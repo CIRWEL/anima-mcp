@@ -1,0 +1,59 @@
+[Unit]
+Description=Anima Hardware Broker - Lumen's Body (Sensors & Display)
+After=network.target redis.service
+Wants=network-online.target
+# Broker must start before MCP server (mind)
+Before=anima.service
+# Prevent rapid restarts - wait for hardware to stabilize
+OnFailure=anima-broker-failed.service
+
+[Service]
+Type=simple
+# User is already set by systemd user service context
+WorkingDirectory=/home/unitares-anima/anima-mcp
+
+      # Environment variables
+      Environment="ANIMA_ID=49e14444-b59e-48f1-83b8-b36a988c9975"
+      Environment="ANIMA_DB=/home/unitares-anima/anima-mcp/anima.db"
+      Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
+      Environment="UNITARES_URL=https://unitares.ngrok.io/sse"
+      Environment="PYTHONUNBUFFERED=1"
+      Environment="PYTHONIOENCODING=utf-8"
+      Environment="LC_ALL=C.UTF-8"
+
+# Executable - runs stable_creature.py as broker
+# Add timeout to prevent hanging on hardware initialization
+ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/python3 /home/unitares-anima/anima-mcp/stable_creature.py
+TimeoutStartSec=30
+TimeoutStopSec=10
+
+# Restart policy - broker should be very stable
+# Use exponential backoff to prevent reboot loops
+Restart=on-failure
+RestartSec=10
+# Increase delay between restarts to prevent loops
+# After 3 failures in 5 minutes, wait 5 minutes before allowing restart
+StartLimitInterval=300
+StartLimitBurst=3
+# Add delay after hitting burst limit
+StartLimitAction=none
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=256M
+CPUQuota=30%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=anima-broker
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/unitares-anima/anima-mcp /dev/shm
+
+[Install]
+WantedBy=multi-user.target

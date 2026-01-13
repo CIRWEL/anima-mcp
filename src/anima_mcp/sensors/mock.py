@@ -1,0 +1,75 @@
+"""
+Mock sensors for development on Mac.
+
+Simulates sensor readings with slight variation to feel alive.
+"""
+
+import random
+import psutil
+from datetime import datetime
+from .base import SensorBackend, SensorReadings
+
+
+class MockSensors(SensorBackend):
+    """Mock sensors using system stats + random variation."""
+
+    def __init__(self):
+        # Base values that drift slowly
+        self._base_temp = 22.0
+        self._base_humidity = 45.0
+        self._base_light = 300.0
+
+    def read(self) -> SensorReadings:
+        """Read simulated sensors with realistic variation."""
+        now = datetime.now()
+
+        # Slow drift in base values
+        self._base_temp += random.gauss(0, 0.1)
+        self._base_temp = max(15, min(35, self._base_temp))
+
+        self._base_humidity += random.gauss(0, 0.5)
+        self._base_humidity = max(20, min(80, self._base_humidity))
+
+        self._base_light += random.gauss(0, 10)
+        self._base_light = max(0, min(1000, self._base_light))
+
+        # Real system stats (these are actually from the Mac)
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+
+        # CPU temp from Mac (if available)
+        cpu_temp = None
+        try:
+            # macOS doesn't expose CPU temp easily, estimate from CPU usage
+            cpu_temp = 40 + (cpu_percent * 0.4)  # Rough estimate
+        except Exception:
+            pass
+
+        return SensorReadings(
+            timestamp=now,
+            cpu_temp_c=cpu_temp,
+            ambient_temp_c=self._base_temp + random.gauss(0, 0.2),
+            humidity_pct=self._base_humidity + random.gauss(0, 1),
+            light_lux=self._base_light + random.gauss(0, 5),
+            sound_level=30 + random.gauss(0, 5),  # Quiet room
+            cpu_percent=cpu_percent,
+            memory_percent=memory.percent,
+            disk_percent=disk.percent,
+            power_watts=None,  # Can't measure on Mac
+        )
+
+    def available_sensors(self) -> list[str]:
+        return [
+            "cpu_temp_c (estimated)",
+            "ambient_temp_c (simulated)",
+            "humidity_pct (simulated)",
+            "light_lux (simulated)",
+            "sound_level (simulated)",
+            "cpu_percent (real)",
+            "memory_percent (real)",
+            "disk_percent (real)",
+        ]
+
+    def is_pi(self) -> bool:
+        return False

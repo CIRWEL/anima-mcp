@@ -1,0 +1,470 @@
+"""
+Display Renderer - Interface to BrainCraft HAT TFT.
+
+240x240 pixel display for the creature's face.
+Falls back to image generation (no display) on Mac.
+"""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional, Tuple
+import io
+import math
+import sys
+import traceback
+
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    HAS_PIL = True
+except ImportError:
+    HAS_PIL = False
+
+from .face import FaceState, EyeState, MouthState
+
+
+# Display dimensions (BrainCraft HAT)
+WIDTH = 240
+HEIGHT = 240
+
+# Colors
+BLACK = (0, 0, 0)
+WHITE = (255, 255, 255)
+
+
+@dataclass
+class DisplayConfig:
+    """Display configuration."""
+    width: int = WIDTH
+    height: int = HEIGHT
+    rotation: int = 180  # BrainCraft HAT default
+    fps: int = 10
+
+
+class DisplayRenderer(ABC):
+    """Abstract display renderer."""
+
+    @abstractmethod
+    def render_face(self, state: FaceState, name: Optional[str] = None) -> None:
+        """Render face state to display."""
+        pass
+
+    @abstractmethod
+    def render_text(self, text: str, position: Tuple[int, int] = (10, 10)) -> None:
+        """Render text to display."""
+        pass
+
+    @abstractmethod
+    def clear(self) -> None:
+        """Clear the display."""
+        pass
+
+    @abstractmethod
+    def is_available(self) -> bool:
+        """Check if display hardware is available."""
+        pass
+
+    @abstractmethod
+    def show_default(self) -> None:
+        """Show minimal default screen (non-grey, non-distracting)."""
+        pass
+
+
+class PilRenderer(DisplayRenderer):
+    """
+    PIL-based renderer.
+
+    Generates images that can be:
+    - Displayed on BrainCraft HAT TFT (on Pi)
+    - Saved to file (for debugging)
+    - Shown in terminal as ASCII (fallback)
+    """
+
+    def __init__(self, config: Optional[DisplayConfig] = None):
+        if not HAS_PIL:
+            raise ImportError("PIL/Pillow required for display rendering")
+
+        self.config = config or DisplayConfig()
+        self._display = None
+        self._backlight = None
+        self._image: Optional[Image.Image] = None
+        self._last_face_state: Optional[FaceState] = None
+        self._last_blink_time: float = 0.0
+        self._blink_in_progress: bool = False
+        self._blink_start_time: float = 0.0
+        self._init_display()
+
+    def _init_display(self):
+        """Initialize display hardware if available."""
+        try:
+            import board
+            import digitalio
+            from adafruit_rgb_display import st7789
+
+            # BrainCraft HAT pin configuration
+            cs_pin = digitalio.DigitalInOut(board.CE0)
+            dc_pin = digitalio.DigitalInOut(board.D25)
+            reset_pin = digitalio.DigitalInOut(board.D24)
+
+            # SPI setup
+            spi = board.SPI()
+
+            self._display = st7789.ST7789(
+                spi,
+                height=self.config.height,
+                width=self.config.width,
+                y_offset=80,
+                rotation=self.config.rotation,
+                cs=cs_pin,
+                dc=dc_pin,
+                rst=reset_pin,
+            )
+
+            # Enable backlight on D22 (BrainCraft HAT)
+            self._backlight = digitalio.DigitalInOut(board.D22)
+            self._backlight.direction = digitalio.Direction.OUTPUT
+            self._backlight.value = True
+
+            print("BrainCraft HAT display initialized", file=sys.stderr, flush=True)
+
+            # Immediately show a waking face (removes grey screen) - safe, never crashes
+            try:
+                self._show_waking_face()
+                print("Display showing waking face", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"Warning: Could not show waking face: {e}", file=sys.stderr, flush=True)
+                # Continue - display initialized but waking face failed
+        except Exception as e:
+            print(f"No display hardware: {e}", file=sys.stderr, flush=True)
+            self._display = None
+            self._backlight = None
+
+    def _show_waking_face(self):
+        """Show minimal default screen - subtle border, non-distracting. Safe, never crashes."""
+        try:
+            image = Image.new("RGB", (self.config.width, self.config.height), BLACK)
+            draw = ImageDraw.Draw(image)
+        except Exception as e:
+            print(f"[Display] Error creating waking face image: {e}", file=sys.stderr)
+            return
+
+        # Subtle border - dark enough to be minimal, visible enough to confirm it's not grey
+        # Dark blue-grey, minimal but clear
+        border_color = (25, 35, 45)  # Dark but visible
+        border_width = 2
+        
+        # Draw a thin border around the edge
+        # Top
+        draw.rectangle([0, 0, self.config.width, border_width], fill=border_color)
+        # Bottom
+        draw.rectangle([0, self.config.height - border_width, self.config.width, self.config.height], fill=border_color)
+        # Left
+        draw.rectangle([0, 0, border_width, self.config.height], fill=border_color)
+        # Right
+        draw.rectangle([self.config.width - border_width, 0, self.config.width, self.config.height], fill=border_color)
+
+        try:
+            self._image = image
+            if self._display:
+                self._display.image(self._image)
+        except Exception as e:
+            print(f"[Display] Error showing waking face: {e}", file=sys.stderr)
+            # Don't crash - display might be temporarily unavailable
+
+    def _create_canvas(self, background: Tuple[int, int, int] = BLACK) -> Tuple[Image.Image, ImageDraw.ImageDraw]:
+        """Create a new canvas for drawing."""
+        image = Image.new("RGB", (self.config.width, self.config.height), background)
+        draw = ImageDraw.Draw(image)
+        return image, draw
+
+    def render_face(self, state: FaceState, name: Optional[str] = None) -> None:
+        """Render face to display with micro-expressions and transitions. Safe, never crashes."""
+        if not self._display:
+            print("[Display] render_face called but display hardware not available", file=sys.stderr, flush=True)
+            return  # Display not available, skip silently
+        
+        try:
+            import time
+            
+            image, draw = self._create_canvas(BLACK)
+
+            # Face background circle with tint
+            center_x, center_y = self.config.width // 2, self.config.height // 2 - 20
+            face_radius = 90
+
+            # Smooth color transition for tint
+            if self._last_face_state:
+                # Transition tint smoothly
+                transition_factor = 0.2
+                current_tint = state.tint
+                last_tint = self._last_face_state.tint
+                smooth_tint = tuple(
+                    int(last_tint[i] + (current_tint[i] - last_tint[i]) * transition_factor)
+                    for i in range(3)
+                )
+                state.tint = smooth_tint
+
+            # Draw face background (subtle tint)
+            tinted_bg = tuple(c // 8 for c in state.tint)  # Subtle tint
+            draw.ellipse(
+                [center_x - face_radius, center_y - face_radius,
+                 center_x + face_radius, center_y + face_radius],
+                fill=tinted_bg,
+                outline=state.tint,
+                width=2
+            )
+
+            # Handle blinking animation
+            now = time.time()
+            time_since_last_blink = now - self._last_blink_time
+            
+            # Check if should blink
+            if not self._blink_in_progress and time_since_last_blink >= state.blink_frequency:
+                self._blink_in_progress = True
+                self._blink_start_time = now
+                self._last_blink_time = now
+            
+            # Apply blink if in progress
+            blink_state = state
+            if self._blink_in_progress:
+                elapsed = now - self._blink_start_time
+                if elapsed < state.blink_duration:
+                    # During blink: reduce eye openness
+                    blink_progress = elapsed / state.blink_duration
+                    # Smooth blink curve (ease in/out)
+                    blink_curve = 0.5 - 0.5 * math.cos(blink_progress * math.pi)
+                    effective_openness = state.eye_openness * (1 - blink_curve * (1 - state.blink_intensity))
+                    # Create modified state for blink
+                    blink_state = FaceState(
+                        eyes=state.eyes,
+                        mouth=state.mouth,
+                        tint=state.tint,
+                        eye_openness=effective_openness,
+                        blinking=True,
+                        eyebrow_raise=state.eyebrow_raise,
+                        blink_frequency=state.blink_frequency,
+                        blink_duration=state.blink_duration,
+                        blink_intensity=state.blink_intensity,
+                    )
+                else:
+                    # Blink complete
+                    self._blink_in_progress = False
+
+            # Draw eyes (with blink applied)
+            self._draw_eyes(draw, blink_state, center_x, center_y)
+
+            # Draw mouth
+            self._draw_mouth(draw, state, center_x, center_y)
+            
+            # Store state for next transition
+            self._last_face_state = state
+
+            # Draw name at bottom if provided
+            if name:
+                try:
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+                except (OSError, IOError):
+                    font = ImageFont.load_default()
+
+                bbox = draw.textbbox((0, 0), name, font=font)
+                text_width = bbox[2] - bbox[0]
+                draw.text(
+                    ((self.config.width - text_width) // 2, self.config.height - 30),
+                    name,
+                    fill=WHITE,
+                    font=font
+                )
+
+            self._image = image
+            self._show()
+        except Exception as e:
+            print(f"[Display] Error rendering face: {e}", file=sys.stderr, flush=True)
+            # Don't print full traceback in production - too verbose
+            # Don't crash - display might be temporarily unavailable
+
+    def _draw_eyes(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
+        """Draw eyes based on state."""
+        eye_spacing = 35
+        eye_y = cy - 15
+
+        left_x = cx - eye_spacing
+        right_x = cx + eye_spacing
+
+        eye_color = state.tint
+
+        if state.eyes == EyeState.WIDE:
+            # Large circles
+            r = 18
+            draw.ellipse([left_x - r, eye_y - r, left_x + r, eye_y + r], fill=eye_color)
+            draw.ellipse([right_x - r, eye_y - r, right_x + r, eye_y + r], fill=eye_color)
+            # Pupils
+            pr = 8
+            draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
+            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
+
+        elif state.eyes == EyeState.NORMAL:
+            # Medium circles
+            r = 14
+            draw.ellipse([left_x - r, eye_y - r, left_x + r, eye_y + r], fill=eye_color)
+            draw.ellipse([right_x - r, eye_y - r, right_x + r, eye_y + r], fill=eye_color)
+            # Pupils
+            pr = 6
+            draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
+            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
+
+        elif state.eyes == EyeState.DROOPY:
+            # Half-closed ovals
+            r = 14
+            h = int(r * state.eye_openness)
+            draw.ellipse([left_x - r, eye_y - h, left_x + r, eye_y + h], fill=eye_color)
+            draw.ellipse([right_x - r, eye_y - h, right_x + r, eye_y + h], fill=eye_color)
+
+        elif state.eyes == EyeState.SQUINT:
+            # Narrow horizontal lines
+            draw.line([left_x - 12, eye_y, left_x + 12, eye_y], fill=eye_color, width=4)
+            draw.line([right_x - 12, eye_y, right_x + 12, eye_y], fill=eye_color, width=4)
+
+        elif state.eyes == EyeState.CLOSED:
+            # Curved lines (sleeping)
+            draw.arc([left_x - 12, eye_y - 6, left_x + 12, eye_y + 6], 0, 180, fill=eye_color, width=3)
+            draw.arc([right_x - 12, eye_y - 6, right_x + 12, eye_y + 6], 0, 180, fill=eye_color, width=3)
+
+    def _draw_mouth(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
+        """Draw mouth based on state."""
+        mouth_y = cy + 35
+        mouth_color = state.tint
+
+        if state.mouth == MouthState.SMILE:
+            # Curved smile
+            draw.arc([cx - 25, mouth_y - 15, cx + 25, mouth_y + 15], 0, 180, fill=mouth_color, width=3)
+
+        elif state.mouth == MouthState.NEUTRAL:
+            # Straight line
+            draw.line([cx - 20, mouth_y, cx + 20, mouth_y], fill=mouth_color, width=3)
+
+        elif state.mouth == MouthState.FROWN:
+            # Curved frown
+            draw.arc([cx - 25, mouth_y - 5, cx + 25, mouth_y + 25], 180, 360, fill=mouth_color, width=3)
+
+        elif state.mouth == MouthState.OPEN:
+            # Open oval
+            draw.ellipse([cx - 12, mouth_y - 8, cx + 12, mouth_y + 8], fill=mouth_color)
+
+        elif state.mouth == MouthState.FLAT:
+            # Small flat line
+            draw.line([cx - 15, mouth_y, cx + 15, mouth_y], fill=mouth_color, width=2)
+
+    def render_text(self, text: str, position: Tuple[int, int] = (10, 10), color: Optional[Tuple[int, int, int]] = None) -> None:
+        """Render text to display. Supports multi-line text (\\n separated)."""
+        image, draw = self._create_canvas(BLACK)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+
+        # Handle multi-line text
+        lines = text.split('\n')
+        x, y = position
+        line_height = 18  # Approximate line height for 14pt font
+        text_color = color or WHITE
+        
+        for line in lines:
+            if line.strip():  # Only draw non-empty lines
+                draw.text((x, y), line, fill=text_color, font=font)
+            y += line_height
+        
+        self._image = image
+        self._show()
+    
+    def render_colored_text(self, lines_with_colors: list, position: Tuple[int, int] = (10, 10)) -> None:
+        """Render multi-line text with different colors per line.
+        
+        Args:
+            lines_with_colors: List of tuples (text, color) or just text (defaults to white)
+            position: Starting position
+        """
+        image, draw = self._create_canvas(BLACK)
+
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+
+        x, y = position
+        line_height = 18
+        
+        for item in lines_with_colors:
+            if isinstance(item, tuple):
+                line, color = item
+            else:
+                line, color = item, WHITE
+            
+            if line.strip():  # Only draw non-empty lines
+                draw.text((x, y), line, fill=color, font=font)
+            y += line_height
+        
+        self._image = image
+        self._show()
+
+    def clear(self) -> None:
+        """Clear the display - shows minimal default instead of grey."""
+        self._show_waking_face()  # Show minimal default instead of blank
+
+    def _show(self):
+        """Send image to display if available - safe, never crashes."""
+        if self._display and self._image:
+            try:
+                self._display.image(self._image)
+            except Exception as e:
+                # Hardware error - mark display as unavailable, don't crash
+                print(f"[Display] Hardware error during show: {e}", file=sys.stderr, flush=True)
+                print("[Display] Marking display as unavailable", file=sys.stderr, flush=True)
+                self._display = None
+        elif not self._display:
+            print("[Display] _show called but display hardware not available", file=sys.stderr, flush=True)
+        elif not self._image:
+            print("[Display] _show called but no image to display", file=sys.stderr, flush=True)
+
+    def is_available(self) -> bool:
+        """Check if display hardware is available."""
+        return self._display is not None
+
+    def show_default(self) -> None:
+        """Show minimal default screen (non-grey, non-distracting)."""
+        self._show_waking_face()
+
+    def save_image(self, path: str) -> None:
+        """Save current image to file (for debugging)."""
+        if self._image:
+            self._image.save(path)
+
+    def get_image(self) -> Optional[Image.Image]:
+        """Get current image (for testing)."""
+        return self._image
+
+
+class NoopRenderer(DisplayRenderer):
+    """No-op renderer when PIL not available."""
+
+    def render_face(self, state: FaceState, name: Optional[str] = None) -> None:
+        pass
+
+    def render_text(self, text: str, position: Tuple[int, int] = (10, 10)) -> None:
+        pass
+
+    def clear(self) -> None:
+        pass
+
+    def is_available(self) -> bool:
+        return False
+
+    def show_default(self) -> None:
+        """No-op for systems without display."""
+        pass
+
+
+def get_display(config: Optional[DisplayConfig] = None) -> DisplayRenderer:
+    """Get appropriate display renderer."""
+    if HAS_PIL:
+        return PilRenderer(config)
+    return NoopRenderer()

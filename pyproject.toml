@@ -1,0 +1,41 @@
+[project]
+name = "anima-mcp"
+version = "0.1.0"
+description = "A persistent Pi creature with grounded self-sense (anima)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=1.0.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+pi = [
+    "RPi.GPIO",
+    "adafruit-circuitpython-dht",
+    "adafruit-circuitpython-bh1750",
+    "adafruit-circuitpython-bmp280",
+    "pillow",
+    "adafruit-circuitpython-rgb-display",
+    "brainflow>=5.0.0",
+    "numpy>=1.24.0",
+    "scipy>=1.10.0",
+]
+sse = [
+    "starlette",
+    "uvicorn",
+]
+unitares = [
+    "aiohttp>=3.9.0",
+]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+anima = "anima_mcp.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
