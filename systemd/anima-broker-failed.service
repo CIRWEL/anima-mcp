@@ -1,0 +1,8 @@
+[Unit]
+Description=Anima Broker Failed - Wait Before Restart
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sleep 60
+RemainAfterExit=yes

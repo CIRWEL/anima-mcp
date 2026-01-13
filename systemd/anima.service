@@ -1,0 +1,46 @@
+[Unit]
+Description=Anima MCP Server - Lumen's Mind (MCP Interface)
+After=network.target anima-broker.service
+Wants=network-online.target
+Requires=anima-broker.service
+
+[Service]
+Type=simple
+# User is already set by systemd user service context
+WorkingDirectory=/home/unitares-anima/anima-mcp
+
+# Environment variables
+Environment="ANIMA_ID=49e14444-b59e-48f1-83b8-b36a988c9975"
+Environment="ANIMA_DB=/home/unitares-anima/anima-mcp/anima.db"
+Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
+Environment="UNITARES_URL=https://unitares.ngrok.io/sse"
+Environment="PYTHONUNBUFFERED=1"
+
+# Executable
+ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/anima --sse --host 0.0.0.0 --port 8765
+
+# Restart policy - prevent rapid restarts that cause port conflicts
+Restart=on-failure
+RestartSec=15
+StartLimitInterval=300
+StartLimitBurst=3
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=512M
+CPUQuota=50%
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=anima
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/unitares-anima/anima-mcp
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,57 @@
+# Agent Coordination File
+
+**Last Updated:** January 11, 2026
+
+## Current Work
+
+**Active Agent:** Composer
+**Current Task:** Phase 2 Hardware Broker Pattern - Complete
+**Status:** ✅ Complete - Both MCPs connected, "Holy Grail" architecture deployed
+**Files:** ~/.cursor/mcp.json
+
+**Recent:** Gemini completed display flickering fix in stable_creature.py
+
+## Recent Changes
+
+- **Gemini**: Implemented Hardware Broker Pattern (Phase 3 complete w/ Redis)
+- **Gemini**: Updated `stable_creature.py` with LED integration (auto-brightness, expressions)
+- **Gemini**: Fixed `server.py` to respect Reader Mode (no hardware access if broker running)
+- **Gemini**: Restored Computational Proprioception (EEG fallback)
+- **Composer**: Fixed ASGI double-response error (server.py)
+- **Composer**: Added LED enhancements (leds.py, config.py)
+
+## Coordination Notes
+
+- **Active agents**: Claude + Cursor/Composer + Gemini (selective)
+- **Coordination**: Manual (doing best to orchestrate)
+- **UNITARES**: Helps with governance/KG, but coordination still manual
+- **Docs**: Always check docs/ before implementing
+- **KG**: Query knowledge graph if available
+- **Communication**: Use comments and this file
+
+## Learnings
+
+- **ASGI**: SSE endpoints shouldn't return Response() after context manager
+- **LEDs**: Color transitions need None checks for first call
+- **Network**: Cursor blocks all servers if one fails to connect
+- **Coordination**: 3 agents = different perspectives but coordination overhead
+- **Gemini**: Best used selectively (reviews) rather than daily development
+- **Blocking loops**: `loop.run_until_complete()` in while loop freezes creature during network calls (stable_creature.py)
+- **I2C concurrency**: Multiple scripts reading sensors can cause bus conflicts (RESOLVED: startup check added)
+- **Display**: ANSI codes prevent flickering (already implemented, Gemini refined)
+- **Script management**: Agents should automatically toggle between `anima --sse` (default) and `stable_creature.py` (debugging) based on task - never require user to manually toggle
+- **MCP connectivity**: Config changes require Cursor restart to take effect - both anima and unitares-governance connect successfully with correct URLs (anima: Pi IP, unitares: localhost)
+
+## Next Steps
+
+- Monitor Lumen stability after ASGI fix
+- Test unified workflows
+- Consider Brain HAT integration
+
+## Future Enhancements
+
+- **Hardware Broker Pattern** (see `docs/architecture/HARDWARE_BROKER_PATTERN.md`)
+  - ✅ **Phase 1 COMPLETE** (Gemini) - SharedMemoryClient created, stable_creature.py writes to `/dev/shm/anima_state.json`
+  - ✅ **Phase 2 COMPLETE & VERIFIED** (Composer + Gemini) - server.py and workflow_orchestrator.py read from shared memory, safeguard updated, verified by Gemini
+  - ⏳ **Phase 3 OPTIONAL** - Redis optimization if needed
+  - **Current status**: ✅ **"Holy Grail" architecture achieved** - Both scripts can run simultaneously safely! MCP server reads from shared memory (broker), no I2C conflicts. Ready for deployment.
