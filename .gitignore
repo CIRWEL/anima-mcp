@@ -38,3 +38,7 @@ anima_config.yaml
 # Temp files
 *.tmp
 *.bak
+
+# Generated data
+drawing_samples/
+drawing_analysis.json

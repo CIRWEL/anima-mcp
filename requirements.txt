@@ -1,0 +1,21 @@
+# Anima MCP - Core Dependencies
+# For Mac/Linux development with mock sensors
+
+# MCP Server Framework
+mcp>=1.0.0,<2.0.0
+
+# Configuration
+pyyaml>=6.0,<7.0
+
+# Data handling
+psutil>=5.9.0,<6.0.0        # System resource monitoring
+
+# Image processing (for display rendering, even on Mac)
+Pillow>=10.0.0,<11.0.0
+
+# HTTP client for UNITARES bridge
+aiohttp>=3.9.0,<4.0.0
+
+# SSE server support (optional but recommended)
+starlette>=0.35.0,<1.0.0
+uvicorn>=0.25.0,<1.0.0

@@ -140,15 +140,15 @@ ssh -p 2222 unitares-anima@192.168.1.165 \
 
 ---
 
-## ⚠️ CRITICAL TRAP: Port 8765 Stale Process
+## ⚠️ CRITICAL TRAP: Port 8767 Stale Process
 
 **🚨 FOR FUTURE AGENTS: This is a common trap that causes reboot loops!**
 
 ### The Problem
 
-When the `anima` service crashes or is killed improperly, a stale process can remain bound to port 8765. When systemd tries to restart the service:
+When the `anima` service crashes or is killed improperly, a stale process can remain bound to port 8767. When systemd tries to restart the service:
 
-1. **New process tries to bind to port 8765** → fails with `[Errno 98] address already in use`
+1. **New process tries to bind to port 8767** → fails with `[Errno 98] address already in use`
 2. **Service exits immediately** → systemd sees exit code 1
 3. **systemd restarts service** → same failure repeats
 4. **Reboot loop begins** → service can't start, keeps trying
@@ -197,7 +197,7 @@ The service now handles shutdown gracefully, but if you see a reboot loop:
 - systemd restarts before port is freed
 - Creates a race condition where old and new processes conflict
 
-**Remember: Port 8765 is a trap - always check for stale processes first!**
+**Remember: Port 8767 is a trap - always check for stale processes first!**
 
 ---
 

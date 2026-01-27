@@ -40,6 +40,7 @@ from .eisv_mapper import anima_to_eisv
 from .config import get_calibration, get_display_config, ConfigManager, NervousSystemCalibration
 from .learning import get_learner
 from .learning_visualization import LearningVisualizer
+from .messages import add_user_message, add_observation, add_agent_message
 from .workflow_orchestrator import UnifiedWorkflowOrchestrator, get_orchestrator
 from .workflow_templates import WorkflowTemplates
 from .expression_moods import ExpressionMoodTracker
@@ -52,6 +53,7 @@ _sensors: SensorBackend | None = None
 _display: DisplayRenderer | None = None
 _screen_renderer: ScreenRenderer | None = None
 _joystick_enabled: bool = False
+_sep_btn_press_start: float | None = None  # Track separate button press start time for long-press shutdown
 _last_governance_decision: Dict[str, Any] | None = None
 _last_input_error_log: float = 0.0
 _leds: LEDDisplay | None = None
@@ -144,7 +146,21 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     shm_client = _get_shm_client()
     shm_data = shm_client.read()
     
-    if shm_data and "readings" in shm_data and "anima" in shm_data:
+    # Check if shared memory data is recent (within last 5 seconds)
+    shm_stale = True
+    if shm_data:
+        try:
+            # Check timestamp in shared memory data (broker writes "timestamp" field)
+            timestamp_str = shm_data.get("timestamp")
+            if timestamp_str:
+                from datetime import datetime
+                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+                shm_stale = age_seconds > 5.0  # Consider stale if older than 5 seconds
+        except Exception:
+            pass  # If timestamp parsing fails, assume stale
+    
+    if shm_data and "readings" in shm_data and "anima" in shm_data and not shm_stale:
         try:
             # Reconstruct SensorReadings from shared memory
             readings = _readings_from_dict(shm_data["readings"])
@@ -161,23 +177,29 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
         except Exception as e:
             print(f"[Server] Error reading from shared memory: {e}", file=sys.stderr, flush=True)
     
-    # Fallback to direct sensor access ONLY if broker is not running
-    # If broker is running, don't access I2C directly (prevents hardware conflicts)
+    # Fallback to direct sensor access if:
+    # 1. Shared memory is empty/stale, OR
+    # 2. Broker is not running (no I2C conflict risk)
     if fallback_to_sensors:
-        # Check if broker is running (if so, don't access I2C - wait for shared memory)
+        # Check if broker is running
         import subprocess
+        broker_running = False
         try:
             broker_running = subprocess.run(
                 ['pgrep', '-f', 'stable_creature.py'],
                 capture_output=True,
                 text=True
             ).returncode == 0
-            
-            if broker_running:
-                print("[Server] Broker is running - waiting for shared memory instead of accessing I2C directly", file=sys.stderr, flush=True)
-                return None, None  # Don't access I2C if broker is running
         except Exception:
-            pass  # If check fails, proceed with fallback
+            pass  # If check fails, assume broker not running
+        
+        # If broker is running but shared memory is stale/empty, warn but allow fallback
+        # (Better to have sensors than nothing, even if it means brief I2C conflict)
+        if broker_running and (not shm_data or shm_stale):
+            print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
+        
+        if not broker_running:
+            print("[Server] Broker not running - using direct sensor access", file=sys.stderr, flush=True)
         
         try:
             sensors = _get_sensors()
@@ -285,9 +307,18 @@ async def _update_display_loop():
                 brainhat.enable()
                 if brainhat.is_available():
                     _joystick_enabled = True
-                    print("[Input] Fast polling enabled", file=sys.stderr, flush=True)
-            except Exception:
-                pass
+                    print("[Input] BrainHat input enabled - buttons and joystick ready", file=sys.stderr, flush=True)
+                else:
+                    # Log once that hardware isn't available
+                    import time
+                    if not hasattr(fast_input_poll, '_logged_unavailable'):
+                        print("[Input] BrainHat hardware not available - buttons disabled (not on Pi or hardware issue)", file=sys.stderr, flush=True)
+                        fast_input_poll._logged_unavailable = True
+            except Exception as e:
+                # Log once that initialization failed
+                if not hasattr(fast_input_poll, '_logged_error'):
+                    print(f"[Input] Failed to enable input: {e}", file=sys.stderr, flush=True)
+                    fast_input_poll._logged_error = True
         
         while True:
             try:
@@ -335,18 +366,57 @@ async def _update_display_loop():
                                 _screen_renderer._state.last_user_action_time = time.time()
                                 print(f"[Input] {old_mode.value} -> notepad (joystick button)", file=sys.stderr, flush=True)
                         
-                        # Separate button
-                        if current_mode == ScreenMode.NOTEPAD:
-                            # In notepad: separate button = clear canvas
-                            if sep_btn_pressed:
-                                _screen_renderer.canvas_clear()
-                                print(f"[Notepad] Canvas cleared", file=sys.stderr, flush=True)
+                        # Separate button - with long-press shutdown for mobile readiness
+                        # Short press: save art (notepad) or go to face (normal mode) - preserves previous "save art" behavior
+                        # Long press (3+ seconds): graceful shutdown
+                        global _sep_btn_press_start
+                        
+                        if input_state.separate_button:
+                            # Track button hold duration for long-press shutdown
+                            if _sep_btn_press_start is None:
+                                _sep_btn_press_start = time.time()
+                            
+                            hold_duration = time.time() - _sep_btn_press_start
+                            
+                            # Long press (3+ seconds) = graceful shutdown
+                            if hold_duration >= 3.0:
+                                print(f"[Shutdown] Long press detected ({hold_duration:.1f}s) - initiating graceful shutdown...", file=sys.stderr, flush=True)
+                                try:
+                                    # Save canvas if in notepad mode
+                                    if current_mode == ScreenMode.NOTEPAD:
+                                        saved_path = _screen_renderer.canvas_save()
+                                        if saved_path:
+                                            print(f"[Shutdown] Saved drawing to {saved_path}", file=sys.stderr, flush=True)
+                                    
+                                    # Graceful shutdown
+                                    stop_display_loop()
+                                    sleep()
+                                    print("[Shutdown] Complete - safe to unplug", file=sys.stderr, flush=True)
+                                    raise SystemExit(0)
+                                except SystemExit:
+                                    raise
+                                except Exception as e:
+                                    print(f"[Shutdown] Error during shutdown: {e}", file=sys.stderr, flush=True)
+                                    raise SystemExit(1)
                         else:
-                            # Normal mode: separate button goes to face
-                            if sep_btn_pressed:
-                                _screen_renderer.set_mode(ScreenMode.FACE)
-                                _screen_renderer._state.last_user_action_time = time.time()
-                                print(f"[Input] -> face (separate)", file=sys.stderr, flush=True)
+                            # Button released - check if it was a short press
+                            if _sep_btn_press_start is not None:
+                                hold_duration = time.time() - _sep_btn_press_start
+                                _sep_btn_press_start = None
+                                
+                                # Short press (< 3 seconds) = normal behavior (save art)
+                                if hold_duration < 3.0 and sep_btn_pressed:
+                                    if current_mode == ScreenMode.NOTEPAD:
+                                        # In notepad: save canvas then clear (previous "save art" behavior)
+                                        saved_path = _screen_renderer.canvas_save()
+                                        if saved_path:
+                                            print(f"[Notepad] Drawing saved to {saved_path}", file=sys.stderr, flush=True)
+                                        _screen_renderer.canvas_clear()  # Clear for new drawing
+                                    else:
+                                        # Normal mode: separate button goes to face
+                                        _screen_renderer.set_mode(ScreenMode.FACE)
+                                        _screen_renderer._state.last_user_action_time = time.time()
+                                        print(f"[Input] -> face (separate)", file=sys.stderr, flush=True)
             except Exception as e:
                 # Log errors but don't spam - only log occasionally
                 import time
@@ -451,6 +521,19 @@ async def _update_display_loop():
                                 identity=identity,
                                 governance=governance_decision_for_display
                             )
+                            
+                            # BUG FIX: Check canvas autonomy (Lumen saving/clearing on its own)
+                            # This function existed but was never called!
+                            try:
+                                current_mode = _screen_renderer.get_mode()
+                                if current_mode == ScreenMode.NOTEPAD and anima:
+                                    autonomy_action = _screen_renderer.canvas_check_autonomy(anima)
+                                    if autonomy_action:
+                                        print(f"[Canvas] Lumen {autonomy_action} autonomously", file=sys.stderr, flush=True)
+                            except Exception as e:
+                                # Don't crash display loop if canvas autonomy fails
+                                if loop_count % 100 == 0:  # Log occasionally
+                                    print(f"[Canvas] Autonomy check error: {e}", file=sys.stderr, flush=True)
                         else:
                             # Fallback: render face directly
                             identity_name = identity.name if identity else None
@@ -529,6 +612,66 @@ async def _update_display_loop():
                         print(f"[Learning] Pressure: {new_cal.pressure_ideal:.1f} hPa, Ambient: {new_cal.ambient_temp_min:.1f}-{new_cal.ambient_temp_max:.1f}°C", file=sys.stderr, flush=True)
                 
                 safe_call(try_learning, default=None, log_error=False)
+            
+            # Lumen's voice: Every 60 iterations (~2 minutes), let Lumen express what it wants
+            # Uses next_steps advocate to generate observations based on how Lumen feels
+            if loop_count % 60 == 0 and readings and anima and identity:
+                from .error_recovery import safe_call
+                from .messages import add_observation
+                from .eisv_mapper import anima_to_eisv
+                
+                def lumen_speak():
+                    """Let Lumen express what it wants based on how it feels."""
+                    try:
+                        # Get advocate
+                        advocate = get_advocate()
+                        
+                        # Check availability
+                        display_available = _display.is_available() if _display else False
+                        brain_hat_available = display_available
+                        
+                        # Check UNITARES (simple check - just see if URL is set)
+                        unitares_connected = False
+                        try:
+                            import os
+                            unitares_url = os.environ.get("UNITARES_URL")
+                            unitares_connected = bool(unitares_url)  # Assume connected if URL set
+                        except Exception:
+                            pass
+                        
+                        # Analyze current state
+                        eisv = anima_to_eisv(anima, readings)
+                        steps = advocate.analyze_current_state(
+                            anima=anima,
+                            readings=readings,
+                            eisv=eisv,
+                            display_available=display_available,
+                            brain_hat_available=brain_hat_available,
+                            unitares_connected=unitares_connected,
+                        )
+                        
+                        # Add top priority step as Lumen's observation (if any)
+                        if steps:
+                            top_step = steps[0]
+                            # Format as Lumen speaking: "I feel X - I want Y"
+                            observation = f"{top_step.feeling} - {top_step.desire}"
+                            result = add_observation(observation, author="lumen")
+                            if result:  # Only log if not duplicate
+                                print(f"[Lumen] Said: {observation}", file=sys.stderr, flush=True)
+                            else:
+                                # Message was deduplicated - log occasionally
+                                if loop_count % 300 == 0:  # Every 10 minutes
+                                    print(f"[Lumen] Same feeling persists (deduplicated): {observation[:60]}...", file=sys.stderr, flush=True)
+                        else:
+                            # No steps generated - state is balanced
+                            if loop_count == 60:  # Log once at first check
+                                wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+                                print(f"[Lumen Voice] No urgent wants (wellness:{wellness:.2f}, all thresholds OK) - staying quiet", file=sys.stderr, flush=True)
+                    except Exception as e:
+                        # Don't crash if message board fails
+                        print(f"[Lumen Voice] Error: {e}", file=sys.stderr, flush=True)
+                
+                safe_call(lumen_speak, default=None, log_error=False)
             
             # UNITARES governance check-in: Every 30 iterations (~1 minute)
             # Provides continuous governance feedback for self-regulation
@@ -749,6 +892,7 @@ async def handle_switch_screen(arguments: dict) -> list[TextContent]:
         "diagnostics": ScreenMode.DIAGNOSTICS,
         "notepad": ScreenMode.NOTEPAD,
         "learning": ScreenMode.LEARNING,
+        "messages": ScreenMode.MESSAGES,
     }
     
     if mode_str in mode_map:
@@ -775,8 +919,50 @@ async def handle_switch_screen(arguments: dict) -> list[TextContent]:
     else:
         return [TextContent(type="text", text=json.dumps({
             "error": f"Invalid mode: {mode_str}",
-            "valid_modes": ["face", "sensors", "identity", "diagnostics", "learning", "notepad", "next", "previous"]
+            "valid_modes": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "next", "previous"]
         }))]
+
+
+async def handle_leave_message(arguments: dict) -> list[TextContent]:
+    """Leave a message for Lumen on the message board."""
+    message = arguments.get("message", "").strip()
+
+    if not message:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "message parameter required"
+        }))]
+
+    # Add the message
+    msg = add_user_message(message)
+
+    return [TextContent(type="text", text=json.dumps({
+        "success": True,
+        "message": message,
+        "timestamp": msg.timestamp,
+        "note": "Message added to Lumen's message board"
+    }))]
+
+
+async def handle_leave_agent_note(arguments: dict) -> list[TextContent]:
+    """Leave a note from an AI agent on Lumen's message board."""
+    message = arguments.get("message", "").strip()
+    agent_name = arguments.get("agent_name", "agent").strip()
+
+    if not message:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "message parameter required"
+        }))]
+
+    # Add the agent message
+    msg = add_agent_message(message, agent_name)
+
+    return [TextContent(type="text", text=json.dumps({
+        "success": True,
+        "message": message,
+        "agent_name": agent_name,
+        "timestamp": msg.timestamp,
+        "note": "Agent note added to Lumen's message board"
+    }))]
 
 
 async def handle_set_name(arguments: dict) -> list[TextContent]:
@@ -939,12 +1125,22 @@ async def handle_test_leds(arguments: dict) -> list[TextContent]:
 
 async def handle_get_calibration(arguments: dict) -> list[TextContent]:
     """Get current nervous system calibration."""
-    calibration = get_calibration()
+    config_manager = ConfigManager()
+    # Force reload to get latest from disk
+    config = config_manager.reload()
+    calibration = config.nervous_system
+    metadata = config.metadata
     
     result = {
         "calibration": calibration.to_dict(),
-        "config_file": str(ConfigManager().config_path),
-        "config_exists": ConfigManager().config_path.exists(),
+        "config_file": str(config_manager.config_path),
+        "config_exists": config_manager.config_path.exists(),
+        "metadata": {
+            "last_updated": metadata.get("calibration_last_updated"),
+            "last_updated_by": metadata.get("calibration_last_updated_by"),
+            "update_count": metadata.get("calibration_update_count", 0),
+            "recent_changes": metadata.get("calibration_history", [])[-5:],  # Last 5 changes
+        },
     }
     
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -1007,6 +1203,9 @@ async def handle_set_calibration(arguments: dict) -> list[TextContent]:
             }
         }))]
     
+    # Track who/what is updating (for metadata)
+    update_source = arguments.get("source", "agent")  # "agent", "manual", "automatic"
+    
     # Update calibration values
     cal_dict = calibration.to_dict()
     cal_dict.update(updates)
@@ -1026,11 +1225,20 @@ async def handle_set_calibration(arguments: dict) -> list[TextContent]:
         config = config_manager.load()
         config.nervous_system = updated_cal
         
-        if config_manager.save(config):
+        if config_manager.save(config, update_source=update_source):
+            # Force reload to get updated metadata
+            updated_config = config_manager.reload()
+            metadata = updated_config.metadata
+            
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "message": "Calibration updated",
                 "calibration": updated_cal.to_dict(),
+                "metadata": {
+                    "last_updated": metadata.get("calibration_last_updated"),
+                    "last_updated_by": metadata.get("calibration_last_updated_by"),
+                    "update_count": metadata.get("calibration_update_count", 0),
+                },
             }))]
         else:
             return [TextContent(type="text", text=json.dumps({
@@ -1226,17 +1434,40 @@ TOOLS = [
     ),
     Tool(
         name="switch_screen",
-        description="Switch display screen mode (face, sensors, identity, diagnostics, learning, notepad, next, previous)",
+        description="Switch display screen mode (face, sensors, identity, diagnostics, learning, messages, notepad, next, previous)",
         inputSchema={
             "type": "object",
             "properties": {
                 "mode": {
                     "type": "string",
-                    "description": "Screen mode: 'face', 'sensors', 'identity', 'diagnostics', 'learning', 'notepad', 'next', or 'previous'",
-                    "enum": ["face", "sensors", "identity", "diagnostics", "learning", "notepad", "next", "previous", "prev"]
+                    "description": "Screen mode: 'face', 'sensors', 'identity', 'diagnostics', 'learning', 'messages', 'notepad', 'next', or 'previous'",
+                    "enum": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "next", "previous", "prev"]
                 }
             },
             "required": ["mode"],
+        },
+    ),
+    Tool(
+        name="leave_message",
+        description="Leave a message for Lumen on the message board",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Message to leave for Lumen"}
+            },
+            "required": ["message"],
+        },
+    ),
+    Tool(
+        name="leave_agent_note",
+        description="Leave a note from an AI agent on Lumen's message board (appears with ◆ prefix)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Note message to leave"},
+                "agent_name": {"type": "string", "description": "Name of the agent (default: 'agent')"}
+            },
+            "required": ["message"],
         },
     ),
     Tool(
@@ -1308,6 +1539,11 @@ TOOLS = [
                 "updates": {
                     "type": "object",
                     "description": "Partial calibration updates (e.g., {'ambient_temp_min': 10.0, 'pressure_ideal': 833.0})"
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Source of update: 'agent', 'manual', or 'automatic' (default: 'agent')",
+                    "enum": ["agent", "manual", "automatic"]
                 }
             },
             "required": ["updates"],
@@ -1323,14 +1559,162 @@ TOOLS = [
         description="Get Lumen's current expression mood - persistent drawing style preferences that evolve over time",
         inputSchema={"type": "object", "properties": {}, "required": []},
     ),
+    # Voice tools - Lumen's ability to hear and speak
+    Tool(
+        name="say",
+        description="Have Lumen speak. Lumen's voice reflects their internal state (warmth, clarity, stability).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "What Lumen should say"
+                },
+                "blocking": {
+                    "type": "boolean",
+                    "description": "Wait for speech to complete (default: true)"
+                }
+            },
+            "required": ["text"],
+        },
+    ),
+    Tool(
+        name="voice_status",
+        description="Get Lumen's voice system status - whether listening, speaking, recent utterances heard",
+        inputSchema={"type": "object", "properties": {}, "required": []},
+    ),
+    Tool(
+        name="set_voice_mode",
+        description="Configure Lumen's voice behavior - always listening, chattiness, wake word",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "always_listening": {
+                    "type": "boolean",
+                    "description": "If true, Lumen listens continuously. If false, requires wake word."
+                },
+                "chattiness": {
+                    "type": "number",
+                    "description": "How talkative Lumen is autonomously (0.0 = quiet, 1.0 = very chatty)"
+                },
+                "wake_word": {
+                    "type": "string",
+                    "description": "Word that activates listening when not always_listening (default: 'lumen')"
+                }
+            },
+            "required": [],
+        },
+    ),
 ]
+
+# Voice handler functions
+_voice_instance = None  # Global voice instance (lazy initialized)
+
+def _get_voice():
+    """Get or initialize the voice instance."""
+    global _voice_instance
+    if _voice_instance is None:
+        try:
+            from .audio import AutonomousVoice
+            _voice_instance = AutonomousVoice()
+            _voice_instance.start()
+            print("[Server] Voice system initialized", file=sys.stderr, flush=True)
+        except ImportError:
+            print("[Server] Voice module not available (missing dependencies)", file=sys.stderr, flush=True)
+            return None
+        except Exception as e:
+            print(f"[Server] Voice initialization failed: {e}", file=sys.stderr, flush=True)
+            return None
+    return _voice_instance
+
+
+async def handle_say(arguments: dict) -> list[TextContent]:
+    """Have Lumen speak."""
+    text = arguments.get("text", "")
+    blocking = arguments.get("blocking", True)
+
+    if not text:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "No text provided"
+        }))]
+
+    voice = _get_voice()
+    if voice is None:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Voice system not available",
+            "hint": "Install dependencies: pip install sounddevice vosk piper-tts"
+        }))]
+
+    try:
+        voice._voice.say(text, blocking=blocking)
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "spoken": text
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Speech failed: {e}"
+        }))]
+
+
+async def handle_voice_status(arguments: dict) -> list[TextContent]:
+    """Get voice system status."""
+    voice = _get_voice()
+    if voice is None:
+        return [TextContent(type="text", text=json.dumps({
+            "available": False,
+            "error": "Voice system not available"
+        }))]
+
+    state = voice.state if hasattr(voice, 'state') else None
+    return [TextContent(type="text", text=json.dumps({
+        "available": True,
+        "running": voice.is_running,
+        "is_listening": state.is_listening if state else False,
+        "is_speaking": state.is_speaking if state else False,
+        "last_heard": state.last_heard.text if state and state.last_heard else None,
+        "last_spoken": state.last_spoken if state else None,
+        "chattiness": voice.chattiness,
+        "recent_utterances": [u.text for u in (state.utterance_history[-5:] if state else [])]
+    }))]
+
+
+async def handle_set_voice_mode(arguments: dict) -> list[TextContent]:
+    """Configure voice behavior."""
+    voice = _get_voice()
+    if voice is None:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Voice system not available"
+        }))]
+
+    changes = {}
+
+    if "always_listening" in arguments:
+        voice._voice.set_always_listening(arguments["always_listening"])
+        changes["always_listening"] = arguments["always_listening"]
+
+    if "chattiness" in arguments:
+        voice.chattiness = float(arguments["chattiness"])
+        changes["chattiness"] = voice.chattiness
+
+    if "wake_word" in arguments:
+        voice._voice._config.wake_word = arguments["wake_word"]
+        changes["wake_word"] = arguments["wake_word"]
+
+    return [TextContent(type="text", text=json.dumps({
+        "success": True,
+        "changes": changes
+    }))]
+
 
 HANDLERS = {
     "unified_workflow": handle_unified_workflow,
     "get_state": handle_get_state,
     "get_identity": handle_get_identity,
-        "set_name": handle_set_name,
-        "switch_screen": handle_switch_screen,
+    "set_name": handle_set_name,
+    "switch_screen": handle_switch_screen,
+    "leave_message": handle_leave_message,
+    "leave_agent_note": handle_leave_agent_note,
     "read_sensors": handle_read_sensors,
     "show_face": handle_show_face,
     "next_steps": handle_next_steps,
@@ -1340,6 +1724,10 @@ HANDLERS = {
     "set_calibration": handle_set_calibration,
     "learning_visualization": handle_learning_visualization,
     "get_expression_mood": handle_get_expression_mood,
+    # Voice tools
+    "say": handle_say,
+    "voice_status": handle_voice_status,
+    "set_voice_mode": handle_set_voice_mode,
 }
 
 
@@ -1374,13 +1762,31 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
     Args:
         db_path: Path to SQLite database
-        anima_id: UUID (generated if not provided)
+        anima_id: UUID from environment or database (DO NOT override - use existing identity)
     """
     global _store, _anima_id
 
     try:
-        _anima_id = anima_id or str(uuid.uuid4())
         _store = IdentityStore(db_path)
+        
+        # CRITICAL: Use provided anima_id OR check database for existing identity
+        # DO NOT generate new UUID if identity already exists - preserves Lumen's identity
+        if anima_id:
+            _anima_id = anima_id
+        else:
+            # Check if identity exists in database
+            conn = _store._connect()
+            existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
+            if existing:
+                _anima_id = existing[0]
+                print(f"[Wake] Using existing identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
+            else:
+                # Only generate new UUID if no identity exists (first time)
+                _anima_id = str(uuid.uuid4())
+                print(f"[Wake] Creating new identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
+        
+        if _anima_id is None:
+            raise ValueError("anima_id must be set before calling wake()")
         identity = _store.wake(_anima_id)
 
         # Identity (name + birthdate) is fundamental to Lumen's existence
@@ -1389,10 +1795,12 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         print(f"  Awakening #{identity.total_awakenings}")
         print(f"  Born: {identity.born_at.isoformat()}")
         print(f"  Total alive: {identity.total_alive_seconds:.0f}s")
+        print(f"[Wake] ✓ Identity established - message board will be active", file=sys.stderr, flush=True)
     except Exception as e:
-        print(f"[Server] CRITICAL: Error during wake: {e}", file=sys.stderr)
-        print(f"[Server] Identity store failed - creature cannot establish persistent identity", file=sys.stderr)
-        print(f"[Server] Display will work but identity features unavailable", file=sys.stderr)
+        print(f"[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
+        print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
+        print(f"[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
+        print(f"[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
         # Continue anyway - store might be None but server can still run (display can show face without identity)
         _store = None
 
@@ -1548,14 +1956,25 @@ def run_sse_server(host: str, port: int):
 def main():
     """Entry point."""
     import os
+    from pathlib import Path
 
     parser = argparse.ArgumentParser(description="Anima MCP Server")
     parser.add_argument("--sse", action="store_true", help="Run SSE server (network)")
     parser.add_argument("--host", default="0.0.0.0", help="SSE host (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8765, help="SSE port (default: 8765)")
+    parser.add_argument("--port", type=int, default=8766, help="SSE port (default: 8766)")
     args = parser.parse_args()
 
-    db_path = os.environ.get("ANIMA_DB", "anima.db")
+    # Determine DB persistence path (User Home > Project Root)
+    env_db = os.environ.get("ANIMA_DB")
+    if env_db:
+        db_path = env_db
+    else:
+        # Default to persistent user home directory
+        home_dir = Path.home() / ".anima"
+        home_dir.mkdir(parents=True, exist_ok=True)
+        db_path = str(home_dir / "anima.db")
+
+    print(f"[Server] Using persistent database: {db_path}", file=sys.stderr)
     anima_id = os.environ.get("ANIMA_ID")
 
     wake(db_path, anima_id)

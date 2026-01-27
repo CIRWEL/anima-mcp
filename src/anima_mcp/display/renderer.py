@@ -282,7 +282,7 @@ class PilRenderer(DisplayRenderer):
             # Don't crash - display might be temporarily unavailable
 
     def _draw_eyes(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
-        """Draw eyes based on state."""
+        """Draw eyes based on state - fluid and expressive."""
         eye_spacing = 35
         eye_y = cy - 15
 
@@ -290,68 +290,116 @@ class PilRenderer(DisplayRenderer):
         right_x = cx + eye_spacing
 
         eye_color = state.tint
+        
+        # Apply eyebrow raise (affects eye position)
+        eyebrow_offset = int(state.eyebrow_raise * 5)  # -5 to +5 pixels
+        eye_y += eyebrow_offset
 
+        # Base eye size from state, then apply fluid size factor
         if state.eyes == EyeState.WIDE:
-            # Large circles
-            r = 18
-            draw.ellipse([left_x - r, eye_y - r, left_x + r, eye_y + r], fill=eye_color)
-            draw.ellipse([right_x - r, eye_y - r, right_x + r, eye_y + r], fill=eye_color)
-            # Pupils
-            pr = 8
-            draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
-            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
-
+            base_r = 18
         elif state.eyes == EyeState.NORMAL:
-            # Medium circles
-            r = 14
-            draw.ellipse([left_x - r, eye_y - r, left_x + r, eye_y + r], fill=eye_color)
-            draw.ellipse([right_x - r, eye_y - r, right_x + r, eye_y + r], fill=eye_color)
-            # Pupils
-            pr = 6
-            draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
-            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
-
+            base_r = 14
         elif state.eyes == EyeState.DROOPY:
-            # Half-closed ovals
-            r = 14
-            h = int(r * state.eye_openness)
-            draw.ellipse([left_x - r, eye_y - h, left_x + r, eye_y + h], fill=eye_color)
-            draw.ellipse([right_x - r, eye_y - h, right_x + r, eye_y + h], fill=eye_color)
-
+            base_r = 14
         elif state.eyes == EyeState.SQUINT:
-            # Narrow horizontal lines
-            draw.line([left_x - 12, eye_y, left_x + 12, eye_y], fill=eye_color, width=4)
-            draw.line([right_x - 12, eye_y, right_x + 12, eye_y], fill=eye_color, width=4)
-
-        elif state.eyes == EyeState.CLOSED:
-            # Curved lines (sleeping)
+            base_r = 8  # Smaller for squint
+        else:  # CLOSED
+            base_r = 0
+        
+        # Apply fluid size factor (continuous variation)
+        r = int(base_r * state.eye_size_factor)
+        r = max(4, min(25, r))  # Clamp to reasonable range
+        
+        # Apply eye openness (continuous, not discrete)
+        if state.eyes == EyeState.CLOSED:
+            # Closed eyes - curved arcs
             draw.arc([left_x - 12, eye_y - 6, left_x + 12, eye_y + 6], 0, 180, fill=eye_color, width=3)
             draw.arc([right_x - 12, eye_y - 6, right_x + 12, eye_y + 6], 0, 180, fill=eye_color, width=3)
+        elif state.eyes == EyeState.SQUINT:
+            # Squinting - narrow lines, width varies with openness
+            line_width = max(2, int(4 * state.eye_openness))
+            draw.line([left_x - 12, eye_y, left_x + 12, eye_y], fill=eye_color, width=line_width)
+            draw.line([right_x - 12, eye_y, right_x + 12, eye_y], fill=eye_color, width=line_width)
+        elif state.eyes == EyeState.DROOPY:
+            # Droopy - ovals with fluid openness
+            h = max(4, int(r * state.eye_openness))
+            draw.ellipse([left_x - r, eye_y - h, left_x + r, eye_y + h], fill=eye_color)
+            draw.ellipse([right_x - r, eye_y - h, right_x + r, eye_y + h], fill=eye_color)
+            # Pupils (smaller for droopy)
+            pr = max(2, int(4 * state.eye_openness))
+            draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
+            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
+        else:
+            # WIDE or NORMAL - circles with fluid size and openness
+            # Apply openness to create more variation
+            actual_r = max(4, int(r * (0.7 + state.eye_openness * 0.3)))
+            draw.ellipse([left_x - actual_r, eye_y - actual_r, left_x + actual_r, eye_y + actual_r], fill=eye_color)
+            draw.ellipse([right_x - actual_r, eye_y - actual_r, right_x + actual_r, eye_y + actual_r], fill=eye_color)
+            # Pupils - size varies with openness
+            pr = max(3, int(6 * state.eye_openness))
+            pr = min(pr, actual_r - 2)  # Don't exceed eye size
+            draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
+            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
 
     def _draw_mouth(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
-        """Draw mouth based on state."""
+        """Draw mouth based on state - fluid with smile intensity."""
         mouth_y = cy + 35
         mouth_color = state.tint
-
-        if state.mouth == MouthState.SMILE:
-            # Curved smile
-            draw.arc([cx - 25, mouth_y - 15, cx + 25, mouth_y + 15], 0, 180, fill=mouth_color, width=3)
-
-        elif state.mouth == MouthState.NEUTRAL:
-            # Straight line
-            draw.line([cx - 20, mouth_y, cx + 20, mouth_y], fill=mouth_color, width=3)
-
-        elif state.mouth == MouthState.FROWN:
-            # Curved frown
-            draw.arc([cx - 25, mouth_y - 5, cx + 25, mouth_y + 25], 180, 360, fill=mouth_color, width=3)
-
-        elif state.mouth == MouthState.OPEN:
-            # Open oval
-            draw.ellipse([cx - 12, mouth_y - 8, cx + 12, mouth_y + 8], fill=mouth_color)
-
+        
+        # Apply mouth width factor (fluid variation)
+        base_width = 20
+        mouth_width = int(base_width * state.mouth_width_factor)
+        mouth_width = max(12, min(30, mouth_width))  # Clamp to reasonable range
+        
+        # Use smile_intensity for fluid expression (can blend states)
+        smile_intensity = getattr(state, 'smile_intensity', 0.0)
+        
+        if state.mouth == MouthState.OPEN:
+            # Open oval - size varies with expression intensity
+            open_size = int(8 + state.expression_intensity * 4)
+            draw.ellipse([cx - open_size, mouth_y - open_size, cx + open_size, mouth_y + open_size], fill=mouth_color)
         elif state.mouth == MouthState.FLAT:
-            # Small flat line
-            draw.line([cx - 15, mouth_y, cx + 15, mouth_y], fill=mouth_color, width=2)
+            # Small flat line - very minimal
+            draw.line([cx - int(mouth_width * 0.7), mouth_y, cx + int(mouth_width * 0.7), mouth_y], fill=mouth_color, width=2)
+        elif smile_intensity > 0.3:
+            # Positive expression - smile (can be subtle or strong)
+            # Arc height varies with smile_intensity
+            arc_height = int(10 + smile_intensity * 10)  # 10-20 range
+            draw.arc([cx - mouth_width, mouth_y - arc_height, cx + mouth_width, mouth_y + arc_height], 
+                    0, 180, fill=mouth_color, width=3)
+        elif smile_intensity < -0.2:
+            # Negative expression - frown
+            arc_height = int(5 + abs(smile_intensity) * 10)
+            draw.arc([cx - mouth_width, mouth_y - 5, cx + mouth_width, mouth_y + arc_height], 
+                    180, 360, fill=mouth_color, width=3)
+        elif state.mouth == MouthState.SMILE:
+            # Explicit smile state
+            arc_height = int(12 + smile_intensity * 8) if smile_intensity > 0 else 12
+            draw.arc([cx - mouth_width, mouth_y - arc_height, cx + mouth_width, mouth_y + arc_height], 
+                    0, 180, fill=mouth_color, width=3)
+        elif state.mouth == MouthState.FROWN:
+            # Explicit frown state
+            arc_height = int(5 + abs(smile_intensity) * 10) if smile_intensity < 0 else 10
+            draw.arc([cx - mouth_width, mouth_y - 5, cx + mouth_width, mouth_y + arc_height], 
+                    180, 360, fill=mouth_color, width=3)
+        else:
+            # Neutral - but can have subtle curve from smile_intensity
+            if abs(smile_intensity) > 0.1:
+                # Subtle curve (blended state)
+                if smile_intensity > 0:
+                    # Subtle smile
+                    arc_height = int(smile_intensity * 8)
+                    draw.arc([cx - mouth_width, mouth_y - arc_height, cx + mouth_width, mouth_y + arc_height], 
+                            0, 180, fill=mouth_color, width=2)
+                else:
+                    # Subtle frown
+                    arc_height = int(abs(smile_intensity) * 8)
+                    draw.arc([cx - mouth_width, mouth_y - 3, cx + mouth_width, mouth_y + arc_height], 
+                            180, 360, fill=mouth_color, width=2)
+            else:
+                # Truly neutral - straight line
+                draw.line([cx - mouth_width, mouth_y, cx + mouth_width, mouth_y], fill=mouth_color, width=3)
 
     def render_text(self, text: str, position: Tuple[int, int] = (10, 10), color: Optional[Tuple[int, int, int]] = None) -> None:
         """Render text to display. Supports multi-line text (\\n separated)."""

@@ -1,0 +1,17 @@
+[Unit]
+Description=Anima Safe Shutdown Listener
+After=multi-user.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/unitares-anima/anima-mcp
+ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/python3 /home/unitares-anima/anima-mcp/scripts/shutdown_listener.py
+Restart=always
+RestartSec=5
+# Allow shutdown command
+CapabilityBoundingSet=CAP_SYS_BOOT
+AmbientCapabilities=CAP_SYS_BOOT
+
+[Install]
+WantedBy=multi-user.target

@@ -137,11 +137,20 @@ class AnimaConfig:
     nervous_system: NervousSystemCalibration = field(default_factory=NervousSystemCalibration)
     display: DisplayConfig = field(default_factory=DisplayConfig)
     
+    # Metadata for tracking changes
+    metadata: Dict[str, Any] = field(default_factory=lambda: {
+        "calibration_last_updated": None,
+        "calibration_last_updated_by": None,  # "manual", "automatic", "agent"
+        "calibration_update_count": 0,
+        "calibration_history": [],  # List of recent changes
+    })
+    
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
         return {
             "nervous_system": self.nervous_system.to_dict(),
             "display": asdict(self.display),
+            "metadata": self.metadata.copy(),
         }
     
     @classmethod
@@ -152,6 +161,12 @@ class AnimaConfig:
                 data.get("nervous_system", {})
             ),
             display=DisplayConfig(**data.get("display", {})),
+            metadata=data.get("metadata", {
+                "calibration_last_updated": None,
+                "calibration_last_updated_by": None,
+                "calibration_update_count": 0,
+                "calibration_history": [],
+            }),
         )
     
     def validate(self) -> Tuple[bool, Optional[str]]:
@@ -184,9 +199,9 @@ class ConfigManager:
         self.config_path = Path(config_path)
         self._config: Optional[AnimaConfig] = None
     
-    def load(self) -> AnimaConfig:
+    def load(self, force_reload: bool = False) -> AnimaConfig:
         """Load configuration from file or return defaults."""
-        if self._config is not None:
+        if self._config is not None and not force_reload:
             return self._config
         
         if self.config_path.exists():
@@ -214,12 +229,13 @@ class ConfigManager:
         
         return self._config
     
-    def save(self, config: Optional[AnimaConfig] = None) -> bool:
+    def save(self, config: Optional[AnimaConfig] = None, update_source: Optional[str] = None) -> bool:
         """
         Save configuration to file.
         
         Args:
             config: Config to save (uses current if None)
+            update_source: Source of update ("manual", "automatic", "agent") for tracking
         
         Returns:
             True if saved successfully
@@ -233,6 +249,57 @@ class ConfigManager:
             print(f"[Config] Cannot save invalid config: {error}")
             return False
         
+        # Track calibration changes
+        if update_source:
+            from datetime import datetime
+            # Load old config to compare
+            old_config = self.load()
+            old_cal = old_config.nervous_system.to_dict()
+            new_cal = config.nervous_system.to_dict()
+            
+            # Detect changes
+            changes = {}
+            for key in old_cal:
+                old_val = old_cal.get(key)
+                new_val = new_cal.get(key)
+                # Handle float comparison (allow small differences)
+                if isinstance(old_val, float) and isinstance(new_val, float):
+                    if abs(old_val - new_val) > 0.001:
+                        changes[key] = {
+                            "old": old_val,
+                            "new": new_val,
+                        }
+                elif old_val != new_val:
+                    changes[key] = {
+                        "old": old_val,
+                        "new": new_val,
+                    }
+            
+            if changes:
+                # Initialize metadata if needed
+                if "calibration_last_updated" not in config.metadata:
+                    config.metadata = {
+                        "calibration_last_updated": None,
+                        "calibration_last_updated_by": None,
+                        "calibration_update_count": 0,
+                        "calibration_history": [],
+                    }
+                
+                # Update metadata
+                config.metadata["calibration_last_updated"] = datetime.now().isoformat()
+                config.metadata["calibration_last_updated_by"] = update_source
+                config.metadata["calibration_update_count"] = config.metadata.get("calibration_update_count", 0) + 1
+                
+                # Add to history (keep last 10)
+                history_entry = {
+                    "timestamp": datetime.now().isoformat(),
+                    "source": update_source,
+                    "changes": changes,
+                }
+                history = config.metadata.get("calibration_history", [])
+                history.append(history_entry)
+                config.metadata["calibration_history"] = history[-10:]  # Keep last 10
+        
         try:
             data = config.to_dict()
             
@@ -244,10 +311,16 @@ class ConfigManager:
                     json.dump(data, f, indent=2)
             
             self._config = config
+            # Force reload on next access to ensure consistency
             return True
         except Exception as e:
             print(f"[Config] Error saving config: {e}")
             return False
+    
+    def reload(self) -> AnimaConfig:
+        """Force reload configuration from file."""
+        self._config = None
+        return self.load()
     
     def get_calibration(self) -> NervousSystemCalibration:
         """Get current nervous system calibration."""

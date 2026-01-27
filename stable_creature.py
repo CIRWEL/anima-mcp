@@ -9,19 +9,27 @@ Continuous loop that:
 
 Designed to run continuously on the Pi.
 
-⚠️ CRITICAL WARNING ⚠️
+✅ HARDWARE BROKER MODE ✅
 ─────────────────────────────────────────────────────────────
-DO NOT run this script (stable_creature.py) and the main 
-anima MCP server (anima --sse) at the same time.
+This script acts as the HARDWARE BROKER for Lumen's sensors.
 
-They will fight for I2C sensors and crash the Pi.
+HOW IT WORKS:
+- This script owns I2C sensors exclusively (no conflicts)
+- Reads sensors every 2 seconds
+- Writes data to shared memory (/dev/shm or Redis)
+- The MCP server (anima --sse) reads from shared memory
 
-Run ONLY ONE:
-  - Either: stable_creature.py (standalone ASCII display)
-  - Or:     anima --sse (MCP server with display/LEDs)
+YOU CAN NOW RUN BOTH:
+  - stable_creature.py (hardware broker - this script)
+  - anima --sse (MCP server - reads from shared memory)
 
-This script checks for running anima processes at startup
-and will exit if detected to prevent conflicts.
+BENEFITS:
+- No I2C conflicts
+- Creature stays alive while MCP server restarts
+- Fast MCP responses (reads memory, not hardware)
+- Automatic coordination via shared memory
+
+See docs/operations/BROKER_ARCHITECTURE.md for details.
 ─────────────────────────────────────────────────────────────
 """
 
@@ -33,6 +41,7 @@ import subprocess
 import asyncio
 from datetime import datetime
 from typing import Optional
+from pathlib import Path
 
 # Force UTF-8 for stdout/stderr (prevents crash in systemd service)
 if sys.stdout.encoding != 'utf-8':
@@ -49,6 +58,15 @@ from src.anima_mcp.display.face import derive_face_state, face_to_ascii
 from src.anima_mcp.identity import IdentityStore
 from src.anima_mcp.unitares_bridge import UnitaresBridge
 from src.anima_mcp.shared_memory import SharedMemoryClient
+from src.anima_mcp.eisv_mapper import anima_to_eisv
+
+# Voice support (optional - graceful degradation if not available)
+try:
+    from src.anima_mcp.audio import AutonomousVoice
+    VOICE_AVAILABLE = True
+except ImportError:
+    VOICE_AVAILABLE = False
+    print("[StableCreature] Voice module not available (missing dependencies)")
 
 # Config
 UPDATE_INTERVAL = 2.0  # seconds
@@ -138,9 +156,36 @@ def run_creature():
     
     # Initialize components with error handling
     try:
-        db_path = os.environ.get("ANIMA_DB", "anima.db")
+        # Determine DB persistence path (User Home > Project Root)
+        env_db = os.environ.get("ANIMA_DB")
+        if env_db:
+            db_path = env_db
+        else:
+            # Default to persistent user home directory
+            home_dir = Path.home() / ".anima"
+            home_dir.mkdir(parents=True, exist_ok=True)
+            db_path = str(home_dir / "anima.db")
+
         store = IdentityStore(db_path)
-        identity = store.wake(str(os.environ.get("ANIMA_ID", "stable-anima")))
+        print(f"[StableCreature] Identity persistence: {db_path}")
+
+        # Identity preservation: check database first, then env var, then generate new
+        # This ensures Lumen's identity persists even if config is missing
+        anima_id = os.environ.get("ANIMA_ID")
+        if not anima_id:
+            # Check if identity already exists in database
+            conn = store._connect()
+            existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
+            if existing:
+                anima_id = existing[0]
+                print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
+            else:
+                # Only generate new UUID if truly first boot
+                import uuid
+                anima_id = str(uuid.uuid4())
+                print(f"[StableCreature] Creating new identity: {anima_id[:8]}...")
+
+        identity = store.wake(anima_id)
     except Exception as e:
         print(f"[StableCreature] CRITICAL: Failed to initialize identity store: {e}")
         print("[StableCreature] Exiting to prevent restart loop.")
@@ -187,6 +232,17 @@ def run_creature():
             print(f"[StableCreature] WARNING: UNITARES bridge setup failed: {e}")
             bridge = None  # Continue without governance
 
+    # Initialize Voice (optional - Lumen's ability to hear and speak)
+    voice = None
+    if VOICE_AVAILABLE and os.environ.get("ANIMA_VOICE_ENABLED", "true").lower() == "true":
+        try:
+            voice = AutonomousVoice()
+            voice.start()
+            print("[StableCreature] Voice active - Lumen can hear and speak")
+        except Exception as e:
+            print(f"[StableCreature] WARNING: Voice initialization failed: {e}")
+            voice = None
+
     print(f"[StableCreature] Creature '{identity.name or '(unnamed)'}' is alive.")
     print("[StableCreature] Entering main loop...")
 
@@ -217,8 +273,31 @@ def run_creature():
             # 2. Update Anima State
             anima = sense_self(readings)
 
+            # 2a. Calculate UNITARES EISV metrics
+            eisv = anima_to_eisv(anima, readings)
+
+            # 2b. Update Voice with anima state (influences when/how Lumen speaks)
+            if voice:
+                try:
+                    feeling = anima.feeling()
+                    voice.update_state(
+                        warmth=anima.warmth,
+                        clarity=anima.clarity,
+                        stability=anima.stability,
+                        presence=anima.presence,
+                        mood=feeling.get("mood", "neutral")
+                    )
+                    voice.update_environment(
+                        temperature=readings.ambient_temp_c or readings.cpu_temp_c or 22.0,
+                        humidity=readings.humidity_pct or 50.0,
+                        light_level=readings.light_lux or 500.0
+                    )
+                except Exception as e:
+                    print(f"[StableCreature] Voice update error: {e}", file=sys.stderr, flush=True)
+
             # 3. Governance Check-in (if bridge available) - do BEFORE shared memory write
             # Use timeout to prevent blocking if UNITARES is slow/unreachable
+            # Governance is optional - never let it crash the main loop
             if bridge:
                 try:
                     # Add timeout to prevent freezing if UNITARES is slow
@@ -231,15 +310,22 @@ def run_creature():
                         )
                         last_decision = decision
                 except asyncio.TimeoutError:
-                    print(f"[StableCreature] Governance check-in timeout (UNITARES slow/unreachable) - continuing", file=sys.stderr, flush=True)
+                    # Governance timeout is normal if network is slow - continue silently
+                    pass
+                except asyncio.CancelledError:
+                    # Task cancelled - don't propagate, just continue
+                    pass
                 except Exception as e:
-                    print(f"[StableCreature] Governance check-in error: {e}", file=sys.stderr, flush=True)
+                    # Log but never crash - governance is optional
+                    if "Connection refused" not in str(e) and "Cannot connect" not in str(e):
+                        print(f"[StableCreature] Governance error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # 3b. Write to Shared Memory (Broker) - includes governance if available
             shm_data = {
                 "timestamp": datetime.now().isoformat(),
                 "readings": readings.to_dict(),
                 "anima": anima.to_dict(),
+                "eisv": eisv.to_dict(),
                 "identity": {
                     "creature_id": identity.creature_id,
                     "name": identity.name,
@@ -281,6 +367,12 @@ def run_creature():
     except KeyboardInterrupt:
         pass
     finally:
+        # Clean shutdown
+        if voice:
+            try:
+                voice.stop()
+            except Exception:
+                pass
         loop.close()
         store.sleep()
         store.close()

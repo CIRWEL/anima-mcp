@@ -243,6 +243,22 @@ If governance shows "waiting..." or null on diagnostics:
 2. Check shared memory has governance: `cat /dev/shm/anima_state.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('governance'))"`
 3. If broker has governance but display doesn't, the MCP server isn't reading shared memory correctly
 
+### Identity Table Auto-Correction (Events Table is Source of Truth)
+
+**Fixed:** The identity table now auto-corrects on every wake using the events table as source of truth.
+
+**How it works:**
+- `wake()` method recalculates `total_awakenings` and `total_alive_seconds` from events table
+- Updates identity table with correct values automatically
+- No manual patching needed - just restart the service
+
+**If you see identity drift:**
+- Don't manually patch the identity table
+- Just restart the service - it will auto-correct
+- The events table is the source of truth, identity table is a cache
+
+**Code location:** `src/anima_mcp/identity/store.py` - `_recalculate_stats()` method
+
 ---
 
 ## Quick Reference

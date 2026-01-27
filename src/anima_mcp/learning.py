@@ -296,7 +296,7 @@ class AdaptiveLearner:
         config = config_manager.load()
         config.nervous_system = learned
         
-        if config_manager.save(config):
+        if config_manager.save(config, update_source="automatic"):
             return (True, learned)
         
         return (False, None)
