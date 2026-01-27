@@ -78,8 +78,8 @@ class LEDDisplay:
             self._color_transitions_enabled = True
             self._pattern_mode = "standard"
             self._auto_brightness_enabled = True
-            self._auto_brightness_min = 0.15
-            self._auto_brightness_max = 0.5
+            self._auto_brightness_min = 0.1
+            self._auto_brightness_max = 0.25  # Capped lower - DotStars are bright
             self._pulsing_threshold_clarity = 0.4
             self._pulsing_threshold_stability = 0.4
         

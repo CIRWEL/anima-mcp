@@ -80,42 +80,39 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
 
 def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     """
-    How warm/energetic does the creature feel?
+    How warm does the creature feel?
 
     Sources:
-    - CPU temperature (internal heat)
-    - CPU usage (activity level)
-    - Ambient temperature (environment)
-    - Beta/Gamma EEG power (neural activation)
+    - CPU temperature (internal body heat)
+    - Ambient temperature (environmental warmth)
+    - Neural activity (alertness/engagement - from light or EEG)
+
+    Note: CPU usage removed - a resting creature in a warm room should feel
+    comfortable, not cold. Warmth is about thermal state, not busy-ness.
     """
     components = []
     weights = []
 
-    # CPU temp: calibrated range -> 0-1
+    # CPU temp: calibrated range -> 0-1 (internal body heat)
     if r.cpu_temp_c is not None:
         temp_range = cal.cpu_temp_max - cal.cpu_temp_min
         if temp_range > 0:
             cpu_warmth = (r.cpu_temp_c - cal.cpu_temp_min) / temp_range
             cpu_warmth = max(0, min(1, cpu_warmth))
             components.append(cpu_warmth)
-            weights.append(cal.warmth_weights.get("cpu_temp", 0.3))
+            weights.append(cal.warmth_weights.get("cpu_temp", 0.35))
 
-    # CPU usage: activity = warmth
-    if r.cpu_percent is not None:
-        activity_warmth = r.cpu_percent / 100
-        components.append(activity_warmth)
-        weights.append(cal.warmth_weights.get("cpu_usage", 0.25))
-
-    # Ambient temp: calibrated range -> 0-1
+    # Ambient temp: calibrated range -> 0-1 (environmental warmth)
     if r.ambient_temp_c is not None:
         temp_range = cal.ambient_temp_max - cal.ambient_temp_min
         if temp_range > 0:
             ambient_warmth = (r.ambient_temp_c - cal.ambient_temp_min) / temp_range
             ambient_warmth = max(0, min(1, ambient_warmth))
             components.append(ambient_warmth)
-            weights.append(cal.warmth_weights.get("ambient_temp", 0.25))
+            weights.append(cal.warmth_weights.get("ambient_temp", 0.45))
 
     # Neural component: Real EEG beta+gamma power, or simulated if unavailable
+    # This represents alertness/engagement, not raw CPU cycles
     if r.eeg_beta_power is not None and r.eeg_gamma_power is not None:
         # Use real EEG data
         neural_warmth = (r.eeg_beta_power + r.eeg_gamma_power) / 2
@@ -124,7 +121,7 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         neural = get_neural_state(light_level=r.light_lux)
         neural_warmth = (neural.beta + neural.gamma) / 2  # Active engagement
     components.append(neural_warmth)
-    weights.append(cal.warmth_weights.get("neural", 0.2))
+    weights.append(cal.warmth_weights.get("neural", 0.20))
 
     if not components:
         return 0.5

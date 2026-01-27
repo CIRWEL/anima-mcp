@@ -1,0 +1,39 @@
+# Anima MCP - Raspberry Pi Hardware Dependencies
+# Install AFTER requirements.txt on Raspberry Pi
+
+# Include base requirements
+-r requirements.txt
+
+# Raspberry Pi GPIO
+RPi.GPIO>=0.7.1,<1.0.0
+
+# Adafruit BrainCraft HAT sensors
+adafruit-circuitpython-busdevice>=5.2.0,<6.0.0
+adafruit-circuitpython-register>=1.9.0,<2.0.0
+
+# Temperature + Humidity (AHT20)
+adafruit-circuitpython-ahtx0>=1.0.0,<2.0.0
+
+# Ambient Light (VEML7700) 
+adafruit-circuitpython-veml7700>=1.1.0,<2.0.0
+
+# Pressure + Temperature (BMP280)
+adafruit-circuitpython-bmp280>=3.2.0,<4.0.0
+
+# Display (ST7789 TFT - 240x240)
+adafruit-circuitpython-rgb-display>=3.11.0,<4.0.0
+adafruit-circuitpython-st7789>=1.6.0,<2.0.0
+
+# LEDs (DotStar)
+adafruit-circuitpython-dotstar>=2.2.0,<3.0.0
+
+# Optional: EEG/Brain HAT support (if using OpenBCI)
+# Uncomment if you have Brain HAT hardware
+# brainflow>=5.0.0,<6.0.0
+# numpy>=1.24.0,<2.0.0
+# scipy>=1.10.0,<2.0.0
+
+# Optional: Audio support (for future voice features)
+# Uncomment when ready to use audio
+# pyaudio>=0.2.13,<1.0.0
+# SpeechRecognition>=3.10.0,<4.0.0

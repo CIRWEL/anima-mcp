@@ -6,7 +6,8 @@ Requires=anima-broker.service
 
 [Service]
 Type=simple
-# User is already set by systemd user service context
+User=unitares-anima
+Group=unitares-anima
 WorkingDirectory=/home/unitares-anima/anima-mcp
 
 # Environment variables
@@ -17,7 +18,7 @@ Environment="UNITARES_URL=https://unitares.ngrok.io/sse"
 Environment="PYTHONUNBUFFERED=1"
 
 # Executable
-ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/anima --sse --host 0.0.0.0 --port 8765
+ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/anima --sse --host 0.0.0.0 --port 8766
 
 # Restart policy - prevent rapid restarts that cause port conflicts
 Restart=on-failure
@@ -39,7 +40,7 @@ SyslogIdentifier=anima
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ProtectHome=read-only
+ProtectHome=no
 ReadWritePaths=/home/unitares-anima/anima-mcp
 
 [Install]

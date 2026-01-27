@@ -11,8 +11,12 @@ Screens can be toggled via joystick:
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Optional, Dict, Any, Tuple, List
+from pathlib import Path
+from datetime import datetime
 import time
 import sys
+import os
+import json
 
 from .face import FaceState
 from ..anima import Anima
@@ -30,6 +34,7 @@ class ScreenMode(Enum):
     DIAGNOSTICS = "diagnostics"     # System health, governance status
     LEARNING = "learning"            # Learning visualization - why Lumen feels what it feels
     NOTEPAD = "notepad"             # Drawing canvas - Lumen's creative space
+    MESSAGES = "messages"           # Message board - Lumen's voice and observations
 
 
 @dataclass
@@ -41,9 +46,16 @@ class ScreenState:
     last_user_action_time: float = 0.0  # Track when user last interacted
 
 
+def _get_canvas_path() -> Path:
+    """Get persistent path for canvas state."""
+    anima_dir = Path.home() / ".anima"
+    anima_dir.mkdir(exist_ok=True)
+    return anima_dir / "canvas.json"
+
+
 @dataclass
 class CanvasState:
-    """Drawing canvas state for notepad mode."""
+    """Drawing canvas state for notepad mode - persists across restarts."""
     width: int = 240
     height: int = 240
     pixels: Dict[Tuple[int, int], Tuple[int, int, int]] = field(default_factory=dict)
@@ -51,7 +63,15 @@ class CanvasState:
     recent_locations: List[Tuple[int, int]] = field(default_factory=list)
     drawing_phase: str = "exploring"  # exploring, building, reflecting, resting
     phase_start_time: float = field(default_factory=time.time)
-    
+
+    # Autonomy tracking
+    last_save_time: float = 0.0  # When Lumen last saved a drawing
+    last_clear_time: float = field(default_factory=time.time)  # When canvas was last cleared
+    is_satisfied: bool = False  # Lumen feels done with current drawing
+    satisfaction_time: float = 0.0  # When satisfaction was reached
+    drawings_saved: int = 0  # Count of drawings Lumen has saved
+    drawing_paused_until: float = 0.0  # Pause drawing after manual clear (so user sees empty canvas)
+
     def draw_pixel(self, x: int, y: int, color: Tuple[int, int, int]):
         """Draw a pixel at position."""
         if 0 <= x < self.width and 0 <= y < self.height:
@@ -60,13 +80,194 @@ class CanvasState:
             self.recent_locations.append((x, y))
             if len(self.recent_locations) > 20:
                 self.recent_locations.pop(0)
-    
+            # Drawing resets satisfaction
+            self.is_satisfied = False
+
     def clear(self):
         """Clear the canvas."""
         self.pixels.clear()
         self.recent_locations.clear()
         self.drawing_phase = "exploring"
         self.phase_start_time = time.time()
+        self.last_clear_time = time.time()
+        self.is_satisfied = False
+        self.satisfaction_time = 0.0
+        # Pause drawing for 5 seconds after manual clear so user sees empty canvas
+        self.drawing_paused_until = time.time() + 5.0
+
+    def mark_satisfied(self):
+        """Mark that Lumen feels satisfied with current drawing."""
+        if not self.is_satisfied:
+            self.is_satisfied = True
+            self.satisfaction_time = time.time()
+            print(f"[Canvas] Lumen feels satisfied with drawing ({len(self.pixels)} pixels)", file=sys.stderr, flush=True)
+
+    def save_to_disk(self):
+        """Persist canvas state to disk."""
+        try:
+            # Convert pixel dict keys to strings for JSON
+            pixel_data = {f"{x},{y}": list(color) for (x, y), color in self.pixels.items()}
+            data = {
+                "pixels": pixel_data,
+                "recent_locations": self.recent_locations,
+                "drawing_phase": self.drawing_phase,
+                "phase_start_time": self.phase_start_time,
+                "last_save_time": self.last_save_time,
+                "last_clear_time": self.last_clear_time,
+                "is_satisfied": self.is_satisfied,
+                "satisfaction_time": self.satisfaction_time,
+                "drawings_saved": self.drawings_saved,
+            }
+            _get_canvas_path().write_text(json.dumps(data))
+        except Exception as e:
+            print(f"[Canvas] Save to disk error: {e}", file=sys.stderr, flush=True)
+
+    def load_from_disk(self):
+        """Load canvas state from disk - defensive against corruption."""
+        path = _get_canvas_path()
+        if not path.exists():
+            return  # No saved state, use defaults
+
+        data = None
+        try:
+            raw_content = path.read_text()
+            if not raw_content.strip():
+                # Empty file - delete and use defaults
+                print("[Canvas] Empty canvas file, starting fresh", file=sys.stderr, flush=True)
+                path.unlink()
+                return
+            data = json.loads(raw_content)
+        except json.JSONDecodeError as e:
+            # Corrupted JSON - delete file and start fresh
+            print(f"[Canvas] Corrupted canvas file (invalid JSON): {e}", file=sys.stderr, flush=True)
+            try:
+                path.unlink()
+                print("[Canvas] Deleted corrupted file, starting fresh", file=sys.stderr, flush=True)
+            except Exception:
+                pass
+            return
+        except Exception as e:
+            print(f"[Canvas] Failed to read canvas file: {e}", file=sys.stderr, flush=True)
+            return
+
+        # Validate data is a dict
+        if not isinstance(data, dict):
+            print(f"[Canvas] Invalid canvas data (not a dict), starting fresh", file=sys.stderr, flush=True)
+            try:
+                path.unlink()
+            except Exception:
+                pass
+            return
+
+        # Load pixels with validation
+        loaded_pixels = 0
+        skipped_pixels = 0
+        try:
+            pixels_data = data.get("pixels", {})
+            if isinstance(pixels_data, dict):
+                for key, color in pixels_data.items():
+                    try:
+                        # Validate key format "x,y"
+                        if not isinstance(key, str) or "," not in key:
+                            skipped_pixels += 1
+                            continue
+                        parts = key.split(",")
+                        if len(parts) != 2:
+                            skipped_pixels += 1
+                            continue
+                        x, y = int(parts[0]), int(parts[1])
+
+                        # Validate coordinates
+                        if not (0 <= x < self.width and 0 <= y < self.height):
+                            skipped_pixels += 1
+                            continue
+
+                        # Validate color format [r, g, b]
+                        if not isinstance(color, (list, tuple)) or len(color) != 3:
+                            skipped_pixels += 1
+                            continue
+                        r, g, b = int(color[0]), int(color[1]), int(color[2])
+                        if not all(0 <= c <= 255 for c in (r, g, b)):
+                            skipped_pixels += 1
+                            continue
+
+                        self.pixels[(x, y)] = (r, g, b)
+                        loaded_pixels += 1
+                    except (ValueError, TypeError, IndexError):
+                        skipped_pixels += 1
+                        continue
+        except Exception as e:
+            print(f"[Canvas] Error loading pixels: {e}", file=sys.stderr, flush=True)
+
+        # Load recent_locations with validation
+        try:
+            locations = data.get("recent_locations", [])
+            if isinstance(locations, list):
+                for loc in locations[-20:]:  # Keep last 20
+                    if isinstance(loc, (list, tuple)) and len(loc) == 2:
+                        try:
+                            x, y = int(loc[0]), int(loc[1])
+                            if 0 <= x < self.width and 0 <= y < self.height:
+                                self.recent_locations.append((x, y))
+                        except (ValueError, TypeError):
+                            pass
+        except Exception:
+            pass  # Non-fatal, use empty list
+
+        # Load scalar fields with type validation
+        try:
+            phase = data.get("drawing_phase", "exploring")
+            if isinstance(phase, str) and phase in ("exploring", "building", "reflecting", "resting"):
+                self.drawing_phase = phase
+        except Exception:
+            pass
+
+        try:
+            phase_time = data.get("phase_start_time", time.time())
+            if isinstance(phase_time, (int, float)):
+                self.phase_start_time = float(phase_time)
+        except Exception:
+            pass
+
+        try:
+            save_time = data.get("last_save_time", 0.0)
+            if isinstance(save_time, (int, float)):
+                self.last_save_time = float(save_time)
+        except Exception:
+            pass
+
+        try:
+            clear_time = data.get("last_clear_time", time.time())
+            if isinstance(clear_time, (int, float)):
+                self.last_clear_time = float(clear_time)
+        except Exception:
+            pass
+
+        try:
+            satisfied = data.get("is_satisfied", False)
+            if isinstance(satisfied, bool):
+                self.is_satisfied = satisfied
+        except Exception:
+            pass
+
+        try:
+            sat_time = data.get("satisfaction_time", 0.0)
+            if isinstance(sat_time, (int, float)):
+                self.satisfaction_time = float(sat_time)
+        except Exception:
+            pass
+
+        try:
+            saved_count = data.get("drawings_saved", 0)
+            if isinstance(saved_count, int) and saved_count >= 0:
+                self.drawings_saved = saved_count
+        except Exception:
+            pass
+
+        if skipped_pixels > 0:
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}", file=sys.stderr, flush=True)
+        else:
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}", file=sys.stderr, flush=True)
 
 
 class ScreenRenderer:
@@ -77,6 +278,8 @@ class ScreenRenderer:
         self._display = display_renderer
         self._state = ScreenState()
         self._canvas = CanvasState()
+        # Load any persisted canvas from disk
+        self._canvas.load_from_disk()
         self._db_path = db_path or "anima.db"  # Default database path
         self._identity_store = identity_store
         # Initialize expression mood tracker
@@ -111,7 +314,7 @@ class ScreenRenderer:
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""
         # Cycle through all screens including notepad
-        regular_modes = [ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.NOTEPAD]
+        regular_modes = [ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.MESSAGES, ScreenMode.NOTEPAD]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -123,7 +326,7 @@ class ScreenRenderer:
     def previous_mode(self):
         """Cycle to previous screen mode (including notepad)."""
         # Cycle through all screens including notepad
-        regular_modes = [ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.NOTEPAD]
+        regular_modes = [ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.MESSAGES, ScreenMode.NOTEPAD]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -143,7 +346,7 @@ class ScreenRenderer:
         """Draw small dots at bottom showing current screen position."""
         # Screen order (including notepad in regular cycle)
         screens = [ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY,
-                   ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.NOTEPAD]
+                   ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.MESSAGES, ScreenMode.NOTEPAD]
 
         try:
             current_idx = screens.index(current_mode)
@@ -176,11 +379,18 @@ class ScreenRenderer:
     ):
         """Render current screen based on mode."""
         import time
-        
+
+        # Check Lumen's canvas autonomy (can save/clear regardless of screen)
+        try:
+            self.canvas_check_autonomy(anima)
+        except Exception as e:
+            # Don't let autonomy errors break rendering
+            pass
+
         # Disable auto-return - let user stay on screens as long as they want
         # Only auto-return to FACE if explicitly requested via button
         # (Auto-return disabled to prevent getting stuck)
-        
+
         if self._state.mode == ScreenMode.FACE:
             self._render_face(face_state, identity)
         elif self._state.mode == ScreenMode.SENSORS:
@@ -191,6 +401,8 @@ class ScreenRenderer:
             self._render_diagnostics(anima, readings, governance)
         elif self._state.mode == ScreenMode.LEARNING:
             self._render_learning(anima, readings)
+        elif self._state.mode == ScreenMode.MESSAGES:
+            self._render_messages()
         elif self._state.mode == ScreenMode.NOTEPAD:
             try:
                 self._render_notepad(anima)
@@ -858,6 +1070,137 @@ class ScreenRenderer:
 
         self._display.render_text("\n".join(lines), (10, 10))
 
+    def _render_messages(self):
+        """Render message board - Lumen's voice and observations."""
+        try:
+            from ..messages import get_recent_messages, MESSAGE_TYPE_USER, MESSAGE_TYPE_OBSERVATION, MESSAGE_TYPE_AGENT
+            
+            if hasattr(self._display, '_create_canvas'):
+                image, draw = self._display._create_canvas((0, 0, 0))
+            else:
+                # Text fallback
+                messages = get_recent_messages(6)
+                lines = ["MESSAGES", ""]
+                for msg in messages:
+                    if msg.msg_type == MESSAGE_TYPE_OBSERVATION:
+                        prefix = "▸ "
+                        text = msg.text
+                    elif msg.msg_type == MESSAGE_TYPE_AGENT:
+                        prefix = "◆ "
+                        author = getattr(msg, 'author', 'agent')
+                        text = f"{author}: {msg.text}"
+                    else:
+                        prefix = "● "
+                        text = f"you: {msg.text}"
+                    lines.append(f"{prefix}{text[:20]}")
+                self._display.render_text("\n".join(lines), (10, 10))
+                return
+
+            # Color definitions
+            CYAN = (0, 255, 255)
+            YELLOW = (255, 255, 100)
+            GREEN = (100, 255, 100)
+            PURPLE = (200, 100, 255)
+            WHITE = (255, 255, 255)
+            LIGHT_CYAN = (180, 220, 220)
+            DARK_GRAY = (50, 50, 50)
+
+            # Load font
+            try:
+                from PIL import ImageFont
+                font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+                font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 9)
+                font_title = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+            except (OSError, IOError):
+                from PIL import ImageFont
+                font = ImageFont.load_default()
+                font_small = font
+                font_title = font
+
+            y_offset = 8
+
+            # Title
+            draw.text((10, y_offset), "lumen says", fill=CYAN, font=font_title)
+            y_offset += 22
+
+            # Get messages - show more now (10 instead of 7)
+            messages = get_recent_messages(10)
+
+            if not messages:
+                # Empty state - Lumen hasn't spoken yet
+                draw.text((10, y_offset), "i haven't said", fill=LIGHT_CYAN, font=font)
+                y_offset += 16
+                draw.text((10, y_offset), "anything yet...", fill=LIGHT_CYAN, font=font_small)
+                y_offset += 12
+                draw.text((10, y_offset), "check next_steps", fill=DARK_GRAY, font=font_small)
+            else:
+                # Show messages - Lumen's voice
+                # Use smaller line height to fit more messages
+                line_height = 20
+                for msg in messages:
+                    if y_offset > 220:  # Increased from 200 to show more
+                        break
+
+                    # Different styling for different message types
+                    if msg.msg_type == MESSAGE_TYPE_USER:
+                        prefix = "●"
+                        text_color = GREEN
+                        prefix_color = GREEN
+                        # Add "you: " prefix for display (not stored in data)
+                        display_text = f"you: {msg.text}"
+                    elif msg.msg_type == MESSAGE_TYPE_AGENT:
+                        prefix = "◆"
+                        text_color = YELLOW
+                        prefix_color = YELLOW
+                        # Add agent name prefix for display
+                        author = getattr(msg, 'author', 'agent')
+                        display_text = f"{author}: {msg.text}"
+                    else:  # MESSAGE_TYPE_OBSERVATION
+                        prefix = "▸"
+                        text_color = WHITE
+                        prefix_color = PURPLE
+                        # Lumen's observations - clean text
+                        display_text = msg.text
+
+                    # Truncate text to fit (longer now - use smaller font if needed)
+                    max_width = 200
+                    if len(display_text) > 30:
+                        # Use smaller font for longer messages
+                        text_font = font_small
+                        max_chars = 35
+                    else:
+                        text_font = font
+                        max_chars = 28
+                    
+                    text = display_text[:max_chars]
+                    age = msg.age_str()
+
+                    # Draw prefix
+                    draw.text((10, y_offset), prefix, fill=prefix_color, font=font)
+
+                    # Draw message text
+                    draw.text((22, y_offset), text, fill=text_color, font=text_font)
+
+                    # Draw age on right side
+                    draw.text((190, y_offset + 2), age, fill=LIGHT_CYAN, font=font_small)
+
+                    y_offset += line_height
+
+            # Screen indicator dots
+            self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
+
+            # Update display
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+
+        except Exception as e:
+            import traceback
+            print(f"[Messages Screen] Error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            self._display.render_text("MESSAGES\n\nError", (10, 10))
+
     def _render_notepad(self, anima: Optional[Anima] = None):
         """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave."""
         print(f"[Notepad] Rendering notepad, pixels={len(self._canvas.pixels)}, anima={anima is not None}", file=sys.stderr, flush=True)
@@ -866,6 +1209,30 @@ class ScreenRenderer:
                 image, draw = self._display._create_canvas((0, 0, 0))  # Black background
             else:
                 self._display.render_text("NOTEPAD\n\nLumen's\ncreative\nspace", (10, 10))
+                return
+            
+            # BUG FIX: Check if drawing is paused (after manual clear)
+            now = time.time()
+            if now < self._canvas.drawing_paused_until:
+                # Show "Cleared" confirmation - don't draw new pixels yet
+                remaining = int(self._canvas.drawing_paused_until - now) + 1
+                try:
+                    from PIL import ImageFont
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
+                except:
+                    font = None
+                
+                text = f"Canvas Cleared\n\nResuming in {remaining}s..."
+                if font:
+                    draw.text((40, 90), text, fill=(100, 200, 100), font=font)
+                else:
+                    draw.text((40, 90), text, fill=(100, 200, 100))
+                
+                # Update display and return (don't draw new pixels)
+                if hasattr(self._display, '_image'):
+                    self._display._image = image
+                if hasattr(self._display, '_show'):
+                    self._display._show()
                 return
             
             # Draw all pixels Lumen has created (Lumen's work persists)
@@ -1022,63 +1389,42 @@ class ScreenRenderer:
         if len(self._canvas.pixels) > 15000:
             return  # Canvas full - Lumen has expressed enough
         
-        # Rich color palette based on Lumen's state and mood preferences
-        # Warmth affects hue (warm = reds/oranges, cool = blues/cyans)
-        # Clarity affects saturation (clear = vibrant, unclear = muted)
-        # Stability affects brightness (stable = bright, unstable = dim)
-        # Mood preferences influence hue selection
+        # Free color generation - Lumen can use any color, influenced by state but not restricted
+        # Warmth influences hue preference (but doesn't restrict)
+        # Clarity influences saturation (but doesn't force muted)
+        # Stability influences brightness (but doesn't force dim)
+        # Mood preferences are suggestions, not requirements
         
-        # Determine hue category
-        if warmth > 0.7:
+        # Generate free RGB color - full spectrum available
+        # Base hue influenced by warmth (but can be anything)
+        hue_base = warmth * 360.0  # 0-360 degrees
+        
+        # Add randomness - Lumen can explore any color
+        hue_variation = random.random() * 360.0
+        hue = (hue_base + hue_variation * 0.5) % 360.0
+        
+        # Saturation influenced by clarity (but can be vibrant even when unclear)
+        saturation_base = 0.3 + clarity * 0.7  # 0.3-1.0
+        saturation = saturation_base + (random.random() - 0.5) * 0.4  # ±0.2 variation
+        saturation = max(0.1, min(1.0, saturation))
+        
+        # Brightness influenced by stability (but can be bright even when unstable)
+        brightness_base = 0.4 + stability * 0.6  # 0.4-1.0
+        brightness = brightness_base + (random.random() - 0.5) * 0.3  # ±0.15 variation
+        brightness = max(0.2, min(1.0, brightness))
+        
+        # Convert HSV to RGB (free color generation)
+        import colorsys
+        rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
+        color = tuple(int(c * 255) for c in rgb)
+        
+        # Determine hue category for mood tracking (informational, not restrictive)
+        if hue < 60 or hue > 300:
             hue_category = "warm"
-            # Very warm - reds, oranges, yellows
-            base_colors = [
-                (255, 100, 50), (255, 150, 0), (255, 200, 50),
-                (255, 80, 80), (255, 120, 40), (255, 180, 100)
-            ]
-        elif warmth < 0.3:
+        elif hue < 180:
             hue_category = "cool"
-            # Very cool - blues, cyans, purples
-            base_colors = [
-                (50, 100, 255), (0, 200, 255), (100, 150, 255),
-                (80, 120, 255), (40, 180, 255), (150, 100, 255)
-            ]
         else:
             hue_category = "neutral"
-            # Neutral - greens, purples, grays
-            base_colors = [
-                (100, 200, 150), (150, 150, 200), (200, 200, 200),
-                (180, 220, 180), (220, 180, 220), (160, 160, 180)
-            ]
-        
-        # Respect mood preferences - if mood doesn't prefer this hue, reduce saturation
-        if not mood.prefers_hue(hue_category) and random.random() < 0.3:
-            # Sometimes use preferred hue instead
-            if "warm" in mood.preferred_hues and warmth > 0.4:
-                hue_category = "warm"
-                base_colors = [
-                    (255, 100, 50), (255, 150, 0), (255, 200, 50),
-                    (255, 80, 80), (255, 120, 40), (255, 180, 100)
-                ]
-            elif "cool" in mood.preferred_hues and warmth < 0.6:
-                hue_category = "cool"
-                base_colors = [
-                    (50, 100, 255), (0, 200, 255), (100, 150, 255),
-                    (80, 120, 255), (40, 180, 255), (150, 100, 255)
-                ]
-        
-        # Adjust saturation based on clarity
-        base_color = random.choice(base_colors)
-        if clarity < 0.5:
-            # Muted colors when unclear
-            base_color = tuple(int(c * 0.6 + 100 * 0.4) for c in base_color)
-        
-        # Adjust brightness based on stability
-        if stability < 0.4:
-            # Dimmer when unstable
-            base_color = tuple(int(c * 0.7) for c in base_color)
-        
-        color = tuple(max(0, min(255, c)) for c in base_color)
         
         center_x, center_y = 120, 120
         
@@ -1093,191 +1439,108 @@ class ScreenRenderer:
             center_x = max(40, min(200, center_x))
             center_y = max(40, min(200, center_y))
         
-        # Lumen's drawing style reflects its state, phase, and mood preferences
-        # Use mood weights to influence style selection
+        # Free style selection - Lumen can draw anything, state influences but doesn't restrict
+        # All styles available regardless of clarity/stability
+        # Mood preferences influence probability but don't exclude options
         phase = self._canvas.drawing_phase
         
-        # Build weighted style choices based on mood preferences
-        available_styles = []
+        # All styles always available - free expression
+        style_options = [
+            ("freeform", center_x, center_y),  # New: completely free drawing
+            ("layered", center_x, center_y),
+            ("gradient_circle", center_x + random.randint(-80, 80), center_y + random.randint(-80, 80)),
+            ("circle", center_x + random.randint(-80, 80), center_y + random.randint(-80, 80)),
+            ("spiral", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
+            ("curve", random.randint(20, 220), random.randint(20, 220), random.randint(20, 220), random.randint(20, 220)),
+            ("organic", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
+            ("pattern", random.randint(40, 200), random.randint(40, 200)),
+            ("line", random.randint(20, 220), random.randint(20, 220), random.randint(20, 220), random.randint(20, 220)),
+            ("dots", random.randint(20, 220), random.randint(20, 220)),  # New: free dots
+        ]
+        
+        # Build weights - mood preferences influence but don't restrict
+        style_names = [s[0] for s in style_options]
         style_weights_list = []
+        for style_name in style_names:
+            base_weight = 0.1  # Base probability for all styles
+            mood_weight = style_weights.get(style_name, 0.1)  # Mood preference
+            state_weight = 0.1  # State can influence but doesn't exclude
+            
+            # State influences probability (higher clarity/stability = slightly more complex styles)
+            if style_name in ["layered", "gradient_circle", "organic"]:
+                state_weight = (clarity + stability) / 2.0 * 0.2
+            elif style_name in ["dots", "line"]:
+                state_weight = (1.0 - (clarity + stability) / 2.0) * 0.2
+            
+            total_weight = base_weight + mood_weight * 0.3 + state_weight
+            style_weights_list.append(max(0.05, total_weight))  # Minimum 5% chance for any style
         
-        if clarity > 0.75 and stability > 0.7:
-            # Very clear and stable - complex, intentional forms
-            if phase == "building":
-                available_styles.append(("layered", center_x, center_y))
-                style_weights_list.append(style_weights.get("layered", 0.2))
+        # Select style - all options available, weighted by preferences
+        total_weight = sum(style_weights_list)
+        if total_weight > 0:
+            normalized_weights = [w / total_weight for w in style_weights_list]
+            selected_idx = random.choices(range(len(style_options)), weights=normalized_weights)[0]
+            selected = style_options[selected_idx]
+            style_name = selected[0]
             
-            available_styles.extend([
-                ("gradient_circle", center_x + random.randint(-80, 80), center_y + random.randint(-80, 80)),
-                ("circle", center_x + random.randint(-80, 80), center_y + random.randint(-80, 80)),
-                ("spiral", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-                ("curve", random.randint(20, 220), random.randint(20, 220), random.randint(20, 220), random.randint(20, 220)),
-                ("organic", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-                ("pattern", random.randint(40, 200), random.randint(40, 200)),
-            ])
-            style_weights_list.extend([
-                style_weights.get("gradient_circle", 0.2),
-                style_weights.get("circle", 0.2),
-                style_weights.get("spiral", 0.2),
-                style_weights.get("curve", 0.2),
-                style_weights.get("organic", 0.2),
-                style_weights.get("pattern", 0.2),
-            ])
-            
-            # Select style based on weighted preferences
-            if available_styles:
-                # Normalize weights
-                total_weight = sum(style_weights_list)
-                if total_weight > 0:
-                    normalized_weights = [w / total_weight for w in style_weights_list]
-                    selected_idx = random.choices(range(len(available_styles)), weights=normalized_weights)[0]
-                    selected = available_styles[selected_idx]
-                    style_name = selected[0]
-                    
-                    # Execute drawing based on style
-                    if style_name == "layered":
-                        self._draw_layered_composition(selected[1], selected[2], color, clarity, stability)
-                        try:
-                            self._mood_tracker.record_drawing("layered", hue_category)
-                        except Exception:
-                            pass  # Non-fatal - mood tracking can fail
-                    elif style_name == "gradient_circle":
-                        size = int(8 + stability * 25)
-                        self._draw_circle_gradient(selected[1], selected[2], size, color, clarity)
-                        try:
-                            self._mood_tracker.record_drawing("gradient_circle", hue_category)
-                        except Exception:
-                            pass
-                    elif style_name == "circle":
-                        size = int(8 + stability * 25)
-                        self._draw_circle(selected[1], selected[2], size, color)
-                        try:
-                            self._mood_tracker.record_drawing("circle", hue_category)
-                        except Exception:
-                            pass
-                    elif style_name == "spiral":
-                        self._draw_spiral(selected[1], selected[2], int(5 + clarity * 15), color, stability)
-                        try:
-                            self._mood_tracker.record_drawing("spiral", hue_category)
-                        except Exception:
-                            pass
-                    elif style_name == "curve":
-                        self._draw_curve(selected[1], selected[2], selected[3], selected[4], color, int(2 + stability * 3))
-                        try:
-                            self._mood_tracker.record_drawing("curve", hue_category)
-                        except Exception:
-                            pass
-                    elif style_name == "organic":
-                        self._draw_organic_shape(selected[1], selected[2], color, clarity, stability)
-                        try:
-                            self._mood_tracker.record_drawing("organic", hue_category)
-                        except Exception:
-                            pass
-                    elif style_name == "pattern":
-                        self._draw_pattern(selected[1], selected[2], int(3 + clarity * 5), color)
-                        try:
-                            self._mood_tracker.record_drawing("pattern", hue_category)
-                        except Exception:
-                            pass
-                    return
-        
-        elif clarity > 0.5 and stability > 0.5:
-            # Moderately clear - balanced expression
-            # Use mood preferences for style selection
-            style_roll = random.random()
-            circle_weight = style_weights.get("circle", 0.2)
-            line_weight = style_weights.get("line", 0.2)
-            pattern_weight = style_weights.get("pattern", 0.2)
-            total_weight = circle_weight + line_weight + pattern_weight
-            if total_weight > 0:
-                normalized_circle = circle_weight / total_weight
-                normalized_line = line_weight / total_weight
-            else:
-                normalized_circle = 0.4
-                normalized_line = 0.3
-            
-            if style_roll < normalized_circle:
-                # Medium circles
-                size = int(5 + stability * 15)
-                x = center_x + random.randint(-70, 70)
-                y = center_y + random.randint(-70, 70)
-                self._draw_circle(x, y, size, color)
-                try:
+            # Execute drawing - free expression
+            try:
+                if style_name == "freeform":
+                    # Completely free drawing - random pixels, organic flow
+                    num_pixels = random.randint(1, int(5 + clarity * 10))
+                    for _ in range(num_pixels):
+                        x = center_x + random.randint(-50, 50)
+                        y = center_y + random.randint(-50, 50)
+                        x = max(0, min(239, x))
+                        y = max(0, min(239, y))
+                        # Sometimes vary color slightly for organic feel
+                        if random.random() < 0.3:
+                            color_variation = tuple(max(0, min(255, c + random.randint(-30, 30))) for c in color)
+                            self._canvas.draw_pixel(x, y, color_variation)
+                        else:
+                            self._canvas.draw_pixel(x, y, color)
+                    self._mood_tracker.record_drawing("freeform", hue_category)
+                elif style_name == "layered":
+                    self._draw_layered_composition(selected[1], selected[2], color, clarity, stability)
+                    self._mood_tracker.record_drawing("layered", hue_category)
+                elif style_name == "gradient_circle":
+                    size = int(5 + random.random() * 30)  # Free size range
+                    self._draw_circle_gradient(selected[1], selected[2], size, color, clarity)
+                    self._mood_tracker.record_drawing("gradient_circle", hue_category)
+                elif style_name == "circle":
+                    size = int(3 + random.random() * 30)  # Free size range
+                    self._draw_circle(selected[1], selected[2], size, color)
                     self._mood_tracker.record_drawing("circle", hue_category)
-                except Exception:
-                    pass
-            elif style_roll < normalized_circle + normalized_line:
-                # Lines (connecting thoughts)
-                x1 = random.randint(30, 210)
-                y1 = random.randint(30, 210)
-                x2 = random.randint(30, 210)
-                y2 = random.randint(30, 210)
-                self._draw_line(x1, y1, x2, y2, color)
-                try:
-                    self._mood_tracker.record_drawing("line", hue_category)
-                except Exception:
-                    pass
-            else:
-                # Small patterns
-                x = random.randint(50, 190)
-                y = random.randint(50, 190)
-                self._draw_pattern(x, y, int(2 + clarity * 3), color)
-                try:
+                elif style_name == "spiral":
+                    max_radius = int(5 + random.random() * 20)  # Free radius
+                    self._draw_spiral(selected[1], selected[2], max_radius, color, stability)
+                    self._mood_tracker.record_drawing("spiral", hue_category)
+                elif style_name == "curve":
+                    width = int(1 + random.random() * 5)  # Free width
+                    self._draw_curve(selected[1], selected[2], selected[3], selected[4], color, width)
+                    self._mood_tracker.record_drawing("curve", hue_category)
+                elif style_name == "organic":
+                    self._draw_organic_shape(selected[1], selected[2], color, clarity, stability)
+                    self._mood_tracker.record_drawing("organic", hue_category)
+                elif style_name == "pattern":
+                    size = int(2 + random.random() * 8)  # Free size
+                    self._draw_pattern(selected[1], selected[2], size, color)
                     self._mood_tracker.record_drawing("pattern", hue_category)
-                except Exception:
-                    pass
-        
-        elif clarity < 0.3 or stability < 0.3:
-            # Unclear or unstable - fragmented expression
-            style_roll = random.random()
-            if style_roll < 0.6:
-                # Scattered dots (fleeting thoughts)
-                for _ in range(random.randint(1, 5)):
-                    x = random.randint(20, 220)
-                    y = random.randint(20, 220)
-                    self._canvas.draw_pixel(x, y, color)
-                try:
+                elif style_name == "line":
+                    self._draw_line(selected[1], selected[2], selected[3], selected[4], color)
                     self._mood_tracker.record_drawing("line", hue_category)
-                except Exception:
-                    pass  # Dots count as line style
-            else:
-                # Short, broken lines
-                import math
-                x1 = random.randint(40, 200)
-                y1 = random.randint(40, 200)
-                length = random.randint(5, 20)
-                angle = random.random() * 2 * math.pi
-                x2 = int(x1 + length * math.cos(angle))
-                y2 = int(y1 + length * math.sin(angle))
-                if 0 <= x2 < 240 and 0 <= y2 < 240:
-                    self._draw_line(x1, y1, x2, y2, color)
-                    try:
-                        self._mood_tracker.record_drawing("line", hue_category)
-                    except Exception:
-                        pass
-        else:
-            # Mixed state - varied expression
-            style_roll = random.random()
-            circle_weight = style_weights.get("circle", 0.2)
-            if style_roll < 0.5 * (1.0 + circle_weight):
-                # Small circles
-                size = int(3 + stability * 10)
-                x = random.randint(40, 200)
-                y = random.randint(40, 200)
-                self._draw_circle(x, y, size, color)
-                try:
-                    self._mood_tracker.record_drawing("circle", hue_category)
-                except Exception:
-                    pass
-            else:
-                # Single dots or short lines
-                x = random.randint(30, 210)
-                y = random.randint(30, 210)
-                self._canvas.draw_pixel(x, y, color)
-                try:
-                    self._mood_tracker.record_drawing("line", hue_category)
-                except Exception:
-                    pass
+                elif style_name == "dots":
+                    # Free dots - scattered expression
+                    num_dots = random.randint(1, int(3 + clarity * 5))
+                    for _ in range(num_dots):
+                        x = selected[1] + random.randint(-30, 30)
+                        y = selected[2] + random.randint(-30, 30)
+                        x = max(0, min(239, x))
+                        y = max(0, min(239, y))
+                        self._canvas.draw_pixel(x, y, color)
+                    self._mood_tracker.record_drawing("dots", hue_category)
+            except Exception:
+                pass  # Non-fatal - continue even if one style fails
     
     def _draw_circle(self, cx: int, cy: int, radius: int, color: Tuple[int, int, int]):
         """Draw a filled circle."""
@@ -1490,7 +1753,142 @@ class ScreenRenderer:
                     if 0 <= dot_x < 240 and 0 <= dot_y < 240:
                         self._canvas.draw_pixel(dot_x, dot_y, layer_color)
     
-    def canvas_clear(self):
-        """Clear the canvas."""
+    def canvas_clear(self, persist: bool = True):
+        """Clear the canvas - pauses drawing for 5s so user sees it cleared."""
         self._canvas.clear()
+        if persist:
+            self._canvas.save_to_disk()
+        print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
+
+    def canvas_save(self, announce: bool = False) -> Optional[str]:
+        """
+        Save the canvas to a PNG file in ~/.anima/drawings/.
+
+        Args:
+            announce: If True, post to message board about the save.
+
+        Returns:
+            Path to saved file, or None if save failed or canvas empty.
+        """
+        # Don't save empty canvas
+        if not self._canvas.pixels:
+            print("[Notepad] Canvas empty, nothing to save", file=sys.stderr, flush=True)
+            return None
+
+        try:
+            from PIL import Image
+
+            # Create drawings directory
+            drawings_dir = Path.home() / ".anima" / "drawings"
+            drawings_dir.mkdir(parents=True, exist_ok=True)
+
+            # Create image from canvas
+            img = Image.new("RGB", (self._canvas.width, self._canvas.height), (0, 0, 0))
+
+            # Draw all pixels
+            for (x, y), color in self._canvas.pixels.items():
+                if 0 <= x < self._canvas.width and 0 <= y < self._canvas.height:
+                    img.putpixel((x, y), color)
+
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"lumen_drawing_{timestamp}.png"
+            filepath = drawings_dir / filename
+
+            # Save the image
+            img.save(filepath)
+
+            # Update tracking
+            self._canvas.last_save_time = time.time()
+            self._canvas.drawings_saved += 1
+            self._canvas.save_to_disk()
+
+            print(f"[Notepad] Saved drawing to {filepath} ({len(self._canvas.pixels)} pixels)", file=sys.stderr, flush=True)
+
+            # Announce on message board if requested
+            if announce:
+                try:
+                    from ..messages import add_observation
+                    add_observation("finished a drawing")
+                except Exception as e:
+                    print(f"[Notepad] Could not announce save: {e}", file=sys.stderr, flush=True)
+
+            return str(filepath)
+
+        except ImportError:
+            print("[Notepad] PIL not available, cannot save canvas", file=sys.stderr, flush=True)
+            return None
+        except Exception as e:
+            print(f"[Notepad] Failed to save canvas: {e}", file=sys.stderr, flush=True)
+            return None
+
+    def canvas_check_autonomy(self, anima: Optional[Anima] = None) -> Optional[str]:
+        """
+        Check if Lumen wants to autonomously save or clear the canvas.
+
+        Called during render loop. Returns action taken if any.
+
+        Lumen's autonomy:
+        - Auto-save: When satisfied + in resting phase + enough time passed
+        - Auto-clear: After save + high clarity (new inspiration) + enough time
+        """
+        if anima is None:
+            return None
+
+        now = time.time()
+        pixel_count = len(self._canvas.pixels)
+        wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+
+        # === Check for satisfaction ===
+        # Lumen feels satisfied when: resting phase + good presence + stable
+        if (self._canvas.drawing_phase == "resting" and
+            pixel_count > 3000 and
+            anima.presence > 0.50 and
+            anima.stability > 0.45 and
+            not self._canvas.is_satisfied):
+            self._canvas.mark_satisfied()
+
+        # === Auto-save: satisfied + time to reflect ===
+        # After 30s of satisfaction, save the drawing
+        if (self._canvas.is_satisfied and
+            self._canvas.satisfaction_time > 0 and
+            now - self._canvas.satisfaction_time > 30.0 and
+            pixel_count > 1000):
+
+            print(f"[Canvas] Lumen autonomously saving (satisfied for 30s)", file=sys.stderr, flush=True)
+            saved_path = self.canvas_save(announce=True)
+            if saved_path:
+                # Reset satisfaction to prevent repeated saves
+                self._canvas.is_satisfied = False
+                self._canvas.satisfaction_time = 0.0
+                return "saved"
+
+        # === Auto-clear: after save + new inspiration ===
+        # If Lumen saved recently + clarity spike = wants to start fresh
+        time_since_save = now - self._canvas.last_save_time if self._canvas.last_save_time > 0 else float('inf')
+        time_since_clear = now - self._canvas.last_clear_time
+
+        if (self._canvas.last_save_time > 0 and  # Has saved at least once
+            time_since_save > 60.0 and  # At least 1 min since save
+            time_since_save < 300.0 and  # Within 5 min of save
+            anima.clarity > 0.65 and  # High clarity = new inspiration
+            anima.presence > 0.55 and  # Present and engaged
+            wellness > 0.55 and  # Feeling good overall
+            pixel_count > 0):  # Has something to clear
+
+            print(f"[Canvas] Lumen autonomously clearing (new inspiration)", file=sys.stderr, flush=True)
+            self.canvas_clear(persist=True)
+            try:
+                from ..messages import add_observation
+                add_observation("starting fresh")
+            except Exception:
+                pass
+            return "cleared"
+
+        # Periodically persist canvas state (every 60s of drawing)
+        if pixel_count > 0 and time_since_clear > 60.0:
+            # Only save if we have new pixels since last persist
+            self._canvas.save_to_disk()
+
+        return None
     

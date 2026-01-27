@@ -8,6 +8,7 @@ The creature remembers:
 - Its name (if it has chosen one)
 """
 
+import sys
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -112,65 +113,115 @@ class IdentityStore:
         """)
         conn.commit()
 
-    def wake(self, creature_id: str) -> CreatureIdentity:
+    def _recalculate_stats(self, conn: sqlite3.Connection, creature_id: str) -> tuple[int, float]:
+        """Recalculate stats from events table (Source of Truth)."""
+        # Count wakes
+        count_row = conn.execute("SELECT COUNT(*) FROM events WHERE event_type = 'wake'").fetchone()
+        total_awakenings = count_row[0]
+
+        # Sum alive time
+        # json_extract returns NULL if key missing or data null. SUM ignores NULL.
+        sum_row = conn.execute("SELECT SUM(json_extract(data, '$.session_seconds')) FROM events WHERE event_type = 'sleep'").fetchone()
+        total_alive_seconds = sum_row[0] if sum_row[0] is not None else 0.0
+
+        return total_awakenings, total_alive_seconds
+
+    def wake(self, creature_id: str, dedupe_window_seconds: int = 60) -> CreatureIdentity:
         """
         Wake up the creature. Creates identity if first awakening.
+        Recalculates stats from events table to ensure consistency.
+
+        Deduplicates wake events within dedupe_window_seconds (default 60s)
+        to prevent multiple awakenings during the same boot cycle.
 
         Call this when the MCP server starts.
+        
+        Args:
+            creature_id: UUID of the creature
+            dedupe_window_seconds: Only count as new awakening if last wake was
+                                   more than this many seconds ago (default: 60)
         """
         conn = self._connect()
         now = datetime.now()
 
-        # Try to load existing identity
+        # Ensure identity exists (or create first-time record)
         row = conn.execute(
             "SELECT * FROM identity WHERE creature_id = ?",
             (creature_id,)
         ).fetchone()
 
-        if row:
-            # Existing creature waking up
-            self._identity = CreatureIdentity(
-                creature_id=row["creature_id"],
-                born_at=datetime.fromisoformat(row["born_at"]),
-                total_awakenings=row["total_awakenings"] + 1,
-                total_alive_seconds=row["total_alive_seconds"],
-                name=row["name"],
-                name_history=json.loads(row["name_history"]),
-                current_awakening_at=now,
-                metadata=json.loads(row["metadata"]),
-            )
-
-            # Update awakening count
-            conn.execute(
-                "UPDATE identity SET total_awakenings = ? WHERE creature_id = ?",
-                (self._identity.total_awakenings, creature_id)
-            )
-        else:
+        if not row:
             # First awakening - birth!
-            self._identity = CreatureIdentity(
-                creature_id=creature_id,
-                born_at=now,
-                total_awakenings=1,
-                total_alive_seconds=0.0,
-                current_awakening_at=now,
-            )
-
+            # Initialize with 0s; will be updated by recalculation below
             conn.execute(
                 """INSERT INTO identity
                    (creature_id, born_at, total_awakenings, total_alive_seconds, name, name_history, metadata)
                    VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                (creature_id, now.isoformat(), 1, 0.0, None, "[]", "{}")
+                (creature_id, now.isoformat(), 0, 0.0, None, "[]", "{}")
+            )
+            born_at = now
+            name = None
+            name_history = []
+            metadata = {}
+        else:
+            born_at = datetime.fromisoformat(row["born_at"])
+            name = row["name"]
+            name_history = json.loads(row["name_history"])
+            metadata = json.loads(row["metadata"])
+
+        # Check for recent wake events to deduplicate
+        # (prevents counting multiple process starts during same boot as separate awakenings)
+        last_wake = conn.execute(
+            "SELECT timestamp FROM events WHERE event_type = 'wake' ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        
+        should_log_wake = True
+        if last_wake:
+            last_wake_time = datetime.fromisoformat(last_wake[0])
+            seconds_since_last_wake = (now - last_wake_time).total_seconds()
+            if seconds_since_last_wake < dedupe_window_seconds:
+                should_log_wake = False
+                print(f"[Wake] Deduplicating: last wake was {seconds_since_last_wake:.1f}s ago (< {dedupe_window_seconds}s)", file=sys.stderr, flush=True)
+
+        # 1. Log awakening event (if not a duplicate)
+        current_event_id = None
+        if should_log_wake:
+            cursor = conn.execute(
+                "INSERT INTO events (timestamp, event_type, data) VALUES (?, ?, ?)",
+                (now.isoformat(), "wake", "{}")
+            )
+            current_event_id = cursor.lastrowid
+
+        # 2. Recalculate stats from events (Source of Truth)
+        total_awakenings, total_alive_seconds = self._recalculate_stats(conn, creature_id)
+
+        # Update current event data with correct count (if we logged a wake event)
+        if current_event_id is not None:
+            conn.execute(
+                "UPDATE events SET data = ? WHERE id = ?",
+                (json.dumps({"awakening": total_awakenings}), current_event_id)
             )
 
-        # Log awakening event
+        # 3. Update Identity Table with Truth
         conn.execute(
-            "INSERT INTO events (timestamp, event_type, data) VALUES (?, ?, ?)",
-            (now.isoformat(), "wake", json.dumps({"awakening": self._identity.total_awakenings}))
+            "UPDATE identity SET total_awakenings = ?, total_alive_seconds = ? WHERE creature_id = ?",
+            (total_awakenings, total_alive_seconds, creature_id)
+        )
+        conn.commit()
+
+        # 4. Update In-Memory Object
+        self._identity = CreatureIdentity(
+            creature_id=creature_id,
+            born_at=born_at,
+            total_awakenings=total_awakenings,
+            total_alive_seconds=total_alive_seconds,
+            name=name,
+            name_history=name_history,
+            current_awakening_at=now,
+            metadata=metadata,
         )
 
-        conn.commit()
         self._session_start = now
-
         return self._identity
 
     def sleep(self) -> float:

@@ -30,37 +30,84 @@ Each derived from actual measurements, not text analysis.
 
 ## Quick Start
 
+### 🍎 Mac (Development)
 ```bash
-# Install (Mac - mock sensors)
+pip install -r requirements.txt
 pip install -e .
-
-# Install (Pi - real sensors + display)
-pip install -e ".[pi]"
-
-# Install (with SSE for network access)
-pip install -e ".[sse]"
-
-# Run (stdio - local)
 anima
-
-# Run (SSE - network)
-anima --sse --port 8765
 ```
 
-## ⚠️ Critical: Do Not Run Both Scripts Simultaneously
+### 🥧 Raspberry Pi (Production)
+```bash
+# One-line install
+./install_pi.sh
 
-**DO NOT run `stable_creature.py` and `anima --sse` at the same time.**
+# Or see installation guides:
+# - QUICK_SETUP.md (one-page reference)
+# - README_INSTALL.md (quick guide)
+# - docs/PI_SETUP_COMPLETE.md (complete walkthrough)
+```
 
-Both scripts access I2C sensors simultaneously, which will cause:
-- Sensor read conflicts
-- I2C bus contention
-- **Potential Pi crashes**
+### Network Access (SSE)
+```bash
+anima --sse --host 0.0.0.0 --port 8765
+```
 
-**Run ONLY ONE:**
-- **`anima --sse`** - Main MCP server with TFT display + LEDs (recommended)
-- **`stable_creature.py`** - Standalone ASCII terminal display (alternative)
+**📖 Documentation:**
+- **Quick Setup:** `QUICK_SETUP.md` 
+- **Daily Development:** `DEVELOPMENT_WORKFLOW.md` ← Edit code, deploy, test
+- **Visual Workflow:** `WORKFLOW_VISUAL.md` ← Diagrams and comparisons
+- **Complete Guide:** `docs/PI_SETUP_COMPLETE.md`
+- **Dependencies:** `docs/DEPENDENCIES.md`
 
-The `stable_creature.py` script automatically checks for running `anima --sse` processes at startup and will exit with a clear error if detected.
+## 🔄 Broker Architecture: Body & Mind Separation
+
+Lumen uses a **hardware broker pattern** that allows both scripts to run simultaneously without conflicts:
+
+### How It Works
+
+```
+┌──────────────────────────────────────────────────────────┐
+│ stable_creature.py (The Body - Hardware Broker)          │
+│ - Owns I2C sensors exclusively                           │
+│ - Reads sensors every 2 seconds                          │
+│ - Writes data to shared memory (/dev/shm or Redis)       │
+│ - Updates TFT display + LEDs                             │
+└────────────────────┬─────────────────────────────────────┘
+                     │ Shared Memory
+                     ▼
+┌──────────────────────────────────────────────────────────┐
+│ anima --sse (The Mind - MCP Server)                      │
+│ - Reads from shared memory (no direct sensor access)     │
+│ - Provides MCP tools for external communication          │
+│ - Fast responses (reads from memory, not hardware)       │
+└──────────────────────────────────────────────────────────┘
+```
+
+**Key Benefits:**
+- ✅ **No I2C conflicts** - Only broker touches hardware
+- ✅ **Both can run together** - Creature alive while MCP server responds
+- ✅ **Fast responses** - MCP reads from memory (microseconds, not milliseconds)
+- ✅ **Automatic fallback** - MCP can read sensors directly if broker isn't running
+
+### Running Modes
+
+**Recommended: Both scripts (full system)**
+```bash
+# Terminal 1: Hardware broker
+python3 stable_creature.py
+
+# Terminal 2: MCP server
+anima --sse --host 0.0.0.0 --port 8765
+```
+
+**Or: MCP server only (standalone)**
+```bash
+anima --sse --host 0.0.0.0 --port 8765
+# Falls back to direct sensor access automatically
+```
+
+**See:** `docs/operations/BROKER_ARCHITECTURE.md` for architecture details
 
 ## Tools
 

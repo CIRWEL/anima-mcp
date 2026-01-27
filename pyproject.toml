@@ -4,33 +4,74 @@ version = "0.1.0"
 description = "A persistent Pi creature with grounded self-sense (anima)"
 readme = "README.md"
 requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+keywords = ["mcp", "raspberry-pi", "embodied-ai", "creature", "sensors"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
 dependencies = [
-    "mcp>=1.0.0",
-    "pyyaml>=6.0",
+    "mcp>=1.0.0,<2.0.0",
+    "pyyaml>=6.0,<7.0",
+    "psutil>=5.9.0,<6.0.0",
+    "Pillow>=10.0.0,<11.0.0",
+    "aiohttp>=3.9.0,<4.0.0",
+    "starlette>=0.35.0,<1.0.0",
+    "uvicorn>=0.25.0,<1.0.0",
 ]
 
 [project.optional-dependencies]
 pi = [
-    "RPi.GPIO",
-    "adafruit-circuitpython-dht",
-    "adafruit-circuitpython-bh1750",
-    "adafruit-circuitpython-bmp280",
-    "pillow",
-    "adafruit-circuitpython-rgb-display",
-    "brainflow>=5.0.0",
-    "numpy>=1.24.0",
-    "scipy>=1.10.0",
+    # GPIO
+    "RPi.GPIO>=0.7.1,<1.0.0",
+    # I2C communication
+    "adafruit-circuitpython-busdevice>=5.2.0,<6.0.0",
+    "adafruit-circuitpython-register>=1.9.0,<2.0.0",
+    # Sensors
+    "adafruit-circuitpython-ahtx0>=1.0.0,<2.0.0",
+    "adafruit-circuitpython-veml7700>=1.1.0,<2.0.0",
+    "adafruit-circuitpython-bmp280>=3.2.0,<4.0.0",
+    # Display
+    "adafruit-circuitpython-rgb-display>=3.11.0,<4.0.0",
+    "adafruit-circuitpython-st7789>=1.6.0,<2.0.0",
+    # LEDs
+    "adafruit-circuitpython-dotstar>=2.2.0,<3.0.0",
 ]
-sse = [
-    "starlette",
-    "uvicorn",
+
+brain = [
+    # OpenBCI Brain HAT support (optional)
+    "brainflow>=5.0.0,<6.0.0",
+    "numpy>=1.24.0,<2.0.0",
+    "scipy>=1.10.0,<2.0.0",
 ]
-unitares = [
-    "aiohttp>=3.9.0",
+
+audio = [
+    # Audio support (future feature)
+    "pyaudio>=0.2.13,<1.0.0",
+    "SpeechRecognition>=3.10.0,<4.0.0",
 ]
+
 dev = [
-    "pytest",
-    "pytest-asyncio",
+    "pytest>=7.4.0,<8.0.0",
+    "pytest-asyncio>=0.21.0,<1.0.0",
+    "pytest-cov>=4.1.0,<5.0.0",
+    "black>=23.7.0,<24.0.0",
+    "ruff>=0.0.285,<1.0.0",
+    "mypy>=1.5.0,<2.0.0",
+    "types-PyYAML>=6.0.0,<7.0.0",
+    "types-psutil>=5.9.0,<6.0.0",
+]
+
+# Convenience: Install everything for Pi
+all = [
+    "anima-mcp[pi,brain,audio,dev]",
 ]
 
 [project.scripts]
