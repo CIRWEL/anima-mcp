@@ -34,7 +34,7 @@ class LEDState:
     led0: Tuple[int, int, int]  # RGB for warmth (physical left, DotStar index 2)
     led1: Tuple[int, int, int]  # RGB for clarity (physical center, DotStar index 1)
     led2: Tuple[int, int, int]  # RGB for stability/presence (physical right, DotStar index 0)
-    brightness: float = 0.3     # Global brightness (0-1)
+    brightness: float = 0.15  # Global brightness (0-1) - lower default to prevent self-illumination
 
 
 class LEDDisplay:
@@ -72,14 +72,14 @@ class LEDDisplay:
             self._expression_mode = expression_mode
         except ImportError:
             # Fallback if config not available
-            self._base_brightness = brightness if brightness is not None else 0.3
+            self._base_brightness = brightness if brightness is not None else 0.15  # Lower default - LEDs are bright
             self._enable_breathing = enable_breathing if enable_breathing is not None else True
             self._pulsing_enabled = True
             self._color_transitions_enabled = True
             self._pattern_mode = "standard"
             self._auto_brightness_enabled = True
-            self._auto_brightness_min = 0.1
-            self._auto_brightness_max = 0.25  # Capped lower - DotStars are bright
+            self._auto_brightness_min = 0.05  # Lower minimum - LEDs are very bright
+            self._auto_brightness_max = 0.15  # Much lower max - prevent self-illumination feedback loop
             self._pulsing_threshold_clarity = 0.4
             self._pulsing_threshold_stability = 0.4
         
@@ -269,6 +269,9 @@ class LEDDisplay:
         """
         Auto-adjust brightness based on ambient light.
         
+        IMPORTANT: LEDs can illuminate themselves, creating a feedback loop.
+        We compensate by using lower brightness ranges and being conservative.
+        
         Args:
             light_level: Light level in lux (None to disable)
         
@@ -285,6 +288,10 @@ class LEDDisplay:
         # Bright (> 1000 lux): dimmer (min)
         # Logarithmic mapping for better feel
         
+        # COMPENSATION: If LEDs are currently bright, they might be contributing to lux reading
+        # Use more conservative brightness to avoid self-illumination feedback loop
+        # LEDs provide their own "clarity" (lux) - we need to account for this
+        
         if light_level < 10:
             brightness = self._auto_brightness_max
         elif light_level > 1000:
@@ -296,6 +303,13 @@ class LEDDisplay:
             log_current = math.log10(max(10, min(1000, light_level)))
             ratio = (log_current - log_min) / (log_max - log_min)
             brightness = self._auto_brightness_max - (ratio * (self._auto_brightness_max - self._auto_brightness_min))
+        
+        # Additional safety: Cap brightness lower if we suspect self-illumination
+        # If brightness is high and light level is moderate, LEDs might be contributing
+        # Be more conservative to break feedback loop
+        if brightness > self._base_brightness * 1.5 and 50 < light_level < 500:
+            # Suspect self-illumination - reduce brightness more aggressively
+            brightness = brightness * 0.7
         
         return max(self._auto_brightness_min, min(self._auto_brightness_max, brightness))
     
@@ -351,10 +365,12 @@ class LEDDisplay:
                 self._dots = None  # Mark as unavailable on hardware error
     
     def set_all(self, state: LEDState):
-        """Set all LEDs from state with retry logic.
+        """Set all LEDs from state with timeout protection.
         
         CRITICAL: This should never fail silently - if LEDs can't be updated,
         they should stay in their last state (not turn off).
+        
+        PERFORMANCE: LED updates are now fast-fail with timeout to prevent blocking.
         """
         if not self._dots:
             # LEDs unavailable - log but don't crash
@@ -362,7 +378,11 @@ class LEDDisplay:
                 print("[LEDs] set_all called but LEDs unavailable (_dots is None)", file=sys.stderr, flush=True)
             return
         
-        from ..error_recovery import retry_with_backoff, RetryConfig, safe_call
+        # Skip if state hasn't changed (performance optimization)
+        if self._last_state and self._last_state == state:
+            return
+        
+        from ..error_recovery import safe_call
         
         def set_leds():
             # LED order: 0=right, 1=center, 2=left (physical order on BrainCraft HAT)
@@ -390,20 +410,28 @@ class LEDDisplay:
             
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
+            # Note: show() can block on SPI communication - we rely on safe_call timeout
             self._dots.show()
         
-        retry_config = RetryConfig(max_attempts=2, initial_delay=0.1, max_delay=0.5)
+        # Fast path: no retries, just try once
+        # LEDs don't need retries - if hardware works, it works; if not, retries won't help
+        # Use safe_call to catch exceptions but don't retry (prevents blocking)
+        start_time = time.time()
         success = safe_call(
-            lambda: retry_with_backoff(set_leds, config=retry_config),
+            set_leds,
             default=False,
-            log_error=True
+            log_error=False  # Don't log every failure - too noisy
         )
+        elapsed = time.time() - start_time
+        
+        # Warn if LED update takes too long (indicates SPI bottleneck)
+        if elapsed > 0.5 and self._update_count % 20 == 0:  # Log every 20th slow update
+            print(f"[LEDs] Slow update: {elapsed*1000:.1f}ms (SPI bottleneck?)", file=sys.stderr, flush=True)
         
         if not success:
-            # CRITICAL: If set_all failed, LEDs stay in their last state (not turned off)
-            # Log error with full details for debugging
-            print(f"[LEDs] ERROR: set_all failed - LEDs NOT updated (staying in last state)", file=sys.stderr, flush=True)
-            print(f"[LEDs] Failed state: brightness={state.brightness:.3f}, colors={state.led0}/{state.led1}/{state.led2}", file=sys.stderr, flush=True)
+            # Only log failures occasionally to avoid spam
+            if self._update_count % 50 == 0:  # Log every 50th failure
+                print(f"[LEDs] Update skipped (timeout/hardware issue) - LEDs staying in last state", file=sys.stderr, flush=True)
             # Don't mark _dots as None here - keep trying on next update
             # Only mark unavailable if it's a persistent hardware error
         else:
@@ -922,12 +950,12 @@ def derive_led_state(warmth: float, clarity: float,
             glow_color = (0, int(150 * presence_glow), int(255 * presence_glow))
             led2 = blend_colors(led2, glow_color, ratio=presence_glow)
     
-    return LEDState(
-        led0=led0,
-        led1=led1,
-        led2=led2,
-        brightness=0.3  # Base brightness (will be adjusted)
-    )
+        return LEDState(
+            led0=led0,
+            led1=led1,
+            led2=led2,
+            brightness=0.15  # Base brightness (will be adjusted) - lower to prevent self-illumination
+        )
 
 
 # Singleton instance

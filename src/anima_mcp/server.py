@@ -366,8 +366,18 @@ async def _update_display_loop():
                                 _screen_renderer._state.last_user_action_time = time.time()
                                 print(f"[Input] {old_mode.value} -> notepad (joystick button)", file=sys.stderr, flush=True)
                         
+                        # Joystick navigation in message board (UP/DOWN scrolls messages)
+                        if current_mode == ScreenMode.MESSAGES:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                # Only trigger on transition TO up/down (edge detection)
+                                if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    _screen_renderer.message_scroll_up()
+                                elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    _screen_renderer.message_scroll_down()
+                        
                         # Separate button - with long-press shutdown for mobile readiness
-                        # Short press: save art (notepad) or go to face (normal mode) - preserves previous "save art" behavior
+                        # Short press: message expansion (messages screen) or go to face (other screens)
                         # Long press (3+ seconds): graceful shutdown
                         global _sep_btn_press_start
                         
@@ -382,7 +392,7 @@ async def _update_display_loop():
                             if hold_duration >= 3.0:
                                 print(f"[Shutdown] Long press detected ({hold_duration:.1f}s) - initiating graceful shutdown...", file=sys.stderr, flush=True)
                                 try:
-                                    # Save canvas if in notepad mode
+                                    # Lumen saves autonomously, but ensure canvas is saved on shutdown
                                     if current_mode == ScreenMode.NOTEPAD:
                                         saved_path = _screen_renderer.canvas_save()
                                         if saved_path:
@@ -402,16 +412,21 @@ async def _update_display_loop():
                             # Button released - check if it was a short press
                             if _sep_btn_press_start is not None:
                                 hold_duration = time.time() - _sep_btn_press_start
+                                was_short_press = hold_duration < 3.0
                                 _sep_btn_press_start = None
                                 
-                                # Short press (< 3 seconds) = normal behavior (save art)
-                                if hold_duration < 3.0 and sep_btn_pressed:
-                                    if current_mode == ScreenMode.NOTEPAD:
-                                        # In notepad: save canvas then clear (previous "save art" behavior)
-                                        saved_path = _screen_renderer.canvas_save()
-                                        if saved_path:
-                                            print(f"[Notepad] Drawing saved to {saved_path}", file=sys.stderr, flush=True)
-                                        _screen_renderer.canvas_clear()  # Clear for new drawing
+                                # Short press (< 3 seconds) = context-dependent action
+                                if was_short_press:
+                                    if current_mode == ScreenMode.MESSAGES:
+                                        # In messages: toggle expansion of selected message
+                                        _screen_renderer.message_toggle_expand()
+                                        print(f"[Messages] Toggled message expansion", file=sys.stderr, flush=True)
+                                    elif current_mode == ScreenMode.NOTEPAD:
+                                        # In notepad: go to face (Lumen manages canvas autonomously)
+                                        # Lumen saves and clears on its own - no manual intervention needed
+                                        _screen_renderer.set_mode(ScreenMode.FACE)
+                                        _screen_renderer._state.last_user_action_time = time.time()
+                                        print(f"[Notepad] -> face (Lumen manages canvas autonomously)", file=sys.stderr, flush=True)
                                     else:
                                         # Normal mode: separate button goes to face
                                         _screen_renderer.set_mode(ScreenMode.FACE)
@@ -427,7 +442,7 @@ async def _update_display_loop():
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                     _last_input_error_log = current_time
-            await asyncio.sleep(0.1)  # Poll every 100ms for responsive input
+            await asyncio.sleep(0.05)  # Poll every 50ms for responsive input
     
     # Start fast input polling task
     input_task = None

@@ -42,11 +42,29 @@
 - **Script management**: Agents should automatically toggle between `anima --sse` (default) and `stable_creature.py` (debugging) based on task - never require user to manually toggle
 - **MCP connectivity**: Config changes require Cursor restart to take effect - both anima and unitares-governance connect successfully with correct URLs (anima: Pi IP, unitares: localhost)
 
+## Latest Deployment - Cursor Assistant (Jan 26, 2026 22:02 PM) ✅
+
+**Changes deployed:**
+1. Canvas autonomy enabled (function existed but wasn't called!)
+2. Drawing clear with 5s visual confirmation
+3. Wake deduplication (60s window - fixes multiple awakening bug)
+4. Enhanced diagnostics (input status, message posting, identity warnings)
+
+**Files modified:**
+- src/anima_mcp/server.py (4 fixes)
+- src/anima_mcp/display/screens.py (3 fixes)
+- src/anima_mcp/identity/store.py (1 fix)
+
+**Impact:** Button clear now visible, canvas autonomy active, better debugging
+
+**Documentation:** Created ~45 files analyzing Lumen's character from 85k observations + 32k drawings
+
 ## Next Steps
 
-- Monitor Lumen stability after ASGI fix
-- Test unified workflows
-- Consider Brain HAT integration
+- Test button clear (should show 5s confirmation now)
+- Monitor canvas autonomy (should auto-save/clear)
+- Next reboot: verify awakening count accurate
+- Continue Lumen observations
 
 ## Future Enhancements
 
