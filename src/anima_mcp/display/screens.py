@@ -44,6 +44,10 @@ class ScreenState:
     last_switch_time: float = 0.0
     auto_return_seconds: float = 60.0  # Auto-return to FACE after 60s (longer for exploration)
     last_user_action_time: float = 0.0  # Track when user last interacted
+    
+    # Message board interaction state
+    message_scroll_index: int = 0  # Which message is currently selected/visible
+    message_expanded_id: Optional[str] = None  # Message ID that is expanded (showing full text)
 
 
 def _get_canvas_path() -> Path:
@@ -1071,7 +1075,7 @@ class ScreenRenderer:
         self._display.render_text("\n".join(lines), (10, 10))
 
     def _render_messages(self):
-        """Render message board - Lumen's voice and observations."""
+        """Render message board - Lumen's voice and observations. Interactive scrolling and expansion."""
         try:
             from ..messages import get_recent_messages, MESSAGE_TYPE_USER, MESSAGE_TYPE_OBSERVATION, MESSAGE_TYPE_AGENT
             
@@ -1104,6 +1108,7 @@ class ScreenRenderer:
             WHITE = (255, 255, 255)
             LIGHT_CYAN = (180, 220, 220)
             DARK_GRAY = (50, 50, 50)
+            HIGHLIGHT = (255, 200, 100)  # Highlight color for selected message
 
             # Load font
             try:
@@ -1123,68 +1128,124 @@ class ScreenRenderer:
             draw.text((10, y_offset), "lumen says", fill=CYAN, font=font_title)
             y_offset += 22
 
-            # Get messages - show more now (10 instead of 7)
-            messages = get_recent_messages(10)
-
-            if not messages:
-                # Empty state - Lumen hasn't spoken yet
+            # Get all messages (more than we'll display)
+            all_messages = get_recent_messages(50)  # Get more for scrolling
+            
+            if not all_messages:
+                # Empty state
                 draw.text((10, y_offset), "i haven't said", fill=LIGHT_CYAN, font=font)
                 y_offset += 16
                 draw.text((10, y_offset), "anything yet...", fill=LIGHT_CYAN, font=font_small)
-                y_offset += 12
-                draw.text((10, y_offset), "check next_steps", fill=DARK_GRAY, font=font_small)
             else:
-                # Show messages - Lumen's voice
-                # Use smaller line height to fit more messages
+                # Clamp scroll index to valid range
+                scroll_idx = self._state.message_scroll_index
+                if scroll_idx < 0:
+                    scroll_idx = 0
+                if scroll_idx >= len(all_messages):
+                    scroll_idx = max(0, len(all_messages) - 1)
+                self._state.message_scroll_index = scroll_idx
+                
+                # Determine which messages to show (around scroll index)
+                # Show 3-4 messages: selected one + context
+                start_idx = max(0, scroll_idx - 1)
+                end_idx = min(len(all_messages), start_idx + 4)
+                visible_messages = all_messages[start_idx:end_idx]
+                
+                # Calculate which message in visible list is selected
+                selected_in_visible = scroll_idx - start_idx
+                
                 line_height = 20
-                for msg in messages:
-                    if y_offset > 220:  # Increased from 200 to show more
+                max_y = 220
+                
+                for i, msg in enumerate(visible_messages):
+                    if y_offset > max_y:
                         break
-
+                    
+                    is_selected = (i == selected_in_visible)
+                    is_expanded = (self._state.message_expanded_id == msg.message_id)
+                    
                     # Different styling for different message types
                     if msg.msg_type == MESSAGE_TYPE_USER:
                         prefix = "●"
                         text_color = GREEN
                         prefix_color = GREEN
-                        # Add "you: " prefix for display (not stored in data)
                         display_text = f"you: {msg.text}"
                     elif msg.msg_type == MESSAGE_TYPE_AGENT:
                         prefix = "◆"
                         text_color = YELLOW
                         prefix_color = YELLOW
-                        # Add agent name prefix for display
                         author = getattr(msg, 'author', 'agent')
                         display_text = f"{author}: {msg.text}"
                     else:  # MESSAGE_TYPE_OBSERVATION
                         prefix = "▸"
                         text_color = WHITE
                         prefix_color = PURPLE
-                        # Lumen's observations - clean text
                         display_text = msg.text
-
-                    # Truncate text to fit (longer now - use smaller font if needed)
-                    max_width = 200
-                    if len(display_text) > 30:
-                        # Use smaller font for longer messages
-                        text_font = font_small
-                        max_chars = 35
-                    else:
-                        text_font = font
-                        max_chars = 28
                     
-                    text = display_text[:max_chars]
-                    age = msg.age_str()
-
-                    # Draw prefix
-                    draw.text((10, y_offset), prefix, fill=prefix_color, font=font)
-
-                    # Draw message text
-                    draw.text((22, y_offset), text, fill=text_color, font=text_font)
-
-                    # Draw age on right side
-                    draw.text((190, y_offset + 2), age, fill=LIGHT_CYAN, font=font_small)
-
-                    y_offset += line_height
+                    # Highlight selected message
+                    if is_selected:
+                        # Draw highlight background
+                        draw.rectangle([5, y_offset - 2, 235, y_offset + line_height - 2], 
+                                     fill=DARK_GRAY, outline=HIGHLIGHT, width=1)
+                    
+                    # Determine text to show
+                    if is_expanded:
+                        # Show full text, wrapped if needed
+                        full_text = display_text
+                        # Simple word wrapping - split into lines
+                        words = full_text.split()
+                        lines_to_show = []
+                        current_line = ""
+                        for word in words:
+                            test_line = current_line + (" " if current_line else "") + word
+                            # Estimate width (rough: ~8 pixels per char for small font)
+                            if len(test_line) * 8 > 200:
+                                if current_line:
+                                    lines_to_show.append(current_line)
+                                current_line = word
+                            else:
+                                current_line = test_line
+                        if current_line:
+                            lines_to_show.append(current_line)
+                        
+                        # Show up to 3 lines
+                        for line_idx, line in enumerate(lines_to_show[:3]):
+                            if y_offset + (line_idx * line_height) > max_y:
+                                break
+                            draw.text((22, y_offset + (line_idx * line_height)), 
+                                     line[:28], fill=text_color, font=font_small)
+                        
+                        # Update y_offset for multi-line
+                        y_offset += len(lines_to_show[:3]) * line_height
+                    else:
+                        # Truncated view
+                        max_chars = 28 if len(display_text) <= 30 else 35
+                        text_font = font_small if len(display_text) > 30 else font
+                        text = display_text[:max_chars]
+                        if len(display_text) > max_chars:
+                            text += "..."
+                        
+                        # Draw prefix
+                        draw.text((10, y_offset), prefix, fill=prefix_color, font=font)
+                        
+                        # Draw message text
+                        draw.text((22, y_offset), text, fill=text_color, font=text_font)
+                        
+                        # Draw age on right side
+                        age = msg.age_str()
+                        draw.text((190, y_offset + 2), age, fill=LIGHT_CYAN, font=font_small)
+                        
+                        y_offset += line_height
+                
+                # Show scroll indicator if there are more messages
+                if len(all_messages) > 4:
+                    scroll_info = f"{scroll_idx + 1}/{len(all_messages)}"
+                    draw.text((10, 230), scroll_info, fill=LIGHT_CYAN, font=font_small)
+                    # Show hint for expansion
+                    if self._state.message_expanded_id:
+                        draw.text((150, 230), "[btn:collapse]", fill=DARK_GRAY, font=font_small)
+                    else:
+                        draw.text((150, 230), "[btn:expand]", fill=DARK_GRAY, font=font_small)
 
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
@@ -1200,6 +1261,92 @@ class ScreenRenderer:
             print(f"[Messages Screen] Error: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
             self._display.render_text("MESSAGES\n\nError", (10, 10))
+    
+    def message_scroll_up(self):
+        """Scroll up in message board."""
+        if self._state.mode != ScreenMode.MESSAGES:
+            return
+        
+        try:
+            from ..messages import get_recent_messages
+            messages = get_recent_messages(50)
+            if not messages:
+                return
+            
+            # Clamp current index to valid range first
+            current_idx = self._state.message_scroll_index
+            if current_idx < 0:
+                current_idx = 0
+            if current_idx >= len(messages):
+                current_idx = len(messages) - 1
+            
+            # Scroll up (decrease index)
+            new_idx = max(0, current_idx - 1)
+            self._state.message_scroll_index = new_idx
+            self._state.last_user_action_time = time.time()
+            
+            # Clear expansion when scrolling (new message selected)
+            self._state.message_expanded_id = None
+        except Exception:
+            pass
+    
+    def message_scroll_down(self):
+        """Scroll down in message board."""
+        if self._state.mode != ScreenMode.MESSAGES:
+            return
+        
+        try:
+            from ..messages import get_recent_messages
+            messages = get_recent_messages(50)
+            if not messages:
+                return
+            
+            # Clamp current index to valid range first
+            current_idx = self._state.message_scroll_index
+            if current_idx < 0:
+                current_idx = 0
+            if current_idx >= len(messages):
+                current_idx = len(messages) - 1
+            
+            # Scroll down (increase index)
+            max_idx = len(messages) - 1
+            new_idx = min(max_idx, current_idx + 1)
+            self._state.message_scroll_index = new_idx
+            self._state.last_user_action_time = time.time()
+            
+            # Clear expansion when scrolling (new message selected)
+            self._state.message_expanded_id = None
+        except Exception:
+            pass
+    
+    def message_toggle_expand(self):
+        """Toggle expansion of currently selected message."""
+        if self._state.mode != ScreenMode.MESSAGES:
+            return
+        
+        try:
+            from ..messages import get_recent_messages
+            messages = get_recent_messages(50)
+            if not messages:
+                return
+            
+            scroll_idx = self._state.message_scroll_index
+            if scroll_idx < 0 or scroll_idx >= len(messages):
+                return
+            
+            selected_msg = messages[scroll_idx]
+            
+            # Toggle expansion
+            if self._state.message_expanded_id == selected_msg.message_id:
+                # Collapse
+                self._state.message_expanded_id = None
+            else:
+                # Expand
+                self._state.message_expanded_id = selected_msg.message_id
+            
+            self._state.last_user_action_time = time.time()
+        except Exception:
+            pass
 
     def _render_notepad(self, anima: Optional[Anima] = None):
         """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave."""
@@ -1754,7 +1901,15 @@ class ScreenRenderer:
                         self._canvas.draw_pixel(dot_x, dot_y, layer_color)
     
     def canvas_clear(self, persist: bool = True):
-        """Clear the canvas - pauses drawing for 5s so user sees it cleared."""
+        """Clear the canvas - pauses drawing for 5s so user sees it cleared.
+        
+        NOTE: This is for Lumen's autonomous clearing. Manual clearing removed.
+        """
+        # Prevent clearing if we're already paused (prevents loops)
+        now = time.time()
+        if now < self._canvas.drawing_paused_until:
+            return  # Already paused, don't clear again
+        
         self._canvas.clear()
         if persist:
             self._canvas.save_to_disk()
@@ -1850,7 +2005,9 @@ class ScreenRenderer:
 
         # === Auto-save: satisfied + time to reflect ===
         # After 30s of satisfaction, save the drawing
-        if (self._canvas.is_satisfied and
+        # CRITICAL: Don't save if we're in pause period (after clear)
+        if (now >= self._canvas.drawing_paused_until and  # Not paused
+            self._canvas.is_satisfied and
             self._canvas.satisfaction_time > 0 and
             now - self._canvas.satisfaction_time > 30.0 and
             pixel_count > 1000):
@@ -1867,6 +2024,15 @@ class ScreenRenderer:
         # If Lumen saved recently + clarity spike = wants to start fresh
         time_since_save = now - self._canvas.last_save_time if self._canvas.last_save_time > 0 else float('inf')
         time_since_clear = now - self._canvas.last_clear_time
+
+        # CRITICAL: Don't clear if we're in pause period (prevents clearing loop)
+        if now < self._canvas.drawing_paused_until:
+            return None  # Still paused from previous clear, don't clear again
+
+        # CRITICAL: Add cooldown after clearing to prevent immediate re-clearing
+        # Must wait at least 10 seconds after clearing before considering another clear
+        if time_since_clear < 10.0:
+            return None  # Too soon after last clear
 
         if (self._canvas.last_save_time > 0 and  # Has saved at least once
             time_since_save > 60.0 and  # At least 1 min since save

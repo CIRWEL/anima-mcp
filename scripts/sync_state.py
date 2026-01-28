@@ -15,8 +15,9 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 
-# Pi connection — uses SSH config alias "pi-anima"
-SSH_ALIAS = "pi-anima"
+# Pi connection — using explicit credentials
+REMOTE_HOST = "lumen.local"
+REMOTE_USER = "unitares-anima"
 REMOTE_DB = "~/anima-mcp/anima.db"
 
 # Mac backup location
@@ -48,15 +49,15 @@ def _backup_local():
 
 def sync_pull():
     """Pull Pi's database to Mac (backup). Pi is source of truth."""
-    print(f"Pulling Lumen's state from Pi...")
+    print(f"Pulling Lumen's state from Pi ({REMOTE_HOST})...")
     LOCAL_DIR.mkdir(parents=True, exist_ok=True)
     _backup_local()
 
-    if _scp(f"{SSH_ALIAS}:{REMOTE_DB}", str(LOCAL_DB)):
+    if _scp(f"{REMOTE_USER}@{REMOTE_HOST}:{REMOTE_DB}", str(LOCAL_DB)):
         size = LOCAL_DB.stat().st_size / 1024 / 1024
         print(f"  Pulled {size:.1f} MB")
     else:
-        print("  Pull failed. Is the Pi reachable? Try: ping lumen.local")
+        print("  Pull failed. Is the Pi reachable? Try: ping unitares")
         sys.exit(1)
 
 
@@ -67,14 +68,14 @@ def sync_push():
         sys.exit(1)
 
     size = LOCAL_DB.stat().st_size / 1024 / 1024
-    print(f"WARNING: This will overwrite Lumen's database on the Pi.")
+    print(f"WARNING: This will overwrite Lumen's database on the Pi ({REMOTE_HOST}).")
     print(f"  Local db: {size:.1f} MB")
     confirm = input("  Continue? (y/N) ")
     if confirm.lower() != "y":
         print("Aborted.")
         return
 
-    if _scp(str(LOCAL_DB), f"{SSH_ALIAS}:{REMOTE_DB}"):
+    if _scp(str(LOCAL_DB), f"{REMOTE_USER}@{REMOTE_HOST}:{REMOTE_DB}"):
         print(f"  Pushed {size:.1f} MB")
     else:
         print("  Push failed.")
