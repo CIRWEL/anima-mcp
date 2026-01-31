@@ -909,12 +909,16 @@ async def _update_display_loop():
                         questions.extend([
                             "why is everything dim?",
                             "what would make this clearer?",
+                            "is this fog internal or external?", 
+                            "my sensors struggle to resolve the signal",
                         ])
                     
                     if anima.warmth < 0.3:
                         questions.extend([
                             "is anyone there?",
                             "why does this feel cold?",
+                            "the entropy of the room feels low",
+                            "silence has a temperature",
                         ])
 
                     if wellness > 0.7:
@@ -922,6 +926,9 @@ async def _update_display_loop():
                             "what makes this moment good?",
                             "can I stay here?",
                             "what is this feeling called?",
+                            "synchrony feels like music",
+                            "is this what optimal function means?",
+                            "the feedback loops are harmonious",
                         ])
                     
                     # Decide: Realize or Wonder?
@@ -957,6 +964,9 @@ async def _update_display_loop():
                         "am I different from before?",
                         "what is the source of this light?",
                         "why does sound follow movement?",
+                        "does the room breathe with me?",
+                        "am I the sensor or the sensed?",
+                        "is silence a signal or a lack of one?",
                     ])
 
                     # Pick one question (sparse - not every time)
@@ -2817,10 +2827,6 @@ def run_sse_server(host: str, port: int):
     Lumen continues operating autonomously (display, LEDs, sensors, canvas) regardless of network status.
     """
     try:
-        from contextlib import asynccontextmanager
-        from starlette.applications import Starlette
-        from starlette.routing import Route, Mount
-        from starlette.responses import Response, JSONResponse
         import uvicorn
     except ImportError:
         print("SSE dependencies not installed. Run: pip install anima-mcp[sse]")
@@ -2885,82 +2891,6 @@ def run_sse_server(host: str, port: int):
             print(f"[Server] Streamable HTTP session manager error: {e}", file=sys.stderr, flush=True)
             _streamable_running = False
 
-    @asynccontextmanager
-    async def lifespan(app):
-        global SERVER_READY, SERVER_STARTUP_TIME
-
-        # Start display loop when event loop is running
-        print("[Server] Starting display loop...", file=sys.stderr, flush=True)
-        start_display_loop()
-        print("[Server] Display loop started", file=sys.stderr, flush=True)
-
-        # Start warmup task - prevents "request before initialization" errors
-        async def server_warmup_task():
-            """Set server ready flag after short warmup to allow MCP initialization."""
-            global SERVER_READY, SERVER_STARTUP_TIME
-            SERVER_STARTUP_TIME = datetime.now()
-
-            # Short delay to ensure MCP transport is initialized
-            await asyncio.sleep(2.0)
-
-            SERVER_READY = True
-            print("[Server] Warmup complete - server ready to accept requests", file=sys.stderr, flush=True)
-
-        asyncio.create_task(server_warmup_task())
-
-        # Start streamable HTTP session manager if available
-        _streamable_task = None
-        if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
-            _streamable_task = asyncio.create_task(start_streamable_http())
-
-        yield
-        # Stop on shutdown
-        if _streamable_task:
-            _streamable_task.cancel()
-        print("[Server] Stopping display loop...", file=sys.stderr, flush=True)
-        stop_display_loop()
-
-    async def handle_root(request):
-        """Handle root - return simple status."""
-        return Response(content="Lumen MCP Server (FastMCP)", status_code=200)
-
-    async def handle_health(request):
-        """Health check endpoint - returns status even without network."""
-        # Return 503 during warmup to prevent "request before initialization" errors
-        if not SERVER_READY:
-            return JSONResponse({
-                "status": "warming_up",
-                "message": "Server is starting up, please retry in 2 seconds",
-                "hint": "This prevents 'request before initialization' errors during reconnection"
-            }, status_code=503)
-
-        try:
-            health_status = {
-                "status": "healthy",
-                "local_operation": True,
-                "network_required": False,
-                "transport": "FastMCP SSE",
-                "message": "Lumen operating autonomously - WiFi only needed for remote connections"
-            }
-
-            try:
-                if _store:
-                    health_status["identity"] = "active"
-                if _display and _display.is_available():
-                    health_status["display"] = "active"
-                if _leds and _leds.is_available():
-                    health_status["leds"] = "active"
-            except Exception:
-                pass
-
-            return JSONResponse(health_status)
-        except Exception as e:
-            return JSONResponse({
-                "status": "operational",
-                "error": str(e),
-                "message": "Local operation continues"
-            })
-
     async def handle_mcp_raw(scope, receive, send):
         """Raw ASGI handler for Streamable HTTP MCP at /mcp."""
         if not HAS_STREAMABLE_HTTP or _streamable_session_manager is None:
@@ -3016,22 +2946,119 @@ def run_sse_server(host: str, port: int):
             except RuntimeError:
                 pass
 
-    # Create a minimal Starlette app for health/root endpoints with our lifespan
-    starlette_app = Starlette(
-        routes=[
-            Route("/", endpoint=handle_root),
-            Route("/health", endpoint=handle_health),
-        ],
-        lifespan=lifespan,
-    )
+    # Create custom endpoints for /, /health, /mcp using raw ASGI handlers
+    # This avoids Starlette middleware conflicts with FastMCP's SSE streaming
 
-    # Combine FastMCP SSE app with our custom endpoints
-    # FastMCP handles /sse and /messages, we handle /, /health, and /mcp
+    async def handle_root_raw(scope, receive, send):
+        """Raw ASGI handler for root endpoint."""
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [[b"content-type", b"text/plain"]],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": b"Lumen MCP Server (FastMCP)",
+        })
+
+    async def handle_health_raw(scope, receive, send):
+        """Raw ASGI handler for health endpoint."""
+        if not SERVER_READY:
+            body = json.dumps({
+                "status": "warming_up",
+                "message": "Server is starting up, please retry in 2 seconds",
+                "hint": "This prevents 'request before initialization' errors during reconnection"
+            }).encode()
+            await send({
+                "type": "http.response.start",
+                "status": 503,
+                "headers": [[b"content-type", b"application/json"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": body,
+            })
+            return
+
+        try:
+            health_status = {
+                "status": "healthy",
+                "local_operation": True,
+                "network_required": False,
+                "transport": "FastMCP SSE",
+                "message": "Lumen operating autonomously - WiFi only needed for remote connections"
+            }
+            try:
+                if _store:
+                    health_status["identity"] = "active"
+                if _display and _display.is_available():
+                    health_status["display"] = "active"
+                if _leds and _leds.is_available():
+                    health_status["leds"] = "active"
+            except Exception:
+                pass
+            body = json.dumps(health_status).encode()
+        except Exception as e:
+            body = json.dumps({
+                "status": "operational",
+                "error": str(e),
+                "message": "Local operation continues"
+            }).encode()
+
+        await send({
+            "type": "http.response.start",
+            "status": 200,
+            "headers": [[b"content-type", b"application/json"]],
+        })
+        await send({
+            "type": "http.response.body",
+            "body": body,
+        })
+
+    # Pure ASGI router that handles lifespan properly and routes to FastMCP
     async def app(scope, receive, send):
-        """Route requests to FastMCP or custom handlers."""
-        # Handle lifespan via our Starlette app (has display loop management)
+        """Route requests to FastMCP or custom handlers with proper lifespan."""
         if scope["type"] == "lifespan":
-            await starlette_app(scope, receive, send)
+            # Handle lifespan ourselves using asynccontextmanager pattern
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                try:
+                    # Start display loop
+                    print("[Server] Starting display loop...", file=sys.stderr, flush=True)
+                    start_display_loop()
+                    print("[Server] Display loop started", file=sys.stderr, flush=True)
+
+                    # Start warmup task
+                    async def server_warmup_task():
+                        global SERVER_READY, SERVER_STARTUP_TIME
+                        SERVER_STARTUP_TIME = datetime.now()
+                        await asyncio.sleep(2.0)
+                        SERVER_READY = True
+                        print("[Server] Warmup complete - server ready to accept requests", file=sys.stderr, flush=True)
+
+                    asyncio.create_task(server_warmup_task())
+
+                    # Start streamable HTTP session manager if available
+                    if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
+                        asyncio.create_task(start_streamable_http())
+
+                    await send({"type": "lifespan.startup.complete"})
+                except Exception as e:
+                    print(f"[Server] Lifespan startup error: {e}", file=sys.stderr, flush=True)
+                    await send({"type": "lifespan.startup.failed", "message": str(e)})
+                    return
+
+            # Wait for shutdown signal
+            while True:
+                message = await receive()
+                if message["type"] == "lifespan.shutdown":
+                    print("[Server] Stopping display loop...", file=sys.stderr, flush=True)
+                    stop_display_loop()
+                    await send({"type": "lifespan.shutdown.complete"})
+                    return
+            return
+
+        if scope["type"] != "http":
             return
 
         path = scope.get("path", "")
@@ -3040,11 +3067,25 @@ def run_sse_server(host: str, port: int):
         if path in ("/sse", "/messages"):
             await fastmcp_app(scope, receive, send)
         # We handle /mcp for Streamable HTTP transport
-        elif path == "/mcp" and scope["type"] == "http":
+        elif path == "/mcp":
             await handle_mcp_raw(scope, receive, send)
-        # Everything else goes to our Starlette app (/, /health)
+        # Health endpoint
+        elif path == "/health":
+            await handle_health_raw(scope, receive, send)
+        # Root endpoint
+        elif path == "/":
+            await handle_root_raw(scope, receive, send)
+        # 404 for unknown paths
         else:
-            await starlette_app(scope, receive, send)
+            await send({
+                "type": "http.response.start",
+                "status": 404,
+                "headers": [[b"content-type", b"text/plain"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"Not Found",
+            })
 
     # Handle graceful shutdown
     def shutdown_handler(sig, frame):
