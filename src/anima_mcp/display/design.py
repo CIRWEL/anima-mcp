@@ -13,36 +13,36 @@ from typing import Tuple
 
 @dataclass(frozen=True)
 class Colors:
-    """Lumen's color palette - warm and elegant."""
+    """Lumen's color palette - vibrant yet warm."""
 
     # Primary colors (warm whites and ambers)
     WARM_WHITE: Tuple[int, int, int] = (255, 252, 245)
-    SOFT_WHITE: Tuple[int, int, int] = (240, 238, 230)
-    AMBER: Tuple[int, int, int] = (255, 200, 120)
-    GOLD: Tuple[int, int, int] = (255, 215, 140)
+    SOFT_WHITE: Tuple[int, int, int] = (245, 242, 235)
+    AMBER: Tuple[int, int, int] = (255, 190, 80)
+    GOLD: Tuple[int, int, int] = (255, 210, 100)
 
-    # Accent colors (soft, not harsh)
-    SOFT_CYAN: Tuple[int, int, int] = (140, 200, 210)
-    SOFT_TEAL: Tuple[int, int, int] = (120, 180, 190)
-    SOFT_GREEN: Tuple[int, int, int] = (140, 200, 140)
-    SOFT_YELLOW: Tuple[int, int, int] = (240, 220, 140)
-    SOFT_ORANGE: Tuple[int, int, int] = (240, 180, 120)
-    SOFT_CORAL: Tuple[int, int, int] = (240, 160, 140)
-    SOFT_PURPLE: Tuple[int, int, int] = (180, 150, 200)
-    SOFT_BLUE: Tuple[int, int, int] = (140, 170, 210)
+    # Accent colors - VIBRANT but not harsh
+    SOFT_CYAN: Tuple[int, int, int] = (80, 220, 240)      # Bright cyan
+    SOFT_TEAL: Tuple[int, int, int] = (60, 200, 220)      # Rich teal
+    SOFT_GREEN: Tuple[int, int, int] = (100, 220, 120)    # Lively green
+    SOFT_YELLOW: Tuple[int, int, int] = (255, 230, 100)   # Warm yellow
+    SOFT_ORANGE: Tuple[int, int, int] = (255, 170, 80)    # Vibrant orange
+    SOFT_CORAL: Tuple[int, int, int] = (255, 130, 120)    # Warm coral
+    SOFT_PURPLE: Tuple[int, int, int] = (200, 140, 255)   # Rich purple
+    SOFT_BLUE: Tuple[int, int, int] = (100, 160, 255)     # Clear blue
 
-    # Status colors (muted, not alarming)
-    STATUS_GOOD: Tuple[int, int, int] = (140, 200, 140)
-    STATUS_OK: Tuple[int, int, int] = (220, 200, 120)
-    STATUS_WARN: Tuple[int, int, int] = (220, 160, 100)
-    STATUS_BAD: Tuple[int, int, int] = (200, 120, 120)
+    # Status colors - clear but not alarming
+    STATUS_GOOD: Tuple[int, int, int] = (100, 220, 120)
+    STATUS_OK: Tuple[int, int, int] = (255, 220, 100)
+    STATUS_WARN: Tuple[int, int, int] = (255, 170, 80)
+    STATUS_BAD: Tuple[int, int, int] = (255, 120, 120)
 
     # Backgrounds and text
-    BG_DARK: Tuple[int, int, int] = (15, 15, 18)
-    BG_SUBTLE: Tuple[int, int, int] = (25, 25, 30)
-    TEXT_PRIMARY: Tuple[int, int, int] = (240, 238, 230)
-    TEXT_SECONDARY: Tuple[int, int, int] = (180, 175, 165)
-    TEXT_DIM: Tuple[int, int, int] = (120, 115, 110)
+    BG_DARK: Tuple[int, int, int] = (8, 8, 12)            # Deeper black
+    BG_SUBTLE: Tuple[int, int, int] = (20, 20, 28)
+    TEXT_PRIMARY: Tuple[int, int, int] = (250, 248, 240)  # Brighter
+    TEXT_SECONDARY: Tuple[int, int, int] = (200, 195, 185)
+    TEXT_DIM: Tuple[int, int, int] = (140, 135, 125)
 
 
 # Singleton instance
@@ -170,3 +170,86 @@ def anima_dimension_color(dimension: str, value: float) -> Tuple[int, int, int]:
             return COLORS.SOFT_CYAN
     else:
         return COLORS.TEXT_SECONDARY
+
+
+# === Gradient System ===
+# Create smooth color transitions for visual richness
+
+from typing import List, Callable
+
+def create_gradient(color1: Tuple[int, int, int], color2: Tuple[int, int, int],
+                    steps: int = 10) -> List[Tuple[int, int, int]]:
+    """Create a list of colors forming a gradient between two colors."""
+    return [blend_color(color1, color2, i / (steps - 1)) for i in range(steps)]
+
+
+def create_multi_gradient(*colors: Tuple[int, int, int], steps_per_segment: int = 5) -> List[Tuple[int, int, int]]:
+    """Create a gradient through multiple colors."""
+    if len(colors) < 2:
+        return list(colors) if colors else []
+
+    result = []
+    for i in range(len(colors) - 1):
+        segment = create_gradient(colors[i], colors[i + 1], steps_per_segment)
+        if i > 0:
+            segment = segment[1:]  # Avoid duplicating middle colors
+        result.extend(segment)
+    return result
+
+
+def gradient_at(color1: Tuple[int, int, int], color2: Tuple[int, int, int],
+                position: float) -> Tuple[int, int, int]:
+    """Get color at a specific position (0-1) along a gradient."""
+    return blend_color(color1, color2, position)
+
+
+def radial_gradient_color(center_color: Tuple[int, int, int],
+                          edge_color: Tuple[int, int, int],
+                          distance: float, max_distance: float) -> Tuple[int, int, int]:
+    """Get color for radial gradient based on distance from center."""
+    t = min(1.0, distance / max_distance) if max_distance > 0 else 0
+    return blend_color(center_color, edge_color, t)
+
+
+# === Preset Gradients ===
+# Beautiful color combinations for common uses
+
+@dataclass(frozen=True)
+class Gradients:
+    """Preset gradient combinations."""
+
+    # Warmth gradient: cool cyan -> warm amber
+    WARMTH: tuple = (COLORS.SOFT_CYAN, COLORS.SOFT_WHITE, COLORS.AMBER)
+
+    # Wellness gradient: coral -> yellow -> green
+    WELLNESS: tuple = (COLORS.SOFT_CORAL, COLORS.SOFT_YELLOW, COLORS.SOFT_GREEN)
+
+    # Depth gradient: purple -> blue -> cyan (for backgrounds)
+    DEPTH: tuple = (COLORS.SOFT_PURPLE, COLORS.SOFT_BLUE, COLORS.SOFT_CYAN)
+
+    # Sunset: warm tones
+    SUNSET: tuple = (COLORS.SOFT_PURPLE, COLORS.SOFT_CORAL, COLORS.SOFT_ORANGE, COLORS.GOLD)
+
+    # Aurora: cool to warm
+    AURORA: tuple = (COLORS.SOFT_TEAL, COLORS.SOFT_CYAN, COLORS.SOFT_GREEN, COLORS.SOFT_YELLOW)
+
+
+GRADIENTS = Gradients()
+
+
+def get_wellness_gradient_color(wellness: float) -> Tuple[int, int, int]:
+    """Get color along wellness gradient (0=bad, 1=good)."""
+    colors = GRADIENTS.WELLNESS
+    if wellness < 0.5:
+        return blend_color(colors[0], colors[1], wellness * 2)
+    else:
+        return blend_color(colors[1], colors[2], (wellness - 0.5) * 2)
+
+
+def get_warmth_gradient_color(warmth: float) -> Tuple[int, int, int]:
+    """Get color along warmth gradient (0=cool, 1=warm)."""
+    colors = GRADIENTS.WARMTH
+    if warmth < 0.5:
+        return blend_color(colors[0], colors[1], warmth * 2)
+    else:
+        return blend_color(colors[1], colors[2], (warmth - 0.5) * 2)
