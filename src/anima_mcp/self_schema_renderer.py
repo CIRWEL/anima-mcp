@@ -464,11 +464,11 @@ Questions:
     # Try providers in order (free first)
     providers = []
 
-    # 1. Groq (FREE) - Llama 3.2 Vision
-    if os.environ.get("GROQ_API_KEY"):
-        providers.append(("groq", os.environ["GROQ_API_KEY"]))
+    # 1. Hugging Face Inference API (FREE) - Llama 3.2 Vision or LLaVA
+    if os.environ.get("HF_TOKEN"):
+        providers.append(("huggingface", os.environ["HF_TOKEN"]))
 
-    # 2. Together AI (FREE tier)
+    # 2. Together AI (FREE tier) - Llama Vision Free
     if os.environ.get("TOGETHER_API_KEY"):
         providers.append(("together", os.environ["TOGETHER_API_KEY"]))
 
@@ -479,7 +479,7 @@ Questions:
     if not providers:
         return {
             "v_f": None,
-            "error": "No vision API key set (GROQ_API_KEY, TOGETHER_API_KEY, or ANTHROPIC_API_KEY)",
+            "error": "No vision API key set (TOGETHER_API_KEY or ANTHROPIC_API_KEY). Get free key at together.ai",
             "stub_fallback": True,
         }
 
@@ -512,16 +512,18 @@ async def _call_vision_provider(
     import httpx
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        if provider == "groq":
-            # Groq with Llama 3.2 Vision (FREE)
+        if provider == "huggingface":
+            # Hugging Face Inference API - Llama 3.2 Vision
+            # Uses the new router endpoint for serverless inference
+            model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
             response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                f"https://router.huggingface.co/hf-inference/models/{model}/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.2-11b-vision-preview",
+                    "model": model,
                     "messages": [
                         {
                             "role": "user",
@@ -541,9 +543,14 @@ async def _call_vision_provider(
             )
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
+            elif response.status_code == 503:
+                # Model loading - try fallback
+                raise Exception("HF model loading, trying fallback...")
+            else:
+                raise Exception(f"HF API error {response.status_code}: {response.text[:200]}")
 
         elif provider == "together":
-            # Together AI with Llama Vision (FREE tier)
+            # Together AI with Qwen3-VL-8B (serverless, pay-per-use)
             response = await client.post(
                 "https://api.together.xyz/v1/chat/completions",
                 headers={
@@ -551,7 +558,7 @@ async def _call_vision_provider(
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "meta-llama/Llama-Vision-Free",
+                    "model": "Qwen/Qwen3-VL-8B-Instruct",
                     "messages": [
                         {
                             "role": "user",
@@ -571,6 +578,8 @@ async def _call_vision_provider(
             )
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
+            else:
+                raise Exception(f"Together API error {response.status_code}: {response.text[:200]}")
 
         elif provider == "anthropic":
             # Anthropic Claude (PAID)
@@ -604,6 +613,8 @@ async def _call_vision_provider(
             )
             if response.status_code == 200:
                 return response.json()["content"][0]["text"]
+            else:
+                raise Exception(f"Anthropic API error {response.status_code}: {response.text[:200]}")
 
     return None
 
