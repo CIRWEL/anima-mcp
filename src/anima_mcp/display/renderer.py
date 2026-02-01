@@ -20,6 +20,7 @@ except ImportError:
     HAS_PIL = False
 
 from .face import FaceState, EyeState, MouthState
+from .design import COLORS, radial_gradient_color, blend_color
 
 
 # Display dimensions (BrainCraft HAT)
@@ -216,25 +217,9 @@ class PilRenderer(DisplayRenderer):
                 )
                 state.tint = smooth_tint
 
-            # Draw face background with soft glow effect
-            # Outer glow (subtle, warm)
-            glow_color = tuple(c // 16 for c in state.tint)
-            draw.ellipse(
-                [center_x - face_radius - 4, center_y - face_radius - 4,
-                 center_x + face_radius + 4, center_y + face_radius + 4],
-                fill=glow_color,
-                outline=None
-            )
-
-            # Main face circle (subtle tint, no harsh outline)
-            tinted_bg = tuple(c // 10 for c in state.tint)  # Slightly more visible tint
-            draw.ellipse(
-                [center_x - face_radius, center_y - face_radius,
-                 center_x + face_radius, center_y + face_radius],
-                fill=tinted_bg,
-                outline=tuple(c // 3 for c in state.tint),  # Softer outline
-                width=1
-            )
+            # Draw face background with radial gradient
+            # Creates depth and warmth - the face glows from within
+            self._draw_gradient_face(draw, center_x, center_y, face_radius, state.tint)
 
             t1 = time.time()
 
@@ -310,6 +295,29 @@ class PilRenderer(DisplayRenderer):
             print(f"[Display] Error rendering face: {e}", file=sys.stderr, flush=True)
             # Don't print full traceback in production - too verbose
             # Don't crash - display might be temporarily unavailable
+
+    def _draw_gradient_face(self, draw: ImageDraw.ImageDraw, cx: int, cy: int,
+                             radius: int, tint: Tuple[int, int, int]):
+        """Draw face with radial gradient - glowing from within."""
+        # Center color: brighter version of tint
+        center_color = tuple(min(255, c // 6 + 20) for c in tint)
+
+        # Edge color: darker, fades to background
+        edge_color = tuple(c // 20 for c in tint)
+
+        # Draw gradient using concentric circles (efficient for small display)
+        # Use fewer rings with thicker bands for performance
+        num_rings = 12  # Fewer rings = faster, still looks smooth on 240px
+        for i in range(num_rings, 0, -1):
+            t = i / num_rings
+            r = int(radius * t + 4)  # +4 for soft edge
+            color = radial_gradient_color(center_color, edge_color, 1 - t, 1.0)
+            draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
+
+        # Subtle rim highlight (top edge catches light)
+        rim_color = tuple(min(255, c // 4 + 30) for c in tint)
+        draw.arc([cx - radius + 2, cy - radius + 2, cx + radius - 2, cy + radius - 2],
+                 200, 340, fill=rim_color, width=1)
 
     def _draw_eyes(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
         """Draw eyes based on state - fluid, expressive, and alive."""
