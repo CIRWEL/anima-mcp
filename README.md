@@ -280,16 +280,24 @@ See `docs/CONFIGURATION_GUIDE.md` for details.
 
 **VQA (Visual Question Answering):**
 
-Lumen can validate its self-schema rendering using vision LLMs. Set one of these for real VQA:
+Lumen validates its self-schema rendering (G_t) using vision LLMs every 5 minutes. This enables real StructScore-style visual integrity evaluation.
 
-- `GROQ_API_KEY`: **Recommended (FREE)** - Uses Llama 3.2 Vision. Get key at https://console.groq.com
-- `TOGETHER_API_KEY`: Together.ai vision models
-- `ANTHROPIC_API_KEY`: Claude vision (if available)
+**Recommended setup:**
+- `TOGETHER_API_KEY`: **Recommended** - Uses Qwen3-VL-8B. Get key at https://together.ai ($5 free credit)
 
-Without a key, VQA uses a stub score. With GROQ_API_KEY set:
+**Other providers:**
+- `HF_TOKEN`: Hugging Face Inference API (Llama 3.2 Vision)
+- `ANTHROPIC_API_KEY`: Claude vision (paid fallback)
+
+**Note:** Groq removed their vision model in late 2024. Use Together AI instead.
+
+Without a key, VQA uses a stub score (V=0.85). With TOGETHER_API_KEY set:
 ```
-[G_t] VQA (llama-3.2-11b): v_f=0.92 (11/12 correct)
+[G_t] Extracted self-schema: 12 nodes, 10 edges
+[G_t] VQA (together): v_f=0.20 (1/5 correct)
 ```
+
+VQA runs automatically during G_t extraction. The v_f score measures how accurately the vision model can answer questions about Lumen's rendered self-schema graph.
 
 **LLM Reflection:**
 - `NGROK_API_KEY`: For LLM-powered reflections via ngrok endpoints
