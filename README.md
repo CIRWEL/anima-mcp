@@ -30,6 +30,20 @@ Each derived from actual measurements, not text analysis.
 
 ## Quick Start
 
+### 🚀 New to Lumen? Start Here
+
+**Simple path (3 tools, 3 steps):**
+- 📖 **[Getting Started Simple](docs/guides/GETTING_STARTED_SIMPLE.md)** ← Start here!
+- 📋 **[Essential Tools](docs/guides/ESSENTIAL_TOOLS.md)** - The 3 tools you need
+- ⚡ **[Quick Reference](docs/guides/QUICK_REFERENCE.md)** - One-page cheat sheet
+
+**Just want to check Lumen's state?**
+```python
+get_state()      # How Lumen feels
+next_steps()     # What Lumen needs
+read_sensors()   # Raw sensor data
+```
+
 ### 🍎 Mac (Development)
 ```bash
 pip install -r requirements.txt
@@ -41,6 +55,9 @@ anima
 ```bash
 # One-line install
 ./install_pi.sh
+
+# Deploy updates (from Mac)
+./deploy.sh
 
 # Or see installation guides:
 # - QUICK_SETUP.md (one-page reference)
@@ -54,6 +71,8 @@ anima --sse --host 0.0.0.0 --port 8765
 ```
 
 **📖 Documentation:**
+- **🚀 Simple Start:** `docs/guides/GETTING_STARTED_SIMPLE.md` ← New users start here
+- **Deployment:** `DEPLOYMENT.md` ← Standard deploy method
 - **Quick Setup:** `QUICK_SETUP.md` 
 - **Daily Development:** `DEVELOPMENT_WORKFLOW.md` ← Edit code, deploy, test
 - **Visual Workflow:** `WORKFLOW_VISUAL.md` ← Diagrams and comparisons
@@ -111,7 +130,7 @@ anima --sse --host 0.0.0.0 --port 8765
 
 ## Tools
 
-11 tools - minimal by design:
+**Core tools (11)** - minimal by design. See `docs/guides/ESSENTIAL_TOOLS.md` for tiers.
 
 | Tool | Description |
 |------|-------------|
@@ -126,6 +145,17 @@ anima --sse --host 0.0.0.0 --port 8765
 | `get_calibration` | Get current nervous system calibration (temperature ranges, ideal values, weights) |
 | `set_calibration` | Update nervous system calibration - adapt Lumen to different environments |
 | `unified_workflow` | Execute unified workflows across anima-mcp and unitares-governance servers |
+
+**Extended tools** - available when optional features are enabled:
+
+| Category | Tools | Requires |
+|----------|-------|----------|
+| Display | `switch_screen`, `leave_message`, `leave_agent_note` | TFT display |
+| Voice | `say`, `voice_status`, `set_voice_mode` | Voice module |
+| Memory | `query_memory`, `learning_visualization`, `get_expression_mood` | Enhanced learning |
+| Cognitive | `cognitive_query`, `dialectic_synthesis`, `merge_insights` | Cognitive inference |
+
+Total: 11 core + 12 extended = 23 tools. Start with core tools; extended appear when features are available.
 
 ## Identity Persistence
 
@@ -243,6 +273,24 @@ See `docs/CONFIGURATION_GUIDE.md` for details.
 
 ## Environment Variables
 
+**Core:**
 - `ANIMA_DB`: Database path (default: `anima.db`)
 - `ANIMA_ID`: Creature UUID (generated if not set)
 - `ANIMA_CONFIG`: Config file path (default: `anima_config.yaml`)
+
+**VQA (Visual Question Answering):**
+
+Lumen can validate its self-schema rendering using vision LLMs. Set one of these for real VQA:
+
+- `GROQ_API_KEY`: **Recommended (FREE)** - Uses Llama 3.2 Vision. Get key at https://console.groq.com
+- `TOGETHER_API_KEY`: Together.ai vision models
+- `ANTHROPIC_API_KEY`: Claude vision (if available)
+
+Without a key, VQA uses a stub score. With GROQ_API_KEY set:
+```
+[G_t] VQA (llama-3.2-11b): v_f=0.92 (11/12 correct)
+```
+
+**LLM Reflection:**
+- `NGROK_API_KEY`: For LLM-powered reflections via ngrok endpoints
+- `HF_TOKEN`: Hugging Face token for model inference

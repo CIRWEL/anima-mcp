@@ -72,9 +72,11 @@ class AutonomousVoice:
 
         # Speech state
         self._last_speech_time = 0.0
-        self._speech_cooldown = 30.0  # Min seconds between autonomous speech
+        self._speech_cooldown = 60.0  # Min seconds between autonomous speech (was 30s)
         self._pending_thoughts: List[SpeechMoment] = []
         self._heard_recently: List[Utterance] = []
+        self._spoken_recently: List[str] = []  # Deduplication: avoid repeating phrases
+        self._spoken_recently_max = 20  # Keep track of last N phrases
 
         # Behavioral settings
         self._chattiness = 0.5  # 0 = very quiet, 1 = very talkative
@@ -200,6 +202,11 @@ class AutonomousVoice:
         if not observations:
             return None
 
+        # Filter out recently spoken phrases
+        observations = [(t, u) for t, u in observations if not self._is_phrase_recent(t)]
+        if not observations:
+            return None
+
         # Weight by urgency and pick one
         text, urgency = random.choice(observations)
 
@@ -234,6 +241,11 @@ class AutonomousVoice:
         if not feelings:
             return None
 
+        # Filter out recently spoken phrases
+        feelings = [(t, u) for t, u in feelings if not self._is_phrase_recent(t)]
+        if not feelings:
+            return None
+
         text, urgency = random.choice(feelings)
 
         return SpeechMoment(
@@ -255,6 +267,11 @@ class AutonomousVoice:
         if len(self._heard_recently) > 0:
             reflections.append(("I heard something earlier", 0.5))
 
+        # Filter out recently spoken phrases
+        reflections = [(t, u) for t, u in reflections if not self._is_phrase_recent(t)]
+        if not reflections:
+            return None
+
         text, urgency = random.choice(reflections)
 
         return SpeechMoment(
@@ -270,6 +287,11 @@ class AutonomousVoice:
             ("What's happening?", 0.4),
             ("Are you still here?", 0.5),
         ]
+
+        # Filter out recently spoken phrases
+        questions = [(t, u) for t, u in questions if not self._is_phrase_recent(t)]
+        if not questions:
+            return None
 
         text, urgency = random.choice(questions)
 
@@ -300,13 +322,48 @@ class AutonomousVoice:
             self._speak(best_thought)
             self._pending_thoughts.remove(best_thought)
 
+    def _is_phrase_recent(self, text: str) -> bool:
+        """Check if a phrase is too similar to something recently spoken."""
+        normalized = text.lower().strip().rstrip("?!.")
+
+        for recent in self._spoken_recently:
+            recent_norm = recent.lower().strip().rstrip("?!.")
+
+            # Exact match
+            if normalized == recent_norm:
+                return True
+
+            # Word overlap (Jaccard similarity > 0.6 = too similar)
+            words1 = set(normalized.split())
+            words2 = set(recent_norm.split())
+            intersection = words1 & words2
+            union = words1 | words2
+            if union and len(intersection) / len(union) > 0.6:
+                return True
+
+        return False
+
+    def _record_spoken(self, text: str):
+        """Record a phrase as recently spoken for deduplication."""
+        self._spoken_recently.append(text)
+        # Keep bounded
+        if len(self._spoken_recently) > self._spoken_recently_max:
+            self._spoken_recently.pop(0)
+
     def _speak(self, thought: SpeechMoment):
         """Actually speak a thought."""
+        # Skip if too similar to recent speech
+        if self._is_phrase_recent(thought.text):
+            print(f"[AutonomousVoice] Skipping (recently said similar): \"{thought.text}\"",
+                  file=sys.stderr, flush=True)
+            return
+
         print(f"[AutonomousVoice] Speaking ({thought.intent.value}): \"{thought.text}\"",
               file=sys.stderr, flush=True)
 
         self._voice.say(thought.text, blocking=True)
         self._last_speech_time = time.time()
+        self._record_spoken(thought.text)  # Track for deduplication
 
         if thought.intent == SpeechIntent.OBSERVATION:
             self._last_env_comment_time = time.time()
@@ -358,7 +415,8 @@ class AutonomousVoice:
         self._voice.update_anima_state(warmth, clarity, stability)
 
         # Adjust behavioral traits based on state
-        self._chattiness = 0.3 + warmth * 0.4 + presence * 0.3
+        # Reduced base chattiness (was 0.3) and coefficients to make Lumen quieter
+        self._chattiness = 0.15 + warmth * 0.25 + presence * 0.2
         self._curiosity = 0.3 + clarity * 0.3 + (1.0 - stability) * 0.2
         self._reflectiveness = stability * 0.5 + clarity * 0.3
 

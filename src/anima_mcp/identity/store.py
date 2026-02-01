@@ -36,6 +36,9 @@ class CreatureIdentity:
     # Current session
     current_awakening_at: Optional[datetime] = None
 
+    # Heartbeat tracking (for crash-resistant alive time)
+    last_heartbeat_at: Optional[datetime] = None
+
     # Memories
     metadata: Dict[str, Any] = field(default_factory=dict)
 
@@ -75,8 +78,12 @@ class IdentityStore:
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
-            self._conn = sqlite3.connect(self.db_path)
+            # Use timeout and WAL mode for better concurrency between broker and anima
+            self._conn = sqlite3.connect(self.db_path, timeout=30.0)
             self._conn.row_factory = sqlite3.Row
+            # WAL mode allows concurrent reads while writing
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=30000")
             self._init_schema()
         return self._conn
 
@@ -218,10 +225,17 @@ class IdentityStore:
             name=name,
             name_history=name_history,
             current_awakening_at=now,
+            last_heartbeat_at=None,  # Reset heartbeat for new session
             metadata=metadata,
         )
 
         self._session_start = now
+
+        # Attempt to recover any lost time from previous crashes
+        recovered = self.recover_lost_time()
+        if recovered > 0:
+            print(f"[Identity] Recovered {recovered:.1f}s from crash history", file=sys.stderr, flush=True)
+
         return self._identity
 
     def sleep(self) -> float:
@@ -236,9 +250,15 @@ class IdentityStore:
 
         conn = self._connect()
         now = datetime.now()
+
+        # Calculate total session time (for logging)
         session_seconds = (now - self._session_start).total_seconds()
 
-        self._identity.total_alive_seconds += session_seconds
+        # Only add time since last heartbeat (heartbeats already saved incremental time)
+        last_checkpoint = self._identity.last_heartbeat_at or self._session_start
+        remaining_seconds = (now - last_checkpoint).total_seconds()
+
+        self._identity.total_alive_seconds += remaining_seconds
 
         conn.execute(
             "UPDATE identity SET total_alive_seconds = ? WHERE creature_id = ?",
@@ -349,6 +369,116 @@ class IdentityStore:
         if not self._session_start:
             return 0.0
         return (datetime.now() - self._session_start).total_seconds()
+
+    def heartbeat(self, min_interval_seconds: float = 30.0) -> float:
+        """
+        Periodically save alive time to database.
+
+        Call this regularly (e.g., every loop iteration). The method will
+        only actually write to DB if min_interval_seconds has passed since
+        the last heartbeat, preventing excessive writes.
+
+        This ensures that if Lumen crashes, only time since the last heartbeat
+        is lost (e.g., 30 seconds) instead of the entire session.
+
+        Args:
+            min_interval_seconds: Minimum time between DB writes (default: 30s)
+
+        Returns:
+            Seconds saved in this heartbeat (0 if skipped due to interval)
+        """
+        if not self._identity or not self._session_start:
+            return 0.0
+
+        now = datetime.now()
+
+        # Determine last checkpoint (heartbeat or session start)
+        last_checkpoint = self._identity.last_heartbeat_at or self._session_start
+
+        # Check if enough time has passed
+        seconds_since_checkpoint = (now - last_checkpoint).total_seconds()
+        if seconds_since_checkpoint < min_interval_seconds:
+            return 0.0  # Skip - too soon
+
+        # Save the incremental time
+        conn = self._connect()
+
+        self._identity.total_alive_seconds += seconds_since_checkpoint
+        self._identity.last_heartbeat_at = now
+
+        conn.execute(
+            "UPDATE identity SET total_alive_seconds = ? WHERE creature_id = ?",
+            (self._identity.total_alive_seconds, self._identity.creature_id)
+        )
+        conn.commit()
+
+        return seconds_since_checkpoint
+
+    def recover_lost_time(self, max_gap_seconds: float = 10.0) -> float:
+        """
+        Recover alive time from state_history that wasn't captured due to crashes.
+
+        Analyzes state_history timestamps to find continuous periods of activity
+        that weren't properly recorded in sleep events.
+
+        Args:
+            max_gap_seconds: Maximum gap between state records to consider continuous
+                            (default: 10s, since state is recorded every 2s)
+
+        Returns:
+            Seconds of recovered time added to total_alive_seconds
+        """
+        if not self._identity:
+            return 0.0
+
+        conn = self._connect()
+
+        # Get all state_history timestamps
+        rows = conn.execute(
+            "SELECT timestamp FROM state_history ORDER BY timestamp ASC"
+        ).fetchall()
+
+        if len(rows) < 2:
+            return 0.0
+
+        # Calculate continuous alive periods
+        total_continuous_time = 0.0
+        prev_time = None
+
+        for row in rows:
+            curr_time = datetime.fromisoformat(row[0])
+            if prev_time:
+                gap = (curr_time - prev_time).total_seconds()
+                if gap <= max_gap_seconds:
+                    total_continuous_time += gap
+            prev_time = curr_time
+
+        # Compare with recorded total_alive_seconds
+        recorded_time = self._identity.total_alive_seconds
+        missing_time = max(0, total_continuous_time - recorded_time)
+
+        if missing_time > 60:  # Only recover if more than 1 minute missing
+            print(f"[Identity] Recovering {missing_time:.1f}s of lost alive time", file=sys.stderr, flush=True)
+            self._identity.total_alive_seconds += missing_time
+
+            conn.execute(
+                "UPDATE identity SET total_alive_seconds = ? WHERE creature_id = ?",
+                (self._identity.total_alive_seconds, self._identity.creature_id)
+            )
+
+            conn.execute(
+                "INSERT INTO events (timestamp, event_type, data) VALUES (?, ?, ?)",
+                (datetime.now().isoformat(), "time_recovery", json.dumps({
+                    "recovered_seconds": missing_time,
+                    "recorded_time": recorded_time,
+                    "calculated_time": total_continuous_time
+                }))
+            )
+
+            conn.commit()
+            return missing_time
+
+        return 0.0
 
     def close(self):
         """Close database connection."""

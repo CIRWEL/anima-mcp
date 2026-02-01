@@ -40,9 +40,15 @@ class Speaker:
         self._volume = 0.8  # 0.0 - 1.0
         self._audio_interface = None
         self._device = None
+        self._init_failed = False  # Track if init failed to suppress repeated warnings
 
     def _init_audio(self) -> bool:
         """Initialize audio output interface."""
+        if self._audio_interface is not None:
+            return True  # Already initialized
+        if self._init_failed:
+            return False  # Don't retry or print warnings again
+
         try:
             import sounddevice as sd
 
@@ -71,9 +77,11 @@ class Speaker:
         except ImportError:
             print("[Speaker] sounddevice not installed. Run: pip install sounddevice",
                   file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
         except Exception as e:
             print(f"[Speaker] Failed to init audio: {e}", file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
 
     def start(self) -> bool:

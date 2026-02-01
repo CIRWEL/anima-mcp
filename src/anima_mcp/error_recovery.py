@@ -10,10 +10,16 @@ Provides:
 
 import time
 import asyncio
+import threading
+import concurrent.futures
 from datetime import datetime, timedelta
 from typing import Optional, Callable, TypeVar, Any
 from enum import Enum
 from dataclasses import dataclass, field
+
+# Reusable thread pool for timeout-wrapped calls (avoids creation overhead)
+_timeout_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+_executor_lock = threading.Lock()
 
 
 class ErrorType(Enum):
@@ -312,12 +318,12 @@ def safe_call(
 ) -> Optional[T]:
     """
     Safely call a function, returning default on error.
-    
+
     Args:
         func: Function to call
         default: Value to return on error
         log_error: If True, log errors to stderr
-    
+
     Returns:
         Function result or default
     """
@@ -331,6 +337,56 @@ def safe_call(
             # Print traceback for display errors to help debug
             if "display" in str(e).lower() or "render" in str(e).lower():
                 traceback.print_exc(file=sys.stderr)
+        return default
+
+
+def _get_timeout_executor() -> concurrent.futures.ThreadPoolExecutor:
+    """Get or create reusable thread pool executor."""
+    global _timeout_executor
+    if _timeout_executor is None:
+        with _executor_lock:
+            if _timeout_executor is None:
+                # Small pool - we don't want many concurrent timeout calls
+                _timeout_executor = concurrent.futures.ThreadPoolExecutor(
+                    max_workers=2,
+                    thread_name_prefix="safe_timeout"
+                )
+    return _timeout_executor
+
+
+def safe_call_with_timeout(
+    func: Callable[[], T],
+    timeout_seconds: float = 0.5,
+    default: Optional[T] = None,
+    log_error: bool = True
+) -> Optional[T]:
+    """
+    Safely call a function with a hard timeout. Uses threading to enforce.
+
+    CRITICAL for hardware calls (SPI, I2C) that can block indefinitely.
+
+    Args:
+        func: Function to call
+        timeout_seconds: Max time to wait (default 0.5s for hardware)
+        default: Value to return on error/timeout
+        log_error: If True, log errors to stderr
+
+    Returns:
+        Function result or default on error/timeout
+    """
+    executor = _get_timeout_executor()
+    try:
+        future = executor.submit(func)
+        return future.result(timeout=timeout_seconds)
+    except concurrent.futures.TimeoutError:
+        if log_error:
+            import sys
+            print(f"[SafeCall] Timeout after {timeout_seconds}s", file=sys.stderr, flush=True)
+        return default
+    except Exception as e:
+        if log_error:
+            import sys
+            print(f"[SafeCall] Error: {e}", file=sys.stderr, flush=True)
         return default
 
 

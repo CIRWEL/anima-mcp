@@ -18,7 +18,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "mcp>=1.0.0,<2.0.0",
+    "mcp>=1.26.0,<2.0.0",
     "pyyaml>=6.0,<7.0",
     "psutil>=5.9.0,<6.0.0",
     "Pillow>=10.0.0,<11.0.0",
@@ -38,9 +38,10 @@ pi = [
     "adafruit-circuitpython-ahtx0>=1.0.0,<2.0.0",
     "adafruit-circuitpython-veml7700>=1.1.0,<2.0.0",
     "adafruit-circuitpython-bmp280>=3.2.0,<4.0.0",
-    # Display
+    # Display - numpy required for fast RGB565 conversion (10x speedup)
     "adafruit-circuitpython-rgb-display>=3.11.0,<4.0.0",
     "adafruit-circuitpython-st7789>=1.6.0,<2.0.0",
+    "numpy>=1.24.0,<3.0.0",
     # LEDs
     "adafruit-circuitpython-dotstar>=2.2.0,<3.0.0",
 ]

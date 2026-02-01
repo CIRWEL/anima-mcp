@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    Lumen Control Center
+    Live state, Q&A, and messaging interface.
+    Requires: python3 scripts/message_server.py
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumen Control Center</title>
+    <style>
+        :root {
+            --bg-color: #0d0d12;
+            --card-bg: #1a1a23;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0b0;
+            --accent-cyan: #00ffff;
+            --accent-purple: #bb86fc;
+            --accent-green: #03dac6;
+            --accent-orange: #cf6679;
+            --accent-yellow: #ffcc00;
+            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 20px 40px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 20px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        h1 {
+            font-weight: 700;
+            margin: 0;
+            font-size: 2rem;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #666;
+        }
+
+        .status-online { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
+        .status-offline { background-color: var(--accent-orange); box-shadow: 0 0 8px var(--accent-orange); }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        @media (max-width: 900px) {
+            .grid { grid-template-columns: 1fr; }
+        }
+
+        .card {
+            background-color: var(--card-bg);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid #333;
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+            margin: 0 0 15px 0;
+            color: var(--accent-cyan);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* State Display */
+        .state-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+        }
+
+        .state-item {
+            background: #0d0d12;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #222;
+        }
+
+        .state-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .state-value {
+            font-size: 1.4rem;
+            font-weight: 600;
+            margin-top: 4px;
+        }
+
+        .state-bar {
+            height: 4px;
+            background: #333;
+            border-radius: 2px;
+            margin-top: 6px;
+            overflow: hidden;
+        }
+
+        .state-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.5s ease;
+        }
+
+        .mood-display {
+            text-align: center;
+            padding: 15px;
+            background: linear-gradient(135deg, rgba(0,255,255,0.1), rgba(187,134,252,0.1));
+            border-radius: 8px;
+            grid-column: span 2;
+        }
+
+        .mood-text {
+            font-size: 1.8rem;
+            font-weight: 300;
+        }
+
+        .mood-name {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-top: 4px;
+        }
+
+        /* Q&A Section */
+        .qa-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .qa-item {
+            background: #0d0d12;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 10px;
+            border: 1px solid #222;
+        }
+
+        .qa-item.unanswered {
+            border-color: var(--accent-yellow);
+            border-width: 2px;
+        }
+
+        .qa-question {
+            color: var(--accent-cyan);
+            font-weight: 500;
+            margin-bottom: 8px;
+        }
+
+        .qa-answer {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            padding-left: 12px;
+            border-left: 2px solid var(--accent-purple);
+        }
+
+        .qa-meta {
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 6px;
+        }
+
+        .qa-answer-form {
+            margin-top: 10px;
+        }
+
+        .qa-answer-input {
+            width: 100%;
+            background: #1a1a23;
+            border: 1px solid #333;
+            color: var(--text-primary);
+            padding: 8px;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            resize: vertical;
+            min-height: 60px;
+            box-sizing: border-box;
+        }
+
+        .qa-answer-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+        }
+
+        /* Message Form */
+        .message-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .message-input {
+            background-color: #0d0d12;
+            border: 1px solid #333;
+            color: var(--text-primary);
+            padding: 12px;
+            border-radius: 8px;
+            font-family: var(--font-family);
+            min-height: 80px;
+            resize: vertical;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+        }
+
+        .btn {
+            display: inline-block;
+            background: linear-gradient(135deg, #2a2a35, #3a3a45);
+            color: white;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-weight: 500;
+            text-align: center;
+            transition: all 0.2s;
+            border: 1px solid #444;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+
+        .btn:hover {
+            background: linear-gradient(135deg, #3a3a45, #4a4a55);
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.8rem;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.15), rgba(187, 134, 252, 0.15));
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+        }
+
+        #messageStatus, #answerStatus {
+            font-size: 0.85em;
+            min-height: 1.2em;
+        }
+
+        .status-success { color: var(--accent-green); }
+        .status-error { color: var(--accent-orange); }
+        .status-sending { color: var(--accent-cyan); }
+
+        .section-title {
+            font-size: 1.3rem;
+            margin-top: 30px;
+            margin-bottom: 10px;
+            color: var(--text-primary);
+        }
+
+        .quick-links {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .quick-link {
+            color: var(--text-secondary);
+            text-decoration: none;
+            font-size: 0.9rem;
+            transition: color 0.2s;
+        }
+
+        .quick-link:hover {
+            color: var(--accent-cyan);
+        }
+
+        .refresh-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+            font-size: 1rem;
+        }
+
+        .refresh-btn:hover {
+            color: var(--accent-cyan);
+        }
+
+        .no-data {
+            color: var(--text-secondary);
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Learning Stats */
+        .learning-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .learning-stat {
+            text-align: center;
+            padding: 10px;
+            background: #0d0d12;
+            border-radius: 8px;
+        }
+
+        .learning-stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--accent-purple);
+        }
+
+        .learning-stat-label {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+        }
+
+        .trend-up { color: var(--accent-green); }
+        .trend-down { color: var(--accent-orange); }
+        .trend-neutral { color: var(--text-secondary); }
+
+        /* Voice Status */
+        .voice-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: #0d0d12;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .voice-icon {
+            font-size: 1.5rem;
+        }
+
+        .voice-text {
+            flex: 1;
+        }
+
+        .voice-speaking {
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Notification badge */
+        .notification-badge {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            background: var(--accent-yellow);
+            color: #000;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-weight: 600;
+            box-shadow: 0 4px 12px rgba(255, 204, 0, 0.3);
+            display: none;
+            cursor: pointer;
+            z-index: 1000;
+        }
+
+        .notification-badge.show {
+            display: block;
+            animation: slideIn 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { transform: translateX(100px); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #00ffff, #bb86fc); border-radius: 50%; opacity: 0.8;"></div>
+                <h1>Lumen Control Center</h1>
+            </div>
+            <div class="connection-status">
+                <div id="connectionDot" class="status-dot"></div>
+                <span id="connectionText">Checking...</span>
+            </div>
+        </header>
+
+        <!-- Notification Badge -->
+        <div id="notificationBadge" class="notification-badge" onclick="scrollToQA()">
+            New question from Lumen!
+        </div>
+
+        <div class="grid">
+            <!-- Live State -->
+            <div class="card">
+                <h3 class="card-title">
+                    Live State
+                    <button class="refresh-btn" onclick="fetchState()" title="Refresh">&#x21bb;</button>
+                </h3>
+                <!-- Voice Status -->
+                <div id="voiceStatus" class="voice-status" style="display: none;">
+                    <span class="voice-icon">🔊</span>
+                    <div class="voice-text">
+                        <div id="voiceState">Idle</div>
+                    </div>
+                </div>
+                <div id="stateContent">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+
+            <!-- Q&A -->
+            <div class="card" id="qaCard">
+                <h3 class="card-title">
+                    Questions & Answers
+                    <button class="refresh-btn" onclick="fetchQA()" title="Refresh">&#x21bb;</button>
+                    <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                </h3>
+                <div id="qaContent" class="qa-list">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Learning Stats -->
+        <div class="section-title">Learning Progress</div>
+        <div class="card">
+            <div id="learningContent">
+                <div class="no-data">Loading learning stats...</div>
+            </div>
+        </div>
+
+        <!-- Message Board -->
+        <div class="section-title">Send Message to Lumen</div>
+        <div class="card">
+            <div class="message-form">
+                <textarea id="messageInput" class="message-input" placeholder="Type your message to Lumen..."></textarea>
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span id="messageStatus"></span>
+                    <button onclick="sendMessage()" class="btn btn-primary">Send Message</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Links -->
+        <div class="section-title">Quick Links</div>
+        <div class="quick-links">
+            <a href="https://unitares.ngrok.io/dashboard" target="_blank" class="quick-link">UNITARES Dashboard</a>
+            <a href="NEURO_PSYCH_FRAMING.html" target="_blank" class="quick-link">Neuro-Psych Framework</a>
+            <a href="INDEX.md" class="quick-link">Documentation</a>
+            <span class="quick-link" style="cursor: default; color: #444;">|</span>
+            <span class="quick-link" style="cursor: text; user-select: all;">ssh unitares-anima@lumen</span>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:8768';
+        let currentQuestionId = null;
+        let lastUnansweredCount = 0;
+        let notificationSound = null;
+
+        // Try to create notification sound (silent fallback if not supported)
+        try {
+            notificationSound = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2teleRoAQKTo+/+dWwYDbrT4/8VvDQBS0P//zV0EAG/l//+wPgMA');
+        } catch (e) { }
+
+        function showNotification(message) {
+            const badge = document.getElementById('notificationBadge');
+            badge.textContent = message;
+            badge.classList.add('show');
+            if (notificationSound) {
+                notificationSound.play().catch(() => {});
+            }
+            setTimeout(() => badge.classList.remove('show'), 10000);
+        }
+
+        function scrollToQA() {
+            document.getElementById('qaCard').scrollIntoView({ behavior: 'smooth' });
+            document.getElementById('notificationBadge').classList.remove('show');
+        }
+
+        // Fetch state
+        async function fetchState() {
+            try {
+                const response = await fetch(`${API_BASE}/state`);
+                const data = await response.json();
+
+                if (data.error) {
+                    updateConnection(false, data.error);
+                    document.getElementById('stateContent').innerHTML = `<div class="no-data">Offline: ${data.error}</div>`;
+                    return;
+                }
+
+                updateConnection(true, data.name || 'Lumen');
+                renderState(data);
+            } catch (e) {
+                updateConnection(false, 'Server not running');
+                document.getElementById('stateContent').innerHTML = `<div class="no-data">Run: python3 scripts/message_server.py</div>`;
+            }
+        }
+
+        function renderState(data) {
+            const moodEmoji = {
+                'content': '😊', 'calm': '😌', 'alert': '👀', 'curious': '🤔',
+                'uncomfortable': '😟', 'stressed': '😰', 'unknown': '🤖'
+            }[data.mood] || '🤖';
+
+            const html = `
+                <div class="mood-display">
+                    <div class="mood-text">${moodEmoji}</div>
+                    <div class="mood-name">${data.name} is ${data.mood}</div>
+                </div>
+                <div class="state-grid" style="margin-top: 12px;">
+                    ${renderStateItem('Warmth', data.warmth, '#ff6b6b')}
+                    ${renderStateItem('Clarity', data.clarity, '#4ecdc4')}
+                    ${renderStateItem('Stability', data.stability, '#45b7d1')}
+                    ${renderStateItem('Presence', data.presence, '#96ceb4')}
+                </div>
+                <div style="margin-top: 12px; font-size: 0.8rem; color: var(--text-secondary);">
+                    🌡️ ${data.ambient_temp?.toFixed(1) || '?'}°C &nbsp;
+                    💡 ${data.light?.toFixed(0) || '?'} lux &nbsp;
+                    💧 ${data.humidity?.toFixed(0) || '?'}% &nbsp;
+                    ${data.surprise > 0.1 ? `⚡ ${(data.surprise * 100).toFixed(0)}% surprise` : ''}
+                </div>
+            `;
+            document.getElementById('stateContent').innerHTML = html;
+        }
+
+        function renderStateItem(label, value, color) {
+            const pct = (value * 100).toFixed(0);
+            return `
+                <div class="state-item">
+                    <div class="state-label">${label}</div>
+                    <div class="state-value" style="color: ${color}">${pct}%</div>
+                    <div class="state-bar">
+                        <div class="state-bar-fill" style="width: ${pct}%; background: ${color};"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Fetch Q&A
+        async function fetchQA() {
+            try {
+                const response = await fetch(`${API_BASE}/qa`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('qaContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    return;
+                }
+
+                document.getElementById('qaCount').textContent =
+                    data.unanswered > 0 ? `(${data.unanswered} unanswered)` : '';
+                renderQA(data.questions);
+            } catch (e) {
+                document.getElementById('qaContent').innerHTML = `<div class="no-data">Could not load Q&A</div>`;
+            }
+        }
+
+        function renderQA(questions) {
+            if (!questions || questions.length === 0) {
+                document.getElementById('qaContent').innerHTML = `<div class="no-data">No questions yet</div>`;
+                return;
+            }
+
+            const html = questions.map(q => `
+                <div class="qa-item ${q.answered ? '' : 'unanswered'}">
+                    <div class="qa-question">? ${q.question}</div>
+                    ${q.answer ? `
+                        <div class="qa-answer">${q.answer.text}</div>
+                        <div class="qa-meta">Answered by ${q.answer.author}</div>
+                    ` : `
+                        <div class="qa-answer-form">
+                            <textarea class="qa-answer-input" id="answer-${q.id}" placeholder="Type your answer..."></textarea>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
+                                <span id="status-${q.id}" style="font-size: 0.8rem;"></span>
+                                <button class="btn btn-small btn-primary" onclick="submitAnswer('${q.id}')">Answer</button>
+                            </div>
+                        </div>
+                    `}
+                </div>
+            `).join('');
+
+            document.getElementById('qaContent').innerHTML = html;
+        }
+
+        // Submit answer
+        async function submitAnswer(questionId) {
+            const input = document.getElementById(`answer-${questionId}`);
+            const status = document.getElementById(`status-${questionId}`);
+            const answer = input.value.trim();
+
+            if (!answer) return;
+
+            status.textContent = 'Sending...';
+            status.className = 'status-sending';
+
+            try {
+                const response = await fetch(`${API_BASE}/answer`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ question_id: questionId, answer: answer })
+                });
+
+                if (response.ok) {
+                    status.textContent = 'Answered!';
+                    status.className = 'status-success';
+                    setTimeout(() => fetchQA(), 1000);
+                } else {
+                    throw new Error('Server error');
+                }
+            } catch (e) {
+                status.textContent = 'Error sending answer';
+                status.className = 'status-error';
+            }
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const status = document.getElementById('messageStatus');
+            const text = input.value.trim();
+
+            if (!text) return;
+
+            status.textContent = 'Sending...';
+            status.className = 'status-sending';
+
+            try {
+                const response = await fetch(`${API_BASE}/message`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+
+                if (response.ok) {
+                    status.textContent = 'Sent!';
+                    status.className = 'status-success';
+                    input.value = '';
+                    setTimeout(() => { status.textContent = ''; }, 3000);
+                } else {
+                    throw new Error('Server error');
+                }
+            } catch (e) {
+                status.textContent = 'Error: Is message_server.py running?';
+                status.className = 'status-error';
+            }
+        }
+
+        // Connection status
+        function updateConnection(online, text) {
+            const dot = document.getElementById('connectionDot');
+            const label = document.getElementById('connectionText');
+            dot.className = online ? 'status-dot status-online' : 'status-dot status-offline';
+            label.textContent = online ? `Connected to ${text}` : text;
+        }
+
+        // Fetch learning stats
+        async function fetchLearning() {
+            try {
+                const response = await fetch(`${API_BASE}/learning`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('learningContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    return;
+                }
+
+                renderLearning(data);
+            } catch (e) {
+                document.getElementById('learningContent').innerHTML = `<div class="no-data">Could not load learning stats</div>`;
+            }
+        }
+
+        function renderLearning(data) {
+            const trendIcon = data.stability_trend > 0.01 ? '↑' : data.stability_trend < -0.01 ? '↓' : '→';
+            const trendClass = data.stability_trend > 0.01 ? 'trend-up' : data.stability_trend < -0.01 ? 'trend-down' : 'trend-neutral';
+
+            const html = `
+                <div class="learning-stats">
+                    <div class="learning-stat">
+                        <div class="learning-stat-value">${data.awakenings}</div>
+                        <div class="learning-stat-label">Awakenings</div>
+                    </div>
+                    <div class="learning-stat">
+                        <div class="learning-stat-value">${data.alive_hours}h</div>
+                        <div class="learning-stat-label">Time Alive</div>
+                    </div>
+                    <div class="learning-stat">
+                        <div class="learning-stat-value">${data.samples_24h}</div>
+                        <div class="learning-stat-label">Samples (24h)</div>
+                    </div>
+                </div>
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; font-size: 0.85rem;">
+                    <div>
+                        <div style="color: #ff6b6b;">W: ${(data.avg_warmth * 100).toFixed(0)}%</div>
+                    </div>
+                    <div>
+                        <div style="color: #4ecdc4;">C: ${(data.avg_clarity * 100).toFixed(0)}%</div>
+                    </div>
+                    <div>
+                        <div style="color: #45b7d1;">S: ${(data.avg_stability * 100).toFixed(0)}%</div>
+                    </div>
+                    <div>
+                        <div style="color: #96ceb4;">P: ${(data.avg_presence * 100).toFixed(0)}%</div>
+                    </div>
+                </div>
+                <div style="text-align: center; margin-top: 10px; font-size: 0.9rem;">
+                    Stability Trend: <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span>
+                    <span style="color: var(--text-secondary); font-size: 0.8rem;">(24h average)</span>
+                </div>
+                ${data.recent_events && data.recent_events.length > 0 ? `
+                    <div style="margin-top: 15px; font-size: 0.8rem; color: var(--text-secondary);">
+                        Recent: ${data.recent_events.map(e => e.type).join(', ')}
+                    </div>
+                ` : ''}
+            `;
+            document.getElementById('learningContent').innerHTML = html;
+        }
+
+        // Fetch voice status
+        async function fetchVoice() {
+            try {
+                const response = await fetch(`${API_BASE}/voice`);
+                const data = await response.json();
+
+                const voiceDiv = document.getElementById('voiceStatus');
+                const voiceState = document.getElementById('voiceState');
+                const voiceIcon = voiceDiv.querySelector('.voice-icon');
+
+                if (data.active || data.speaking || data.listening) {
+                    voiceDiv.style.display = 'flex';
+                    if (data.speaking) {
+                        voiceIcon.textContent = '🗣️';
+                        voiceIcon.classList.add('voice-speaking');
+                        voiceState.textContent = data.text ? `"${data.text.slice(0, 50)}..."` : 'Speaking...';
+                    } else if (data.listening) {
+                        voiceIcon.textContent = '👂';
+                        voiceIcon.classList.remove('voice-speaking');
+                        voiceState.textContent = 'Listening...';
+                    } else {
+                        voiceIcon.textContent = '🔊';
+                        voiceIcon.classList.remove('voice-speaking');
+                        voiceState.textContent = 'Voice active';
+                    }
+                } else {
+                    voiceDiv.style.display = 'none';
+                }
+            } catch (e) {
+                document.getElementById('voiceStatus').style.display = 'none';
+            }
+        }
+
+        // Check for new questions (with notification)
+        async function checkNewQuestions() {
+            try {
+                const response = await fetch(`${API_BASE}/qa`);
+                const data = await response.json();
+
+                if (!data.error && data.unanswered > lastUnansweredCount && lastUnansweredCount > 0) {
+                    showNotification(`Lumen asked a new question!`);
+                }
+                lastUnansweredCount = data.unanswered || 0;
+            } catch (e) { }
+        }
+
+        // Initialize
+        fetchState();
+        fetchQA();
+        fetchLearning();
+        fetchVoice();
+
+        // Auto-refresh
+        setInterval(fetchState, 10000);
+        setInterval(fetchQA, 30000);
+        setInterval(fetchLearning, 60000);
+        setInterval(fetchVoice, 5000);
+        setInterval(checkNewQuestions, 15000);
+    </script>
+</body>
+
+</html>

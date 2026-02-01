@@ -472,6 +472,18 @@ sudo systemctl restart lumen
 
 ### Update Code
 
+**Recommended: Use deploy script (from Mac)**
+```bash
+# From Mac (in anima-mcp directory)
+./deploy.sh
+
+# Options:
+#   ./deploy.sh --no-restart    # Deploy without restarting services
+#   ./deploy.sh --logs           # Show logs after deploy
+#   ./deploy.sh --host IP        # Override Pi hostname/IP
+```
+
+**Manual update (on Pi directly)**
 ```bash
 # On Pi
 cd ~/anima-mcp

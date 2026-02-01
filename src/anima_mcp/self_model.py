@@ -1,0 +1,558 @@
+"""
+Self-Model - Beliefs about self that can be wrong and updated.
+
+Core philosophical insight: Self-knowledge is not given, it's learned.
+Lumen should have beliefs about itself that can be tested against experience
+and updated when they're wrong.
+
+Examples of self-beliefs:
+- "I am sensitive to light changes" (testable: do light changes cause high surprise?)
+- "My stability recovers quickly" (testable: track recovery rates)
+- "Temperature affects my clarity" (testable: correlate temp with clarity)
+- "I tend to get warmer in the evening" (testable: track patterns)
+
+This is genuine metacognition: having beliefs about your own processes
+that can be wrong and corrected through experience.
+"""
+
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Optional, Dict, List, Tuple, Any
+from collections import deque
+import json
+from pathlib import Path
+import math
+
+
+@dataclass
+class SelfBelief:
+    """A belief Lumen holds about itself."""
+    belief_id: str
+    description: str
+
+    # Confidence: 0 = no idea, 1 = certain
+    confidence: float = 0.5
+
+    # Evidence tracking
+    supporting_count: int = 0
+    contradicting_count: int = 0
+    last_tested: Optional[datetime] = None
+
+    # The actual belief value (depends on belief type)
+    # For correlation beliefs: correlation coefficient
+    # For rate beliefs: rate value
+    # For categorical beliefs: probability
+    value: float = 0.5
+
+    def update_from_evidence(self, supports: bool, strength: float = 1.0):
+        """Update belief based on new evidence."""
+        self.last_tested = datetime.now()
+
+        if supports:
+            self.supporting_count += 1
+            # Increase confidence and value
+            adjustment = 0.1 * strength * (1 - self.confidence)
+            self.confidence = min(1.0, self.confidence + adjustment)
+            self.value = min(1.0, self.value + adjustment * 0.5)
+        else:
+            self.contradicting_count += 1
+            # Decrease confidence, adjust value toward 0.5
+            adjustment = 0.1 * strength * self.confidence
+            self.confidence = max(0.0, self.confidence - adjustment)
+            self.value = self.value + (0.5 - self.value) * adjustment
+
+    def get_belief_strength(self) -> str:
+        """Get natural language description of belief strength."""
+        total = self.supporting_count + self.contradicting_count
+        if total < 3:
+            return "uncertain"
+        elif self.confidence < 0.3:
+            return "doubtful"
+        elif self.confidence < 0.6:
+            return "moderate"
+        elif self.confidence < 0.8:
+            return "confident"
+        else:
+            return "very confident"
+
+
+class SelfModel:
+    """
+    Lumen's model of itself - beliefs that can be tested and updated.
+
+    Key behaviors:
+    1. Maintains beliefs about self
+    2. Tests beliefs against experience
+    3. Updates beliefs when evidence contradicts them
+    4. Uses beliefs to predict own behavior
+    """
+
+    def __init__(self, persistence_path: Optional[Path] = None):
+        self.persistence_path = persistence_path or Path.home() / ".anima" / "self_model.json"
+
+        # Core self-beliefs
+        self._beliefs: Dict[str, SelfBelief] = {
+            # Sensitivity beliefs
+            "light_sensitive": SelfBelief(
+                belief_id="light_sensitive",
+                description="I am sensitive to light changes",
+                confidence=0.5,
+                value=0.5,
+            ),
+            "temp_sensitive": SelfBelief(
+                belief_id="temp_sensitive",
+                description="I am sensitive to temperature changes",
+                confidence=0.5,
+                value=0.5,
+            ),
+
+            # Recovery beliefs
+            "stability_recovery": SelfBelief(
+                belief_id="stability_recovery",
+                description="I recover stability quickly",
+                confidence=0.5,
+                value=0.5,  # 1 = fast recovery, 0 = slow
+            ),
+            "warmth_recovery": SelfBelief(
+                belief_id="warmth_recovery",
+                description="My warmth returns to baseline quickly",
+                confidence=0.5,
+                value=0.5,
+            ),
+
+            # Correlation beliefs
+            "temp_clarity_correlation": SelfBelief(
+                belief_id="temp_clarity_correlation",
+                description="Temperature affects my clarity",
+                confidence=0.5,
+                value=0.5,  # 0.5 = no effect, 0 = negative, 1 = positive
+            ),
+            "light_warmth_correlation": SelfBelief(
+                belief_id="light_warmth_correlation",
+                description="Light level affects my warmth",
+                confidence=0.5,
+                value=0.5,
+            ),
+            "interaction_clarity_boost": SelfBelief(
+                belief_id="interaction_clarity_boost",
+                description="Interaction increases my clarity",
+                confidence=0.5,
+                value=0.7,  # Hypothesis: interactions help
+            ),
+
+            # Pattern beliefs
+            "evening_warmth_increase": SelfBelief(
+                belief_id="evening_warmth_increase",
+                description="I tend to feel warmer in evenings",
+                confidence=0.3,
+                value=0.5,
+            ),
+            "morning_clarity": SelfBelief(
+                belief_id="morning_clarity",
+                description="I have higher clarity in the morning",
+                confidence=0.3,
+                value=0.5,
+            ),
+
+            # Behavioral beliefs
+            "question_asking_tendency": SelfBelief(
+                belief_id="question_asking_tendency",
+                description="I tend to ask questions when surprised",
+                confidence=0.5,
+                value=0.7,
+            ),
+        }
+
+        # Tracking data for belief testing
+        self._stability_episodes: deque = deque(maxlen=20)  # (drop_time, recovery_time)
+        self._correlation_data: Dict[str, deque] = {
+            "temp_clarity": deque(maxlen=50),  # (temp, clarity) pairs
+            "light_warmth": deque(maxlen=50),  # (light, warmth) pairs
+        }
+        self._surprise_data: deque = deque(maxlen=50)  # (source, surprise_level)
+
+        # Load persisted model
+        self._load()
+
+    def _load(self):
+        """Load self-model from disk."""
+        if self.persistence_path.exists():
+            try:
+                with open(self.persistence_path, 'r') as f:
+                    data = json.load(f)
+                    for belief_id, bdata in data.get("beliefs", {}).items():
+                        if belief_id in self._beliefs:
+                            b = self._beliefs[belief_id]
+                            b.confidence = bdata.get("confidence", 0.5)
+                            b.value = bdata.get("value", 0.5)
+                            b.supporting_count = bdata.get("supporting_count", 0)
+                            b.contradicting_count = bdata.get("contradicting_count", 0)
+            except Exception as e:
+                print(f"[SelfModel] Could not load: {e}")
+
+    def _save(self):
+        """Save self-model to disk."""
+        try:
+            self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "beliefs": {
+                    bid: {
+                        "confidence": b.confidence,
+                        "value": b.value,
+                        "supporting_count": b.supporting_count,
+                        "contradicting_count": b.contradicting_count,
+                    }
+                    for bid, b in self._beliefs.items()
+                },
+                "last_saved": datetime.now().isoformat(),
+            }
+            with open(self.persistence_path, 'w') as f:
+                json.dump(data, f, indent=2)
+        except Exception as e:
+            print(f"[SelfModel] Could not save: {e}")
+
+    def observe_surprise(self, surprise_level: float, sources: List[str]):
+        """Record a surprise observation for belief testing."""
+        self._surprise_data.append({
+            "timestamp": datetime.now(),
+            "surprise": surprise_level,
+            "sources": sources,
+        })
+
+        # Test sensitivity beliefs
+        if "light" in sources:
+            # High surprise from light suggests high sensitivity
+            self._beliefs["light_sensitive"].update_from_evidence(
+                supports=surprise_level > 0.3,
+                strength=surprise_level,
+            )
+
+        if "ambient_temp" in sources:
+            self._beliefs["temp_sensitive"].update_from_evidence(
+                supports=surprise_level > 0.3,
+                strength=surprise_level,
+            )
+
+    def observe_stability_change(self, stability_before: float, stability_after: float, duration_seconds: float):
+        """Record stability change for recovery belief testing."""
+        if stability_before > stability_after:
+            # Stability dropped - record episode start
+            self._stability_episodes.append({
+                "drop_time": datetime.now(),
+                "initial": stability_before,
+                "dropped_to": stability_after,
+                "recovered": False,
+            })
+        elif stability_after > stability_before and self._stability_episodes:
+            # Stability recovering - check if this completes an episode
+            for episode in reversed(self._stability_episodes):
+                if not episode.get("recovered"):
+                    recovery_time = (datetime.now() - episode["drop_time"]).total_seconds()
+                    recovery_amount = stability_after - episode["dropped_to"]
+
+                    if recovery_amount > 0.1:  # Significant recovery
+                        episode["recovered"] = True
+                        episode["recovery_seconds"] = recovery_time
+
+                        # Test recovery belief
+                        # Fast recovery = under 60 seconds for 0.1 unit
+                        is_fast = recovery_time / max(0.1, recovery_amount) < 600
+
+                        self._beliefs["stability_recovery"].update_from_evidence(
+                            supports=is_fast,
+                            strength=recovery_amount,
+                        )
+                    break
+
+    def observe_correlation(self, sensor_values: Dict[str, float], anima_values: Dict[str, float]):
+        """Record data for correlation beliefs."""
+        now = datetime.now()
+
+        # Temperature-clarity correlation
+        if "ambient_temp" in sensor_values and "clarity" in anima_values:
+            self._correlation_data["temp_clarity"].append({
+                "temp": sensor_values["ambient_temp"],
+                "clarity": anima_values["clarity"],
+                "timestamp": now,
+            })
+            self._test_correlation_belief("temp_clarity_correlation", "temp_clarity")
+
+        # Light-warmth correlation
+        if "light" in sensor_values and "warmth" in anima_values:
+            self._correlation_data["light_warmth"].append({
+                "light": sensor_values.get("light", sensor_values.get("light_lux", 0)),
+                "warmth": anima_values["warmth"],
+                "timestamp": now,
+            })
+            self._test_correlation_belief("light_warmth_correlation", "light_warmth")
+
+    def _test_correlation_belief(self, belief_id: str, data_key: str):
+        """Test a correlation belief against accumulated data."""
+        if len(self._correlation_data[data_key]) < 10:
+            return  # Not enough data
+
+        data = list(self._correlation_data[data_key])
+        keys = list(data[0].keys())
+        keys.remove("timestamp")
+
+        if len(keys) < 2:
+            return
+
+        x_key, y_key = keys[0], keys[1]
+        x_values = [d[x_key] for d in data if d[x_key] is not None]
+        y_values = [d[y_key] for d in data if d[y_key] is not None]
+
+        if len(x_values) < 10 or len(y_values) < 10:
+            return
+
+        # Calculate correlation
+        n = min(len(x_values), len(y_values))
+        x = x_values[:n]
+        y = y_values[:n]
+
+        mean_x = sum(x) / n
+        mean_y = sum(y) / n
+
+        numerator = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n))
+        denom_x = math.sqrt(sum((xi - mean_x) ** 2 for xi in x))
+        denom_y = math.sqrt(sum((yi - mean_y) ** 2 for yi in y))
+
+        if denom_x == 0 or denom_y == 0:
+            return
+
+        correlation = numerator / (denom_x * denom_y)
+
+        # Update belief
+        belief = self._beliefs[belief_id]
+
+        # Strong correlation supports the belief
+        if abs(correlation) > 0.3:
+            belief.update_from_evidence(supports=True, strength=abs(correlation))
+            # Update value to reflect correlation direction
+            belief.value = 0.5 + correlation * 0.5  # Map -1,1 to 0,1
+        else:
+            # Weak correlation contradicts
+            belief.update_from_evidence(supports=False, strength=1 - abs(correlation))
+
+    def observe_interaction(self, clarity_before: float, clarity_after: float):
+        """Record interaction for testing interaction-clarity belief."""
+        clarity_change = clarity_after - clarity_before
+
+        self._beliefs["interaction_clarity_boost"].update_from_evidence(
+            supports=clarity_change > 0,
+            strength=abs(clarity_change) * 2,
+        )
+
+    def observe_time_pattern(self, hour: int, warmth: float, clarity: float):
+        """Test time-based beliefs."""
+        # Evening warmth (6pm-10pm)
+        if 18 <= hour <= 22:
+            self._beliefs["evening_warmth_increase"].update_from_evidence(
+                supports=warmth > 0.5,
+                strength=abs(warmth - 0.5),
+            )
+
+        # Morning clarity (6am-10am)
+        if 6 <= hour <= 10:
+            self._beliefs["morning_clarity"].update_from_evidence(
+                supports=clarity > 0.5,
+                strength=abs(clarity - 0.5),
+            )
+
+    def predict_own_response(self, context: str) -> Dict[str, float]:
+        """
+        Predict how Lumen will respond to a situation based on self-beliefs.
+
+        This is using self-knowledge to predict own behavior - genuine self-model.
+        """
+        predictions = {}
+
+        if context == "light_change":
+            sensitivity = self._beliefs["light_sensitive"].value
+            predictions["surprise_likelihood"] = sensitivity
+            predictions["warmth_change_likelihood"] = self._beliefs["light_warmth_correlation"].value
+
+        elif context == "temp_change":
+            sensitivity = self._beliefs["temp_sensitive"].value
+            predictions["surprise_likelihood"] = sensitivity
+            predictions["clarity_change_likelihood"] = self._beliefs["temp_clarity_correlation"].value
+
+        elif context == "stability_drop":
+            recovery_speed = self._beliefs["stability_recovery"].value
+            predictions["fast_recovery_likelihood"] = recovery_speed
+
+        elif context == "interaction":
+            predictions["clarity_boost_likelihood"] = self._beliefs["interaction_clarity_boost"].value
+
+        return predictions
+
+    def get_self_description(self) -> str:
+        """Generate natural language self-description based on beliefs."""
+        descriptions = []
+
+        for belief_id, belief in self._beliefs.items():
+            if belief.confidence < 0.4:
+                continue  # Not confident enough
+
+            strength = belief.get_belief_strength()
+
+            if belief_id == "light_sensitive":
+                if belief.value > 0.6:
+                    descriptions.append(f"I am {strength} that I'm sensitive to light changes")
+                elif belief.value < 0.4:
+                    descriptions.append(f"I am {strength} that light changes don't affect me much")
+
+            elif belief_id == "stability_recovery":
+                if belief.value > 0.6:
+                    descriptions.append(f"I am {strength} that I recover stability quickly")
+                elif belief.value < 0.4:
+                    descriptions.append(f"I am {strength} that my stability takes time to recover")
+
+            elif belief_id == "interaction_clarity_boost" and belief.value > 0.6:
+                descriptions.append(f"I am {strength} that interactions help my clarity")
+
+        if not descriptions:
+            return "I am still learning about myself."
+
+        return " ".join(descriptions) + "."
+
+    def get_belief_summary(self) -> Dict[str, Any]:
+        """Get summary of all beliefs."""
+        return {
+            bid: {
+                "description": b.description,
+                "confidence": round(b.confidence, 3),
+                "value": round(b.value, 3),
+                "strength": b.get_belief_strength(),
+                "evidence": f"{b.supporting_count}+ / {b.contradicting_count}-",
+            }
+            for bid, b in self._beliefs.items()
+        }
+
+    # ==================== Trajectory Components ====================
+    # These methods extract data for trajectory signature computation.
+    # See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
+
+    def get_belief_signature(self) -> Dict[str, Any]:
+        """
+        Extract belief signature (Β) for trajectory computation.
+
+        Returns the pattern of self-beliefs: values, confidences, and evidence ratios.
+        This reveals what the agent believes about itself and how certain it is.
+        """
+        beliefs = list(self._beliefs.values())
+
+        values = [b.value for b in beliefs]
+        confidences = [b.confidence for b in beliefs]
+        evidence_ratios = [
+            b.supporting_count / max(1, b.contradicting_count)
+            for b in beliefs
+        ]
+        labels = [b.belief_id for b in beliefs]
+
+        # Total evidence accumulated
+        total_evidence = sum(b.supporting_count + b.contradicting_count for b in beliefs)
+
+        # Average confidence
+        avg_confidence = sum(confidences) / len(confidences) if confidences else 0.0
+
+        return {
+            "values": [round(v, 4) for v in values],
+            "confidences": [round(c, 4) for c in confidences],
+            "evidence_ratios": [round(r, 4) for r in evidence_ratios],
+            "labels": labels,
+            "total_evidence": total_evidence,
+            "avg_confidence": round(avg_confidence, 4),
+            "n_beliefs": len(beliefs),
+        }
+
+    def get_recovery_profile(self) -> Dict[str, Any]:
+        """
+        Extract recovery profile (Ρ) for trajectory computation.
+
+        Estimates the characteristic time constant τ for returning to equilibrium
+        after perturbation. This is computed from recorded stability episodes.
+        """
+        completed = [
+            e for e in self._stability_episodes
+            if e.get("recovered") and e.get("recovery_seconds")
+        ]
+
+        if not completed:
+            return {
+                "tau_estimate": None,
+                "tau_std": None,
+                "n_episodes": 0,
+                "confidence": 0.0,
+            }
+
+        # Estimate tau from recovery episodes
+        # Using exponential recovery model: x(t) = x_final - (x_final - x_0) * e^(-t/τ)
+        # Rearranging: τ = -t / ln(1 - recovery_fraction)
+        tau_estimates = []
+
+        for ep in completed:
+            initial = ep.get("initial", 0.7)
+            dropped_to = ep.get("dropped_to", 0.5)
+            drop = initial - dropped_to
+
+            if drop <= 0.01:
+                continue  # Not a real drop
+
+            recovery_time = ep["recovery_seconds"]
+            # Assume 63.2% recovery (one time constant) as typical
+            recovery_fraction = min(0.95, 0.632)
+
+            tau = -recovery_time / math.log(1 - recovery_fraction)
+            if 0 < tau < 3600:  # Sanity check: 0-1 hour
+                tau_estimates.append(tau)
+
+        if not tau_estimates:
+            return {
+                "tau_estimate": None,
+                "tau_std": None,
+                "n_episodes": len(completed),
+                "confidence": 0.0,
+            }
+
+        # Statistics
+        tau_median = sorted(tau_estimates)[len(tau_estimates) // 2]
+        tau_mean = sum(tau_estimates) / len(tau_estimates)
+
+        if len(tau_estimates) > 1:
+            tau_var = sum((t - tau_mean)**2 for t in tau_estimates) / len(tau_estimates)
+            tau_std = tau_var ** 0.5
+        else:
+            tau_std = None
+
+        # Confidence increases with number of episodes
+        confidence = min(1.0, len(tau_estimates) / 10)
+
+        return {
+            "tau_estimate": round(tau_median, 2),
+            "tau_mean": round(tau_mean, 2),
+            "tau_std": round(tau_std, 2) if tau_std else None,
+            "n_episodes": len(completed),
+            "n_valid_estimates": len(tau_estimates),
+            "confidence": round(confidence, 2),
+        }
+
+    def get_recovery_episodes(self) -> List[Dict[str, Any]]:
+        """Get all recovery episodes for analysis."""
+        return list(self._stability_episodes)
+
+    def save(self):
+        """Explicitly save the model."""
+        self._save()
+
+
+# Singleton instance
+_self_model: Optional[SelfModel] = None
+
+
+def get_self_model() -> SelfModel:
+    """Get or create the self-model."""
+    global _self_model
+    if _self_model is None:
+        _self_model = SelfModel()
+    return _self_model

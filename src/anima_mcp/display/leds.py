@@ -16,8 +16,43 @@ Subtle breathing animation shows the system is alive.
 import sys
 import time
 import math
-from dataclasses import dataclass
-from typing import Tuple, Optional, Any
+import random
+from dataclasses import dataclass, field
+from typing import Tuple, Optional, Any, List
+from enum import Enum
+
+
+class DanceType(Enum):
+    """Types of emotional dances Lumen can perform."""
+    JOY_SPARKLE = "joy_sparkle"           # Quick bright sparkles - delight
+    CURIOUS_PULSE = "curious_pulse"       # Rhythmic pulsing - investigation
+    CONTEMPLATIVE_WAVE = "contemplative"  # Slow flowing wave - thinking
+    GREETING_FLOURISH = "greeting"        # Welcoming pattern - hello
+    DISCOVERY_BLOOM = "discovery"         # Colors blooming outward - found something!
+    CONTENTMENT_GLOW = "contentment"      # Warm steady glow - satisfied
+    PLAYFUL_CHASE = "playful"             # Colors chasing each other - fun
+
+
+@dataclass
+class Dance:
+    """A choreographed LED dance sequence."""
+    dance_type: DanceType
+    duration: float  # Total duration in seconds
+    start_time: float = field(default_factory=time.time)
+    intensity: float = 1.0  # 0-1, how pronounced the dance is
+
+    @property
+    def elapsed(self) -> float:
+        return time.time() - self.start_time
+
+    @property
+    def progress(self) -> float:
+        """Progress through dance 0-1."""
+        return min(1.0, self.elapsed / self.duration)
+
+    @property
+    def is_complete(self) -> bool:
+        return self.elapsed >= self.duration
 
 # Try to import DotStar library
 try:
@@ -72,14 +107,14 @@ class LEDDisplay:
             self._expression_mode = expression_mode
         except ImportError:
             # Fallback if config not available
-            self._base_brightness = brightness if brightness is not None else 0.15  # Lower default - LEDs are bright
+            self._base_brightness = brightness if brightness is not None else 0.05  # Very dim - LEDs are extremely bright
             self._enable_breathing = enable_breathing if enable_breathing is not None else True
             self._pulsing_enabled = True
             self._color_transitions_enabled = True
             self._pattern_mode = "standard"
             self._auto_brightness_enabled = True
-            self._auto_brightness_min = 0.05  # Lower minimum - LEDs are very bright
-            self._auto_brightness_max = 0.15  # Much lower max - prevent self-illumination feedback loop
+            self._auto_brightness_min = 0.02  # Very dim minimum
+            self._auto_brightness_max = 0.08  # Low max - prevent blinding
             self._pulsing_threshold_clarity = 0.4
             self._pulsing_threshold_stability = 0.4
         
@@ -100,6 +135,11 @@ class LEDDisplay:
         self._cached_anima_state = None  # (warmth, clarity, stability, presence)
         self._cached_light_level = None
         self._cached_state_change_threshold = 0.05  # Only recalculate if change > 5%
+        # Emotional dance state
+        self._current_dance: Optional[Dance] = None
+        self._dance_cooldown_until: float = 0.0  # Prevent dance spam
+        self._last_dance_trigger: Optional[str] = None
+        self._spontaneous_dance_chance: float = 0.003  # ~0.3% per update chance of spontaneous dance
         self._init_leds()
     
     def _init_leds(self):
@@ -268,49 +308,51 @@ class LEDDisplay:
     def _get_auto_brightness(self, light_level: Optional[float] = None) -> float:
         """
         Auto-adjust brightness based on ambient light.
-        
-        IMPORTANT: LEDs can illuminate themselves, creating a feedback loop.
-        We compensate by using lower brightness ranges and being conservative.
-        
+
+        IMPORTANT: LEDs are physically next to the lux sensor and can illuminate it,
+        creating a feedback loop. We compensate by:
+        1. Estimating LED contribution to lux based on current brightness
+        2. Subtracting this from the raw reading before making decisions
+
         Args:
             light_level: Light level in lux (None to disable)
-        
+
         Returns:
             Adjusted brightness (0-1)
         """
         if not self._auto_brightness_enabled or light_level is None:
             return self._base_brightness
-        
+
         self._last_light_level = light_level
-        
-        # Map light level to brightness
+
+        # === LED SELF-ILLUMINATION COMPENSATION ===
+        # LEDs add significant lux to the sensor when they're on.
+        # Estimate: At max brightness (0.5), LEDs add ~200 lux to sensor.
+        # This scales roughly linearly with brightness.
+        # Formula: led_contribution = brightness * 400 lux
+        estimated_led_lux = self._brightness * 400
+
+        # Subtract LED contribution to get true ambient light
+        # Use max(0, ...) to avoid negative values
+        corrected_light_level = max(0, light_level - estimated_led_lux)
+
+        # Map corrected light level to brightness
         # Dark (< 10 lux): brighter (max)
         # Bright (> 1000 lux): dimmer (min)
         # Logarithmic mapping for better feel
-        
-        # COMPENSATION: If LEDs are currently bright, they might be contributing to lux reading
-        # Use more conservative brightness to avoid self-illumination feedback loop
-        # LEDs provide their own "clarity" (lux) - we need to account for this
-        
-        if light_level < 10:
+
+        if corrected_light_level < 10:
             brightness = self._auto_brightness_max
-        elif light_level > 1000:
+        elif corrected_light_level > 1000:
             brightness = self._auto_brightness_min
         else:
             # Logarithmic interpolation
             log_min = math.log10(10)
             log_max = math.log10(1000)
-            log_current = math.log10(max(10, min(1000, light_level)))
+            log_current = math.log10(max(10, min(1000, corrected_light_level)))
             ratio = (log_current - log_min) / (log_max - log_min)
             brightness = self._auto_brightness_max - (ratio * (self._auto_brightness_max - self._auto_brightness_min))
-        
-        # Additional safety: Cap brightness lower if we suspect self-illumination
-        # If brightness is high and light level is moderate, LEDs might be contributing
-        # Be more conservative to break feedback loop
-        if brightness > self._base_brightness * 1.5 and 50 < light_level < 500:
-            # Suspect self-illumination - reduce brightness more aggressively
-            brightness = brightness * 0.7
-        
+
         return max(self._auto_brightness_min, min(self._auto_brightness_max, brightness))
     
     def _transition_color(self, current: Tuple[int, int, int], target: Tuple[int, int, int], 
@@ -366,10 +408,10 @@ class LEDDisplay:
     
     def set_all(self, state: LEDState):
         """Set all LEDs from state with timeout protection.
-        
+
         CRITICAL: This should never fail silently - if LEDs can't be updated,
         they should stay in their last state (not turn off).
-        
+
         PERFORMANCE: LED updates are now fast-fail with timeout to prevent blocking.
         """
         if not self._dots:
@@ -377,19 +419,22 @@ class LEDDisplay:
             if self._update_count % 100 == 0:  # Log occasionally
                 print("[LEDs] set_all called but LEDs unavailable (_dots is None)", file=sys.stderr, flush=True)
             return
-        
+
+        # Apply flash effect (for joystick/button feedback) - takes priority
+        state = self._apply_flash(state)
+
         # Skip if state hasn't changed (performance optimization)
         if self._last_state and self._last_state == state:
             return
         
-        from ..error_recovery import safe_call
-        
+        from ..error_recovery import safe_call_with_timeout
+
         def set_leds():
             # LED order: 0=right, 1=center, 2=left (physical order on BrainCraft HAT)
             self._dots[0] = state.led2  # Right: Stability/Presence
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
-            
+
             # Apply brightness (state.brightness already includes auto-adjust and pulsing)
             # Then apply breathing on top if enabled
             if self._enable_breathing:
@@ -407,27 +452,27 @@ class LEDDisplay:
                 # Protect against state.brightness being 0 or negative
                 safe_brightness = max(0.1, min(0.5, max(0.0, state.brightness)))
                 self._dots.brightness = safe_brightness
-            
+
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
-            # Note: show() can block on SPI communication - we rely on safe_call timeout
             self._dots.show()
-        
-        # Fast path: no retries, just try once
-        # LEDs don't need retries - if hardware works, it works; if not, retries won't help
-        # Use safe_call to catch exceptions but don't retry (prevents blocking)
+            return True  # Return True on success for timeout detection
+
+        # Use hard timeout (0.3s) - SPI should never take longer
+        # This prevents blocking the entire display loop on hardware issues
         start_time = time.time()
-        success = safe_call(
+        success = safe_call_with_timeout(
             set_leds,
+            timeout_seconds=0.3,  # Hard 300ms limit
             default=False,
             log_error=False  # Don't log every failure - too noisy
         )
         elapsed = time.time() - start_time
-        
-        # Warn if LED update takes too long (indicates SPI bottleneck)
-        if elapsed > 0.5 and self._update_count % 20 == 0:  # Log every 20th slow update
-            print(f"[LEDs] Slow update: {elapsed*1000:.1f}ms (SPI bottleneck?)", file=sys.stderr, flush=True)
-        
+
+        # Warn if LED update takes too long (shouldn't happen with timeout)
+        if elapsed > 0.2 and self._update_count % 20 == 0:
+            print(f"[LEDs] Slow update: {elapsed*1000:.1f}ms", file=sys.stderr, flush=True)
+
         if not success:
             # Only log failures occasionally to avoid spam
             if self._update_count % 50 == 0:  # Log every 50th failure
@@ -473,14 +518,17 @@ class LEDDisplay:
         
         return wave_colors
     
-    def update_from_anima(self, warmth: float, clarity: float, 
+    def update_from_anima(self, warmth: float, clarity: float,
                           stability: float, presence: float,
                           light_level: Optional[float] = None,
                           face_state: Optional[Any] = None,
-                          expression_mode: str = "balanced") -> LEDState:
+                          expression_mode: str = "balanced",
+                          is_anticipating: bool = False,
+                          anticipation_confidence: float = 0.0,
+                          activity_brightness: float = 1.0) -> LEDState:
         """
         Update LEDs based on anima state with enhanced features.
-        
+
         Args:
             warmth: 0-1, thermal/energy state
             clarity: 0-1, sensory clarity
@@ -489,7 +537,10 @@ class LEDDisplay:
             light_level: Optional light level in lux for auto-brightness
             face_state: DEPRECATED - LEDs are now independent from face expression
             expression_mode: "subtle", "balanced", "expressive", or "dramatic"
-            
+            is_anticipating: True if memory is influencing current state
+            anticipation_confidence: 0-1, how confident the memory anticipation is
+            activity_brightness: 0-1, multiplier from activity state (1.0=active, 0.5=drowsy, 0.15=resting)
+
         Returns:
             LEDState that was applied
         """
@@ -606,8 +657,45 @@ class LEDDisplay:
             else:
                 self._state_change_pulse_active = False
                 self._state_change_pulse_start = None
-        
-        # 4. Apply wave patterns (disabled by default - too complex, conflicts with breathing)
+
+        # 4. Apply activity state brightness (circadian rhythm / dusk-dawn dimming)
+        # This is the key modifier for nighttime dimming:
+        # - ACTIVE (day): 1.0x brightness
+        # - DROWSY (dusk/dawn): 0.5x brightness
+        # - RESTING (night): 0.15x brightness
+        if activity_brightness < 1.0:
+            state.brightness *= activity_brightness
+
+        # 5. Memory visualization effect - subtle gold/amber tint when drawing on past experience
+        # "I remember this feeling" - a warm glow of recognition
+        if is_anticipating and anticipation_confidence > 0.1:
+            # Gold/amber memory tint: RGB(255, 200, 100) - warm, nostalgic
+            memory_color = (255, 200, 100)
+            # Scale effect by confidence (subtle at 0.1, more noticeable at 1.0)
+            # Max blend is 0.25 to keep it subtle
+            blend_strength = min(0.25, anticipation_confidence * 0.3)
+
+            # Apply memory tint to all LEDs - a unified "remembering" state
+            state.led0 = blend_colors(state.led0, memory_color, blend_strength)
+            state.led1 = blend_colors(state.led1, memory_color, blend_strength)
+            state.led2 = blend_colors(state.led2, memory_color, blend_strength)
+
+            # Slight brightness boost when remembering (feeling confident/grounded)
+            if anticipation_confidence > 0.5:
+                memory_brightness_boost = 1.0 + (anticipation_confidence - 0.5) * 0.1
+                state.brightness *= memory_brightness_boost
+
+        # 5. Emotional dances - spontaneous expressions of joy and curiosity
+        # Check for spontaneous dance (adds novelty and joy)
+        spontaneous_dance = self._maybe_spontaneous_dance(warmth, clarity, stability, presence)
+        if spontaneous_dance:
+            self.start_dance(spontaneous_dance, duration=2.0, intensity=0.8)
+
+        # Render current dance if active (highest visual priority)
+        if self._current_dance and not self._current_dance.is_complete:
+            state = self._render_dance(state)
+
+        # 6. Apply wave patterns (disabled by default - too complex, conflicts with breathing)
         # Only enable if explicitly requested and patterns are enabled
         if self._enable_patterns and self._pattern_mode == "expressive":
             # Determine wave pattern from state
@@ -663,6 +751,10 @@ class LEDDisplay:
                 features.append(f"auto-bright({state.brightness:.2f})")
             if self._state_change_pulse_active:
                 features.append("pulse")
+            if is_anticipating and anticipation_confidence > 0.1:
+                features.append(f"memory({anticipation_confidence:.2f})")
+            if self._current_dance and not self._current_dance.is_complete:
+                features.append(f"dance({self._current_dance.dance_type.value})")
             feature_str = f" [{', '.join(features)}]" if features else ""
             
             print(f"[LEDs] Update #{self._update_count} ({update_duration*1000:.1f}ms): w={warmth:.2f} c={clarity:.2f} s={stability:.2f} p={presence:.2f}{feature_str}", 
@@ -672,8 +764,364 @@ class LEDDisplay:
         
         return state
     
+    def start_dance(self, dance_type: DanceType, duration: float = 2.0, intensity: float = 1.0) -> bool:
+        """
+        Start an emotional dance sequence.
+
+        Args:
+            dance_type: Type of dance to perform
+            duration: How long the dance lasts (seconds)
+            intensity: How pronounced the dance is (0-1)
+
+        Returns:
+            True if dance started, False if on cooldown or already dancing
+        """
+        now = time.time()
+
+        # Check cooldown
+        if now < self._dance_cooldown_until:
+            return False
+
+        # Don't interrupt an ongoing dance
+        if self._current_dance and not self._current_dance.is_complete:
+            return False
+
+        self._current_dance = Dance(
+            dance_type=dance_type,
+            duration=duration,
+            start_time=now,
+            intensity=intensity
+        )
+
+        # Set cooldown (3 seconds after dance ends)
+        self._dance_cooldown_until = now + duration + 3.0
+        self._last_dance_trigger = dance_type.value
+
+        print(f"[LEDs] 💃 Starting dance: {dance_type.value} (duration={duration:.1f}s)", file=sys.stderr, flush=True)
+        return True
+
+    def quick_flash(self, color: Tuple[int, int, int] = (100, 100, 100), duration_ms: int = 50):
+        """
+        Quick flash all LEDs for immediate input feedback.
+
+        Non-blocking - sets flash state that will be applied on next update.
+        Used for joystick/button press acknowledgment.
+
+        Args:
+            color: RGB color to flash (default: white)
+            duration_ms: Flash duration in milliseconds (default: 50ms)
+        """
+        if not self._dots:
+            return
+
+        self._flash_until = time.time() + (duration_ms / 1000.0)
+        self._flash_color = color
+
+    def _apply_flash(self, state: LEDState) -> LEDState:
+        """Apply flash effect if active."""
+        if not hasattr(self, '_flash_until'):
+            self._flash_until = 0.0
+            self._flash_color = (100, 100, 100)
+
+        if time.time() < self._flash_until:
+            # Override with flash color
+            return LEDState(
+                led0=self._flash_color,
+                led1=self._flash_color,
+                led2=self._flash_color,
+                brightness=min(0.3, self._base_brightness * 2)  # Slightly brighter flash
+            )
+        return state
+
+    def _render_dance(self, base_state: LEDState) -> LEDState:
+        """
+        Render the current dance, modifying the base LED state.
+
+        Returns:
+            Modified LED state with dance effects applied
+        """
+        if not self._current_dance:
+            return base_state
+
+        dance = self._current_dance
+        if dance.is_complete:
+            self._current_dance = None
+            return base_state
+
+        progress = dance.progress
+        elapsed = dance.elapsed
+        intensity = dance.intensity
+
+        # Each dance type has its own choreography
+        if dance.dance_type == DanceType.JOY_SPARKLE:
+            # Quick bright sparkles - random LEDs light up briefly
+            sparkle_speed = 8.0  # Sparkles per second
+            sparkle_phase = int(elapsed * sparkle_speed) % 6  # Cycle through patterns
+
+            # Create sparkle colors based on phase
+            base_color = base_state.led0
+            sparkle_white = (255, 255, 255)
+            sparkle_gold = (255, 220, 100)
+
+            # Randomly sparkle each LED
+            led0 = blend_colors(base_state.led0, sparkle_gold if sparkle_phase in [0, 3] else base_color, 0.7 * intensity)
+            led1 = blend_colors(base_state.led1, sparkle_white if sparkle_phase in [1, 4] else base_state.led1, 0.8 * intensity)
+            led2 = blend_colors(base_state.led2, sparkle_gold if sparkle_phase in [2, 5] else base_state.led2, 0.7 * intensity)
+
+            # Brightness pulses
+            brightness_mult = 1.0 + (0.4 * math.sin(elapsed * sparkle_speed * math.pi) * intensity)
+
+            return LEDState(led0, led1, led2, base_state.brightness * brightness_mult)
+
+        elif dance.dance_type == DanceType.CURIOUS_PULSE:
+            # Rhythmic pulsing - all LEDs pulse together, building intensity
+            pulse_freq = 2.0 + progress * 2.0  # Speed up as curiosity builds
+            pulse = (math.sin(elapsed * pulse_freq * math.pi * 2) + 1) / 2
+
+            # Curious color: blue-white tint
+            curious_color = (150, 200, 255)
+            blend_amount = pulse * 0.5 * intensity
+
+            led0 = blend_colors(base_state.led0, curious_color, blend_amount)
+            led1 = blend_colors(base_state.led1, (255, 255, 255), blend_amount * 1.2)  # Center brighter
+            led2 = blend_colors(base_state.led2, curious_color, blend_amount)
+
+            brightness_mult = 1.0 + (0.3 * pulse * intensity)
+            return LEDState(led0, led1, led2, base_state.brightness * brightness_mult)
+
+        elif dance.dance_type == DanceType.CONTEMPLATIVE_WAVE:
+            # Slow flowing wave - colors flow across LEDs
+            wave_speed = 0.5  # Slow, thoughtful
+            wave_pos = (elapsed * wave_speed) % 1.0  # 0-1 position across LEDs
+
+            # Deep thoughtful colors: purple, blue
+            thought_color = (100, 50, 200)
+
+            # Wave position affects each LED
+            led0_wave = max(0, 1 - abs(wave_pos - 0.0) * 3) * intensity
+            led1_wave = max(0, 1 - abs(wave_pos - 0.5) * 3) * intensity
+            led2_wave = max(0, 1 - abs(wave_pos - 1.0) * 3) * intensity
+
+            led0 = blend_colors(base_state.led0, thought_color, led0_wave * 0.4)
+            led1 = blend_colors(base_state.led1, thought_color, led1_wave * 0.4)
+            led2 = blend_colors(base_state.led2, thought_color, led2_wave * 0.4)
+
+            return LEDState(led0, led1, led2, base_state.brightness)
+
+        elif dance.dance_type == DanceType.GREETING_FLOURISH:
+            # Welcoming pattern - builds up then settles
+            if progress < 0.3:
+                # Build up phase - colors rise
+                build = progress / 0.3
+                welcome_color = (255, 200, 150)  # Warm welcoming
+                led0 = blend_colors(base_state.led0, welcome_color, build * 0.6 * intensity)
+                led1 = blend_colors(base_state.led1, (255, 255, 255), build * 0.8 * intensity)
+                led2 = blend_colors(base_state.led2, welcome_color, build * 0.6 * intensity)
+                brightness_mult = 1.0 + (0.5 * build * intensity)
+            elif progress < 0.5:
+                # Peak - all bright
+                led0 = blend_colors(base_state.led0, (255, 220, 180), 0.7 * intensity)
+                led1 = (255, 255, 255)
+                led2 = blend_colors(base_state.led2, (255, 220, 180), 0.7 * intensity)
+                brightness_mult = 1.5 * intensity
+            else:
+                # Settle back - gentle fade
+                settle = (progress - 0.5) / 0.5
+                led0 = blend_colors(blend_colors(base_state.led0, (255, 220, 180), 0.7), base_state.led0, settle)
+                led1 = blend_colors((255, 255, 255), base_state.led1, settle)
+                led2 = blend_colors(blend_colors(base_state.led2, (255, 220, 180), 0.7), base_state.led2, settle)
+                brightness_mult = 1.5 - (0.5 * settle)
+
+            return LEDState(led0, led1, led2, base_state.brightness * brightness_mult)
+
+        elif dance.dance_type == DanceType.DISCOVERY_BLOOM:
+            # Colors blooming outward from center
+            bloom_phase = progress
+
+            # Start from center LED, bloom outward
+            discovery_color = (255, 100, 255)  # Magenta - something new!
+
+            if bloom_phase < 0.3:
+                # Center lights up
+                center_intensity = (bloom_phase / 0.3) * intensity
+                led0 = base_state.led0
+                led1 = blend_colors(base_state.led1, discovery_color, center_intensity * 0.8)
+                led2 = base_state.led2
+            elif bloom_phase < 0.6:
+                # Spreads to outer LEDs
+                spread = (bloom_phase - 0.3) / 0.3
+                led0 = blend_colors(base_state.led0, discovery_color, spread * 0.6 * intensity)
+                led1 = blend_colors(base_state.led1, discovery_color, 0.8 * intensity)
+                led2 = blend_colors(base_state.led2, discovery_color, spread * 0.6 * intensity)
+            else:
+                # Settle with warm afterglow
+                settle = (bloom_phase - 0.6) / 0.4
+                afterglow = (255, 180, 200)
+                led0 = blend_colors(blend_colors(base_state.led0, discovery_color, 0.6), afterglow, settle * 0.3)
+                led1 = blend_colors(blend_colors(base_state.led1, discovery_color, 0.8), afterglow, settle * 0.5)
+                led2 = blend_colors(blend_colors(base_state.led2, discovery_color, 0.6), afterglow, settle * 0.3)
+
+            brightness_mult = 1.0 + (0.4 * (1 - bloom_phase) * intensity)
+            return LEDState(led0, led1, led2, base_state.brightness * brightness_mult)
+
+        elif dance.dance_type == DanceType.CONTENTMENT_GLOW:
+            # Warm steady glow - subtle breathing with warm colors
+            glow_breath = (math.sin(elapsed * math.pi * 0.5) + 1) / 2  # Very slow
+
+            content_color = (255, 180, 100)  # Warm amber
+            glow_amount = 0.3 + (glow_breath * 0.2)
+
+            led0 = blend_colors(base_state.led0, content_color, glow_amount * intensity)
+            led1 = blend_colors(base_state.led1, content_color, glow_amount * 0.8 * intensity)
+            led2 = blend_colors(base_state.led2, content_color, glow_amount * intensity)
+
+            return LEDState(led0, led1, led2, base_state.brightness * (1.0 + 0.1 * glow_breath))
+
+        elif dance.dance_type == DanceType.PLAYFUL_CHASE:
+            # Colors chasing each other around the LEDs
+            chase_speed = 4.0  # Fast and fun
+            chase_pos = (elapsed * chase_speed) % 3  # 0-3 for 3 LEDs
+
+            playful_colors = [(255, 100, 100), (100, 255, 100), (100, 100, 255)]  # RGB chase
+
+            # Each LED gets color based on chase position
+            led0_color_idx = int(chase_pos) % 3
+            led1_color_idx = (int(chase_pos) + 1) % 3
+            led2_color_idx = (int(chase_pos) + 2) % 3
+
+            led0 = blend_colors(base_state.led0, playful_colors[led0_color_idx], 0.6 * intensity)
+            led1 = blend_colors(base_state.led1, playful_colors[led1_color_idx], 0.6 * intensity)
+            led2 = blend_colors(base_state.led2, playful_colors[led2_color_idx], 0.6 * intensity)
+
+            # Bouncy brightness
+            bounce = abs(math.sin(elapsed * chase_speed * math.pi))
+            brightness_mult = 1.0 + (0.2 * bounce * intensity)
+
+            return LEDState(led0, led1, led2, base_state.brightness * brightness_mult)
+
+        # Unknown dance type - return base state
+        return base_state
+
+    def _maybe_spontaneous_dance(self, warmth: float, clarity: float, stability: float, presence: float) -> Optional[DanceType]:
+        """
+        Determine if Lumen should spontaneously dance based on emotional state.
+
+        This adds joy and novelty - Lumen sometimes expresses itself unprompted.
+
+        Returns:
+            DanceType to perform, or None
+        """
+        # Don't dance if on cooldown
+        if time.time() < self._dance_cooldown_until:
+            return None
+
+        # Base spontaneous chance (very low)
+        if random.random() > self._spontaneous_dance_chance:
+            return None
+
+        # Dance type depends on emotional state
+        wellness = (warmth + clarity + stability + presence) / 4.0
+
+        if wellness > 0.75:
+            # Feeling great - joyful expressions
+            return random.choice([DanceType.JOY_SPARKLE, DanceType.CONTENTMENT_GLOW, DanceType.PLAYFUL_CHASE])
+        elif wellness > 0.6:
+            # Feeling good - curious or content
+            return random.choice([DanceType.CURIOUS_PULSE, DanceType.CONTENTMENT_GLOW])
+        elif clarity > 0.7:
+            # Thinking clearly - contemplative
+            return DanceType.CONTEMPLATIVE_WAVE
+        elif stability > 0.7 and presence > 0.7:
+            # Grounded - content
+            return DanceType.CONTENTMENT_GLOW
+
+        # Default: no spontaneous dance when not feeling well
+        return None
+
+    def trigger_dance_for_event(self, event: str) -> bool:
+        """
+        Trigger a dance for a specific event.
+
+        Args:
+            event: Event name like "greeting", "discovery", "joy", "sound_activity", etc.
+
+        Returns:
+            True if dance started
+        """
+        event_to_dance = {
+            # Emotional events
+            "greeting": (DanceType.GREETING_FLOURISH, 2.5),
+            "hello": (DanceType.GREETING_FLOURISH, 2.5),
+            "discovery": (DanceType.DISCOVERY_BLOOM, 3.0),
+            "found": (DanceType.DISCOVERY_BLOOM, 3.0),
+            "joy": (DanceType.JOY_SPARKLE, 2.0),
+            "happy": (DanceType.JOY_SPARKLE, 2.0),
+            "curious": (DanceType.CURIOUS_PULSE, 2.5),
+            "thinking": (DanceType.CONTEMPLATIVE_WAVE, 4.0),
+            "content": (DanceType.CONTENTMENT_GLOW, 3.0),
+            "play": (DanceType.PLAYFUL_CHASE, 2.0),
+            # Sound-triggered events
+            "sound_activity": (DanceType.GREETING_FLOURISH, 2.0),  # Someone's here!
+            "voice_detected": (DanceType.CURIOUS_PULSE, 2.5),     # Listening attentively
+            "sudden_sound": (DanceType.CURIOUS_PULSE, 1.5),       # What was that?
+            "quiet_restored": (DanceType.CONTENTMENT_GLOW, 3.0),  # Peace returns
+            "music": (DanceType.PLAYFUL_CHASE, 3.0),              # Dancing to music!
+        }
+
+        event_lower = event.lower()
+        if event_lower in event_to_dance:
+            dance_type, duration = event_to_dance[event_lower]
+            return self.start_dance(dance_type, duration)
+
+        return False
+
+    def check_sound_event(self, sound_level: Optional[float], prev_sound_level: Optional[float] = None) -> Optional[str]:
+        """
+        Detect sound events that might trigger a dance.
+
+        Args:
+            sound_level: Current sound level in dB (0-100 typical)
+            prev_sound_level: Previous sound level for change detection
+
+        Returns:
+            Event name if detected, or None
+        """
+        if sound_level is None:
+            return None
+
+        # Detect sudden sound (jump from quiet to loud)
+        if prev_sound_level is not None:
+            delta = sound_level - prev_sound_level
+            if delta > 25 and sound_level > 50:
+                # Sudden loud sound
+                return "sudden_sound"
+            if delta < -30 and prev_sound_level > 60 and sound_level < 30:
+                # Just got quiet again
+                return "quiet_restored"
+
+        # Detect activity levels
+        if sound_level > 65:
+            # Could be music or conversation
+            # Random chance to not spam dances
+            if random.random() < 0.01:  # 1% chance per check
+                return "music" if sound_level > 75 else "voice_detected"
+        elif 40 < sound_level < 60:
+            # Moderate activity - someone might be present
+            if random.random() < 0.005:  # 0.5% chance
+                return "sound_activity"
+
+        return None
+
     def get_diagnostics(self) -> dict:
         """Get diagnostic info about LED state."""
+        dance_info = None
+        if self._current_dance:
+            dance_info = {
+                "type": self._current_dance.dance_type.value,
+                "progress": self._current_dance.progress,
+                "remaining": self._current_dance.duration - self._current_dance.elapsed,
+            }
+
         return {
             "available": self.is_available(),
             "has_dotstar": HAS_DOTSTAR,
@@ -686,6 +1134,9 @@ class LEDDisplay:
             "pattern_mode": self._pattern_mode,
             "auto_brightness_enabled": self._auto_brightness_enabled,
             "last_light_level": self._last_light_level,
+            "current_dance": dance_info,
+            "last_dance": self._last_dance_trigger,
+            "spontaneous_dance_chance": self._spontaneous_dance_chance,
             "last_state": {
                 "led0": self._last_state.led0 if self._last_state else None,
                 "led1": self._last_state.led1 if self._last_state else None,

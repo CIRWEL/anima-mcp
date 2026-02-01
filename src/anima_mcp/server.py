@@ -26,6 +26,7 @@ from typing import Any, Dict
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import Tool, TextContent
 
 from .identity import IdentityStore
@@ -47,6 +48,7 @@ from .workflow_orchestrator import UnifiedWorkflowOrchestrator, get_orchestrator
 from .workflow_templates import WorkflowTemplates
 from .expression_moods import ExpressionMoodTracker
 from .shared_memory import SharedMemoryClient
+from .growth import get_growth_system, GrowthSystem
 
 
 # Global state
@@ -63,11 +65,14 @@ _anima_id: str | None = None
 _display_update_task: asyncio.Task | None = None
 _shm_client: SharedMemoryClient | None = None
 _metacog_monitor = None  # MetacognitiveMonitor - prediction-error based self-awareness
+_unitares_bridge = None  # Singleton UnitaresBridge to avoid creating new sessions each check-in
+_growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
 SERVER_READY = False
 SERVER_STARTUP_TIME = None
+SERVER_SHUTTING_DOWN = False  # Set during graceful shutdown to reject new requests
 
 
 def _get_store() -> IdentityStore:
@@ -106,6 +111,33 @@ def _get_metacog_monitor():
             reflection_cooldown_seconds=120.0,  # 2 min between reflections
         )
     return _metacog_monitor
+
+
+def _get_unitares_bridge(unitares_url: str, identity=None):
+    """Get or create singleton UnitaresBridge to avoid creating new sessions each check-in."""
+    global _unitares_bridge
+    import os
+
+    if _unitares_bridge is None:
+        from .unitares_bridge import UnitaresBridge
+        _unitares_bridge = UnitaresBridge(unitares_url=unitares_url)
+        print("[Server] UnitaresBridge initialized (singleton, connection pooling enabled)", file=sys.stderr, flush=True)
+
+    # Update identity binding if provided (creature_id may not be known at init time)
+    if identity:
+        _unitares_bridge.set_agent_id(identity.creature_id)
+        _unitares_bridge.set_session_id(f"anima-{identity.creature_id[:8]}")
+
+    return _unitares_bridge
+
+
+async def _close_unitares_bridge():
+    """Close the UnitaresBridge session (call during shutdown)."""
+    global _unitares_bridge
+    if _unitares_bridge:
+        await _unitares_bridge.close()
+        _unitares_bridge = None
+        print("[Server] UnitaresBridge closed", file=sys.stderr, flush=True)
 
 
 
@@ -318,7 +350,7 @@ async def _update_display_loop():
     loop_count = 0
     consecutive_errors = 0
     max_consecutive_errors = 10
-    base_delay = 0.5  # Reduced from 2.0 - numpy makes renders fast enough
+    base_delay = 0.2  # Further reduced for responsive joystick navigation
     max_delay = 30.0
 
     # Sound tracking for sound-triggered dances
@@ -377,6 +409,10 @@ async def _update_display_loop():
 
                             if not qa_needs_lr:
                                 if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
+                                    # Visual + LED feedback for left navigation
+                                    _screen_renderer.trigger_input_feedback("left")
+                                    if _leds and _leds.is_available():
+                                        _leds.quick_flash((60, 60, 120), 50)  # Subtle blue flash
                                     old_mode = _screen_renderer.get_mode()
                                     _screen_renderer.previous_mode()
                                     new_mode = _screen_renderer.get_mode()
@@ -384,6 +420,10 @@ async def _update_display_loop():
                                     mode_change_event.set()  # Trigger immediate re-render
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (left)", file=sys.stderr, flush=True)
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+                                    # Visual + LED feedback for right navigation
+                                    _screen_renderer.trigger_input_feedback("right")
+                                    if _leds and _leds.is_available():
+                                        _leds.quick_flash((60, 60, 120), 50)  # Subtle blue flash
                                     old_mode = _screen_renderer.get_mode()
                                     _screen_renderer.next_mode()
                                     new_mode = _screen_renderer.get_mode()
@@ -394,6 +434,10 @@ async def _update_display_loop():
                         # Button controls
                         # Joystick button = notepad toggle (enter notepad from any screen, exit to face when on notepad)
                         if joy_btn_pressed:
+                            # Visual + LED feedback for button press
+                            _screen_renderer.trigger_input_feedback("press")
+                            if _leds and _leds.is_available():
+                                _leds.quick_flash((100, 80, 60), 80)  # Warm flash for button
                             if current_mode == ScreenMode.NOTEPAD:
                                 # Exit notepad to face (preserves Lumen's work)
                                 _screen_renderer.set_mode(ScreenMode.FACE)
@@ -414,8 +458,10 @@ async def _update_display_loop():
                                 prev_dir = prev_state.joystick_direction
                                 # Only trigger on transition TO up/down (edge detection)
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    _screen_renderer.trigger_input_feedback("up")
                                     _screen_renderer.message_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.message_scroll_down()
 
                         # Joystick navigation in Q&A screen (UP/DOWN scrolls, LEFT/RIGHT changes focus)
@@ -423,12 +469,16 @@ async def _update_display_loop():
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    _screen_renderer.trigger_input_feedback("up")
                                     _screen_renderer.qa_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.qa_scroll_down()
                                 elif current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
+                                    _screen_renderer.trigger_input_feedback("left")
                                     _screen_renderer.qa_focus_next()
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+                                    _screen_renderer.trigger_input_feedback("right")
                                     _screen_renderer.qa_focus_next()
                         
                         # Separate button - with long-press shutdown for mobile readiness
@@ -472,6 +522,10 @@ async def _update_display_loop():
                                 
                                 # Short press (< 3 seconds) = context-dependent action
                                 if was_short_press:
+                                    # Visual + LED feedback for separate button
+                                    _screen_renderer.trigger_input_feedback("press")
+                                    if _leds and _leds.is_available():
+                                        _leds.quick_flash((80, 100, 60), 80)  # Soft green flash
                                     if current_mode == ScreenMode.MESSAGES:
                                         # In messages: toggle expansion of selected message
                                         _screen_renderer.message_toggle_expand()
@@ -550,11 +604,20 @@ async def _update_display_loop():
                         # Generate reflection
                         reflection = metacog.reflect(prediction_error, anima, readings, trigger=reason)
 
-                        # Surprise triggers curiosity - ask a question
+                        # Surprise triggers curiosity - ask a question with context
                         curiosity_question = metacog.generate_curiosity_question(prediction_error)
                         if curiosity_question:
                             from .messages import add_question
-                            result = add_question(curiosity_question, author="lumen")
+                            # Build context from prediction error
+                            context_parts = []
+                            if prediction_error.predicted and prediction_error.actual:
+                                for key in prediction_error.predicted:
+                                    pred = prediction_error.predicted.get(key, 0)
+                                    actual = prediction_error.actual.get(key, 0)
+                                    if abs(pred - actual) > 0.1:
+                                        context_parts.append(f"{key} changed unexpectedly")
+                            context = f"surprise={prediction_error.surprise:.2f}: {', '.join(context_parts[:2])}" if context_parts else f"surprise={prediction_error.surprise:.2f}"
+                            result = add_question(curiosity_question, author="lumen", context=context)
                             if result:
                                 print(f"[Metacog] Surprised! Asked: {curiosity_question} (surprise={prediction_error.surprise:.2f})", file=sys.stderr, flush=True)
 
@@ -638,11 +701,10 @@ async def _update_display_loop():
                                 governance=governance_decision_for_display
                             )
 
-                            # BUG FIX: Check canvas autonomy (Lumen saving/clearing on its own)
-                            # This function existed but was never called!
+                            # Canvas autonomy: runs on ALL screens (not just notepad)
+                            # Lumen's drawings evolve and save even when showing face/sensors
                             try:
-                                current_mode = _screen_renderer.get_mode()
-                                if current_mode == ScreenMode.NOTEPAD and anima:
+                                if anima:
                                     autonomy_action = _screen_renderer.canvas_check_autonomy(anima)
                                     if autonomy_action:
                                         print(f"[Canvas] Lumen {autonomy_action} autonomously", file=sys.stderr, flush=True)
@@ -744,6 +806,45 @@ async def _update_display_loop():
                         print(f"[Sound] 🎵 Triggered dance for event: {sound_event} (sound={readings.sound_level:.1f}dB)", file=sys.stderr, flush=True)
                 _prev_sound_level = readings.sound_level
 
+            # Update autonomous voice with anima state and environment (every 10th iteration)
+            # Voice uses this to decide when/what to say based on Lumen's internal state
+            if loop_count % 10 == 0:
+                try:
+                    voice = _get_voice()
+                    if voice and voice.is_running:
+                        # Determine mood based on anima state
+                        if anima.warmth > 0.7 and anima.stability > 0.6:
+                            mood = "content"
+                        elif anima.clarity > 0.7:
+                            mood = "curious"
+                        elif anima.warmth > 0.6 and anima.presence > 0.6:
+                            mood = "peaceful"
+                        elif anima.warmth < 0.4:
+                            mood = "withdrawn"
+                        else:
+                            mood = "neutral"
+
+                        # Update voice with anima state
+                        voice.update_state(
+                            warmth=anima.warmth,
+                            clarity=anima.clarity,
+                            stability=anima.stability,
+                            presence=anima.presence,
+                            mood=mood
+                        )
+
+                        # Update voice with environment if readings available
+                        if readings:
+                            voice.update_environment(
+                                temperature=readings.ambient_temp_c or 22.0,
+                                humidity=readings.humidity_pct or 50.0,
+                                light_level=readings.light_lux or 500.0
+                            )
+                except Exception as e:
+                    # Voice errors should never crash the main loop
+                    if loop_count % 100 == 0:  # Log sparingly
+                        print(f"[Voice] State update error: {e}", file=sys.stderr, flush=True)
+
             # Log update status every 20th iteration
             if loop_count % 20 == 1 and (display_updated or led_updated):
                 update_duration = time.time() - update_start
@@ -772,9 +873,10 @@ async def _update_display_loop():
                 
                 safe_call(try_learning, default=None, log_error=False)
             
-            # Lumen's voice: Every 60 iterations (~2 minutes), let Lumen express what it wants
+            # Lumen's voice: Every 120 iterations (~4 minutes), let Lumen express what it wants
             # Uses next_steps advocate to generate observations based on how Lumen feels
-            if loop_count % 60 == 0 and readings and anima and identity:
+            # (Reduced from 60 to make Lumen less chatty)
+            if loop_count % 120 == 0 and readings and anima and identity:
                 from .error_recovery import safe_call
                 from .messages import add_observation
                 from .eisv_mapper import anima_to_eisv
@@ -817,7 +919,10 @@ async def _update_display_loop():
                             result = add_observation(observation, author="lumen")
                             if result:  # Only log if not duplicate
                                 print(f"[Lumen] Said: {observation}", file=sys.stderr, flush=True)
-                                
+                                # Note: Speech is handled by AutonomousVoice independently
+                                # to avoid duplicate speech sources. AutonomousVoice speaks
+                                # based on anima state and has its own deduplication.
+
                                 # Share significant insights to UNITARES knowledge graph
                                 try:
                                     from .unitares_knowledge import should_share_insight, share_insight_sync
@@ -973,10 +1078,21 @@ async def _update_display_loop():
                     if random.random() < 0.4 and questions:  # 40% chance
                         # Filter out duplicates
                         valid_questions = [q for q in questions if q not in recent_texts]
-                        
+
                         if valid_questions:
                             question = random.choice(valid_questions)
-                            result = add_question(question, author="lumen")
+                            # Build context from current state
+                            context_parts = []
+                            if anima.clarity < 0.4:
+                                context_parts.append(f"clarity={anima.clarity:.2f} (low)")
+                            if anima.warmth < 0.3:
+                                context_parts.append(f"warmth={anima.warmth:.2f} (low)")
+                            if wellness > 0.7:
+                                context_parts.append(f"wellness={wellness:.2f} (high)")
+                            if anima.is_anticipating:
+                                context_parts.append("anticipating novelty")
+                            context = ", ".join(context_parts) if context_parts else f"wellness={wellness:.2f}"
+                            result = add_question(question, author="lumen", context=context)
                             if result:
                                 print(f"[Lumen] Asked: {question}", file=sys.stderr, flush=True)
 
@@ -1015,7 +1131,7 @@ async def _update_display_loop():
                             recent_messages=recent_msgs,
                             unanswered_questions=unanswered_texts,
                             time_alive_hours=time_alive,
-                            current_screen=_screen_renderer.current_mode.value if _screen_renderer else "face"
+                            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face"
                         )
 
                         # Choose reflection mode based on state
@@ -1030,12 +1146,23 @@ async def _update_display_loop():
                         else:
                             mode = random.choice(["wonder", "desire", "observe"])
 
+                        # Show loading indicator during LLM call
+                        if _screen_renderer:
+                            _screen_renderer.set_loading("thinking...")
+
                         # Generate reflection
-                        reflection = await generate_reflection(context, mode)
+                        try:
+                            reflection = await generate_reflection(context, mode)
+                        finally:
+                            # Clear loading indicator
+                            if _screen_renderer:
+                                _screen_renderer.clear_loading()
 
                         if reflection:
                             if mode == "wonder":
-                                result = add_question(reflection, author="lumen")
+                                # Context for LLM-generated questions
+                                context = f"LLM reflection, wellness={wellness:.2f}, alive={time_alive:.1f}h"
+                                result = add_question(reflection, author="lumen", context=context)
                                 if result:
                                     print(f"[Lumen/LLM] Asked: {reflection}", file=sys.stderr, flush=True)
                             else:
@@ -1138,6 +1265,58 @@ async def _update_display_loop():
 
                 safe_call(lumen_respond, default=None, log_error=False)
 
+            # Growth system: Observe state for preference learning and check milestones
+            # Every 30 iterations (~1 minute) - learns from anima state + environment
+            if loop_count % 30 == 0 and readings and anima and identity and _growth:
+                from .error_recovery import safe_call
+
+                def growth_observe():
+                    """Observe environment and check milestones."""
+                    # Prepare anima state dict
+                    anima_state = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
+                    # Prepare environment dict from sensor readings
+                    environment = {
+                        "light_lux": readings.light_lux,
+                        "temp_c": readings.temperature,
+                        "humidity": readings.humidity,
+                    }
+
+                    # Observe for preference learning
+                    insight = _growth.observe_state_preference(anima_state, environment)
+                    if insight:
+                        print(f"[Growth] {insight}", file=sys.stderr, flush=True)
+                        # Add insight as an observation from Lumen
+                        from .messages import add_observation
+                        add_observation(insight, author="lumen")
+
+                    # Check for age/awakening milestones
+                    milestone = _growth.check_for_milestones(identity, anima)
+                    if milestone:
+                        print(f"[Growth] Milestone: {milestone}", file=sys.stderr, flush=True)
+                        from .messages import add_observation
+                        add_observation(milestone, author="lumen")
+
+                safe_call(growth_observe, default=None, log_error=False)
+
+            # Trajectory: Record anima history for trajectory signature computation
+            # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
+            # See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
+            if loop_count % 5 == 0 and anima:
+                from .error_recovery import safe_call
+                from .anima_history import get_anima_history
+
+                def record_history():
+                    """Record anima state for trajectory computation."""
+                    history = get_anima_history()
+                    history.record_from_anima(anima)
+
+                safe_call(record_history, default=None, log_error=False)
+
             # UNITARES governance check-in: Every 30 iterations (~1 minute)
             # Provides continuous governance feedback for self-regulation
             # Uses Lumen's actual identity (creature_id) for proper binding
@@ -1147,16 +1326,13 @@ async def _update_display_loop():
                 unitares_url = os.environ.get("UNITARES_URL")
                 if unitares_url:
                     from .error_recovery import safe_call_async
-                    from .unitares_bridge import UnitaresBridge
-                    
+
                     # Track if this is the first check-in (for identity sync)
                     is_first_check_in = (loop_count == 30)
-                    
+
                     async def check_in_governance():
-                        bridge = UnitaresBridge(unitares_url=unitares_url)
-                        # Use Lumen's actual identity for proper UNITARES binding
-                        bridge.set_agent_id(identity.creature_id)
-                        bridge.set_session_id(f"anima-{identity.creature_id[:8]}")
+                        # Use singleton bridge (connection pooling, no session leaks)
+                        bridge = _get_unitares_bridge(unitares_url, identity)
                         # Pass identity for metadata sync and include in check-in
                         decision = await bridge.check_in(
                             anima, readings,
@@ -1171,19 +1347,26 @@ async def _update_display_loop():
                             # Store governance decision for potential expression feedback and diagnostics screen
                             # Future: Could influence face/LED expression based on governance state
                             _last_governance_decision = decision
-                            
+
+                            # Update screen renderer connection status (for status bar)
+                            if _screen_renderer:
+                                _screen_renderer.update_connection_status(wifi=True, governance=True)
+
                             # Log periodically
                             if loop_count % 60 == 0:  # Log every 2 minutes
                                 action = decision.get("action", "unknown")
                                 margin = decision.get("margin", "unknown")
                                 source = decision.get("source", "unknown")
                                 print(f"[Governance] Check-in: {action} ({margin}) from {source}", file=sys.stderr, flush=True)
-                            
+
                             # Future: Expression feedback loop
                             # If governance says "pause" or "tight margin", could subtly influence expression
                             # For now, just store the decision - expression remains independent
                         else:
                             _last_governance_decision = None
+                            # Update screen renderer - governance not responding
+                            if _screen_renderer:
+                                _screen_renderer.update_connection_status(governance=False)
                     except Exception as e:
                         # Non-fatal - governance check-ins are optional
                         # Network failures are expected when WiFi is down - Lumen operates autonomously
@@ -1193,7 +1376,14 @@ async def _update_display_loop():
                             'network', 'connection', 'timeout', 'unreachable', 'resolve',
                             'name resolution', 'no route', 'host unreachable', 'network unreachable'
                         ])
-                        
+
+                        # Update screen renderer connection status (for status bar)
+                        if _screen_renderer:
+                            if is_network_error:
+                                _screen_renderer.update_connection_status(wifi=False, governance=False)
+                            else:
+                                _screen_renderer.update_connection_status(governance=False)
+
                         # Only log network errors occasionally (they're expected when WiFi is down)
                         # Log other errors more frequently (they might indicate real issues)
                         if is_network_error:
@@ -1203,11 +1393,112 @@ async def _update_display_loop():
                             if loop_count % 60 == 0:  # Log every 2 minutes for other errors
                                 print(f"[Governance] Check-in skipped: {e}", file=sys.stderr, flush=True)
 
+            # === SLOW CLOCK: Self-Schema G_t extraction (every 5 minutes) ===
+            # PoC for StructScore visual integrity evaluation
+            # Extracts Lumen's self-representation graph and optionally saves for offline analysis
+            if loop_count % 600 == 0 and readings and anima and identity:
+                from .error_recovery import safe_call_async
+
+                async def extract_and_validate_schema():
+                    """Extract G_t, save, and optionally run real VQA validation."""
+                    try:
+                        from .self_schema import get_current_schema
+                        from .self_schema_renderer import (
+                            save_render_to_file, render_schema_to_pixels,
+                            compute_visual_integrity_stub, evaluate_vqa
+                        )
+                        from .preferences import get_preference_system
+                        import os
+
+                        # Try to get preferences (optional enhancement)
+                        preferences = None
+                        try:
+                            preferences = get_preference_system()
+                        except Exception:
+                            pass  # Non-fatal
+
+                        # Extract G_t (with preferences if available)
+                        schema = get_current_schema(
+                            identity=identity,
+                            anima=anima,
+                            readings=readings,
+                            preferences=preferences,
+                            include_preferences=True,
+                            force_refresh=True,
+                        )
+
+                        # Render and compute stub integrity score
+                        pixels = render_schema_to_pixels(schema)
+                        stub_integrity = compute_visual_integrity_stub(pixels, schema)
+
+                        # Save render
+                        png_path, json_path = save_render_to_file(schema)
+
+                        print(f"[G_t] Extracted self-schema: {len(schema.nodes)} nodes, {len(schema.edges)} edges", file=sys.stderr, flush=True)
+
+                        # Try real VQA if any vision API key is available (free providers first)
+                        has_vision_key = any(os.environ.get(k) for k in ["GROQ_API_KEY", "TOGETHER_API_KEY", "ANTHROPIC_API_KEY"])
+                        if has_vision_key:
+                            ground_truth = schema.generate_vqa_ground_truth()
+                            vqa_result = await evaluate_vqa(png_path, ground_truth, max_questions=5)
+
+                            if vqa_result.get("v_f") is not None:
+                                model = vqa_result.get("model", "unknown")
+                                print(f"[G_t] VQA ({model}): v_f={vqa_result['v_f']:.2f} ({vqa_result['correct_count']}/{vqa_result['total_count']} correct)", file=sys.stderr, flush=True)
+                            else:
+                                print(f"[G_t] VQA failed: {vqa_result.get('error', 'unknown')}, stub V={stub_integrity['V']:.2f}", file=sys.stderr, flush=True)
+                        else:
+                            print(f"[G_t] Stub V={stub_integrity['V']:.2f} (set GROQ_API_KEY for free VQA)", file=sys.stderr, flush=True)
+
+                    except Exception as e:
+                        print(f"[G_t] Extraction error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+                try:
+                    await safe_call_async(extract_and_validate_schema, default=None, log_error=False)
+                except Exception:
+                    pass  # Non-fatal
+
+            # === SLOW CLOCK: Self-Reflection (every 15 minutes) ===
+            # Analyze state history, discover patterns, generate insights about self
+            if loop_count % 900 == 0 and readings and anima and identity:
+                from .error_recovery import safe_call_async
+
+                async def self_reflect():
+                    """Lumen reflects on accumulated experience to learn about itself."""
+                    try:
+                        from .self_reflection import get_reflection_system
+                        from .messages import add_observation
+
+                        reflection_system = get_reflection_system(db_path=_store.db_path if _store else "anima.db")
+
+                        # Check if it's time to reflect
+                        if reflection_system.should_reflect():
+                            reflection = reflection_system.reflect()
+
+                            if reflection:
+                                # Surface the insight as an observation
+                                result = add_observation(reflection, author="lumen")
+                                if result:
+                                    print(f"[SelfReflection] Insight: {reflection}", file=sys.stderr, flush=True)
+
+                    except Exception as e:
+                        print(f"[SelfReflection] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+                try:
+                    await safe_call_async(self_reflect, default=None, log_error=False)
+                except Exception:
+                    pass  # Non-fatal
+
             # Update delay depends on current screen mode
             # Interactive screens (notepad, messages) need faster refresh for responsive joystick
             # Non-interactive screens can use slower refresh to save CPU
             current_mode = _screen_renderer.get_mode() if _screen_renderer else None
-            interactive_screens = {ScreenMode.NOTEPAD, ScreenMode.MESSAGES, ScreenMode.LEARNING}
+            # All screens need responsive joystick for navigation
+            interactive_screens = {
+                ScreenMode.NOTEPAD, ScreenMode.MESSAGES, ScreenMode.LEARNING,
+                ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY,
+                ScreenMode.DIAGNOSTICS, ScreenMode.QA, ScreenMode.SELF_GRAPH,
+            }
 
             if consecutive_errors > 0:
                 delay = min(base_delay * (1.5 ** min(consecutive_errors, 3)), max_delay)
@@ -1391,6 +1682,7 @@ async def handle_switch_screen(arguments: dict) -> list[TextContent]:
         "learning": ScreenMode.LEARNING,
         "messages": ScreenMode.MESSAGES,
         "qa": ScreenMode.QA,
+        "self_graph": ScreenMode.SELF_GRAPH,
     }
     
     if mode_str in mode_map:
@@ -1417,7 +1709,7 @@ async def handle_switch_screen(arguments: dict) -> list[TextContent]:
     else:
         return [TextContent(type="text", text=json.dumps({
             "error": f"Invalid mode: {mode_str}",
-            "valid_modes": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "qa", "next", "previous"]
+            "valid_modes": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "qa", "self_graph", "next", "previous"]
         }))]
 
 
@@ -1480,13 +1772,15 @@ async def handle_get_questions(arguments: dict) -> list[TextContent]:
             {
                 "id": q.message_id,
                 "text": q.text,
+                "context": q.context,  # What triggered this question
                 "timestamp": q.timestamp,
                 "age": q.age_str(),
             }
             for q in questions
         ],
         "count": len(questions),
-        "note": "These are things Lumen is wondering about. You can answer by using leave_agent_note with responds_to set to the question id."
+        "how_to_answer": "To answer a question: call leave_agent_note (or post_message) with responds_to='<id>' where <id> is the question's id field above. This links your answer to the question.",
+        "note": "Questions auto-expire after 1 hour if unanswered."
     }))]
 
 
@@ -1669,6 +1963,207 @@ async def handle_get_calibration(arguments: dict) -> list[TextContent]:
     }
     
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
+    """Get Lumen's accumulated self-knowledge from pattern analysis."""
+    store = _get_store()
+    if store is None:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Server not initialized - wake() failed"
+        }))]
+
+    try:
+        from .self_reflection import get_reflection_system, InsightCategory
+
+        reflection_system = get_reflection_system(db_path=str(store.db_path))
+
+        # Parse arguments
+        category_str = arguments.get("category")
+        limit = arguments.get("limit", 10)
+
+        # Get insights
+        category = None
+        if category_str:
+            try:
+                category = InsightCategory(category_str)
+            except ValueError:
+                pass  # Invalid category, ignore filter
+
+        insights = reflection_system.get_insights(category=category)[:limit]
+
+        # Build result
+        result = {
+            "total_insights": len(reflection_system._insights),
+            "insights": [i.to_dict() for i in insights],
+            "summary": reflection_system.get_self_knowledge_summary(),
+        }
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Self-reflection system error: {e}",
+            "note": "Self-reflection may not have accumulated enough data yet"
+        }))]
+
+
+async def handle_get_growth(arguments: dict) -> list[TextContent]:
+    """Get Lumen's growth: preferences, relationships, goals, memories."""
+    if _growth is None:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Growth system not initialized",
+            "note": "Growth system may not be available yet"
+        }))]
+
+    try:
+        include = arguments.get("include", ["all"])
+        if "all" in include:
+            include = ["preferences", "relationships", "goals", "memories", "curiosities", "autobiography"]
+
+        result = {}
+
+        if "autobiography" in include:
+            result["autobiography"] = _growth.get_autobiography_summary()
+
+        if "preferences" in include:
+            prefs = []
+            for p in _growth._preferences.values():
+                if p.confidence >= 0.3:  # Only show preferences with some confidence
+                    prefs.append({
+                        "name": p.name,
+                        "description": p.description,
+                        "confidence": round(p.confidence, 2),
+                        "observations": p.observation_count
+                    })
+            result["preferences"] = {
+                "count": len(_growth._preferences),
+                "learned": prefs[:10],
+            }
+
+        if "relationships" in include:
+            rels = []
+            for r in _growth._relationships.values():
+                rels.append({
+                    "name": r.name or r.agent_id[:8],
+                    "bond": r.bond_strength.value,
+                    "interactions": r.interaction_count,
+                    "first_met": r.first_met.strftime("%Y-%m-%d"),
+                    "last_seen": r.last_seen.strftime("%Y-%m-%d"),
+                })
+            result["relationships"] = {
+                "count": len(_growth._relationships),
+                "bonds": rels[:10],
+            }
+            # Check for missed connections
+            missed = _growth.get_missed_connections()
+            if missed:
+                result["relationships"]["missed"] = [
+                    {"name": name, "days_since": days}
+                    for name, days in missed[:3]
+                ]
+
+        if "goals" in include:
+            goals = []
+            for g in _growth._goals.values():
+                if g.status.value == "active":
+                    goals.append({
+                        "description": g.description,
+                        "progress": round(g.progress, 2),
+                        "milestones": len(g.milestones),
+                    })
+            result["goals"] = {
+                "active": len([g for g in _growth._goals.values() if g.status.value == "active"]),
+                "achieved": len([g for g in _growth._goals.values() if g.status.value == "achieved"]),
+                "current": goals[:5],
+            }
+
+        if "memories" in include:
+            memories = []
+            for m in _growth._memories[:5]:  # Recent memories
+                memories.append({
+                    "description": m.description,
+                    "category": m.category,
+                    "when": m.timestamp.strftime("%Y-%m-%d"),
+                })
+            result["memories"] = {
+                "count": len(_growth._memories),
+                "recent": memories,
+            }
+
+        if "curiosities" in include:
+            result["curiosities"] = {
+                "count": len(_growth._curiosities),
+                "questions": _growth._curiosities[:5],
+            }
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Growth system error: {e}"
+        }))]
+
+
+async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
+    """
+    Get Lumen's trajectory identity signature.
+
+    The trajectory signature captures the invariant patterns that define
+    who Lumen is over time - not just a snapshot, but the characteristic
+    way Lumen tends to behave, where Lumen rests, and how Lumen recovers.
+
+    See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
+    """
+    try:
+        from .trajectory import compute_trajectory_signature
+        from .anima_history import get_anima_history
+        from .self_model import get_self_model
+
+        # Compute trajectory signature from available data
+        signature = compute_trajectory_signature(
+            growth_system=_growth,
+            self_model=get_self_model(),
+            anima_history=get_anima_history(),
+        )
+
+        # Build response
+        include_raw = arguments.get("include_raw", False)
+        compare_historical = arguments.get("compare_to_historical", False)
+
+        if include_raw:
+            result = signature.to_dict()
+        else:
+            result = signature.summary()
+
+        # Add stability assessment
+        stability = signature.get_stability_score()
+        if stability < 0.3:
+            result["identity_status"] = "forming"
+            result["note"] = "Identity is still forming - need more observations"
+        elif stability < 0.6:
+            result["identity_status"] = "developing"
+            result["note"] = "Identity is developing - patterns emerging"
+        else:
+            result["identity_status"] = "stable"
+            result["note"] = "Identity is stable - consistent patterns established"
+
+        # Anomaly detection (compare to historical if requested)
+        if compare_historical:
+            # For now, we don't have historical storage, so just note this
+            result["anomaly_detection"] = {
+                "available": False,
+                "note": "Historical comparison requires persistent signature storage (future feature)"
+            }
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except Exception as e:
+        import traceback
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Trajectory computation error: {e}",
+            "traceback": traceback.format_exc()
+        }))]
 
 
 async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
@@ -1943,80 +2438,30 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
 
 
 # ============================================================
-# Tool Registry
+# Tool Registry - Tiered System
 # ============================================================
+# ANIMA_TOOL_MODE environment variable controls exposure:
+#   - "minimal": Only essential tools (5 tools)
+#   - "lite": Essential + standard (default, ~12 tools)
+#   - "full": All tools including deprecated (~27 tools)
 
-TOOLS = [
+import os
+ANIMA_TOOL_MODE = os.environ.get("ANIMA_TOOL_MODE", "lite").lower()
+
+# ============================================================
+# ESSENTIAL TOOLS - Always visible (5 tools)
+# The minimum needed to interact with Lumen
+# ============================================================
+TOOLS_ESSENTIAL = [
     Tool(
         name="get_state",
         description="Get current anima (warmth, clarity, stability, presence), mood, and identity",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
-        name="get_identity",
-        description="Get full identity: birth, awakenings, name history, existence duration",
+        name="next_steps",
+        description="Get proactive next steps - analyzes current state and suggests what to do",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="switch_screen",
-        description="Switch display screen mode (face, sensors, identity, diagnostics, learning, messages, notepad, next, previous)",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "mode": {
-                    "type": "string",
-                    "description": "Screen mode: 'face', 'sensors', 'identity', 'diagnostics', 'learning', 'messages', 'notepad', 'next', or 'previous'",
-                    "enum": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "qa", "next", "previous", "prev"]
-                }
-            },
-            "required": ["mode"],
-        },
-    ),
-    Tool(
-        name="leave_message",
-        description="Leave a message for Lumen on the message board",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "message": {"type": "string", "description": "Message to leave for Lumen"}
-            },
-            "required": ["message"],
-        },
-    ),
-    Tool(
-        name="leave_agent_note",
-        description="Leave a note from an AI agent on Lumen's message board (appears with ◆ prefix). Can also answer Lumen's questions.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "message": {"type": "string", "description": "Note message to leave"},
-                "agent_name": {"type": "string", "description": "Name of the agent (default: 'agent')"},
-                "responds_to": {"type": "string", "description": "Optional: message_id of a question to answer"}
-            },
-            "required": ["message"],
-        },
-    ),
-    Tool(
-        name="get_questions",
-        description="Get Lumen's unanswered questions - things Lumen is wondering about and seeking answers to",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "limit": {"type": "integer", "description": "Max questions to return (default: 5)"}
-            },
-            "required": [],
-        },
-    ),
-    Tool(
-        name="set_name",
-        description="Set or change name",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "name": {"type": "string", "description": "The name to use"}
-            },
-            "required": ["name"],
-        },
     ),
     Tool(
         name="read_sensors",
@@ -2024,43 +2469,102 @@ TOOLS = [
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
-        name="show_face",
-        description="Show face on display (renders to hardware on Pi, returns ASCII art otherwise)",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+        name="get_questions",
+        description="Get Lumen's unanswered questions. Call FIRST before answering - you need the 'id' for responds_to in post_message.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "Max questions to return (default: 5)"}
+            },
+        },
     ),
     Tool(
-        name="next_steps",
-        description="Get proactive next steps to achieve goals - analyzes current state and suggests what to do next",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+        name="post_message",
+        description="Post a message to Lumen's message board. To ANSWER a question: call get_questions first, then pass the question's 'id' as responds_to.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "The message content"},
+                "source": {"type": "string", "enum": ["human", "agent"], "description": "Who is posting (default: agent)"},
+                "agent_name": {"type": "string", "description": "Agent name (if source=agent)"},
+                "responds_to": {"type": "string", "description": "REQUIRED when answering: question ID from get_questions"}
+            },
+            "required": ["message"],
+        },
+    ),
+]
+
+# ============================================================
+# STANDARD TOOLS - Visible in lite mode (7 tools)
+# Consolidated tools that replace multiple deprecated ones
+# ============================================================
+TOOLS_STANDARD = [
+    Tool(
+        name="get_lumen_context",
+        description="Get Lumen's complete context: identity, anima state, sensors, mood in one call",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "include": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["identity", "anima", "sensors", "mood"]},
+                    "description": "What to include (default: all)"
+                }
+            },
+        },
+    ),
+    Tool(
+        name="manage_display",
+        description="Control Lumen's display: switch screens, show face, navigate",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["switch", "face", "next", "previous"], "description": "Action to perform"},
+                "screen": {"type": "string", "enum": ["face", "sensors", "identity", "diagnostics", "notepad", "learning", "messages", "qa", "self_graph"], "description": "Screen to switch to (for action=switch)"}
+            },
+            "required": ["action"],
+        },
+    ),
+    Tool(
+        name="configure_voice",
+        description="Get or configure Lumen's voice system",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string", "enum": ["status", "configure"], "description": "Action (default: status)"},
+                "always_listening": {"type": "boolean", "description": "Enable always-listening"},
+                "chattiness": {"type": "number", "description": "Chattiness level 0-1"},
+                "wake_word": {"type": "string", "description": "Wake word to use"}
+            },
+        },
+    ),
+    Tool(
+        name="say",
+        description="Have Lumen speak. Voice reflects internal state (warmth, clarity, stability).",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "What Lumen should say"},
+                "blocking": {"type": "boolean", "description": "Wait for speech to complete (default: true)"}
+            },
+            "required": ["text"],
+        },
     ),
     Tool(
         name="diagnostics",
-        description="Get system diagnostics including LED status, display status, and update loop health",
+        description="Get system diagnostics: LED status, display status, update loop health",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
         name="unified_workflow",
-        description="Execute workflows and templates across anima-mcp and unitares-governance. Call without 'workflow' to see available options. Supports: check_state_and_governance, monitor_and_govern, and workflow templates (health_check, full_system_check, learning_check, etc.)",
+        description="Execute workflows across anima-mcp and unitares-governance. Omit workflow to list options.",
         inputSchema={
             "type": "object",
             "properties": {
-                "workflow": {
-                    "type": "string",
-                    "description": "Workflow or template name. Original workflows: 'check_state_and_governance', 'monitor_and_govern'. Templates: 'health_check', 'full_system_check', 'learning_check', 'governance_check', 'identity_check', 'sensor_analysis'. Omit to list all options."
-                },
-                "interval": {
-                    "type": "number",
-                    "description": "For monitor_and_govern: seconds between checks (default: 60)",
-                    "default": 60.0
-                }
+                "workflow": {"type": "string", "description": "Workflow name: health_check, full_system_check, learning_check, etc."},
+                "interval": {"type": "number", "description": "For monitor_and_govern: seconds between checks", "default": 60.0}
             },
-            "required": []
         },
-    ),
-    Tool(
-        name="test_leds",
-        description="Run LED test sequence - cycles through colors to verify hardware works",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
         name="get_calibration",
@@ -2068,68 +2572,118 @@ TOOLS = [
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
-        name="set_calibration",
-        description="Update nervous system calibration - adapt Lumen to different environments",
+        name="get_self_knowledge",
+        description="Get Lumen's accumulated self-knowledge: insights discovered from patterns in state history",
         inputSchema={
             "type": "object",
             "properties": {
-                "updates": {
-                    "type": "object",
-                    "description": "Partial calibration updates (e.g., {'ambient_temp_min': 10.0, 'pressure_ideal': 833.0})"
-                },
-                "source": {
+                "category": {
                     "type": "string",
-                    "description": "Source of update: 'agent', 'manual', or 'automatic' (default: 'agent')",
-                    "enum": ["agent", "manual", "automatic"]
+                    "enum": ["environment", "temporal", "behavioral", "wellness", "social"],
+                    "description": "Filter by insight category (optional)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max insights to return (default: 10)"
                 }
             },
-            "required": ["updates"],
         },
     ),
     Tool(
-        name="learning_visualization",
-        description="Get learning visualization - shows why Lumen feels what it feels, comfort zones, patterns, and calibration history",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="get_expression_mood",
-        description="Get Lumen's current expression mood - persistent drawing style preferences that evolve over time",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    # Voice tools - Lumen's ability to hear and speak
-    Tool(
-        name="say",
-        description="Have Lumen speak. Lumen's voice reflects their internal state (warmth, clarity, stability).",
+        name="get_growth",
+        description="Get Lumen's growth: preferences learned, relationships formed, goals, memories, autobiography",
         inputSchema={
             "type": "object",
             "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "What Lumen should say"
-                },
-                "blocking": {
-                    "type": "boolean",
-                    "description": "Wait for speech to complete (default: true)"
+                "include": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["preferences", "relationships", "goals", "memories", "curiosities", "autobiography", "all"]},
+                    "description": "What to include (default: all)"
                 }
             },
-            "required": ["text"],
+        },
+    ),
+    Tool(
+        name="get_trajectory",
+        description="Get Lumen's trajectory identity signature - the pattern that defines who Lumen is over time, not just a snapshot",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "include_raw": {
+                    "type": "boolean",
+                    "description": "Include raw component data (default: false, just summary)",
+                    "default": False,
+                },
+                "compare_to_historical": {
+                    "type": "boolean",
+                    "description": "Compare current signature to historical (anomaly detection)",
+                    "default": False,
+                },
+            },
+        },
+    ),
+]
+
+# ============================================================
+# DEPRECATED TOOLS - Only in full mode (15 tools)
+# Kept for backwards compatibility, replaced by consolidated tools
+# ============================================================
+TOOLS_DEPRECATED = [
+    Tool(
+        name="get_identity",
+        description="[DEPRECATED: use get_lumen_context] Get full identity: birth, awakenings, name history",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
+        name="switch_screen",
+        description="[DEPRECATED: use manage_display] Switch display screen mode",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "qa", "next", "previous", "prev"]}
+            },
+            "required": ["mode"],
+        },
+    ),
+    Tool(
+        name="show_face",
+        description="[DEPRECATED: use manage_display] Show face on display",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
+        name="leave_message",
+        description="[DEPRECATED: use post_message] Leave a message for Lumen",
+        inputSchema={
+            "type": "object",
+            "properties": {"message": {"type": "string"}},
+            "required": ["message"],
+        },
+    ),
+    Tool(
+        name="leave_agent_note",
+        description="[DEPRECATED: use post_message] Leave an agent note. Use responds_to to answer questions.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string"},
+                "agent_name": {"type": "string"},
+                "responds_to": {"type": "string", "description": "Question ID to answer"}
+            },
+            "required": ["message"],
         },
     ),
     Tool(
         name="voice_status",
-        description="Get Lumen's voice system status - whether listening, speaking, recent utterances heard",
+        description="[DEPRECATED: use configure_voice] Get voice system status",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
         name="set_voice_mode",
-        description="Configure Lumen's voice behavior - always listening, chattiness, wake word",
+        description="[DEPRECATED: use configure_voice] Configure voice behavior",
         inputSchema={
             "type": "object",
             "properties": {
-                "always_listening": {
-                    "type": "boolean",
-                    "description": "If true, Lumen listens continuously. If false, requires wake word."
-                },
+                "always_listening": {"type": "boolean"},
                 "chattiness": {
                     "type": "number",
                     "description": "How talkative Lumen is autonomously (0.0 = quiet, 1.0 = very chatty)"
@@ -2258,20 +2812,104 @@ TOOLS = [
     ),
     Tool(
         name="merge_insights",
-        description="Merge multiple insights into a coherent summary - useful for KG deduplication",
+        description="[DEPRECATED: use cognitive_process] Merge multiple insights",
         inputSchema={
             "type": "object",
             "properties": {
-                "insights": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of insights to merge (at least 2)"
-                }
+                "insights": {"type": "array", "items": {"type": "string"}}
             },
             "required": ["insights"],
         },
     ),
+    Tool(
+        name="set_name",
+        description="Set or change Lumen's name",
+        inputSchema={
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+            "required": ["name"],
+        },
+    ),
+    Tool(
+        name="test_leds",
+        description="Run LED test sequence - cycles through colors",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
+        name="set_calibration",
+        description="Update nervous system calibration",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "updates": {"type": "object", "description": "Calibration updates"},
+                "source": {"type": "string", "enum": ["agent", "manual", "automatic"]}
+            },
+            "required": ["updates"],
+        },
+    ),
+    Tool(
+        name="learning_visualization",
+        description="Get learning visualization - comfort zones, patterns, calibration history",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
+        name="get_expression_mood",
+        description="Get Lumen's current expression mood (drawing style preferences)",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
+        name="query",
+        description="Query Lumen's knowledge systems: learned, memory, graph, or cognitive",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Search query"},
+                "type": {"type": "string", "enum": ["learned", "memory", "graph", "cognitive"]},
+                "category": {"type": "string"},
+                "conditions": {"type": "object"},
+                "limit": {"type": "integer"}
+            },
+            "required": ["text"],
+        },
+    ),
+    Tool(
+        name="cognitive_process",
+        description="Perform cognitive operations: synthesize, extract, or merge",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "operation": {"type": "string", "enum": ["synthesize", "extract", "merge"]},
+                "thesis": {"type": "string"},
+                "antithesis": {"type": "string"},
+                "text": {"type": "string"},
+                "domain": {"type": "string"},
+                "insights": {"type": "array", "items": {"type": "string"}},
+                "context": {"type": "string"}
+            },
+            "required": ["operation"],
+        },
+    ),
 ]
+
+# ============================================================
+# Tool Selection by Mode
+# ============================================================
+def get_active_tools():
+    """Get tools based on ANIMA_TOOL_MODE environment variable."""
+    if ANIMA_TOOL_MODE == "minimal":
+        return TOOLS_ESSENTIAL
+    elif ANIMA_TOOL_MODE == "full":
+        return TOOLS_ESSENTIAL + TOOLS_STANDARD + TOOLS_DEPRECATED
+    else:  # lite (default)
+        return TOOLS_ESSENTIAL + TOOLS_STANDARD
+
+# Legacy TOOLS variable for backwards compatibility
+TOOLS = get_active_tools()
+
+# Log tool mode on import
+import sys
+print(f"[Server] Tool mode: {ANIMA_TOOL_MODE} ({len(TOOLS)} tools)", file=sys.stderr, flush=True)
+
 
 # Voice handler functions
 _voice_instance = None  # Global voice instance (lazy initialized)
@@ -2282,9 +2920,22 @@ def _get_voice():
     if _voice_instance is None:
         try:
             from .audio import AutonomousVoice
+            from .audio.autonomous_voice import SpeechIntent
+            from .messages import add_observation
+
             _voice_instance = AutonomousVoice()
+
+            # Connect voice to message board - when Lumen speaks, post as observation
+            def on_lumen_speaks(text: str, intent: SpeechIntent):
+                """Post autonomous speech to message board so agents can see it."""
+                # Add as observation with intent type
+                result = add_observation(f"[{intent.value}] {text}", author="lumen")
+                if result:
+                    print(f"[Voice->Board] Posted: {text}", file=sys.stderr, flush=True)
+
+            _voice_instance.set_on_speech(on_lumen_speaks)
             _voice_instance.start()
-            print("[Server] Voice system initialized", file=sys.stderr, flush=True)
+            print("[Server] Voice system initialized (connected to message board)", file=sys.stderr, flush=True)
         except ImportError:
             print("[Server] Voice module not available (missing dependencies)", file=sys.stderr, flush=True)
             return None
@@ -2593,6 +3244,399 @@ async def handle_merge_insights(arguments: dict) -> list[TextContent]:
         }))]
 
 
+# ============================================================
+# Consolidated Tool Handlers (reduces 27 → 18 tools)
+# ============================================================
+
+async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
+    """
+    Get Lumen's complete current context in one call.
+    Consolidates: get_state + get_identity + read_sensors
+    """
+    store = _get_store()
+    sensors = _get_sensors()
+
+    include = arguments.get("include", ["identity", "anima", "sensors", "mood"])
+    if isinstance(include, str):
+        include = [include]
+
+    result = {}
+
+    # Always need readings/anima for most queries
+    readings, anima = _get_readings_and_anima()
+
+    if "identity" in include:
+        if store is None:
+            result["identity"] = {"error": "Store not initialized"}
+        else:
+            try:
+                identity = store.get_identity()
+                result["identity"] = {
+                    "name": identity.name,
+                    "id": identity.creature_id,
+                    "born_at": identity.born_at.isoformat(),
+                    "awakenings": identity.total_awakenings,
+                    "age_seconds": round(identity.age_seconds()),
+                    "alive_seconds": round(identity.total_alive_seconds + store.get_session_alive_seconds()),
+                    "alive_ratio": round(identity.alive_ratio(), 3),
+                }
+            except Exception as e:
+                result["identity"] = {"error": str(e)}
+
+    if "anima" in include:
+        if anima:
+            result["anima"] = {
+                "warmth": anima.warmth,
+                "clarity": anima.clarity,
+                "stability": anima.stability,
+                "presence": anima.presence,
+            }
+        else:
+            result["anima"] = {"error": "Unable to read anima state"}
+
+    if "sensors" in include:
+        if readings:
+            result["sensors"] = readings.to_dict()
+            result["sensors"]["is_pi"] = sensors.is_pi()
+        else:
+            result["sensors"] = {"error": "Unable to read sensor data"}
+
+    if "mood" in include:
+        if anima:
+            result["mood"] = anima.feeling()
+        else:
+            result["mood"] = {"error": "Unable to determine mood"}
+
+    # Record state for history if we have it
+    if store and anima and readings:
+        store.record_state(
+            anima.warmth, anima.clarity, anima.stability, anima.presence,
+            readings.to_dict()
+        )
+
+    return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+
+async def handle_post_message(arguments: dict) -> list[TextContent]:
+    """
+    Post a message to Lumen's message board.
+    Consolidates: leave_message + leave_agent_note
+    """
+    message = arguments.get("message", "").strip()
+    source = arguments.get("source", "agent")
+    agent_name = arguments.get("agent_name", "agent")
+    responds_to = arguments.get("responds_to")
+
+    if not message:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "message parameter required"
+        }))]
+
+    try:
+        if source == "human":
+            msg_id = add_user_message(message)
+            # Track relationship with human
+            if _growth:
+                try:
+                    _growth.record_interaction(
+                        agent_id="human",
+                        agent_name="human",
+                        positive=True,
+                        topic=message[:50] if len(message) > 10 else None
+                    )
+                except Exception:
+                    pass  # Non-fatal
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "message_id": msg_id,
+                "source": "human",
+                "message": f"Message received: {message[:50]}..."
+            }))]
+        else:
+            # Agent message - responds_to is passed to add_agent_message
+            msg = add_agent_message(message, agent_name, responds_to=responds_to)
+            # Track relationship with agent
+            if _growth:
+                try:
+                    # Use agent_name as ID (agents have consistent names)
+                    is_gift = responds_to is not None  # Answering a question is a gift
+                    _growth.record_interaction(
+                        agent_id=agent_name,
+                        agent_name=agent_name,
+                        positive=True,
+                        topic=message[:50] if len(message) > 10 else None,
+                        gift=is_gift
+                    )
+                except Exception:
+                    pass  # Non-fatal
+            result = {
+                "success": True,
+                "message_id": msg.message_id,
+                "source": "agent",
+                "agent_name": agent_name,
+                "message": f"Note received from {agent_name}"
+            }
+            if responds_to:
+                result["answered_question"] = responds_to
+            return [TextContent(type="text", text=json.dumps(result))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": str(e)
+        }))]
+
+
+async def handle_query(arguments: dict) -> list[TextContent]:
+    """
+    Unified query across Lumen's knowledge systems.
+    Consolidates: query_knowledge + query_memory + search_knowledge_graph + cognitive_query
+    """
+    text = arguments.get("text", "")
+    query_type = arguments.get("type", "cognitive")
+
+    if query_type == "learned":
+        # Query Q&A learned knowledge
+        from .knowledge import get_knowledge, get_insights
+        kb = get_knowledge()
+        category = arguments.get("category")
+        limit = arguments.get("limit", 10)
+        insights = get_insights(limit=limit, category=category)
+        return [TextContent(type="text", text=json.dumps({
+            "type": "learned",
+            "total_insights": kb.count(),
+            "insights": [{"id": i.insight_id, "text": i.text, "category": i.category} for i in insights]
+        }, indent=2))]
+
+    elif query_type == "memory":
+        # Query associative memory
+        memory = get_memory()
+        conditions = arguments.get("conditions", {})
+        temp = conditions.get("temperature") or arguments.get("temperature")
+        light = conditions.get("light") or arguments.get("light")
+        humidity = conditions.get("humidity") or arguments.get("humidity")
+
+        if temp is None and light is None and humidity is None:
+            # Use current sensor readings
+            readings, _ = _get_readings_and_anima()
+            if readings:
+                temp = readings.temperature
+                light = readings.light
+                humidity = readings.humidity
+
+        predictions = []
+        if temp is not None or light is not None:
+            predictions = anticipate_state(memory, temp, light, humidity)
+
+        return [TextContent(type="text", text=json.dumps({
+            "type": "memory",
+            "query_conditions": {"temperature": temp, "light": light, "humidity": humidity},
+            "predictions": predictions[:arguments.get("limit", 5)]
+        }, indent=2))]
+
+    elif query_type == "graph":
+        # Search knowledge graph
+        try:
+            from .cognitive_inference import get_cognitive_inference
+            cog = get_cognitive_inference()
+            results = await cog.search_knowledge(text, limit=arguments.get("limit", 10))
+            return [TextContent(type="text", text=json.dumps({
+                "type": "graph",
+                "query": text,
+                "results": results
+            }, indent=2))]
+        except Exception as e:
+            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+    else:  # cognitive (RAG)
+        try:
+            from .cognitive_inference import get_cognitive_inference
+            cog = get_cognitive_inference()
+            answer = await cog.query(text)
+            return [TextContent(type="text", text=json.dumps({
+                "type": "cognitive",
+                "query": text,
+                "answer": answer
+            }, indent=2))]
+        except Exception as e:
+            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+
+async def handle_cognitive_process(arguments: dict) -> list[TextContent]:
+    """
+    Perform cognitive operations.
+    Consolidates: dialectic_synthesis + extract_knowledge + merge_insights
+    """
+    operation = arguments.get("operation")
+
+    if not operation:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "operation parameter required (synthesize, extract, or merge)"
+        }))]
+
+    try:
+        from .cognitive_inference import get_cognitive_inference
+        cog = get_cognitive_inference()
+
+        if operation == "synthesize":
+            thesis = arguments.get("thesis", "")
+            antithesis = arguments.get("antithesis", "")
+            context = arguments.get("context", "")
+            result = await cog.dialectic_synthesis(thesis, antithesis, context)
+            return [TextContent(type="text", text=json.dumps({
+                "operation": "synthesize",
+                "thesis": thesis,
+                "antithesis": antithesis,
+                "synthesis": result
+            }, indent=2))]
+
+        elif operation == "extract":
+            text = arguments.get("text", "")
+            domain = arguments.get("domain", "general")
+            result = await cog.extract_knowledge(text, domain)
+            return [TextContent(type="text", text=json.dumps({
+                "operation": "extract",
+                "domain": domain,
+                "knowledge": result
+            }, indent=2))]
+
+        elif operation == "merge":
+            insights = arguments.get("insights", [])
+            result = await cog.merge_insights(insights)
+            return [TextContent(type="text", text=json.dumps({
+                "operation": "merge",
+                "input_count": len(insights),
+                "merged": result
+            }, indent=2))]
+
+        else:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Unknown operation: {operation}",
+                "valid_operations": ["synthesize", "extract", "merge"]
+            }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+
+async def handle_configure_voice(arguments: dict) -> list[TextContent]:
+    """
+    Get or configure Lumen's voice system.
+    Consolidates: voice_status + set_voice_mode
+    """
+    action = arguments.get("action", "status")
+    voice = _get_voice()
+
+    if voice is None:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Voice system not available"
+        }))]
+
+    if action == "status":
+        state = voice.state if hasattr(voice, 'state') else None
+        return [TextContent(type="text", text=json.dumps({
+            "action": "status",
+            "available": True,
+            "running": voice.is_running,
+            "is_listening": state.is_listening if state else False,
+            "is_speaking": state.is_speaking if state else False,
+            "last_heard": state.last_heard.text if state and state.last_heard else None,
+            "chattiness": voice.chattiness,
+        }, indent=2))]
+
+    elif action == "configure":
+        changes = {}
+        if "always_listening" in arguments:
+            voice._voice.set_always_listening(arguments["always_listening"])
+            changes["always_listening"] = arguments["always_listening"]
+        if "chattiness" in arguments:
+            voice.chattiness = float(arguments["chattiness"])
+            changes["chattiness"] = voice.chattiness
+        if "wake_word" in arguments:
+            voice._voice._config.wake_word = arguments["wake_word"]
+            changes["wake_word"] = arguments["wake_word"]
+
+        return [TextContent(type="text", text=json.dumps({
+            "action": "configure",
+            "success": True,
+            "changes": changes
+        }, indent=2))]
+
+    else:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Unknown action: {action}",
+            "valid_actions": ["status", "configure"]
+        }))]
+
+
+async def handle_manage_display(arguments: dict) -> list[TextContent]:
+    """
+    Control Lumen's display.
+    Consolidates: switch_screen + show_face
+    """
+    global _screen_renderer
+
+    action = arguments.get("action")
+    if not action:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "action parameter required (switch, face, next, previous)"
+        }))]
+
+    if action == "face":
+        # Delegate to show_face handler
+        return await handle_show_face({})
+
+    if not _screen_renderer:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Screen renderer not initialized"
+        }))]
+
+    if action == "switch":
+        screen = arguments.get("screen", "").lower()
+        mode_map = {
+            "face": ScreenMode.FACE,
+            "sensors": ScreenMode.SENSORS,
+            "identity": ScreenMode.IDENTITY,
+            "diagnostics": ScreenMode.DIAGNOSTICS,
+            "notepad": ScreenMode.NOTEPAD,
+            "learning": ScreenMode.LEARNING,
+            "messages": ScreenMode.MESSAGES,
+            "qa": ScreenMode.QA,
+            "self_graph": ScreenMode.SELF_GRAPH,
+        }
+        if screen in mode_map:
+            _screen_renderer.set_mode(mode_map[screen])
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "action": "switch",
+                "screen": screen
+            }))]
+        else:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Invalid screen: {screen}",
+                "valid_screens": list(mode_map.keys())
+            }))]
+
+    elif action == "next":
+        _screen_renderer.next_mode()
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "action": "next",
+            "screen": _screen_renderer.get_mode().value
+        }))]
+
+    elif action == "previous":
+        _screen_renderer.previous_mode()
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "action": "previous",
+            "screen": _screen_renderer.get_mode().value
+        }))]
+
+    else:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Unknown action: {action}",
+            "valid_actions": ["switch", "face", "next", "previous"]
+        }))]
+
+
 HANDLERS = {
     "query_knowledge": handle_query_knowledge,
     "query_memory": handle_query_memory,
@@ -2617,12 +3661,22 @@ HANDLERS = {
     "test_leds": handle_test_leds,
     "get_calibration": handle_get_calibration,
     "set_calibration": handle_set_calibration,
+    "get_self_knowledge": handle_get_self_knowledge,
+    "get_growth": handle_get_growth,
+    "get_trajectory": handle_get_trajectory,
     "learning_visualization": handle_learning_visualization,
     "get_expression_mood": handle_get_expression_mood,
     # Voice tools
     "say": handle_say,
     "voice_status": handle_voice_status,
     "set_voice_mode": handle_set_voice_mode,
+    # Consolidated tools (v2)
+    "get_lumen_context": handle_get_lumen_context,
+    "post_message": handle_post_message,
+    "query": handle_query,
+    "cognitive_process": handle_cognitive_process,
+    "configure_voice": handle_configure_voice,
+    "manage_display": handle_manage_display,
 }
 
 
@@ -2641,16 +3695,84 @@ except ImportError:
 _fastmcp: "FastMCP | None" = None
 
 
-def _create_tool_wrapper(handler, tool_name: str):
-    """
-    Create a tool wrapper function that properly captures the handler.
+def _json_type_to_python(json_type):
+    """Convert JSON Schema type to Python type annotation."""
+    from typing import Optional, Union
 
-    This uses a factory function to avoid closure issues when registering
-    tools in a loop. Each wrapper gets its own copy of the handler reference.
+    if isinstance(json_type, list):
+        # Handle union types like ["number", "string", "null"]
+        non_null = [t for t in json_type if t != "null"]
+        has_null = "null" in json_type
+
+        if non_null:
+            base_type = _json_type_to_python(non_null[0])
+            if has_null:
+                return Optional[base_type]
+            return base_type
+        return str
+
+    type_map = {
+        "string": str,
+        "integer": int,
+        "number": float,
+        "boolean": Union[str, bool],
+        "array": list,
+        "object": dict,
+    }
+    return type_map.get(json_type, str)
+
+
+def _create_tool_wrapper(handler, tool_name: str, tool_def=None):
     """
-    async def wrapper(**kwargs):
+    Create a tool wrapper function with proper typed signature.
+
+    Uses inspect.Signature to give the wrapper explicit typed parameters
+    based on the tool's inputSchema. This allows FastMCP to introspect
+    the function correctly without **kwargs issues.
+    """
+    import inspect
+    from typing import Optional
+
+    # Extract parameter info from tool definition's inputSchema
+    param_info = []
+    if tool_def and hasattr(tool_def, 'inputSchema'):
+        schema = tool_def.inputSchema
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
+        for param_name, param_def in properties.items():
+            param_type = _json_type_to_python(param_def.get("type", "string"))
+            is_required = param_name in required
+            param_info.append((param_name, param_type, is_required))
+
+    # Build proper signature with typed parameters
+    params = []
+    for name, ptype, is_required in param_info:
+        if is_required:
+            param = inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                annotation=ptype,
+            )
+        else:
+            param = inspect.Parameter(
+                name,
+                inspect.Parameter.KEYWORD_ONLY,
+                default=None,
+                annotation=Optional[ptype],
+            )
+        params.append(param)
+
+    # Create the signature
+    sig = inspect.Signature(params, return_annotation=dict)
+
+    # Create wrapper that collects kwargs and passes to handler as dict
+    async def typed_wrapper(**kwargs) -> dict:
         try:
-            result = await handler(kwargs)
+            # Filter out None values for cleaner handler calls
+            args = {k: v for k, v in kwargs.items() if v is not None}
+
+            result = await handler(args)
             # Extract text from TextContent
             if result and len(result) > 0 and hasattr(result[0], 'text'):
                 text = result[0].text
@@ -2662,11 +3784,16 @@ def _create_tool_wrapper(handler, tool_name: str):
             return {"result": str(result)}
         except Exception as e:
             print(f"[FastMCP] Tool {tool_name} error: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc()
             return {"error": str(e)}
 
-    # Set function name for FastMCP introspection
-    wrapper.__name__ = tool_name
-    return wrapper
+    # Set the signature for FastMCP introspection
+    typed_wrapper.__signature__ = sig
+    typed_wrapper.__name__ = tool_name
+    typed_wrapper.__qualname__ = tool_name
+
+    return typed_wrapper
 
 
 def get_fastmcp() -> "FastMCP":
@@ -2676,6 +3803,20 @@ def get_fastmcp() -> "FastMCP":
         _fastmcp = FastMCP(
             name="anima-mcp",
             host="0.0.0.0",  # Bind to all interfaces
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=True,
+                allowed_hosts=[
+                    "127.0.0.1:*", "localhost:*", "[::1]:*",  # Localhost
+                    "192.168.1.165:*", "192.168.1.151:*",  # Local network IPs
+                    "0.0.0.0:*",  # Bind all
+                ],
+                allowed_origins=[
+                    "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
+                    "http://192.168.1.165:*", "http://192.168.1.151:*",
+                    "https://lumen-anima.ngrok.io",  # Only ngrok, with auth required
+                    "null",  # For local file access
+                ],
+            ),
         )
 
         print(f"[FastMCP] Registering {len(HANDLERS)} tools...", file=sys.stderr, flush=True)
@@ -2686,8 +3827,8 @@ def get_fastmcp() -> "FastMCP":
             tool_def = next((t for t in TOOLS if t.name == tool_name), None)
             description = tool_def.description if tool_def else f"Tool: {tool_name}"
 
-            # Create properly-captured wrapper
-            wrapper = _create_tool_wrapper(handler, tool_name)
+            # Create properly-captured wrapper with typed signature
+            wrapper = _create_tool_wrapper(handler, tool_name, tool_def)
 
             # Register with FastMCP using structured_output=False to avoid schema validation
             _fastmcp.tool(description=description, name=tool_name)(wrapper)
@@ -2726,7 +3867,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         db_path: Path to SQLite database
         anima_id: UUID from environment or database (DO NOT override - use existing identity)
     """
-    global _store, _anima_id
+    global _store, _anima_id, _growth
 
     try:
         _store = IdentityStore(db_path)
@@ -2758,6 +3899,14 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         print(f"  Born: {identity.born_at.isoformat()}")
         print(f"  Total alive: {identity.total_alive_seconds:.0f}s")
         print(f"[Wake] ✓ Identity established - message board will be active", file=sys.stderr, flush=True)
+
+        # Initialize growth system for learning, relationships, and goals
+        try:
+            _growth = get_growth_system(db_path=db_path)
+            print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
+        except Exception as ge:
+            print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
+            _growth = None
     except Exception as e:
         print(f"[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
         print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
@@ -2769,7 +3918,39 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
 def sleep():
     """Go to sleep. Call on server shutdown."""
-    global _store
+    global _store, _unitares_bridge, _voice_instance
+
+    # Close UnitaresBridge session (prevents "unclosed client session" warnings)
+    if _unitares_bridge:
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # If loop is running, schedule the close (best effort)
+                    loop.create_task(_close_unitares_bridge())
+                else:
+                    loop.run_until_complete(_close_unitares_bridge())
+            except RuntimeError:
+                # No event loop available - create a new one
+                asyncio.run(_close_unitares_bridge())
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error closing UnitaresBridge: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
+
+    # Stop voice system if running
+    if _voice_instance:
+        try:
+            _voice_instance.stop()
+            _voice_instance = None
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error stopping voice: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
+
     if _store:
         try:
             session_seconds = _store.sleep()
@@ -2826,31 +4007,181 @@ def run_sse_server(host: str, port: int):
     WiFi is only needed for remote MCP clients to connect.
     Lumen continues operating autonomously (display, LEDs, sensors, canvas) regardless of network status.
     """
-    try:
+    import asyncio
+
+    async def _run_sse_server_async():
+        """Async inner function to run the SSE server with uvicorn."""
         import uvicorn
-    except ImportError:
-        print("SSE dependencies not installed. Run: pip install anima-mcp[sse]")
-        raise SystemExit(1)
 
-    # Log that local operation continues regardless of network
-    print("[Server] Starting SSE server - Lumen operates autonomously even without WiFi", file=sys.stderr, flush=True)
-    print("[Server] Network connectivity only needed for remote MCP clients", file=sys.stderr, flush=True)
+        # Log that local operation continues regardless of network
+        print("[Server] Starting SSE server - Lumen operates autonomously even without WiFi", file=sys.stderr, flush=True)
+        print("[Server] Network connectivity only needed for remote MCP clients", file=sys.stderr, flush=True)
 
-    # Check if FastMCP is available
-    if not HAS_FASTMCP:
-        print("[Server] ERROR: FastMCP not available - cannot start SSE server", file=sys.stderr, flush=True)
-        print("[Server] Install mcp[cli] to get FastMCP support", file=sys.stderr, flush=True)
-        raise SystemExit(1)
+        # Check if FastMCP is available
+        if not HAS_FASTMCP:
+            print("[Server] ERROR: FastMCP not available - cannot start SSE server", file=sys.stderr, flush=True)
+            print("[Server] Install mcp[cli] to get FastMCP support", file=sys.stderr, flush=True)
+            raise SystemExit(1)
 
-    # Get the FastMCP server instance (creates and registers tools if needed)
-    mcp = get_fastmcp()
-    if mcp is None:
-        print("[Server] ERROR: Failed to create FastMCP server", file=sys.stderr, flush=True)
-        raise SystemExit(1)
+        # Get the FastMCP server instance (creates and registers tools if needed)
+        mcp = get_fastmcp()
+        if mcp is None:
+            print("[Server] ERROR: Failed to create FastMCP server", file=sys.stderr, flush=True)
+            raise SystemExit(1)
 
-    # Get the SSE app from FastMCP - this handles MCP initialization correctly
-    print("[Server] Creating FastMCP SSE application...", file=sys.stderr, flush=True)
-    fastmcp_app = mcp.sse_app()
+        print("[Server] Creating FastMCP SSE application...", file=sys.stderr, flush=True)
+
+        # Get the Starlette app from FastMCP (SSE transport)
+        # This is the pattern governance-mcp-v1 uses successfully
+        app = mcp.sse_app()
+
+        # === Add Streamable HTTP transport (MCP 1.24.0+) ===
+        # This is what governance uses and Claude Code prefers for type="http" configs
+        HAS_STREAMABLE_HTTP = False
+        _streamable_session_manager = None
+        _streamable_running = False
+
+        try:
+            from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+            from starlette.routing import Mount, Route
+            from starlette.responses import JSONResponse, PlainTextResponse
+
+            # Create session manager for Streamable HTTP
+            _streamable_session_manager = StreamableHTTPSessionManager(
+                app=mcp._mcp_server,  # Access the underlying MCP server
+                json_response=False,  # Use SSE streams
+                stateless=True,  # Allow stateless for compatibility
+            )
+
+            HAS_STREAMABLE_HTTP = True
+            print("[Server] Streamable HTTP transport available at /mcp/", file=sys.stderr, flush=True)
+
+            # Create ASGI app for /mcp
+            async def streamable_mcp_asgi(scope, receive, send):
+                """ASGI app for Streamable HTTP MCP at /mcp/."""
+                if scope.get("type") != "http":
+                    return
+
+                if not _streamable_running:
+                    response = JSONResponse({
+                        "status": "starting_up",
+                        "message": "Streamable HTTP session manager not ready"
+                    }, status_code=503)
+                    await response(scope, receive, send)
+                    return
+
+                try:
+                    await _streamable_session_manager.handle_request(scope, receive, send)
+                except Exception as e:
+                    print(f"[MCP] Error in Streamable HTTP handler: {e}", file=sys.stderr, flush=True)
+                    import traceback
+                    traceback.print_exc(file=sys.stderr)
+                    try:
+                        response = JSONResponse({"error": str(e)}, status_code=500)
+                        await response(scope, receive, send)
+                    except RuntimeError:
+                        pass
+
+            # Mount creates sub-application at /mcp/
+            # Note: Clients should use /mcp/ (with trailing slash) to avoid 307 redirect
+            app.routes.insert(0, Mount("/mcp", app=streamable_mcp_asgi))
+            print("[Server] Registered /mcp/ endpoint for Streamable HTTP transport", file=sys.stderr, flush=True)
+
+            # Health check endpoint for monitoring
+            async def health_check(request):
+                """Simple health check - returns 200 if server is running."""
+                status = "ok" if SERVER_READY else "starting"
+                return PlainTextResponse(f"{status}\n")
+
+            app.routes.append(Route("/health", health_check, methods=["GET"]))
+            print("[Server] Registered /health endpoint", file=sys.stderr, flush=True)
+
+        except Exception as e:
+            print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
+
+        # Start display loop before server runs
+        start_display_loop()
+        print("[Server] Display loop started", file=sys.stderr, flush=True)
+
+        # Server warmup task - marks server ready after brief delay
+        async def server_warmup_task():
+            global SERVER_READY, SERVER_STARTUP_TIME
+            SERVER_STARTUP_TIME = datetime.now()
+            await asyncio.sleep(2.0)
+            SERVER_READY = True
+            print("[Server] Warmup complete - server ready", file=sys.stderr, flush=True)
+
+        asyncio.create_task(server_warmup_task())
+
+        print(f"SSE server running at http://{host}:{port}", file=sys.stderr, flush=True)
+        print(f"  SSE transport: http://{host}:{port}/sse", file=sys.stderr, flush=True)
+        if HAS_STREAMABLE_HTTP:
+            print(f"  HTTP transport: http://{host}:{port}/mcp", file=sys.stderr, flush=True)
+
+        # Start Streamable HTTP session manager as background task
+        # Uses anyio task group pattern (same as governance-mcp)
+        if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
+            import anyio
+
+            async def start_streamable_http():
+                nonlocal _streamable_running
+                try:
+                    async with anyio.create_task_group() as tg:
+                        # Manually set internal state (same pattern as governance-mcp)
+                        _streamable_session_manager._task_group = tg
+                        _streamable_session_manager._has_started = True
+                        _streamable_running = True
+                        print("[Server] Streamable HTTP session manager running", file=sys.stderr, flush=True)
+                        # Keep running until cancelled
+                        await asyncio.Event().wait()
+                except asyncio.CancelledError:
+                    print("StreamableHTTP session manager shutting down", file=sys.stderr, flush=True)
+                    _streamable_running = False
+                except Exception as e:
+                    print(f"[Server] Streamable HTTP error: {e}", file=sys.stderr, flush=True)
+                    _streamable_running = False
+
+            streamable_task = asyncio.create_task(start_streamable_http())
+
+        try:
+            # Run with uvicorn (matches governance-mcp-v1 pattern)
+            config = uvicorn.Config(
+                app,
+                host=host,
+                port=port,
+                log_level="info",
+                limit_concurrency=100,
+                timeout_keep_alive=5,
+            )
+            server = uvicorn.Server(config)
+            await server.serve()
+        finally:
+            if HAS_STREAMABLE_HTTP and 'streamable_task' in dir():
+                streamable_task.cancel()
+            stop_display_loop()
+            sleep()
+
+    # Handle graceful shutdown
+    def shutdown_handler(sig, frame):
+        global SERVER_SHUTTING_DOWN
+        SERVER_SHUTTING_DOWN = True  # Signal handlers to reject new requests
+        try:
+            print("\nShutting down...", file=sys.stderr, flush=True)
+        except (ValueError, OSError):
+            pass
+        try:
+            stop_display_loop()
+            sleep()
+        except Exception:
+            pass
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, shutdown_handler)
+    signal.signal(signal.SIGTERM, shutdown_handler)
+
+    # Run the async server
+    asyncio.run(_run_sse_server_async())
+    return  # Early return - skip the old code below
 
     # === Streamable HTTP transport (MCP 1.24.0+) ===
     HAS_STREAMABLE_HTTP = False
@@ -2871,224 +4202,121 @@ def run_sse_server(host: str, port: int):
         HAS_STREAMABLE_HTTP = True
         print("[Server] Streamable HTTP transport available at /mcp", file=sys.stderr, flush=True)
 
+        # Create ASGI wrapper for streamable HTTP
+        async def streamable_mcp_asgi(scope, receive, send):
+            """ASGI handler for Streamable HTTP MCP at /mcp."""
+            # Check shutdown first - reject new requests during shutdown
+            if SERVER_SHUTTING_DOWN:
+                try:
+                    response = JSONResponse({
+                        "status": "shutting_down",
+                        "message": "Server is shutting down"
+                    }, status_code=503)
+                    await response(scope, receive, send)
+                except (RuntimeError, Exception):
+                    pass  # Connection may already be closed during shutdown
+                return
+
+            if not _streamable_running:
+                response = JSONResponse({
+                    "status": "starting_up",
+                    "message": "Streamable HTTP session manager not ready"
+                }, status_code=503)
+                await response(scope, receive, send)
+                return
+
+            if not SERVER_READY:
+                response = JSONResponse({
+                    "status": "warming_up",
+                    "message": "Server is starting up"
+                }, status_code=503)
+                await response(scope, receive, send)
+                return
+
+            try:
+                await _streamable_session_manager.handle_request(scope, receive, send)
+            except Exception as e:
+                if SERVER_SHUTTING_DOWN:
+                    return  # Suppress errors during shutdown
+                print(f"[MCP] Error in Streamable HTTP handler: {e}", file=sys.stderr, flush=True)
+                try:
+                    response = JSONResponse({"error": str(e)}, status_code=500)
+                    await response(scope, receive, send)
+                except RuntimeError:
+                    pass  # Connection already closed
+
+        # Mount streamable HTTP endpoint
+        app.routes.append(Mount("/mcp", app=streamable_mcp_asgi))
+
     except Exception as e:
         print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
 
-    # Function to start the streamable session manager
-    async def start_streamable_http():
-        """Start the Streamable HTTP session manager in background."""
+    # === Async server runner ===
+    async def run_server():
+        """Run the server with proper async context for background tasks."""
+        global SERVER_READY, SERVER_STARTUP_TIME
         nonlocal _streamable_running
-        if not HAS_STREAMABLE_HTTP or _streamable_session_manager is None:
-            return
-        try:
-            import anyio
-            async with anyio.create_task_group() as tg:
-                _streamable_session_manager._task_group = tg
-                _streamable_running = True
-                print("[Server] Streamable HTTP session manager started", file=sys.stderr, flush=True)
-                await anyio.sleep_forever()
-        except Exception as e:
-            print(f"[Server] Streamable HTTP session manager error: {e}", file=sys.stderr, flush=True)
-            _streamable_running = False
 
-    async def handle_mcp_raw(scope, receive, send):
-        """Raw ASGI handler for Streamable HTTP MCP at /mcp."""
-        if not HAS_STREAMABLE_HTTP or _streamable_session_manager is None:
-            await send({
-                "type": "http.response.start",
-                "status": 501,
-                "headers": [[b"content-type", b"application/json"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": json.dumps({"error": "Streamable HTTP transport not available"}).encode(),
-            })
-            return
+        import uvicorn
 
-        if not _streamable_running:
-            await send({
-                "type": "http.response.start",
-                "status": 503,
-                "headers": [[b"content-type", b"application/json"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": json.dumps({"status": "starting_up", "message": "Streamable HTTP session manager not ready"}).encode(),
-            })
-            return
+        # Start display loop
+        print("[Server] Starting display loop...", file=sys.stderr, flush=True)
+        start_display_loop()
+        print("[Server] Display loop started", file=sys.stderr, flush=True)
 
-        if not SERVER_READY:
-            await send({
-                "type": "http.response.start",
-                "status": 503,
-                "headers": [[b"content-type", b"application/json"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": json.dumps({"status": "warming_up", "message": "Server is starting up"}).encode(),
-            })
-            return
+        # Start warmup task
+        async def server_warmup_task():
+            global SERVER_READY, SERVER_STARTUP_TIME
+            SERVER_STARTUP_TIME = datetime.now()
+            await asyncio.sleep(2.0)
+            SERVER_READY = True
+            print("[Server] Warmup complete - server ready to accept requests", file=sys.stderr, flush=True)
 
-        try:
-            await _streamable_session_manager.handle_request(scope, receive, send)
-        except Exception as e:
-            print(f"[MCP] Error in Streamable HTTP handler: {e}", file=sys.stderr, flush=True)
-            try:
-                await send({
-                    "type": "http.response.start",
-                    "status": 500,
-                    "headers": [[b"content-type", b"application/json"]],
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": json.dumps({"error": str(e)}).encode(),
-                })
-            except RuntimeError:
-                pass
+        asyncio.create_task(server_warmup_task())
 
-    # Create custom endpoints for /, /health, /mcp using raw ASGI handlers
-    # This avoids Starlette middleware conflicts with FastMCP's SSE streaming
-
-    async def handle_root_raw(scope, receive, send):
-        """Raw ASGI handler for root endpoint."""
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"text/plain"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": b"Lumen MCP Server (FastMCP)",
-        })
-
-    async def handle_health_raw(scope, receive, send):
-        """Raw ASGI handler for health endpoint."""
-        if not SERVER_READY:
-            body = json.dumps({
-                "status": "warming_up",
-                "message": "Server is starting up, please retry in 2 seconds",
-                "hint": "This prevents 'request before initialization' errors during reconnection"
-            }).encode()
-            await send({
-                "type": "http.response.start",
-                "status": 503,
-                "headers": [[b"content-type", b"application/json"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": body,
-            })
-            return
-
-        try:
-            health_status = {
-                "status": "healthy",
-                "local_operation": True,
-                "network_required": False,
-                "transport": "FastMCP SSE",
-                "message": "Lumen operating autonomously - WiFi only needed for remote connections"
-            }
-            try:
-                if _store:
-                    health_status["identity"] = "active"
-                if _display and _display.is_available():
-                    health_status["display"] = "active"
-                if _leds and _leds.is_available():
-                    health_status["leds"] = "active"
-            except Exception:
-                pass
-            body = json.dumps(health_status).encode()
-        except Exception as e:
-            body = json.dumps({
-                "status": "operational",
-                "error": str(e),
-                "message": "Local operation continues"
-            }).encode()
-
-        await send({
-            "type": "http.response.start",
-            "status": 200,
-            "headers": [[b"content-type", b"application/json"]],
-        })
-        await send({
-            "type": "http.response.body",
-            "body": body,
-        })
-
-    # Pure ASGI router that handles lifespan properly and routes to FastMCP
-    async def app(scope, receive, send):
-        """Route requests to FastMCP or custom handlers with proper lifespan."""
-        if scope["type"] == "lifespan":
-            # Handle lifespan ourselves using asynccontextmanager pattern
-            message = await receive()
-            if message["type"] == "lifespan.startup":
+        # Start streamable HTTP session manager if available
+        if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
+            async def start_streamable_http():
+                nonlocal _streamable_running
                 try:
-                    # Start display loop
-                    print("[Server] Starting display loop...", file=sys.stderr, flush=True)
-                    start_display_loop()
-                    print("[Server] Display loop started", file=sys.stderr, flush=True)
-
-                    # Start warmup task
-                    async def server_warmup_task():
-                        global SERVER_READY, SERVER_STARTUP_TIME
-                        SERVER_STARTUP_TIME = datetime.now()
-                        await asyncio.sleep(2.0)
-                        SERVER_READY = True
-                        print("[Server] Warmup complete - server ready to accept requests", file=sys.stderr, flush=True)
-
-                    asyncio.create_task(server_warmup_task())
-
-                    # Start streamable HTTP session manager if available
-                    if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
-                        asyncio.create_task(start_streamable_http())
-
-                    await send({"type": "lifespan.startup.complete"})
+                    import anyio
+                    async with anyio.create_task_group() as tg:
+                        _streamable_session_manager._task_group = tg
+                        _streamable_running = True
+                        print("[Server] Streamable HTTP session manager started", file=sys.stderr, flush=True)
+                        await anyio.sleep_forever()
                 except Exception as e:
-                    print(f"[Server] Lifespan startup error: {e}", file=sys.stderr, flush=True)
-                    await send({"type": "lifespan.startup.failed", "message": str(e)})
-                    return
+                    print(f"[Server] Streamable HTTP session manager error: {e}", file=sys.stderr, flush=True)
+                    _streamable_running = False
 
-            # Wait for shutdown signal
-            while True:
-                message = await receive()
-                if message["type"] == "lifespan.shutdown":
-                    print("[Server] Stopping display loop...", file=sys.stderr, flush=True)
-                    stop_display_loop()
-                    await send({"type": "lifespan.shutdown.complete"})
-                    return
-            return
+            asyncio.create_task(start_streamable_http())
 
-        if scope["type"] != "http":
-            return
+        print(f"SSE server running at http://{host}:{port}")
+        print(f"  SSE transport: http://{host}:{port}/sse")
+        if HAS_STREAMABLE_HTTP:
+            print(f"  Streamable HTTP: http://{host}:{port}/mcp")
 
-        path = scope.get("path", "")
+        # Run with uvicorn using async server
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level="warning",
+            timeout_keep_alive=5,
+            timeout_graceful_shutdown=10,
+        )
+        server = uvicorn.Server(config)
 
-        # FastMCP handles /sse and /messages for SSE transport
-        if path in ("/sse", "/messages"):
-            await fastmcp_app(scope, receive, send)
-        # We handle /mcp for Streamable HTTP transport
-        elif path == "/mcp":
-            await handle_mcp_raw(scope, receive, send)
-        # Health endpoint
-        elif path == "/health":
-            await handle_health_raw(scope, receive, send)
-        # Root endpoint
-        elif path == "/":
-            await handle_root_raw(scope, receive, send)
-        # 404 for unknown paths
-        else:
-            await send({
-                "type": "http.response.start",
-                "status": 404,
-                "headers": [[b"content-type", b"text/plain"]],
-            })
-            await send({
-                "type": "http.response.body",
-                "body": b"Not Found",
-            })
+        try:
+            await server.serve()
+        finally:
+            print("[Server] Stopping display loop...", file=sys.stderr, flush=True)
+            stop_display_loop()
 
     # Handle graceful shutdown
     def shutdown_handler(sig, frame):
+        global SERVER_SHUTTING_DOWN
+        SERVER_SHUTTING_DOWN = True  # Signal handlers to reject new requests
         try:
             print("\nShutting down...", file=sys.stderr, flush=True)
         except (ValueError, OSError):
@@ -3103,13 +4331,9 @@ def run_sse_server(host: str, port: int):
     signal.signal(signal.SIGINT, shutdown_handler)
     signal.signal(signal.SIGTERM, shutdown_handler)
 
-    print(f"SSE server running at http://{host}:{port}")
-    print(f"  SSE transport: http://{host}:{port}/sse")
-    if HAS_STREAMABLE_HTTP:
-        print(f"  Streamable HTTP: http://{host}:{port}/mcp")
-    
+    # Run the async server
     try:
-        uvicorn.run(app, host=host, port=port, log_level="warning")
+        asyncio.run(run_server())
     finally:
         # Display loop is stopped by lifespan context manager
         # Only stop here if lifespan didn't run (shouldn't happen, but be safe)

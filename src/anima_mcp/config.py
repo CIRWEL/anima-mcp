@@ -115,7 +115,7 @@ class NervousSystemCalibration:
 @dataclass
 class DisplayConfig:
     """Display system configuration."""
-    led_brightness: float = 0.3
+    led_brightness: float = 0.05  # Very dim - LEDs are extremely bright
     update_interval: float = 2.0  # seconds
     breathing_enabled: bool = True
     breathing_cycle: float = 8.0  # seconds
@@ -125,8 +125,8 @@ class DisplayConfig:
     color_transitions_enabled: bool = True  # Smooth color changes
     pattern_mode: str = "standard"  # "standard", "minimal", "expressive", "alert"
     auto_brightness_enabled: bool = True  # Auto-adjust based on ambient light
-    auto_brightness_min: float = 0.15  # Minimum brightness
-    auto_brightness_max: float = 0.5  # Maximum brightness
+    auto_brightness_min: float = 0.02  # Very dim minimum - LEDs are bright
+    auto_brightness_max: float = 0.08  # Low maximum - prevent blinding
     pulsing_threshold_clarity: float = 0.4  # Clarity threshold for pulsing
     pulsing_threshold_stability: float = 0.4  # Stability threshold for pulsing
 

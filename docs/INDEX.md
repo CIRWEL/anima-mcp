@@ -4,7 +4,10 @@
 
 ## 🛑 START HERE
 
-**Check docs before coding.** Most issues are already documented.
+**New to Lumen?** → **[Getting Started Simple](guides/GETTING_STARTED_SIMPLE.md)** ← Start here!
+
+**For developers:**
+- **Check docs before coding.** Most issues are already documented.
 
 | Problem | Doc |
 |---------|-----|
@@ -24,7 +27,7 @@
 ## Before You Code
 
 1. **Read** `operations/AGENT_COORDINATION.md` - Multi-agent protocol
-2. **Check** `operations/PI_ACCESS.md` - SSH is port 2222, not 22!
+2. **Check** `operations/PI_ACCESS.md` - SSH access details
 3. **Understand** `concepts/NEURO_PSYCH_FRAMING.md` - Why anima works this way
 4. **Check Knowledge Graph** - Component relationships (if available)
 
@@ -37,6 +40,21 @@
 | `concepts/ERROR_RECOVERY.md` | Gap handling when sensors fail |
 | `LUMEN_EXPRESSION_PHILOSOPHY.md` | **Core:** How Lumen's expression should emerge authentically |
 | `LUMEN_NEXT_STEPS.md` | **Roadmap:** What Lumen needs next (from tool + project roadmap) |
+
+## Theory
+
+**Deep theoretical foundations** - for researchers and those extending the architecture.
+
+| Doc | What it explains |
+|-----|------------------|
+| `theory/README.md` | **Index:** Overview + implementation status |
+| `theory/TRAJECTORY_IDENTITY_PAPER.md` | **Core Paper v0.8:** Identity as trajectory signature (publication ready) |
+| `theory/CODE_THEORY_MAP.md` | How existing code maps to trajectory framework |
+| `theory/IMPLEMENTATION_COMPLETE.md` | Implementation completion notes |
+
+**Key insight:** Identity is not a UUID, it's a dynamical invariant - the pattern that persists across time.
+
+**Lumen's identity status:** 798+ awakenings, lineage similarity 0.925 (stable), confidence 0.764.
 
 ## Architecture
 
@@ -69,7 +87,7 @@
 
 ## Common Mistakes
 
-- SSH port is **2222**, not 22
+- SSH port is **22** (standard), user is **unitares-anima**
 - User is **unitares-anima**, not pi
 - Don't edit `server.py` without checking what other agents changed
 - Anima dataclass requires `readings` field - don't construct without it
@@ -82,19 +100,20 @@
 ## Deploy Changes
 
 ```bash
-# Deploy code
-rsync -avz -e "ssh -p 2222 -i ~/.ssh/id_ed25519_pi" \
-  --exclude='.venv' --exclude='*.db' --exclude='__pycache__' \
+# Deploy code (uses SSH config: lumen.local)
+rsync -avz -e "ssh -i ~/.ssh/id_ed25519_pi" \
+  --exclude='.venv' --exclude='*.db' --exclude='__pycache__' --exclude='.git' \
   /Users/cirwel/projects/anima-mcp/ \
-  unitares-anima@192.168.1.165:/home/unitares-anima/anima-mcp/
+  unitares-anima@lumen.local:/home/unitares-anima/anima-mcp/
 
-# Restart only MCP server (mind) - broker stays running
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  'systemctl --user restart anima'
+# Restart MCP server (mind) - broker stays running
+ssh lumen.local 'sudo systemctl restart anima.service'
 
 # Or restart broker (body) if needed
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  'systemctl --user restart anima-broker'
+ssh lumen.local 'sudo systemctl restart anima-broker.service'
+
+# Check status
+ssh lumen.local 'sudo systemctl status anima.service --no-pager'
 ```
 
 ## Archive

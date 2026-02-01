@@ -96,7 +96,8 @@ class UnifiedWorkflowOrchestrator:
         """
         # Try shared memory first (broker mode)
         if self._shm_client is None:
-            self._shm_client = SharedMemoryClient(mode="read")
+            # Use file backend to match broker (Redis caused hangs)
+            self._shm_client = SharedMemoryClient(mode="read", backend="file")
         
         shm_data = self._shm_client.read()
         
@@ -244,7 +245,7 @@ class UnifiedWorkflowOrchestrator:
             return {"error": "Cannot compute governance - missing data"}
         
         try:
-            result = await self._bridge.check_governance(anima, readings, eisv)
+            result = await self._bridge.check_in(anima, readings)
             return result
         except Exception as e:
             return {"error": str(e), "source": "local"}

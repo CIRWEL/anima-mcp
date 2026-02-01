@@ -91,7 +91,18 @@ class PilRenderer(DisplayRenderer):
         self._last_blink_time: float = 0.0
         self._blink_in_progress: bool = False
         self._blink_start_time: float = 0.0
+        # Font cache (avoid loading from disk on every render)
+        self._name_font: Optional[ImageFont.FreeTypeFont] = None
         self._init_display()
+
+    def _get_name_font(self) -> ImageFont.FreeTypeFont:
+        """Get cached font for name display."""
+        if self._name_font is None:
+            try:
+                self._name_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
+            except (OSError, IOError):
+                self._name_font = ImageFont.load_default()
+        return self._name_font
 
     def _init_display(self):
         """Initialize display hardware if available."""
@@ -105,7 +116,7 @@ class PilRenderer(DisplayRenderer):
             dc_pin = digitalio.DigitalInOut(board.D25)
             reset_pin = digitalio.DigitalInOut(board.D24)
 
-            # SPI setup
+            # SPI setup - use high speed for fast display updates
             spi = board.SPI()
 
             self._display = st7789.ST7789(
@@ -117,6 +128,7 @@ class PilRenderer(DisplayRenderer):
                 cs=cs_pin,
                 dc=dc_pin,
                 rst=reset_pin,
+                baudrate=24000000,  # 24 MHz - max SPI speed for ST7789
             )
 
             # Enable backlight on D22 (BrainCraft HAT)
@@ -181,10 +193,11 @@ class PilRenderer(DisplayRenderer):
         if not self._display:
             print("[Display] render_face called but display hardware not available", file=sys.stderr, flush=True)
             return  # Display not available, skip silently
-        
+
         try:
             import time
-            
+            t0 = time.time()
+
             image, draw = self._create_canvas(BLACK)
 
             # Face background circle with tint
@@ -213,16 +226,18 @@ class PilRenderer(DisplayRenderer):
                 width=2
             )
 
+            t1 = time.time()
+
             # Handle blinking animation
             now = time.time()
             time_since_last_blink = now - self._last_blink_time
-            
+
             # Check if should blink
             if not self._blink_in_progress and time_since_last_blink >= state.blink_frequency:
                 self._blink_in_progress = True
                 self._blink_start_time = now
                 self._last_blink_time = now
-            
+
             # Apply blink if in progress
             blink_state = state
             if self._blink_in_progress:
@@ -251,20 +266,18 @@ class PilRenderer(DisplayRenderer):
 
             # Draw eyes (with blink applied)
             self._draw_eyes(draw, blink_state, center_x, center_y)
+            t2 = time.time()
 
             # Draw mouth
             self._draw_mouth(draw, state, center_x, center_y)
-            
+            t3 = time.time()
+
             # Store state for next transition
             self._last_face_state = state
 
             # Draw name at bottom if provided
             if name:
-                try:
-                    font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 16)
-                except (OSError, IOError):
-                    font = ImageFont.load_default()
-
+                font = self._get_name_font()
                 bbox = draw.textbbox((0, 0), name, font=font)
                 text_width = bbox[2] - bbox[0]
                 draw.text(
@@ -273,9 +286,16 @@ class PilRenderer(DisplayRenderer):
                     fill=WHITE,
                     font=font
                 )
+            t4 = time.time()
 
             self._image = image
             self._show()
+            t5 = time.time()
+
+            # Log timing breakdown for slow renders
+            total = t5 - t0
+            if total > 0.3:  # Log renders over 300ms
+                print(f"[Face] draw={int((t1-t0)*1000)}ms eyes={int((t2-t1)*1000)}ms mouth={int((t3-t2)*1000)}ms text={int((t4-t3)*1000)}ms show={int((t5-t4)*1000)}ms TOTAL={int(total*1000)}ms", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[Display] Error rendering face: {e}", file=sys.stderr, flush=True)
             # Don't print full traceback in production - too verbose

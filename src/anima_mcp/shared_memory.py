@@ -118,8 +118,8 @@ class SharedMemoryClient:
         """Write to file implementation with file locking."""
         lock_path = self.filepath.with_suffix(".lock")
         try:
-            # Use a separate lock file to coordinate access
-            with open(lock_path, "w") as lock_file:
+            # Use "a" mode to avoid truncation race when multiple processes open lock file
+            with open(lock_path, "a") as lock_file:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # Exclusive lock
                 try:
                     temp_path = self.filepath.with_suffix(".tmp")
@@ -151,18 +151,19 @@ class SharedMemoryClient:
         else:
             return self._read_file()
 
-    def _read_file(self, retries: int = 3) -> Optional[Dict[str, Any]]:
+    def _read_file(self, retries: int = 5) -> Optional[Dict[str, Any]]:
         """Read from file implementation with file locking and retry logic."""
         lock_path = self.filepath.with_suffix(".lock")
         last_error = None
+        error_count = 0
 
         for attempt in range(retries):
             try:
                 if not self.filepath.exists():
                     return None
 
-                # Use shared lock for reading (allows concurrent reads, blocks writes)
-                with open(lock_path, "w") as lock_file:
+                # Use "a" mode to avoid truncation race when multiple processes open lock file
+                with open(lock_path, "a") as lock_file:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)  # Shared lock
                     try:
                         with open(self.filepath, "r") as f:
@@ -173,17 +174,20 @@ class SharedMemoryClient:
 
             except json.JSONDecodeError as e:
                 last_error = e
-                # JSON corruption - wait briefly and retry
+                error_count += 1
+                # JSON corruption - wait with exponential backoff
+                # Broker writes ~every 200ms, so backoff: 50ms, 100ms, 150ms, 200ms
                 if attempt < retries - 1:
-                    time.sleep(0.01 * (attempt + 1))  # 10ms, 20ms, 30ms backoff
+                    time.sleep(0.05 * (attempt + 1))
                 continue
             except Exception as e:
                 last_error = e
+                error_count += 1
                 break
 
-        # Only log on final failure (not transient retries)
-        if last_error:
-            print(f"[SharedMemory] File read error: {last_error}")
+        # Only log persistent failures (>2 retries), not transient single-attempt errors
+        if last_error and error_count > 2:
+            print(f"[SharedMemory] File read error after {error_count} attempts: {last_error}")
         return None
 
     def clear(self):

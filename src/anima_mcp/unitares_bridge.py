@@ -26,13 +26,14 @@ from .sensors.base import SensorReadings
 class UnitaresBridge:
     """
     Connect anima creature to UNITARES governance.
-    
+
     Supports:
     - HTTP/SSE connection to UNITARES server
     - Fallback local governance if server unavailable
     - Automatic retry and error handling
+    - Connection pooling (reuses single aiohttp session)
     """
-    
+
     def __init__(
         self,
         unitares_url: Optional[str] = None,
@@ -41,7 +42,7 @@ class UnitaresBridge:
     ):
         """
         Initialize bridge.
-        
+
         Args:
             unitares_url: URL to UNITARES governance server (e.g., "http://127.0.0.1:8765/sse")
                          If None, will use local governance only
@@ -53,61 +54,96 @@ class UnitaresBridge:
         self._timeout = timeout
         self._session_id = None
         self._available = None  # None = not checked, True/False = checked
+        self._http_session = None  # Reusable aiohttp session
+        self._session_timeout = None  # Timeout config for session
+
+    async def _get_session(self):
+        """Get or create reusable HTTP session."""
+        if self._http_session is None or self._http_session.closed:
+            import aiohttp
+            # Create session with connection pooling
+            connector = aiohttp.TCPConnector(
+                limit=5,  # Max 5 concurrent connections
+                limit_per_host=3,  # Max 3 per host
+                ttl_dns_cache=300,  # Cache DNS for 5 min
+                keepalive_timeout=30,  # Keep connections alive
+            )
+            self._session_timeout = aiohttp.ClientTimeout(total=self._timeout)
+            self._http_session = aiohttp.ClientSession(
+                timeout=self._session_timeout,
+                connector=connector
+            )
+        return self._http_session
+
+    async def close(self):
+        """Close the HTTP session. Call when done with bridge."""
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
         
     async def check_availability(self) -> bool:
         """
         Check if UNITARES server is available.
-        
+
         Returns:
-            True if server is reachable, False otherwise
+            True if server is reachable and accessible, False otherwise
         """
         if self._url is None:
             self._available = False
             return False
-        
+
         if self._available is not None:
             return self._available
-        
+
         try:
-            # Try to connect to UNITARES server
-            import aiohttp
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._timeout)) as session:
-                # Try health check or list_tools endpoint
-                health_url = self._url.replace('/sse', '/health') if '/sse' in self._url else f"{self._url}/health"
-                try:
-                    async with session.get(health_url) as response:
-                        if response.status == 200:
-                            self._available = True
-                            return True
-                except Exception:
-                    pass
-                
-                # If health check fails, try MCP endpoint
-                if '/mcp' in self._url:
-                    mcp_url = self._url
-                elif '/sse' in self._url:
-                    mcp_url = self._url.replace('/sse', '/mcp')
-                else:
-                    mcp_url = f"{self._url}/mcp"
-                try:
-                    async with session.post(
-                        mcp_url,
-                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-                        headers={
-                            "Content-Type": "application/json",
-                            "Accept": "application/json, text/event-stream"
-                        }
-                    ) as response:
-                        if response.status == 200:
-                            self._available = True
-                            return True
-                except Exception:
-                    pass
-                
-                self._available = False
-                return False
-                
+            # Try to connect to UNITARES server using shared session
+            session = await self._get_session()
+
+            # Try health check or list_tools endpoint
+            health_url = self._url.replace('/sse', '/health') if '/sse' in self._url else f"{self._url}/health"
+            try:
+                async with session.get(health_url) as response:
+                    if response.status == 200:
+                        self._available = True
+                        return True
+                    elif response.status == 401:
+                        # OAuth/auth required - not accessible from this client
+                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", flush=True)
+                        self._available = False
+                        return False
+            except Exception:
+                pass
+
+            # If health check fails, try MCP endpoint
+            if '/mcp' in self._url:
+                mcp_url = self._url
+            elif '/sse' in self._url:
+                mcp_url = self._url.replace('/sse', '/mcp')
+            else:
+                mcp_url = f"{self._url}/mcp"
+            try:
+                async with session.post(
+                    mcp_url,
+                    json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                    headers={
+                        "Content-Type": "application/json",
+                        "Accept": "application/json, text/event-stream"
+                    }
+                ) as response:
+                    if response.status == 200:
+                        self._available = True
+                        return True
+                    elif response.status == 401:
+                        # OAuth/auth required - not accessible from this client
+                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", flush=True)
+                        self._available = False
+                        return False
+            except Exception:
+                pass
+
+            self._available = False
+            return False
+
         except ImportError:
             # aiohttp not available
             self._available = False
@@ -127,9 +163,9 @@ class UnitaresBridge:
     ) -> Dict[str, Any]:
         """
         Check in with UNITARES governance.
-        
+
         Maps anima state to EISV metrics and requests governance decision.
-        
+
         Args:
             anima: Anima state
             readings: Sensor readings (physical + neural)
@@ -137,7 +173,7 @@ class UnitaresBridge:
             physical_weight: Weight for physical signals in EISV mapping
             identity: Optional CreatureIdentity for metadata sync
             is_first_check_in: If True, syncs identity metadata to UNITARES
-        
+
         Returns:
             Governance decision dict with:
             - action: "proceed" | "pause" | "halt"
@@ -146,26 +182,38 @@ class UnitaresBridge:
             - eisv: EISV metrics used
             - source: "unitares" | "local" (which governance system responded)
         """
-        # Sync identity metadata on first check-in
-        if is_first_check_in and identity:
+        # Debug: Log what we received
+        print(f"[UnitaresBridge] check_in called: is_first_check_in={is_first_check_in}, identity={identity is not None}", flush=True)
+
+        # Map anima to EISV first (always needed)
+        eisv = anima_to_eisv(anima, readings, neural_weight, physical_weight)
+
+        # Check if UNITARES is available BEFORE trying to sync
+        unitares_available = await self.check_availability()
+
+        # Sync identity metadata on first check-in (only if UNITARES is available)
+        if is_first_check_in and identity and unitares_available:
+            print(f"[UnitaresBridge] First check-in - syncing identity for {identity.name if hasattr(identity, 'name') else 'unknown'}...", flush=True)
             try:
                 await self.sync_identity_metadata(identity)
-            except Exception:
+            except Exception as e:
                 # Non-fatal - continue with governance check-in
-                pass
-        
-        # Map anima to EISV
-        eisv = anima_to_eisv(anima, readings, neural_weight, physical_weight)
-        
+                print(f"[UnitaresBridge] Identity sync exception: {e}", flush=True)
+
         # Check if UNITARES is available
-        if await self.check_availability():
+        if unitares_available:
             try:
-                return await self._call_unitares(anima, readings, eisv, identity=identity)
+                print(f"[UnitaresBridge] Calling UNITARES (agent_id={self._agent_id[:8] if self._agent_id else 'None'})", flush=True)
+                result = await self._call_unitares(anima, readings, eisv, identity=identity)
+                print(f"[UnitaresBridge] UNITARES responded: {result.get('source', 'unknown')}", flush=True)
+                return result
             except Exception as e:
                 # Fallback to local governance on error
+                print(f"[UnitaresBridge] UNITARES error, falling back to local: {e}", flush=True)
                 return self._local_governance(anima, readings, eisv, error=str(e))
         else:
             # Use local governance
+            print("[UnitaresBridge] UNITARES not available, using local governance", flush=True)
             return self._local_governance(anima, readings, eisv)
     
     async def _call_unitares(
@@ -177,8 +225,6 @@ class UnitaresBridge:
     ) -> Dict[str, Any]:
         """Call UNITARES governance via HTTP/SSE."""
         try:
-            import aiohttp
-            
             # Prepare MCP request
             complexity = estimate_complexity(anima, readings)
             status_text = generate_status_text(anima, readings, eisv)
@@ -235,52 +281,58 @@ class UnitaresBridge:
             # Add agent ID header if set (for proper identity binding in UNITARES)
             if self._agent_id:
                 headers["X-Agent-Id"] = self._agent_id
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._timeout)) as session:
-                async with session.post(
-                    mcp_url,
-                    json=mcp_request,
-                    headers=headers
-                ) as response:
-                    if response.status == 200:
-                        # Handle SSE response format (text/event-stream)
-                        content_type = response.headers.get("Content-Type", "")
-                        if "text/event-stream" in content_type:
-                            # Parse SSE format: "event: message\ndata: {...}\n\n"
-                            text = await response.text()
-                            result = None
-                            for line in text.split("\n"):
-                                if line.startswith("data: "):
-                                    try:
-                                        result = json.loads(line[6:])
-                                        break
-                                    except json.JSONDecodeError:
-                                        continue
-                            if not result:
-                                raise Exception("No valid JSON data in SSE response")
-                        else:
-                            result = await response.json()
 
-                        # Parse MCP response
-                        if "result" in result:
-                            governance_result = result["result"]
-
-                            # Extract action and margin from UNITARES response
-                            # UNITARES returns: {"action": "proceed", "margin": "comfortable", ...}
-                            return {
-                                "action": governance_result.get("action", "proceed"),
-                                "margin": governance_result.get("margin", "comfortable"),
-                                "reason": governance_result.get("reason", "Governance check completed"),
-                                "eisv": eisv.to_dict(),
-                                "source": "unitares",
-                                "raw_response": governance_result
-                            }
-                        elif "error" in result:
-                            raise Exception(f"MCP error: {result['error']}")
+            # Use shared session for connection pooling
+            session = await self._get_session()
+            async with session.post(
+                mcp_url,
+                json=mcp_request,
+                headers=headers
+            ) as response:
+                if response.status == 200:
+                    # Handle SSE response format (text/event-stream)
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/event-stream" in content_type:
+                        # Parse SSE format: "event: message\ndata: {...}\n\n"
+                        text = await response.text()
+                        result = None
+                        for line in text.split("\n"):
+                            if line.startswith("data: "):
+                                try:
+                                    result = json.loads(line[6:])
+                                    break
+                                except json.JSONDecodeError:
+                                    continue
+                        if not result:
+                            raise Exception("No valid JSON data in SSE response")
                     else:
-                        # HTTP error - fallback to local
-                        error_text = await response.text()
-                        raise Exception(f"HTTP {response.status}: {error_text}")
+                        result = await response.json()
+
+                    # Parse MCP response
+                    if "result" in result:
+                        governance_result = result["result"]
+                        # Log response structure to understand agent binding
+                        print(f"[UnitaresBridge] Response keys: {list(governance_result.keys())}", flush=True)
+                        # Log agent binding info from UNITARES
+                        bound_id = governance_result.get("agent_id") or governance_result.get("resolved_agent_id") or governance_result.get("agent_signature", {}).get("uuid")
+                        print(f"[UnitaresBridge] Bound to agent: {bound_id[:8] if bound_id else 'not specified'}", flush=True)
+
+                        # Extract action and margin from UNITARES response
+                        # UNITARES returns: {"action": "proceed", "margin": "comfortable", ...}
+                        return {
+                            "action": governance_result.get("action", "proceed"),
+                            "margin": governance_result.get("margin", "comfortable"),
+                            "reason": governance_result.get("reason", "Governance check completed"),
+                            "eisv": eisv.to_dict(),
+                            "source": "unitares",
+                            "raw_response": governance_result
+                        }
+                    elif "error" in result:
+                        raise Exception(f"MCP error: {result['error']}")
+                else:
+                    # HTTP error - fallback to local
+                    error_text = await response.text()
+                    raise Exception(f"HTTP {response.status}: {error_text}")
                         
         except ImportError:
             # aiohttp not available
@@ -374,8 +426,6 @@ class UnitaresBridge:
             return False
         
         try:
-            import aiohttp
-            
             # Call UNITARES identity tool to set label
             # Note: update_agent_metadata doesn't set label directly
             # We need to use identity(name=...) tool instead
@@ -390,7 +440,7 @@ class UnitaresBridge:
                     }
                 }
             }
-            
+
             mcp_url = self._url.replace('/sse', '/mcp') if '/sse' in self._url else f"{self._url}/mcp"
             headers = {
                 "Content-Type": "application/json",
@@ -398,12 +448,13 @@ class UnitaresBridge:
             }
             if self._agent_id:
                 headers["X-Agent-Id"] = self._agent_id
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._timeout)) as session:
-                async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        return "result" in result and "error" not in result
+
+            # Use shared session for connection pooling
+            session = await self._get_session()
+            async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    return "result" in result and "error" not in result
             return False
         except Exception:
             # Non-fatal - name sync is optional
@@ -426,8 +477,6 @@ class UnitaresBridge:
             return False
         
         try:
-            import aiohttp
-            
             # Build metadata payload
             metadata = {
                 "born_at": identity.born_at.isoformat() if hasattr(identity, 'born_at') else None,
@@ -437,8 +486,12 @@ class UnitaresBridge:
                 "name_history": identity.name_history if hasattr(identity, 'name_history') else [],
                 "current_awakening_at": identity.current_awakening_at.isoformat() if hasattr(identity, 'current_awakening_at') and identity.current_awakening_at else None,
             }
-            
-            # Call UNITARES update_agent_metadata tool
+
+            # Get creature name for labeling
+            creature_name = identity.name if hasattr(identity, 'name') and identity.name else "Anima"
+            creature_id = identity.creature_id if hasattr(identity, 'creature_id') else "unknown"
+
+            # Call UNITARES update_agent_metadata tool - label ourselves!
             mcp_request = {
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -446,29 +499,57 @@ class UnitaresBridge:
                 "params": {
                     "name": "update_agent_metadata",
                     "arguments": {
-                        "agent_id": self._agent_id,
-                        "preferences": metadata,  # Store in preferences/metadata
-                        "notes": f"Anima identity sync: born_at={metadata.get('born_at')}, awakenings={metadata.get('total_awakenings')}"
+                        # Don't pass agent_id - let session binding handle it
+                        "purpose": f"{creature_name} - embodied digital creature (creature_id: {creature_id[:8]}...)",
+                        "tags": [creature_name.lower(), "anima", "creature", "embodied", "autonomous"],
+                        "preferences": metadata,
+                        "notes": f"{creature_name} identity: creature_id={creature_id}, born={metadata.get('born_at')}, awakenings={metadata.get('total_awakenings')}"
                     }
                 }
             }
-            
+
             mcp_url = self._url.replace('/sse', '/mcp') if '/sse' in self._url else f"{self._url}/mcp"
             headers = {
                 "Content-Type": "application/json",
-                "X-Session-ID": self._session_id or "anima-creature"
+                "X-Session-ID": self._session_id or "anima-creature",
+                "Accept": "application/json, text/event-stream"
             }
             if self._agent_id:
                 headers["X-Agent-Id"] = self._agent_id
-            
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=self._timeout)) as session:
-                async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
-                    if response.status == 200:
+
+            print(f"[UnitaresBridge] Syncing identity metadata for {creature_name}...", flush=True)
+
+            # Use shared session for connection pooling
+            session = await self._get_session()
+            async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
+                if response.status == 200:
+                    # Handle SSE response format
+                    content_type = response.headers.get("Content-Type", "")
+                    if "text/event-stream" in content_type:
+                        text = await response.text()
+                        result = None
+                        for line in text.split("\n"):
+                            if line.startswith("data: "):
+                                try:
+                                    result = json.loads(line[6:])
+                                    break
+                                except json.JSONDecodeError:
+                                    continue
+                    else:
                         result = await response.json()
-                        return "result" in result and "error" not in result
+
+                    if result and "result" in result and "error" not in result:
+                        print(f"[UnitaresBridge] Identity sync SUCCESS - {creature_name} labeled in UNITARES", flush=True)
+                        return True
+                    else:
+                        error = result.get('error', 'unknown') if result else 'no response'
+                        print(f"[UnitaresBridge] Identity sync failed: {error}", flush=True)
+                else:
+                    print(f"[UnitaresBridge] Identity sync HTTP error: {response.status}", flush=True)
             return False
-        except Exception:
+        except Exception as e:
             # Non-fatal - metadata sync is optional
+            print(f"[UnitaresBridge] Identity sync error: {e}", flush=True)
             return False
 
 

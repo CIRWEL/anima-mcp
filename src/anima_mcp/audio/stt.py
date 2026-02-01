@@ -52,6 +52,7 @@ class SpeechToText:
         self._model = None
         self._recognizer = None
         self._initialized = False
+        self._init_failed = False  # Track if init failed to suppress repeated warnings
 
     def _find_model(self) -> Optional[Path]:
         """Find an available Vosk model."""
@@ -73,12 +74,15 @@ class SpeechToText:
         """Initialize the Vosk model."""
         if self._initialized:
             return True
+        if self._init_failed:
+            return False  # Don't retry or print warnings again
 
         if self._model_path is None or not self._model_path.exists():
             print(f"[STT] Model not found. Please download a Vosk model to ~/.anima/models/",
                   file=sys.stderr, flush=True)
             print("[STT] Small model: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
                   file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
 
         try:
@@ -95,9 +99,11 @@ class SpeechToText:
         except ImportError:
             print("[STT] Vosk not installed. Run: pip install vosk",
                   file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
         except Exception as e:
             print(f"[STT] Failed to load model: {e}", file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
 
     def transcribe(self, audio_bytes: bytes) -> Optional[TranscriptionResult]:
