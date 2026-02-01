@@ -1121,7 +1121,7 @@ class ScreenRenderer:
                 y += 22
 
                 # UUID (short form for identification when disconnected)
-                short_id = identity.id[:8] if identity.id else "unknown"
+                short_id = identity.creature_id[:8] if identity.creature_id else "unknown"
                 draw.text((10, y), f"id: {short_id}", fill=LIGHT_CYAN, font=font_small)
 
                 # Nav dots
@@ -1389,24 +1389,45 @@ class ScreenRenderer:
             return
 
         try:
-            # Use cached visualizer and summary (DB queries take 20+ seconds)
+            # Use cached visualizer and summary (DB queries take 5+ seconds)
             now = time.time()
             cache_expired = (self._learning_cache is None or
                              now - self._learning_cache_time > self._learning_cache_ttl)
 
+            # Track if we're showing stale data
+            showing_stale = False
+
             if cache_expired and not self._learning_cache_refreshing:
-                # Need to refresh cache - mark as refreshing to prevent concurrent queries
-                self._learning_cache_refreshing = True
-                try:
-                    if self._learning_visualizer is None:
-                        self._learning_visualizer = LearningVisualizer(db_path=self._db_path)
-                    self._learning_cache = self._learning_visualizer.get_learning_summary(
-                        readings=readings, anima=anima
-                    )
-                    self._learning_cache_time = now
-                    print(f"[Learning] Cache refreshed in {time.time() - now:.1f}s", file=sys.stderr, flush=True)
-                finally:
-                    self._learning_cache_refreshing = False
+                if self._learning_cache is not None:
+                    # Have stale cache - use it immediately, refresh in background
+                    showing_stale = True
+                    import threading
+                    def _bg_refresh():
+                        try:
+                            self._learning_cache_refreshing = True
+                            if self._learning_visualizer is None:
+                                self._learning_visualizer = LearningVisualizer(db_path=self._db_path)
+                            self._learning_cache = self._learning_visualizer.get_learning_summary(
+                                readings=readings, anima=anima
+                            )
+                            self._learning_cache_time = time.time()
+                            print(f"[Learning] Background refresh complete", file=sys.stderr, flush=True)
+                        finally:
+                            self._learning_cache_refreshing = False
+                    threading.Thread(target=_bg_refresh, daemon=True).start()
+                else:
+                    # No cache at all - must block for first load
+                    self._learning_cache_refreshing = True
+                    try:
+                        if self._learning_visualizer is None:
+                            self._learning_visualizer = LearningVisualizer(db_path=self._db_path)
+                        self._learning_cache = self._learning_visualizer.get_learning_summary(
+                            readings=readings, anima=anima
+                        )
+                        self._learning_cache_time = now
+                        print(f"[Learning] Initial cache loaded in {time.time() - now:.1f}s", file=sys.stderr, flush=True)
+                    finally:
+                        self._learning_cache_refreshing = False
 
             # Use cache (may be stale during refresh, which is fine)
             summary = self._learning_cache
@@ -1464,6 +1485,9 @@ class ScreenRenderer:
                 title_color = GREEN
 
             draw.text((10, y_offset), title, fill=title_color, font=font_title)
+            # Show refresh indicator if using stale data
+            if showing_stale or self._learning_cache_refreshing:
+                draw.text((180, y_offset), "↻", fill=LIGHT_CYAN, font=font_title)
             y_offset += 22
 
             # === HUMIDITY BAR (Visual comfort zone) ===
