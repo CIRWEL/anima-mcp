@@ -210,28 +210,36 @@ def derive_face_state(anima: Anima) -> FaceState:
         eye_size_factor = 0.7 + (eye_openness * 0.5) + presence_size_boost
     eye_size_factor = max(0.5, min(1.5, eye_size_factor))
 
-    # === Color tint ===
+    # === Color tint - Elegant warm palette ===
+    # Cool = soft teal/cyan (not harsh blue)
+    # Content = warm amber/gold (not garish yellow)
+    # Warm = soft coral/peach (not harsh orange)
     base_warmth = anima.warmth
     if mood == "stressed":
         base_warmth *= 0.7
     elif mood == "overheated":
         base_warmth = min(1.0, base_warmth * 1.2)
 
-    # Smoother gradient using interpolation
+    # Smoother gradient using interpolation - warmer, more elegant
     if base_warmth < 0.3:
-        tint = (100, 150, 255)  # Cool blue
-    elif base_warmth < 0.5:
-        # Interpolate blue to white
-        t = (base_warmth - 0.3) / 0.2
-        tint = (int(100 + 155*t), int(150 + 105*t), 255)
-    elif base_warmth < 0.7:
-        # Interpolate white to warm yellow
-        t = (base_warmth - 0.5) / 0.2
-        tint = (255, int(255 - 15*t), int(255 - 55*t))
+        # Cool: soft teal (not harsh blue)
+        tint = (120, 180, 200)
+    elif base_warmth < 0.45:
+        # Interpolate teal to warm white
+        t = (base_warmth - 0.3) / 0.15
+        tint = (int(120 + 120*t), int(180 + 60*t), int(200 + 40*t))
+    elif base_warmth < 0.6:
+        # Interpolate warm white to soft amber
+        t = (base_warmth - 0.45) / 0.15
+        tint = (int(240 + 15*t), int(240 - 20*t), int(240 - 80*t))
+    elif base_warmth < 0.75:
+        # Soft amber/gold - the "content" color
+        t = (base_warmth - 0.6) / 0.15
+        tint = (255, int(220 - 20*t), int(160 - 40*t))
     else:
-        # Interpolate yellow to orange
-        t = min(1.0, (base_warmth - 0.7) / 0.3)
-        tint = (255, int(240 - 60*t), int(200 - 100*t))
+        # Warm coral/peach (not harsh orange)
+        t = min(1.0, (base_warmth - 0.75) / 0.25)
+        tint = (255, int(200 - 40*t), int(120 - 20*t))
 
     # === Eyebrow ===
     eyebrow = 0.0

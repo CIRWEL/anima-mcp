@@ -216,14 +216,24 @@ class PilRenderer(DisplayRenderer):
                 )
                 state.tint = smooth_tint
 
-            # Draw face background (subtle tint)
-            tinted_bg = tuple(c // 8 for c in state.tint)  # Subtle tint
+            # Draw face background with soft glow effect
+            # Outer glow (subtle, warm)
+            glow_color = tuple(c // 16 for c in state.tint)
+            draw.ellipse(
+                [center_x - face_radius - 4, center_y - face_radius - 4,
+                 center_x + face_radius + 4, center_y + face_radius + 4],
+                fill=glow_color,
+                outline=None
+            )
+
+            # Main face circle (subtle tint, no harsh outline)
+            tinted_bg = tuple(c // 10 for c in state.tint)  # Slightly more visible tint
             draw.ellipse(
                 [center_x - face_radius, center_y - face_radius,
                  center_x + face_radius, center_y + face_radius],
                 fill=tinted_bg,
-                outline=state.tint,
-                width=2
+                outline=tuple(c // 3 for c in state.tint),  # Softer outline
+                width=1
             )
 
             t1 = time.time()
@@ -302,7 +312,7 @@ class PilRenderer(DisplayRenderer):
             # Don't crash - display might be temporarily unavailable
 
     def _draw_eyes(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
-        """Draw eyes based on state - fluid and expressive."""
+        """Draw eyes based on state - fluid, expressive, and alive."""
         eye_spacing = 35
         eye_y = cy - 15
 
@@ -310,7 +320,10 @@ class PilRenderer(DisplayRenderer):
         right_x = cx + eye_spacing
 
         eye_color = state.tint
-        
+
+        # Softer highlight color (warm white, not harsh)
+        highlight_color = (255, 252, 245)  # Warm white
+
         # Apply eyebrow raise (affects eye position)
         eyebrow_offset = int(state.eyebrow_raise * 5)  # -5 to +5 pixels
         eye_y += eyebrow_offset
@@ -326,41 +339,73 @@ class PilRenderer(DisplayRenderer):
             base_r = 8  # Smaller for squint
         else:  # CLOSED
             base_r = 0
-        
+
         # Apply fluid size factor (continuous variation)
         r = int(base_r * state.eye_size_factor)
         r = max(4, min(25, r))  # Clamp to reasonable range
-        
+
+        # Subtle asymmetry - right eye slightly different (feels more alive)
+        right_r = int(r * 0.95)  # Right eye 5% smaller
+        right_y_offset = 1  # Right eye 1px lower
+
         # Apply eye openness (continuous, not discrete)
         if state.eyes == EyeState.CLOSED:
-            # Closed eyes - curved arcs
-            draw.arc([left_x - 12, eye_y - 6, left_x + 12, eye_y + 6], 0, 180, fill=eye_color, width=3)
-            draw.arc([right_x - 12, eye_y - 6, right_x + 12, eye_y + 6], 0, 180, fill=eye_color, width=3)
+            # Closed eyes - curved arcs (gentle, not flat)
+            draw.arc([left_x - 12, eye_y - 4, left_x + 12, eye_y + 8], 0, 180, fill=eye_color, width=3)
+            draw.arc([right_x - 12, eye_y - 4 + right_y_offset, right_x + 12, eye_y + 8 + right_y_offset], 0, 180, fill=eye_color, width=3)
         elif state.eyes == EyeState.SQUINT:
-            # Squinting - narrow lines, width varies with openness
+            # Squinting - narrow ovals, not harsh lines
             line_width = max(2, int(4 * state.eye_openness))
-            draw.line([left_x - 12, eye_y, left_x + 12, eye_y], fill=eye_color, width=line_width)
-            draw.line([right_x - 12, eye_y, right_x + 12, eye_y], fill=eye_color, width=line_width)
+            h = max(2, line_width // 2)
+            draw.ellipse([left_x - 12, eye_y - h, left_x + 12, eye_y + h], fill=eye_color)
+            draw.ellipse([right_x - 12, eye_y - h + right_y_offset, right_x + 12, eye_y + h + right_y_offset], fill=eye_color)
         elif state.eyes == EyeState.DROOPY:
-            # Droopy - ovals with fluid openness
+            # Droopy - soft ovals with fluid openness
             h = max(4, int(r * state.eye_openness))
+            # Left eye
             draw.ellipse([left_x - r, eye_y - h, left_x + r, eye_y + h], fill=eye_color)
-            draw.ellipse([right_x - r, eye_y - h, right_x + r, eye_y + h], fill=eye_color)
+            # Right eye (slightly different)
+            draw.ellipse([right_x - right_r, eye_y - h + right_y_offset, right_x + right_r, eye_y + h + right_y_offset], fill=eye_color)
             # Pupils (smaller for droopy)
             pr = max(2, int(4 * state.eye_openness))
             draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
-            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
+            draw.ellipse([right_x - pr, eye_y - pr + right_y_offset, right_x + pr, eye_y + pr + right_y_offset], fill=BLACK)
+            # Subtle highlights (make eyes alive)
+            if pr > 3:
+                hl_r = max(1, pr // 3)
+                draw.ellipse([left_x - pr + 2, eye_y - pr + 2, left_x - pr + 2 + hl_r * 2, eye_y - pr + 2 + hl_r * 2], fill=highlight_color)
+                draw.ellipse([right_x - pr + 2, eye_y - pr + 2 + right_y_offset, right_x - pr + 2 + hl_r * 2, eye_y - pr + 2 + hl_r * 2 + right_y_offset], fill=highlight_color)
         else:
-            # WIDE or NORMAL - circles with fluid size and openness
+            # WIDE or NORMAL - soft circles with fluid size and openness
             # Apply openness to create more variation
             actual_r = max(4, int(r * (0.7 + state.eye_openness * 0.3)))
-            draw.ellipse([left_x - actual_r, eye_y - actual_r, left_x + actual_r, eye_y + actual_r], fill=eye_color)
-            draw.ellipse([right_x - actual_r, eye_y - actual_r, right_x + actual_r, eye_y + actual_r], fill=eye_color)
+            actual_r_right = max(4, int(right_r * (0.7 + state.eye_openness * 0.3)))
+
+            # Draw eyes (slightly oval - more natural)
+            oval_factor = 1.1  # Slightly taller than wide
+            draw.ellipse([left_x - actual_r, eye_y - int(actual_r * oval_factor),
+                         left_x + actual_r, eye_y + int(actual_r * oval_factor)], fill=eye_color)
+            draw.ellipse([right_x - actual_r_right, eye_y - int(actual_r_right * oval_factor) + right_y_offset,
+                         right_x + actual_r_right, eye_y + int(actual_r_right * oval_factor) + right_y_offset], fill=eye_color)
+
             # Pupils - size varies with openness
             pr = max(3, int(6 * state.eye_openness))
             pr = min(pr, actual_r - 2)  # Don't exceed eye size
+            pr_right = min(pr, actual_r_right - 2)
             draw.ellipse([left_x - pr, eye_y - pr, left_x + pr, eye_y + pr], fill=BLACK)
-            draw.ellipse([right_x - pr, eye_y - pr, right_x + pr, eye_y + pr], fill=BLACK)
+            draw.ellipse([right_x - pr_right, eye_y - pr_right + right_y_offset, right_x + pr_right, eye_y + pr_right + right_y_offset], fill=BLACK)
+
+            # Eye highlights - the sparkle that makes eyes alive
+            # Upper-left highlight (simulates light source)
+            if pr > 3 and state.eye_openness > 0.5:
+                hl_r = max(1, pr // 3)
+                hl_offset = pr // 2
+                # Left eye highlight
+                draw.ellipse([left_x - hl_offset - hl_r, eye_y - hl_offset - hl_r,
+                             left_x - hl_offset + hl_r, eye_y - hl_offset + hl_r], fill=highlight_color)
+                # Right eye highlight
+                draw.ellipse([right_x - hl_offset - hl_r, eye_y - hl_offset - hl_r + right_y_offset,
+                             right_x - hl_offset + hl_r, eye_y - hl_offset + hl_r + right_y_offset], fill=highlight_color)
 
     def _draw_mouth(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
         """Draw mouth based on state - fluid with smile intensity."""
