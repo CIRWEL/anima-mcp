@@ -1423,17 +1423,17 @@ class ScreenRenderer:
                 self._render_learning_text_fallback(summary, readings, anima)
                 return
 
-            # Color definitions
-            CYAN = (0, 255, 255)
-            BLUE = (100, 150, 255)
-            YELLOW = (255, 255, 100)
-            ORANGE = (255, 150, 50)
-            RED = (255, 100, 100)
-            GREEN = (100, 255, 100)
-            PURPLE = (200, 100, 255)
+            # Color definitions - BOLD and VIBRANT for readability
+            CYAN = (0, 255, 255)           # Pure cyan
+            BLUE = (80, 180, 255)          # Brighter blue
+            YELLOW = (255, 240, 80)        # Bold yellow
+            ORANGE = (255, 160, 40)        # Vivid orange
+            RED = (255, 100, 100)          # Warm red
+            GREEN = (80, 255, 120)         # Vibrant green
+            PURPLE = (220, 120, 255)       # Bold purple
             WHITE = (255, 255, 255)
-            LIGHT_CYAN = (180, 220, 220)  # For labels
-            DARK_GRAY = (50, 50, 50)
+            LIGHT_CYAN = (200, 255, 255)   # Brighter labels
+            DARK_GRAY = (30, 35, 45)       # Slightly blue-tinted
 
             # Use cached fonts (loading from disk is slow)
             fonts = self._get_fonts()
@@ -1668,20 +1668,20 @@ class ScreenRenderer:
                 self._display.render_text("\n".join(lines), (10, 10))
                 return
 
-            # Color definitions - warm, vibrant palette
-            CYAN = (80, 220, 255)       # Soft cyan for title
-            AMBER = (255, 180, 60)      # Warm amber for agent messages
-            LIME = (120, 255, 120)      # Fresh lime for user messages
-            VIOLET = (180, 130, 255)    # Soft violet for Lumen prefixes
-            SOFT_GOLD = (255, 235, 180) # Warm gold for Lumen's observations
-            CORAL = (255, 140, 120)     # Warm coral for feelings
-            PEACH = (255, 200, 160)     # Soft peach for reflections
-            SKY = (160, 210, 255)       # Sky blue for questions
-            SAGE = (180, 230, 180)      # Sage green for growth
-            MUTED = (140, 160, 180)     # Blue-tinted muted for timestamps
-            DARK_BG = (15, 20, 30)      # Deep blue-black background
-            SELECTED_BG = (35, 55, 85)  # Richer blue selection
-            BORDER = (80, 140, 180)     # Brighter border
+            # Color definitions - BOLD and HIGH CONTRAST for readability
+            CYAN = (0, 255, 255)        # Pure cyan for title
+            AMBER = (255, 200, 60)      # Brighter amber for agent messages
+            LIME = (100, 255, 100)      # Vivid lime for user messages
+            VIOLET = (200, 150, 255)    # Brighter violet for Lumen prefixes
+            SOFT_GOLD = (255, 245, 150) # Brighter gold for Lumen's observations
+            CORAL = (255, 150, 130)     # Brighter coral for feelings
+            PEACH = (255, 220, 180)     # Brighter peach for reflections
+            SKY = (140, 220, 255)       # Brighter sky blue for questions
+            SAGE = (160, 255, 160)      # Brighter sage green for growth
+            MUTED = (160, 180, 200)     # Brighter muted for timestamps
+            DARK_BG = (12, 16, 24)      # Deeper background for contrast
+            SELECTED_BG = (30, 50, 80)  # Selection highlight
+            BORDER = (100, 180, 220)    # Bold border
 
             # Use cached fonts (loading from disk is slow)
             # Larger fonts for readability - user reported text was hard to read
@@ -1784,16 +1784,15 @@ class ScreenRenderer:
                         else:
                             text_color = SOFT_GOLD  # Default warm gold
 
-                    # Wrap text for display
-                    wrapped_lines = self._wrap_text(display_text, font_small, content_width)
-
-                    # Calculate message height
+                    # Only wrap text when expanded (optimization: _wrap_text is slow)
+                    line_height = 14
                     if is_expanded:
-                        num_lines = min(len(wrapped_lines), 10)  # Show up to 10 lines when expanded (full focus mode)
+                        wrapped_lines = self._wrap_text(display_text, font_small, content_width)
+                        num_lines = min(len(wrapped_lines), 10)
                     else:
-                        num_lines = 1  # Single line when collapsed
+                        wrapped_lines = None  # Don't wrap - just truncate
+                        num_lines = 1
 
-                    line_height = 14  # Tighter line height to fit more messages
                     msg_height = (num_lines * line_height) + (msg_padding * 2) + (12 if author_text else 0)
 
                     # Draw message container
@@ -1814,7 +1813,7 @@ class ScreenRenderer:
                         inner_y += 12
 
                     # Message text
-                    if is_expanded:
+                    if is_expanded and wrapped_lines:
                         # Show multiple wrapped lines (up to 10 in full focus mode)
                         for line_idx, line in enumerate(wrapped_lines[:10]):
                             if inner_y > max_y:
@@ -1825,10 +1824,8 @@ class ScreenRenderer:
                         if len(wrapped_lines) > 10:
                             draw.text((200, inner_y - line_height), "...", fill=MUTED, font=font_small)
                     else:
-                        # Single line, truncated (shorter with larger font)
-                        first_line = wrapped_lines[0] if wrapped_lines else ""
-                        if len(wrapped_lines) > 1 or (first_line and len(first_line) > 24):
-                            first_line = first_line[:24] + "..."
+                        # Single line, truncated directly (no _wrap_text call - faster)
+                        first_line = display_text[:28] + "..." if len(display_text) > 28 else display_text
                         # For Lumen's observations, show prefix inline
                         if not author_text:
                             draw.text((12, inner_y), f"{prefix} {first_line}", fill=text_color, font=font_small)
