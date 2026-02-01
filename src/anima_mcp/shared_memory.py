@@ -11,8 +11,10 @@ Usage:
     client.write(data)
 """
 
+import fcntl
 import json
 import os
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -113,15 +115,22 @@ class SharedMemoryClient:
             return self._write_file(envelope)
 
     def _write_file(self, envelope: Dict[str, Any]) -> bool:
-        """Write to file implementation."""
+        """Write to file implementation with file locking."""
+        lock_path = self.filepath.with_suffix(".lock")
         try:
-            temp_path = self.filepath.with_suffix(".tmp")
-            with open(temp_path, "w") as f:
-                json.dump(envelope, f)
-                f.flush()
-                os.fsync(f.fileno())
-            temp_path.replace(self.filepath)
-            return True
+            # Use a separate lock file to coordinate access
+            with open(lock_path, "w") as lock_file:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)  # Exclusive lock
+                try:
+                    temp_path = self.filepath.with_suffix(".tmp")
+                    with open(temp_path, "w") as f:
+                        json.dump(envelope, f)
+                        f.flush()
+                        os.fsync(f.fileno())
+                    temp_path.replace(self.filepath)
+                    return True
+                finally:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         except Exception as e:
             print(f"[SharedMemory] File write error: {e}")
             return False
@@ -142,17 +151,40 @@ class SharedMemoryClient:
         else:
             return self._read_file()
 
-    def _read_file(self) -> Optional[Dict[str, Any]]:
-        """Read from file implementation."""
-        try:
-            if not self.filepath.exists():
-                return None
-            with open(self.filepath, "r") as f:
-                envelope = json.load(f)
-            return envelope.get("data")
-        except (json.JSONDecodeError, Exception) as e:
-            print(f"[SharedMemory] File read error: {e}")
-            return None
+    def _read_file(self, retries: int = 3) -> Optional[Dict[str, Any]]:
+        """Read from file implementation with file locking and retry logic."""
+        lock_path = self.filepath.with_suffix(".lock")
+        last_error = None
+
+        for attempt in range(retries):
+            try:
+                if not self.filepath.exists():
+                    return None
+
+                # Use shared lock for reading (allows concurrent reads, blocks writes)
+                with open(lock_path, "w") as lock_file:
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)  # Shared lock
+                    try:
+                        with open(self.filepath, "r") as f:
+                            envelope = json.load(f)
+                        return envelope.get("data")
+                    finally:
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+            except json.JSONDecodeError as e:
+                last_error = e
+                # JSON corruption - wait briefly and retry
+                if attempt < retries - 1:
+                    time.sleep(0.01 * (attempt + 1))  # 10ms, 20ms, 30ms backoff
+                continue
+            except Exception as e:
+                last_error = e
+                break
+
+        # Only log on final failure (not transient retries)
+        if last_error:
+            print(f"[SharedMemory] File read error: {last_error}")
+        return None
 
     def clear(self):
         """Clear shared memory."""
