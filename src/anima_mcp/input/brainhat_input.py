@@ -60,13 +60,19 @@ class InputState:
 
 class BrainHatInput:
     """Unified input handler for BrainCraft HAT joystick and buttons.
-    
+
     BrainCraft HAT uses GPIO pins directly (not analog/Seesaw):
     - Joystick directions: D22 (left), D24 (right), D23 (up), D27 (down)
     - Joystick button: D16 (center press)
     - Separate button: D17
     """
-    
+
+    # Debounce settings (in seconds)
+    DEBOUNCE_TIME = 0.08  # 80ms debounce for directions
+    BUTTON_DEBOUNCE_TIME = 0.12  # 120ms for buttons (need more)
+    REPEAT_DELAY = 0.4  # 400ms before repeat starts
+    REPEAT_RATE = 0.15  # 150ms between repeats
+
     def __init__(self):
         """Initialize input handler."""
         self._joy_left = None
@@ -80,6 +86,18 @@ class BrainHatInput:
         self._deadzone = 0.15
         self._last_state: Optional[InputState] = None
         self._prev_state: Optional[InputState] = None  # Previous state for edge detection
+
+        # Debounce state - track last stable state and when it changed
+        self._last_direction = JoystickDirection.CENTER
+        self._last_direction_time = 0.0
+        self._last_joy_button = False
+        self._last_joy_button_time = 0.0
+        self._last_sep_button = False
+        self._last_sep_button_time = 0.0
+
+        # Hold/repeat state for directions
+        self._direction_hold_start = 0.0
+        self._last_repeat_time = 0.0
     
     def enable(self):
         """Explicitly enable input (call to activate)."""
@@ -132,7 +150,7 @@ class BrainHatInput:
             self._separate_button_pin.pull = digitalio.Pull.UP
             
             self._available = True
-            print("[BrainHatInput] BrainCraft HAT input initialized (GPIO pins)", file=sys.stderr, flush=True)
+            print(f"[BrainHatInput] Initialized (GPIO) - debounce={self.DEBOUNCE_TIME*1000:.0f}ms btn={self.BUTTON_DEBOUNCE_TIME*1000:.0f}ms", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[BrainHatInput] Failed to initialize GPIO pins: {e}", file=sys.stderr, flush=True)
             self._available = False
@@ -144,58 +162,82 @@ class BrainHatInput:
         )
     
     def read(self) -> Optional[InputState]:
-        """Read current input state from GPIO pins."""
+        """Read current input state from GPIO pins with debouncing."""
         if not self.is_available():
             return None
-        
+
         try:
-            # Read joystick direction pins (pull-up: pressed = LOW = False)
-            joy_left_pressed = not self._joy_left.value
-            joy_right_pressed = not self._joy_right.value
-            joy_up_pressed = not self._joy_up.value
-            joy_down_pressed = not self._joy_down.value
-            
-            # Convert to analog-like values (-1.0 to 1.0)
+            now = time.time()
+
+            # Read raw GPIO states (pull-up: pressed = LOW = False)
+            raw_left = not self._joy_left.value
+            raw_right = not self._joy_right.value
+            raw_up = not self._joy_up.value
+            raw_down = not self._joy_down.value
+            raw_joy_btn = not self._joy_button.value
+            raw_sep_btn = not self._separate_button_pin.value
+
+            # Convert to analog-like values
             joystick_x = 0.0
             joystick_y = 0.0
-            
-            if joy_left_pressed:
+            if raw_left:
                 joystick_x = -1.0
-            elif joy_right_pressed:
+            elif raw_right:
                 joystick_x = 1.0
-            
-            if joy_up_pressed:
+            if raw_up:
                 joystick_y = 1.0
-            elif joy_down_pressed:
+            elif raw_down:
                 joystick_y = -1.0
-            
-            # Read joystick button (center press)
-            joystick_button = not self._joy_button.value  # Pull-up: pressed = LOW
-            
-            # Read separate button
-            separate_button = not self._separate_button_pin.value  # Pull-up: pressed = LOW
-            
-            # Determine direction
-            direction = self._get_direction(joystick_x, joystick_y)
-            
+
+            # Determine raw direction
+            raw_direction = self._get_direction(joystick_x, joystick_y)
+
+            # === Debounce direction ===
+            # Only accept direction change if it's been stable for DEBOUNCE_TIME
+            if raw_direction != self._last_direction:
+                if now - self._last_direction_time >= self.DEBOUNCE_TIME:
+                    self._last_direction = raw_direction
+                    self._last_direction_time = now
+                    self._direction_hold_start = now  # Reset hold timer
+                    self._last_repeat_time = 0.0
+                # else: ignore - likely bounce
+            else:
+                # Same direction - update time for stability tracking
+                self._last_direction_time = now
+
+            # Use debounced direction
+            direction = self._last_direction
+
+            # === Debounce joystick button ===
+            if raw_joy_btn != self._last_joy_button:
+                if now - self._last_joy_button_time >= self.BUTTON_DEBOUNCE_TIME:
+                    self._last_joy_button = raw_joy_btn
+                    self._last_joy_button_time = now
+            joystick_button = self._last_joy_button
+
+            # === Debounce separate button ===
+            if raw_sep_btn != self._last_sep_button:
+                if now - self._last_sep_button_time >= self.BUTTON_DEBOUNCE_TIME:
+                    self._last_sep_button = raw_sep_btn
+                    self._last_sep_button_time = now
+            separate_button = self._last_sep_button
+
             state = InputState(
                 joystick_x=joystick_x,
                 joystick_y=joystick_y,
                 joystick_direction=direction,
                 joystick_button=joystick_button,
                 separate_button=separate_button,
-                timestamp=time.time()
+                timestamp=now
             )
-            
+
             # Store previous state BEFORE updating (for edge detection)
             self._prev_state = self._last_state
             self._last_state = state
             return state
-            
+
         except Exception as e:
             print(f"[BrainHatInput] Read error: {e}", file=sys.stderr, flush=True)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
             return None
     
     def get_prev_state(self) -> Optional[InputState]:
