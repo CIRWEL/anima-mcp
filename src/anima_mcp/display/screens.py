@@ -19,6 +19,7 @@ import os
 import json
 
 from .face import FaceState
+from .design import COLORS, SPACING
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity
@@ -889,24 +890,24 @@ class ScreenRenderer:
     def _render_sensors(self, readings: Optional[SensorReadings]):
         """Render sensor readings screen with colors and nav dots."""
         if not readings:
-            self._display.render_text("feeling\nblind", (10, 10), color=(150, 150, 150))
+            self._display.render_text("feeling\nblind", (10, 10), color=COLORS.TEXT_DIM)
             return
 
-        # Color definitions
-        CYAN = (0, 255, 255)
-        BLUE = (100, 150, 255)
-        YELLOW = (255, 255, 100)
-        ORANGE = (255, 150, 50)
-        RED = (255, 100, 100)
-        GREEN = (100, 255, 100)
-        PURPLE = (200, 100, 255)
-        WHITE = (255, 255, 255)
-        LIGHT_CYAN = (180, 220, 220)  # For descriptions - readable on dark background
+        # Use design system colors (warm, elegant)
+        CYAN = COLORS.SOFT_CYAN
+        BLUE = COLORS.SOFT_BLUE
+        YELLOW = COLORS.SOFT_YELLOW
+        ORANGE = COLORS.SOFT_ORANGE
+        RED = COLORS.SOFT_CORAL
+        GREEN = COLORS.SOFT_GREEN
+        PURPLE = COLORS.SOFT_PURPLE
+        WHITE = COLORS.TEXT_PRIMARY
+        LIGHT_CYAN = COLORS.TEXT_SECONDARY
 
         # Try canvas-based rendering for nav dots
         if hasattr(self._display, '_create_canvas'):
             try:
-                image, draw = self._display._create_canvas((0, 0, 0))
+                image, draw = self._display._create_canvas(COLORS.BG_DARK)
 
                 # Use cached fonts (loading from disk is slow)
                 fonts = self._get_fonts()
@@ -1046,18 +1047,18 @@ class ScreenRenderer:
     def _render_identity(self, identity: Optional[CreatureIdentity]):
         """Render identity screen with colors and nav dots."""
         if not identity:
-            self._display.render_text("who am i?\n(unknown)", (10, 10), color=(150, 150, 150))
+            self._display.render_text("who am i?\n(unknown)", (10, 10), color=COLORS.TEXT_DIM)
             return
 
-        # Color definitions
-        CYAN = (0, 255, 255)
-        BLUE = (100, 150, 255)
-        YELLOW = (255, 255, 100)
-        ORANGE = (255, 150, 50)
-        PURPLE = (200, 100, 255)
-        WHITE = (255, 255, 255)
-        LIGHT_CYAN = (180, 220, 220)  # For readable secondary text
-        GREEN = (100, 255, 100)
+        # Use design system colors (warm, elegant)
+        CYAN = COLORS.SOFT_CYAN
+        BLUE = COLORS.SOFT_BLUE
+        YELLOW = COLORS.SOFT_YELLOW
+        ORANGE = COLORS.SOFT_ORANGE
+        PURPLE = COLORS.SOFT_PURPLE
+        WHITE = COLORS.TEXT_PRIMARY
+        LIGHT_CYAN = COLORS.TEXT_SECONDARY
+        GREEN = COLORS.SOFT_GREEN
 
         age_days = identity.age_seconds() / 86400
         alive_hours = identity.total_alive_seconds / 3600
@@ -1067,7 +1068,7 @@ class ScreenRenderer:
         # Try canvas-based rendering for nav dots
         if hasattr(self._display, '_create_canvas'):
             try:
-                image, draw = self._display._create_canvas((0, 0, 0))
+                image, draw = self._display._create_canvas(COLORS.BG_DARK)
 
                 # Use cached fonts (loading from disk is slow)
                 fonts = self._get_fonts()
@@ -1172,23 +1173,23 @@ class ScreenRenderer:
         try:
             # Create canvas for visual rendering
             if hasattr(self._display, '_create_canvas'):
-                image, draw = self._display._create_canvas((0, 0, 0))
+                image, draw = self._display._create_canvas(COLORS.BG_DARK)
             else:
                 self._render_diagnostics_text_fallback(anima, governance)
                 return
 
-            # Color definitions
-            CYAN = (0, 255, 255)
-            BLUE = (100, 150, 255)
-            YELLOW = (255, 255, 100)
-            ORANGE = (255, 150, 50)
-            RED = (255, 100, 100)
-            GREEN = (100, 255, 100)
-            PURPLE = (200, 100, 255)
-            WHITE = (255, 255, 255)
-            LIGHT_CYAN = (180, 220, 220)  # For labels and descriptions
-            DARK_GRAY = (50, 50, 50)
-            DIM_BLUE = (80, 100, 120)  # For low presence
+            # Use design system colors (warm, elegant)
+            CYAN = COLORS.SOFT_CYAN
+            BLUE = COLORS.SOFT_BLUE
+            YELLOW = COLORS.SOFT_YELLOW
+            ORANGE = COLORS.SOFT_ORANGE
+            RED = COLORS.SOFT_CORAL
+            GREEN = COLORS.SOFT_GREEN
+            PURPLE = COLORS.SOFT_PURPLE
+            WHITE = COLORS.TEXT_PRIMARY
+            LIGHT_CYAN = COLORS.TEXT_SECONDARY
+            DARK_GRAY = COLORS.BG_SUBTLE
+            DIM_BLUE = COLORS.TEXT_DIM
 
             # Use cached fonts (loading from disk is slow)
             fonts = self._get_fonts()
