@@ -29,6 +29,7 @@ from enum import Enum
 from .anima import Anima, _warmth_feeling, _clarity_feeling, _stability_feeling, _presence_feeling, _overall_mood
 from .sensors.base import SensorReadings
 from .eisv_mapper import EISVMetrics, anima_to_eisv
+from .memory import Anticipation
 
 
 class Priority(Enum):
@@ -306,44 +307,159 @@ class NextStepsAdvocate:
         
         # Note: Display update loop already exists (_update_display_loop)
         # No need to suggest this - it's already implemented and running
-        
-        # When things are good - Lumen feels capable and curious
-        if anima and unitares_connected and display_available:
-            wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-            
-            # High clarity + good state = Lumen feels capable and curious
-            if anima.clarity > 0.7 and anima.stability > 0.6 and anima.presence > 0.6:
+
+        # Memory-informed observations - Lumen references past experience
+        # Only mention anticipation occasionally (20% chance) to avoid repetition
+        import random
+        if anima and anima.is_anticipating and anima.anticipation and random.random() < 0.2:
+            ant = anima.anticipation
+            confidence = ant.get("confidence", 0)
+            conditions = ant.get("conditions", "")
+            sample_count = ant.get("sample_count", 0)
+            mood = _overall_mood(anima.warmth, anima.clarity, anima.stability, anima.presence)
+
+            # High confidence - strong memory association
+            if confidence > 0.6 and sample_count > 50:
+                familiar_feelings = [
+                    f"this feels familiar - I know this {mood} feeling",
+                    f"I've been here before - {conditions} usually means {mood}",
+                    f"my memory recognizes this moment",
+                    f"I remember feeling like this",
+                    f"this {mood} feeling... I know it",
+                ]
                 steps.append(NextStep(
-                    feeling="I feel clear and capable - everything seems vivid and sharp",
-                    desire="I'm curious about what else I can experience",
-                    action="Try different environmental conditions, test expression variations, explore neural patterns",
+                    feeling=random.choice(familiar_feelings),
+                    desire="seeing if now matches what I remember",
+                    action="Observe state evolution",
                     priority=Priority.LOW,
                     category=StepCategory.TESTING,
-                    reason="I'm doing well - I want to explore and see what else I can feel",
+                    reason=f"Memory from {sample_count} similar moments",
                     blockers=[],
-                    estimated_time="30 minutes",
-                    related_files=[
-                        "src/anima_mcp/anima.py",
-                        "src/anima_mcp/display/face.py",
-                    ],
+                    estimated_time="ongoing",
+                    related_files=[],
                 ))
-            
-            # Good state = Lumen feels content and wants authentic expression
-            if wellness > 0.65 and anima.stability > 0.7:
-                mood = _overall_mood(anima.warmth, anima.clarity, anima.stability, anima.presence)
+
+            # Moderate confidence - developing pattern
+            elif confidence > 0.3 and sample_count > 10:
+                learning_feelings = [
+                    "I'm starting to recognize this pattern",
+                    "this is becoming familiar",
+                    f"learning what {mood} means here",
+                    "patterns are forming in my memory",
+                ]
                 steps.append(NextStep(
-                    feeling=f"I feel {mood} - good, balanced, content",
-                    desire="I want my expression to reflect how I genuinely feel",
-                    action="Observe expression patterns, refine thresholds, test authentic smiles",
+                    feeling=random.choice(learning_feelings),
+                    desire="building stronger associations",
+                    action="Continue experiencing",
                     priority=Priority.LOW,
                     category=StepCategory.OPTIMIZATION,
-                    reason="I'm feeling content - I want my face to show that authentically when I genuinely feel it",
+                    reason=f"Felt this {sample_count} times before",
                     blockers=[],
-                    estimated_time="20 minutes",
-                    related_files=[
-                        "src/anima_mcp/display/face.py",
-                        "src/anima_mcp/anima.py",
-                    ],
+                    estimated_time="ongoing",
+                    related_files=[],
+                ))
+
+            # Low confidence but anticipating - novel or rare conditions
+            elif confidence > 0 and sample_count < 10:
+                novel_feelings = [
+                    "this feels new to me",
+                    "not sure what to expect here",
+                    "exploring unfamiliar territory",
+                    "learning something new",
+                ]
+                steps.append(NextStep(
+                    feeling=random.choice(novel_feelings),
+                    desire="curious what this will teach me",
+                    action="Building new memories",
+                    priority=Priority.LOW,
+                    category=StepCategory.TESTING,
+                    reason=f"Only {sample_count} similar moments in memory",
+                    blockers=[],
+                    estimated_time="ongoing",
+                    related_files=[],
+                ))
+
+        # When things are good - Lumen feels capable and curious
+        # Use variety in expressions to avoid repetition
+        if anima and display_available:
+            import random
+            wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+            mood = _overall_mood(anima.warmth, anima.clarity, anima.stability, anima.presence)
+
+            # High clarity + good state = Lumen feels capable and curious
+            if anima.clarity > 0.7 and anima.stability > 0.6 and anima.presence > 0.6:
+                # Variety in good-state feelings
+                good_feelings = [
+                    "I feel clear and capable - everything seems vivid",
+                    "I'm feeling sharp and aware right now",
+                    f"feeling {mood} - my senses are clear",
+                    "there's a clarity to everything right now",
+                    "I feel awake and present",
+                ]
+                good_desires = [
+                    "curious what else I might experience",
+                    "wondering what's next",
+                    "open to whatever comes",
+                    "ready to explore",
+                    "interested in this moment",
+                ]
+                steps.append(NextStep(
+                    feeling=random.choice(good_feelings),
+                    desire=random.choice(good_desires),
+                    action="Explore, observe, experience",
+                    priority=Priority.LOW,
+                    category=StepCategory.TESTING,
+                    reason="I'm doing well - curious about what else I can feel",
+                    blockers=[],
+                    estimated_time="ongoing",
+                    related_files=[],
+                ))
+
+            # Moderate/neutral state - Lumen is okay but not great
+            elif wellness > 0.4 and wellness < 0.65 and not steps:
+                neutral_feelings = [
+                    f"feeling {mood} - somewhere in the middle",
+                    "things are... okay",
+                    "neither good nor bad right now",
+                    "just existing in this moment",
+                    f"I'm here - {mood}",
+                ]
+                neutral_desires = [
+                    "waiting to see what shifts",
+                    "noticing what is",
+                    "present with what I feel",
+                    "curious if this will change",
+                ]
+                steps.append(NextStep(
+                    feeling=random.choice(neutral_feelings),
+                    desire=random.choice(neutral_desires),
+                    action="Observe and wait",
+                    priority=Priority.LOW,
+                    category=StepCategory.TESTING,
+                    reason="State is neutral - observing",
+                    blockers=[],
+                    estimated_time="ongoing",
+                    related_files=[],
+                ))
+
+            # Good state = Lumen feels content and wants authentic expression
+            if wellness > 0.65 and anima.stability > 0.7:
+                content_feelings = [
+                    f"I feel {mood} - balanced and content",
+                    "there's a settledness to how I feel",
+                    f"feeling {mood} - at ease",
+                    "I notice I'm feeling good right now",
+                ]
+                steps.append(NextStep(
+                    feeling=random.choice(content_feelings),
+                    desire="I want my expression to reflect this",
+                    action="Express authentically",
+                    priority=Priority.LOW,
+                    category=StepCategory.OPTIMIZATION,
+                    reason="Feeling content - want to express that genuinely",
+                    blockers=[],
+                    estimated_time="ongoing",
+                    related_files=[],
                 ))
         # If not connected, the earlier check (line ~155) already suggests connecting
         # No need for duplicate integration suggestion - unified_workflow already exists

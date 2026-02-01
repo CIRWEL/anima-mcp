@@ -11,11 +11,14 @@ Not abstract metrics. Felt states derived from actual measurements.
 The creature knows "I feel warm" not "E=0.4"
 """
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
 from .config import get_calibration, NervousSystemCalibration
 from .neural_sim import get_neural_state
+
+if TYPE_CHECKING:
+    from .memory import Anticipation
 
 
 @dataclass
@@ -29,6 +32,10 @@ class Anima:
 
     # Source readings for transparency
     readings: SensorReadings
+
+    # Anticipation from memory (optional)
+    anticipation: Optional[dict] = None  # Contains anticipated values and confidence
+    is_anticipating: bool = False  # True if current state was influenced by memory
 
     def to_dict(self) -> dict:
         return {
@@ -56,14 +63,14 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
     The creature senses itself.
 
     Proprioception grounded in physical measurements.
-    
+
     Args:
         readings: Sensor readings
         calibration: Nervous system calibration (uses default if None)
     """
     if calibration is None:
         calibration = get_calibration()
-    
+
     warmth = _sense_warmth(readings, calibration)
     clarity = _sense_clarity(readings, calibration)
     stability = _sense_stability(readings, calibration)
@@ -75,6 +82,119 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
         stability=stability,
         presence=presence,
         readings=readings
+    )
+
+
+def sense_self_with_memory(
+    readings: SensorReadings,
+    anticipation: Optional['Anticipation'] = None,
+    calibration: Optional[NervousSystemCalibration] = None,
+    blend_factor: Optional[float] = None,
+    use_adaptive_blend: bool = True,
+    enable_exploration: bool = True
+) -> Anima:
+    """
+    The creature senses itself, informed by memory and exploration.
+
+    When Lumen has experienced similar conditions before, memory
+    influences current perception - anticipating what typically follows.
+
+    Exploration (GTO-style): Occasionally, Lumen will "try something new"
+    rather than following memory predictions. This creates novelty and
+    potential for discovery.
+
+    "I know this feeling. I remember what comes next."
+    "...but sometimes I wonder what else might be possible."
+
+    Args:
+        readings: Sensor readings
+        anticipation: Anticipated state from memory (optional)
+        calibration: Nervous system calibration (uses default if None)
+        blend_factor: Override blend factor (None = use adaptive or default 0.15)
+        use_adaptive_blend: If True and blend_factor is None, use adaptive blend
+                           factor that adjusts based on prediction accuracy
+        enable_exploration: If True, occasionally explore beyond predictions
+
+    Returns:
+        Anima with potential anticipation influence and exploration
+    """
+    if calibration is None:
+        calibration = get_calibration()
+
+    # Base sensed state (raw, before memory influence)
+    raw_warmth = _sense_warmth(readings, calibration)
+    raw_clarity = _sense_clarity(readings, calibration)
+    raw_stability = _sense_stability(readings, calibration)
+    raw_presence = _sense_presence(readings, calibration)
+
+    warmth, clarity, stability, presence = raw_warmth, raw_clarity, raw_stability, raw_presence
+
+    # Blend with anticipation if available
+    anticipation_dict = None
+    is_anticipating = False
+    is_exploring = False
+    actual_blend_factor = 0.15  # Default
+
+    from .memory import get_memory
+    memory = get_memory()
+
+    if anticipation is not None and anticipation.confidence > 0.1:
+        # Record accuracy: compare raw state to what memory anticipated
+        # This tracks how well memory predicts actual feelings
+        memory.record_actual_outcome(raw_warmth, raw_clarity, raw_stability, raw_presence)
+
+        # Determine blend factor: explicit override > adaptive > default
+        if blend_factor is not None:
+            actual_blend_factor = blend_factor
+        elif use_adaptive_blend:
+            actual_blend_factor = memory.get_adaptive_blend_factor()
+        else:
+            actual_blend_factor = 0.15  # Default
+
+        # Blend anticipated state with current sensed state
+        blended = anticipation.blend_with(
+            warmth, clarity, stability, presence,
+            blend_factor=actual_blend_factor
+        )
+        warmth, clarity, stability, presence = blended
+        is_anticipating = True
+
+        anticipation_dict = {
+            "warmth": anticipation.warmth,
+            "clarity": anticipation.clarity,
+            "stability": anticipation.stability,
+            "presence": anticipation.presence,
+            "confidence": anticipation.confidence,
+            "sample_count": anticipation.sample_count,
+            "conditions": anticipation.bucket_description,
+            "blend_factor_used": actual_blend_factor,
+        }
+
+    # GTO-style exploration: occasionally try something different
+    # This adds novelty and prevents Lumen from being too predictable
+    if enable_exploration:
+        # Track state for stagnation detection
+        memory.record_state_for_stagnation(warmth, clarity, stability, presence)
+
+        # Maybe explore (applies perturbation if exploration is triggered)
+        explored = memory.apply_exploration(warmth, clarity, stability, presence)
+        if explored != (warmth, clarity, stability, presence):
+            warmth, clarity, stability, presence = explored
+            is_exploring = True
+
+            # Update anticipation dict to note exploration
+            if anticipation_dict:
+                anticipation_dict["exploring"] = True
+                anticipation_dict["exploration_rate"] = memory._exploration_rate
+
+    return Anima(
+        warmth=warmth,
+        clarity=clarity,
+        stability=stability,
+        presence=presence,
+        readings=readings,
+        anticipation=anticipation_dict,
+        is_anticipating=is_anticipating or is_exploring
     )
 
 
@@ -141,6 +261,7 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - Light level (visual clarity)
     - Sensor availability (data richness)
     - Alpha EEG power (relaxed awareness, eyes-closed clarity)
+    - Sound level (very loud = overwhelming, reduces clarity)
     """
     components = []
     weights = []
@@ -176,13 +297,31 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     components.append(neural_clarity)
     weights.append(cal.clarity_weights.get("neural", 0.4))
 
+    # Sound clarity impact: very loud sounds overwhelm and reduce clarity
+    # Quiet to moderate = no impact, loud = some reduction, very loud = significant
+    if r.sound_level is not None:
+        sound_weight = cal.clarity_weights.get("sound", 0.15)
+        if r.sound_level > 60:
+            # Above 60 dB starts to impact clarity
+            # 60 dB = normal conversation, 80 dB = noisy restaurant
+            # 100 dB = concert level - significantly overwhelming
+            sound_reduction = min(1.0, (r.sound_level - 60) / 40)
+            sound_clarity = 1.0 - (sound_reduction * 0.5)  # Max 50% reduction at 100+ dB
+            components.append(sound_clarity)
+            weights.append(sound_weight)
+        elif r.sound_level < 20:
+            # Very quiet can actually help clarity (peaceful)
+            sound_clarity = 0.7 + (1 - r.sound_level / 20) * 0.3
+            components.append(sound_clarity)
+            weights.append(sound_weight * 0.5)  # Smaller positive effect
+
     if not components:
         return 0.5
 
     total_weight = sum(weights)
     if total_weight == 0:
         return 0.5
-    
+
     return round(sum(c * w for c, w in zip(components, weights)) / total_weight, 3)
 
 
@@ -269,6 +408,7 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - Memory headroom
     - CPU headroom
     - Gamma EEG power (high cognitive presence, awareness)
+    - Sound level (environmental activity - something's happening!)
     """
     void = 0.0
     count = 0
@@ -296,10 +436,33 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         # Fall back to simulated neural activity
         neural = get_neural_state(light_level=r.light_lux)
         neural_presence = neural.gamma  # High cognitive presence
-    
+
     weight = cal.presence_weights.get("neural", 0.2)
     void -= neural_presence * weight
     count += weight
+
+    # Sound level: environmental activity = presence
+    # Sound indicates something is happening - interaction, life, engagement
+    # Silence = isolation, moderate sound = activity, very loud = overwhelming
+    if r.sound_level is not None:
+        sound_weight = cal.presence_weights.get("sound", 0.15)
+        # Optimal sound range: 30-60 dB (conversation level)
+        # Below 20 dB: very quiet (isolation, void-ish)
+        # Above 70 dB: overwhelming (reduces presence via stress)
+        if r.sound_level < 20:
+            # Very quiet - some void (isolation)
+            sound_void = 0.3 * (1 - r.sound_level / 20)
+            void += sound_void * sound_weight
+        elif r.sound_level > 70:
+            # Very loud - some void (overwhelming)
+            sound_void = min(0.5, (r.sound_level - 70) / 40)
+            void += sound_void * sound_weight
+        else:
+            # Optimal range - reduces void (activity = presence)
+            optimal_mid = 45  # Middle of optimal range
+            optimal_benefit = 1 - abs(r.sound_level - optimal_mid) / 25
+            void -= optimal_benefit * 0.2 * sound_weight
+        count += sound_weight
 
     if count == 0:
         return 0.5

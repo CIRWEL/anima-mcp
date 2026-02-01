@@ -66,6 +66,7 @@ class TextToSpeech:
         self._voice = voice or RECOMMENDED_VOICES["default"]
         self._piper_path: Optional[Path] = None
         self._initialized = False
+        self._init_failed = False  # Track if init failed to suppress repeated warnings
 
         # Voice modulation parameters
         self._speed = 1.0      # 0.5 = slow, 2.0 = fast
@@ -76,6 +77,8 @@ class TextToSpeech:
         """Check if Piper is available."""
         if self._initialized:
             return True
+        if self._init_failed:
+            return False  # Don't retry or print warnings again
 
         try:
             # Check if piper is installed
@@ -92,9 +95,11 @@ class TextToSpeech:
         except FileNotFoundError:
             print("[TTS] Piper not installed. Run: pip install piper-tts",
                   file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
         except Exception as e:
             print(f"[TTS] Failed to initialize: {e}", file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
 
     def synthesize(self, text: str) -> Optional[bytes]:

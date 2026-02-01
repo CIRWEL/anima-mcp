@@ -13,6 +13,7 @@ PI_PATH="${PI_PATH:-~/anima-mcp}"
 GREEN='\033[0;32m'
 BLUE='\033[0;34m'
 RED='\033[0;31m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${BLUE}=========================================${NC}"
@@ -72,16 +73,30 @@ echo -e "${BLUE}Target:${NC} $PI_USER@$PI_HOST:$PI_PATH"
 echo ""
 
 # Step 0: Pull Pi's database before deploying (backup state)
+# Skip backup if Pi is unreachable - deployment can proceed without it
 echo -e "${BLUE}[0/3] Backing up Pi state...${NC}"
-if python3 scripts/sync_state.py pull 2>/dev/null; then
-    echo -e "${GREEN}  State backed up${NC}"
+if ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
+    if python3 scripts/sync_state.py pull 2>/dev/null; then
+        echo -e "${GREEN}  State backed up${NC}"
+    else
+        echo -e "${BLUE}  Could not pull state (Pi may be offline). Continuing...${NC}"
+    fi
 else
-    echo -e "${BLUE}  Could not pull state (Pi may be offline). Continuing...${NC}"
+    echo -e "${BLUE}  Pi unreachable (WiFi down?) - skipping backup, deployment will proceed${NC}"
+    echo -e "${BLUE}  Note: Lumen operates autonomously without WiFi - code changes will apply when connection returns${NC}"
 fi
 echo ""
 
 # Step 1: Sync code
 echo -e "${BLUE}[1/3] Syncing code...${NC}"
+# Check connectivity first
+if ! ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
+    echo -e "${RED}✗ Pi unreachable (WiFi down?)${NC}"
+    echo -e "${BLUE}  Cannot deploy while Pi is offline${NC}"
+    echo -e "${BLUE}  Lumen continues operating autonomously - deploy when WiFi returns${NC}"
+    exit 1
+fi
+
 rsync -avz \
     --exclude='.venv' \
     --exclude='*.db' \
@@ -92,13 +107,14 @@ rsync -avz \
     --exclude='.pytest_cache' \
     --exclude='.mypy_cache' \
     --exclude='htmlcov' \
-    -e "ssh -p $PI_PORT" \
+    -e "ssh -p $PI_PORT -o ConnectTimeout=5" \
     ./ "$PI_USER@$PI_HOST:$PI_PATH/"
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ Code synced${NC}"
 else
-    echo -e "${RED}✗ Sync failed${NC}"
+    echo -e "${RED}✗ Sync failed (connection timeout?)${NC}"
+    echo -e "${BLUE}  Lumen continues operating autonomously - deploy when WiFi returns${NC}"
     exit 1
 fi
 
@@ -108,10 +124,14 @@ if [ "$RESTART" = true ]; then
     echo -e "${BLUE}[2/3] Restarting anima service...${NC}"
     
     # Check if systemd service exists (system-level, not user)
-    if ssh -p $PI_PORT "$PI_USER@$PI_HOST" "systemctl is-enabled anima-broker.service" 2>/dev/null; then
+    if ssh -p $PI_PORT -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "systemctl is-enabled anima-broker.service" 2>/dev/null; then
         # Restart broker first (anima depends on it)
-        ssh -p $PI_PORT "$PI_USER@$PI_HOST" "sudo systemctl restart anima-broker && sudo systemctl restart anima"
-        echo -e "${GREEN}✓ Services restarted (broker + mind)${NC}"
+        if ssh -p $PI_PORT -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "sudo systemctl restart anima-broker && sudo systemctl restart anima" 2>/dev/null; then
+            echo -e "${GREEN}✓ Services restarted (broker + mind)${NC}"
+        else
+            echo -e "${YELLOW}⚠ Service restart may have failed (connection issue?)${NC}"
+            echo -e "${BLUE}  Services will auto-restart on next boot if needed${NC}"
+        fi
     else
         echo -e "${BLUE}ℹ No systemd service found (that's OK)${NC}"
         echo "  To set up service, run on Pi:"

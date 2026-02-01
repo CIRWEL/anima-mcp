@@ -44,6 +44,7 @@ class MicCapture:
         self._capture_thread: Optional[threading.Thread] = None
         self._stream = None
         self._audio_interface = None
+        self._init_failed = False  # Track if init failed to suppress repeated warnings
 
         # Voice activity detection
         self._vad_enabled = True
@@ -56,6 +57,11 @@ class MicCapture:
 
     def _init_audio(self) -> bool:
         """Initialize audio interface."""
+        if self._audio_interface is not None:
+            return True  # Already initialized
+        if self._init_failed:
+            return False  # Don't retry or print warnings again
+
         try:
             import sounddevice as sd
 
@@ -85,9 +91,11 @@ class MicCapture:
         except ImportError:
             print("[Mic] sounddevice not installed. Run: pip install sounddevice",
                   file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
         except Exception as e:
             print(f"[Mic] Failed to init audio: {e}", file=sys.stderr, flush=True)
+            self._init_failed = True
             return False
 
     def start(self) -> bool:

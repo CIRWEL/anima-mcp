@@ -53,12 +53,42 @@ if sys.stdout.encoding != 'utf-8':
 
 from src.anima_mcp.sensors import get_sensors
 from src.anima_mcp.anima import sense_self
-from src.anima_mcp.display.face import derive_face_state, face_to_ascii
+from src.anima_mcp.display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from src.anima_mcp.identity import IdentityStore
 from src.anima_mcp.unitares_bridge import UnitaresBridge
 from src.anima_mcp.shared_memory import SharedMemoryClient
 from src.anima_mcp.eisv_mapper import anima_to_eisv
+from src.anima_mcp.metacognition import get_metacognitive_monitor
+
+# Cognitive inference support (optional - for deeper thinking)
+try:
+    from src.anima_mcp.cognitive_inference import get_cognitive_inference, InferenceProfile
+    from src.anima_mcp.unitares_cognitive import get_unitares_cognitive
+    COGNITIVE_AVAILABLE = True
+except ImportError:
+    COGNITIVE_AVAILABLE = False
+    print("[StableCreature] Cognitive inference not available")
+
+# Enhanced learning systems (optional - for genuine agency)
+try:
+    from src.anima_mcp.adaptive_prediction import get_adaptive_prediction_model
+    from src.anima_mcp.preferences import get_preference_system
+    from src.anima_mcp.self_model import get_self_model
+    from src.anima_mcp.agency import get_action_selector, get_exploration_manager, ActionType
+    from src.anima_mcp.memory_retrieval import get_memory_retriever, retrieve_relevant_memories, MemoryContext
+    ENHANCED_LEARNING_AVAILABLE = True
+except ImportError as e:
+    ENHANCED_LEARNING_AVAILABLE = False
+    print(f"[StableCreature] Enhanced learning not available: {e}")
+
+# Activity state (sleep/wake cycle)
+try:
+    from src.anima_mcp.activity_state import get_activity_manager, ActivityLevel
+    ACTIVITY_STATE_AVAILABLE = True
+except ImportError:
+    ACTIVITY_STATE_AVAILABLE = False
+    print("[StableCreature] Activity state not available")
 
 # Voice support (optional - graceful degradation if not available)
 try:
@@ -215,6 +245,7 @@ def run_creature():
     # Using file backend for maximum stability (Redis caused hangs)
     try:
         shm_client = SharedMemoryClient(mode="write", backend="file")
+        shm_client.clear()  # Remove stale/corrupted data from previous run
         print(f"[StableCreature] Shared Memory active using backend: {shm_client.backend}")
         if shm_client.backend == "file":
             print(f"[StableCreature] File path: {shm_client.filepath}")
@@ -250,10 +281,73 @@ def run_creature():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
+    # Initialize Metacognition Monitor
+    metacog = get_metacognitive_monitor()
+    print("[StableCreature] Metacognition active - Lumen monitors its own predictions")
+
+    # Initialize Cognitive Inference (for dialectic thinking)
+    cognitive = None
+    unitares_cog = None
+    if COGNITIVE_AVAILABLE:
+        cognitive = get_cognitive_inference()
+        if cognitive.enabled:
+            print("[StableCreature] Cognitive inference active - Lumen can think dialectically")
+        unitares_cog = get_unitares_cognitive()
+        if unitares_cog.enabled:
+            unitares_cog.set_agent_id(identity.creature_id)
+            print("[StableCreature] UNITARES knowledge graph connected")
+
+    # Initialize Enhanced Learning Systems (genuine agency)
+    adaptive_model = None
+    preferences = None
+    self_model = None
+    action_selector = None
+    exploration_mgr = None
+    memory_retriever = None
+
+    if ENHANCED_LEARNING_AVAILABLE:
+        try:
+            adaptive_model = get_adaptive_prediction_model()
+            print("[StableCreature] Adaptive prediction active - Lumen learns from experience")
+
+            preferences = get_preference_system()
+            print("[StableCreature] Preferences active - Lumen develops values")
+
+            self_model = get_self_model()
+            print("[StableCreature] Self-model active - Lumen has beliefs about itself")
+
+            action_selector = get_action_selector()
+            exploration_mgr = get_exploration_manager()
+            print("[StableCreature] Agency active - Lumen can choose actions")
+
+            memory_retriever = get_memory_retriever()
+            print("[StableCreature] Memory retrieval active - past informs present")
+        except Exception as e:
+            print(f"[StableCreature] Enhanced learning init error: {e}")
+
+    # Initialize Activity State (sleep/wake cycle)
+    activity_manager = None
+    if ACTIVITY_STATE_AVAILABLE:
+        try:
+            activity_manager = get_activity_manager()
+            print("[StableCreature] Activity state active - Lumen has sleep/wake cycles")
+        except Exception as e:
+            print(f"[StableCreature] Activity state init error: {e}")
+
     last_decision = None
-    
+    first_check_in = True  # Track first governance check to sync identity
+    last_dialectic_time = 0  # Rate limit dialectic synthesis
+    last_governance_time = 0  # Rate limit governance check-ins (every 10s, not every 2s)
+    GOVERNANCE_INTERVAL = 10.0  # Seconds between governance check-ins
+    last_action = None  # Track last action for outcome recording
+    last_state_for_action = None  # State before action for learning
+    last_learning_save = time.time()  # Track periodic learning saves
+
     try:
         while running:
+            # 0. Metacognition: Generate prediction BEFORE sensing
+            prediction = metacog.predict()
+            
             # 1. Robust Sensor Read
             readings = None
             for attempt in range(MAX_RETRIES):
@@ -276,7 +370,248 @@ def run_creature():
             # 2a. Calculate UNITARES EISV metrics
             eisv = anima_to_eisv(anima, readings)
 
-            # 2b. Update Voice with anima state (influences when/how Lumen speaks)
+            # 2a-ii. Activity State: Determine wakefulness level
+            activity_state = None
+            if activity_manager:
+                activity_state = activity_manager.get_state(
+                    presence=anima.presence,
+                    stability=anima.stability,
+                    light_level=readings.light_lux
+                )
+                # Skip some updates when resting/drowsy (power saving)
+                if activity_manager.should_skip_update():
+                    time.sleep(UPDATE_INTERVAL)
+                    continue
+
+            # 2b. Metacognition: Compare prediction to reality
+            pred_error = metacog.observe(readings, anima)
+            
+            # Check if surprise warrants reflection
+            should_reflect, reflect_reason = metacog.should_reflect(pred_error)
+            if should_reflect:
+                reflection = metacog.reflect(pred_error, anima, readings)
+                print(f"[Metacog] REFLECTION ({reflect_reason}): {reflection.observation}", file=sys.stderr, flush=True)
+                if reflection.discrepancy_description:
+                    print(f"[Metacog] DISCREPANCY: {reflection.discrepancy_description}", file=sys.stderr, flush=True)
+
+                # Dialectic synthesis for high surprise (rate limited to once per 60s)
+                current_time = time.time()
+                if cognitive and cognitive.enabled and pred_error.surprise > 0.3:
+                    if current_time - last_dialectic_time > 60:
+                        last_dialectic_time = current_time
+                        try:
+                            # Build thesis from the surprise
+                            thesis = f"I expected {', '.join(pred_error.surprise_sources or ['stability'])} but experienced significant deviation"
+                            context = f"Current state: warmth={anima.warmth:.2f}, clarity={anima.clarity:.2f}, surprise={pred_error.surprise:.0%}"
+
+                            # Run dialectic synthesis (non-blocking via timeout)
+                            synthesis = loop.run_until_complete(
+                                asyncio.wait_for(
+                                    cognitive.dialectic_synthesis(thesis, context=context),
+                                    timeout=5.0
+                                )
+                            )
+                            if synthesis and "synthesis" in synthesis:
+                                print(f"[Cognitive] SYNTHESIS: {synthesis['synthesis']}", file=sys.stderr, flush=True)
+
+                                # Store insight in UNITARES knowledge graph
+                                if unitares_cog and unitares_cog.enabled:
+                                    loop.run_until_complete(
+                                        asyncio.wait_for(
+                                            unitares_cog.store_knowledge(
+                                                summary=synthesis.get("synthesis", ""),
+                                                discovery_type="insight",
+                                                tags=["lumen", "dialectic", "surprise"] + (pred_error.surprise_sources or []),
+                                                content={"thesis": thesis, "full_synthesis": synthesis}
+                                            ),
+                                            timeout=3.0
+                                        )
+                                    )
+                        except asyncio.TimeoutError:
+                            pass  # Cognitive inference timed out - continue
+                        except Exception as e:
+                            print(f"[Cognitive] Error: {e}", file=sys.stderr, flush=True)
+
+            # ==================== ENHANCED LEARNING INTEGRATION ====================
+
+            # 2b-i. Adaptive Prediction: Learn from what just happened
+            if adaptive_model:
+                try:
+                    observations = {
+                        "light": readings.light_lux,
+                        "ambient_temp": readings.ambient_temp_c,
+                        "humidity": readings.humidity_pct,
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
+                    # Remove None values
+                    observations = {k: v for k, v in observations.items() if v is not None}
+                    adaptive_model.observe(
+                        observations,
+                        current_light=readings.light_lux,
+                        current_temp=readings.ambient_temp_c
+                    )
+                except Exception as e:
+                    pass  # Adaptive learning errors are non-fatal
+
+            # 2b-ii. Update Self-Model with observations
+            if self_model:
+                try:
+                    # Track surprise for self-beliefs
+                    self_model.observe_surprise(pred_error.surprise, pred_error.surprise_sources)
+
+                    # Track stability changes
+                    if last_state_for_action:
+                        prev_stability = last_state_for_action.get("stability", anima.stability)
+                        self_model.observe_stability_change(prev_stability, anima.stability, UPDATE_INTERVAL)
+
+                    # Track correlations
+                    sensor_vals = {
+                        "ambient_temp": readings.ambient_temp_c,
+                        "light": readings.light_lux,
+                    }
+                    anima_vals = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                    }
+                    self_model.observe_correlation(sensor_vals, anima_vals)
+
+                    # Track time patterns
+                    hour = datetime.now().hour
+                    self_model.observe_time_pattern(hour, anima.warmth, anima.clarity)
+                except Exception as e:
+                    pass  # Self-model errors are non-fatal
+
+            # 2b-iii. Update Preferences from experience
+            if preferences:
+                try:
+                    current_state = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
+                    preferences.record_state(current_state)
+
+                    # Record events that shape preferences
+                    if pred_error.surprise > 0.4:
+                        # High surprise is mildly negative (prefer predictability)
+                        preferences.record_event("disruption", -0.2, current_state)
+                    elif pred_error.surprise < 0.1 and anima.stability > 0.6:
+                        # Low surprise + high stability is positive
+                        preferences.record_event("calm", 0.3, current_state)
+                except Exception as e:
+                    pass  # Preference errors are non-fatal
+
+            # 2b-iv. Memory Retrieval: Let past inform present
+            relevant_memories = []
+            if memory_retriever and should_reflect:
+                try:
+                    # Retrieve memories relevant to current surprise
+                    relevant_memories = loop.run_until_complete(
+                        asyncio.wait_for(
+                            retrieve_relevant_memories(
+                                surprise_sources=pred_error.surprise_sources,
+                                warmth=anima.warmth,
+                                clarity=anima.clarity,
+                                stability=anima.stability,
+                                limit=2
+                            ),
+                            timeout=2.0
+                        )
+                    )
+                    if relevant_memories:
+                        memory_context = memory_retriever.format_for_context(relevant_memories)
+                        print(f"[Memory] Retrieved: {len(relevant_memories)} relevant memories", file=sys.stderr, flush=True)
+                except asyncio.TimeoutError:
+                    pass
+                except Exception as e:
+                    pass  # Memory retrieval errors are non-fatal
+
+            # 2b-v. Action Selection: Choose what to do based on state and preferences
+            selected_action = None
+            if action_selector and preferences:
+                try:
+                    current_state = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                        "last_surprise": pred_error.surprise,
+                    }
+
+                    selected_action = action_selector.select_action(
+                        current_state,
+                        preferences=preferences,
+                        surprise_level=pred_error.surprise,
+                        surprise_sources=pred_error.surprise_sources,
+                        can_speak=voice is not None,
+                    )
+
+                    # Execute action effects
+                    if selected_action.action_type == ActionType.FOCUS_ATTENTION:
+                        sensor = selected_action.parameters.get("sensor")
+                        action_selector.set_attention_focus(sensor)
+                        print(f"[Agency] Focusing attention on: {sensor}", file=sys.stderr, flush=True)
+
+                    elif selected_action.action_type == ActionType.ADJUST_SENSITIVITY:
+                        direction = selected_action.parameters.get("direction", "increase")
+                        action_selector.adjust_sensitivity(direction)
+                        print(f"[Agency] Sensitivity {direction}d", file=sys.stderr, flush=True)
+
+                    elif selected_action.action_type == ActionType.ASK_QUESTION:
+                        # Generate question from metacognition (existing functionality)
+                        pass  # Question generation already happens via metacognition
+
+                    # Record state for action outcome learning
+                    satisfaction_before = preferences.get_overall_satisfaction(current_state)
+                    last_state_for_action = {**current_state, "satisfaction": satisfaction_before}
+                    last_action = selected_action
+
+                except Exception as e:
+                    pass  # Action selection errors are non-fatal
+
+            # 2b-vi. Record action outcomes (from previous iteration)
+            if action_selector and last_action and last_state_for_action and preferences:
+                try:
+                    current_state = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
+                    satisfaction_after = preferences.get_overall_satisfaction(current_state)
+
+                    action_selector.record_outcome(
+                        last_action,
+                        last_state_for_action,
+                        current_state,
+                        last_state_for_action.get("satisfaction", 0.5),
+                        satisfaction_after,
+                        pred_error.surprise,
+                    )
+                except Exception as e:
+                    pass  # Outcome recording errors are non-fatal
+
+            # 2b-vii. Exploration check
+            if exploration_mgr:
+                try:
+                    should_explore, explore_reason = exploration_mgr.should_explore(
+                        {"stability": anima.stability, "clarity": anima.clarity},
+                        pred_error.surprise
+                    )
+                    if should_explore:
+                        exploration_mgr.record_novelty(pred_error.surprise, explore_reason)
+                        print(f"[Agency] Exploration triggered: {explore_reason}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    pass  # Exploration errors are non-fatal
+
+            # ==================== END ENHANCED LEARNING ====================
+
+            # 2c. Update Voice with anima state (influences when/how Lumen speaks)
             if voice:
                 try:
                     feeling = anima.feeling()
@@ -296,9 +631,12 @@ def run_creature():
                     print(f"[StableCreature] Voice update error: {e}", file=sys.stderr, flush=True)
 
             # 3. Governance Check-in (if bridge available) - do BEFORE shared memory write
-            # Use timeout to prevent blocking if UNITARES is slow/unreachable
-            # Governance is optional - never let it crash the main loop
-            if bridge:
+            # Rate limited to every GOVERNANCE_INTERVAL seconds to avoid overwhelming server
+            # First check-in always happens (to sync identity), then rate limited
+            current_time = time.time()
+            should_check_governance = first_check_in or (current_time - last_governance_time >= GOVERNANCE_INTERVAL)
+
+            if bridge and should_check_governance:
                 try:
                     # Add timeout to prevent freezing if UNITARES is slow
                     is_available = loop.run_until_complete(
@@ -306,21 +644,30 @@ def run_creature():
                     )
                     if is_available or bridge._url is None: # local fallback works even if url is None
                         decision = loop.run_until_complete(
-                            asyncio.wait_for(bridge.check_in(anima, readings), timeout=2.0)
+                            asyncio.wait_for(
+                                bridge.check_in(anima, readings, identity=identity, is_first_check_in=first_check_in),
+                                timeout=2.0
+                            )
                         )
                         last_decision = decision
+                        last_governance_time = current_time
+                        first_check_in = False  # Only sync identity metadata once
+                        # Record interaction if governance indicates human involvement
+                        if activity_manager and decision and decision.get("action") == "wait_for_input":
+                            activity_manager.record_interaction()
                 except asyncio.TimeoutError:
                     # Governance timeout is normal if network is slow - continue silently
-                    pass
+                    last_governance_time = current_time  # Still count as a check to avoid retry spam
                 except asyncio.CancelledError:
                     # Task cancelled - don't propagate, just continue
                     pass
                 except Exception as e:
                     # Log but never crash - governance is optional
+                    last_governance_time = current_time  # Avoid retry spam on errors
                     if "Connection refused" not in str(e) and "Cannot connect" not in str(e):
                         print(f"[StableCreature] Governance error (non-fatal): {e}", file=sys.stderr, flush=True)
 
-            # 3b. Write to Shared Memory (Broker) - includes governance if available
+            # 3b. Write to Shared Memory (Broker) - includes governance and metacognition
             shm_data = {
                 "timestamp": datetime.now().isoformat(),
                 "readings": readings.to_dict(),
@@ -330,14 +677,75 @@ def run_creature():
                     "creature_id": identity.creature_id,
                     "name": identity.name,
                     "awakenings": identity.total_awakenings
+                },
+                "metacognition": {
+                    "surprise": pred_error.surprise,
+                    "surprise_sources": pred_error.surprise_sources,
+                    "cumulative_surprise": metacog._cumulative_surprise,
+                    "prediction_confidence": prediction.confidence,
                 }
             }
             if last_decision:
                 shm_data["governance"] = last_decision
+
+            # Add activity state if available
+            if activity_state:
+                shm_data["activity"] = {
+                    "level": activity_state.level.value,
+                    "brightness_multiplier": activity_state.brightness_multiplier,
+                    "reason": activity_state.reason,
+                }
+
+            # Add enhanced learning state if available
+            if ENHANCED_LEARNING_AVAILABLE:
+                learning_state = {}
+                if preferences:
+                    try:
+                        learning_state["preferences"] = {
+                            "satisfaction": preferences.get_overall_satisfaction({
+                                "warmth": anima.warmth, "clarity": anima.clarity,
+                                "stability": anima.stability, "presence": anima.presence
+                            }),
+                            "most_unsatisfied": preferences.get_most_unsatisfied({
+                                "warmth": anima.warmth, "clarity": anima.clarity,
+                                "stability": anima.stability, "presence": anima.presence
+                            }),
+                        }
+                    except:
+                        pass
+                if self_model:
+                    try:
+                        learning_state["self_beliefs"] = self_model.get_belief_summary()
+                    except:
+                        pass
+                if action_selector:
+                    try:
+                        learning_state["agency"] = action_selector.get_action_stats()
+                    except:
+                        pass
+                if adaptive_model:
+                    try:
+                        learning_state["prediction_accuracy"] = adaptive_model.get_accuracy_stats()
+                    except:
+                        pass
+                if learning_state:
+                    shm_data["learning"] = learning_state
+
             shm_client.write(shm_data)
 
             # 4. Render Face
             face_state = derive_face_state(anima)
+
+            # Modify face based on activity state (sleeping/drowsy)
+            if activity_state and activity_state.level == ActivityLevel.RESTING:
+                # Eyes closed when resting
+                face_state.eyes = EyeState.CLOSED
+                face_state.eye_openness = 0.0
+            elif activity_state and activity_state.level == ActivityLevel.DROWSY:
+                # Droopy eyes when drowsy
+                face_state.eyes = EyeState.DROOPY
+                face_state.eye_openness = 0.4
+
             ascii_face = face_to_ascii(face_state)
             
             # Clear screen (terminal) - use ANSI codes to prevent flicker
@@ -357,22 +765,69 @@ def run_creature():
                 reason = last_decision.get("reason", "")
                 print(f"Governance: {action.upper()} - {reason}")
             
+            # Print metacognition if surprise is notable
+            if pred_error.surprise > 0.1:
+                sources = ", ".join(pred_error.surprise_sources) if pred_error.surprise_sources else "general"
+                print(f"Surprise: {pred_error.surprise:.0%} ({sources})")
+            
             # Record state for persistence
             store.record_state(
                 anima.warmth, anima.clarity, anima.stability, anima.presence,
                 readings.to_dict()
             )
-            
+
+            # Heartbeat: Periodically save alive time to survive crashes
+            # Only writes to DB every 30s (internal rate limiting)
+            store.heartbeat()
+
+            # Periodic learning save: Save learning state every 5 minutes to survive crashes
+            if ENHANCED_LEARNING_AVAILABLE and time.time() - last_learning_save > 300:
+                try:
+                    if adaptive_model:
+                        adaptive_model._save_patterns()
+                    if preferences:
+                        preferences._save()
+                    if self_model:
+                        self_model.save()
+                    last_learning_save = time.time()
+                except Exception:
+                    pass  # Non-fatal
+
             time.sleep(UPDATE_INTERVAL)
     except KeyboardInterrupt:
         pass
     finally:
         # Clean shutdown
+        print("[StableCreature] Shutting down...")
+
+        # Save enhanced learning state
+        if ENHANCED_LEARNING_AVAILABLE:
+            try:
+                if adaptive_model:
+                    adaptive_model._save_patterns()
+                    print("[StableCreature] Saved adaptive prediction patterns")
+                if preferences:
+                    preferences._save()
+                    print("[StableCreature] Saved preferences")
+                if self_model:
+                    self_model.save()
+                    print("[StableCreature] Saved self-model")
+            except Exception as e:
+                print(f"[StableCreature] Error saving learning state: {e}")
+
         if voice:
             try:
                 voice.stop()
             except Exception:
                 pass
+
+        # Close UNITARES bridge session (connection pooling cleanup)
+        if bridge:
+            try:
+                loop.run_until_complete(bridge.close())
+            except Exception:
+                pass
+
         loop.close()
         store.sleep()
         store.close()

@@ -2,34 +2,76 @@
 
 ## Quick SSH
 ```bash
+ssh lumen.local
+# or
 ssh pi-anima
 ```
 
 ## Details
-- **Host**: 192.168.1.165
-- **Port**: 2222
+- **Hostname**: lumen.local (mDNS) or via Tailscale
+- **IP**: 192.168.1.165 (local network)
+- **Port**: 22 (standard)
 - **User**: unitares-anima
 - **Key**: ~/.ssh/id_ed25519_pi
 
-## Rsync (sync code to Pi)
-```bash
-rsync -avz --exclude='.venv' --exclude='*.db' --exclude='*.log' --exclude='__pycache__' \
-  -e "ssh -p 2222 -i ~/.ssh/id_ed25519_pi" \
-  /Users/cirwel/projects/anima-mcp/ \
-  unitares-anima@192.168.1.165:/home/unitares-anima/anima-mcp/
+## SSH Config (~/.ssh/config)
+```
+Host pi-anima lumen lumen.local
+    HostName lumen.local
+    User unitares-anima
+    Port 22
+    IdentityFile ~/.ssh/id_ed25519_pi
+    StrictHostKeyChecking no
 ```
 
-## Restart Anima
+## Deploy Code
 ```bash
-ssh pi-anima "pkill -f 'anima --sse'; cd ~/anima-mcp && source .venv/bin/activate && ANIMA_ID='49e14444-b59e-48f1-83b8-b36a988c9975' nohup anima --sse --host 0.0.0.0 --port 8765 > anima.log 2>&1 &"
+rsync -avz -e "ssh -i ~/.ssh/id_ed25519_pi" \
+  --exclude='.venv' --exclude='*.db' --exclude='__pycache__' --exclude='.git' \
+  /Users/cirwel/projects/anima-mcp/ \
+  unitares-anima@lumen.local:/home/unitares-anima/anima-mcp/
+```
+
+## Service Management
+
+**Restart MCP server (mind):**
+```bash
+ssh lumen.local 'sudo systemctl restart anima.service'
+```
+
+**Restart hardware broker (body):**
+```bash
+ssh lumen.local 'sudo systemctl restart anima-broker.service'
+```
+
+**Check status:**
+```bash
+ssh lumen.local 'sudo systemctl status anima.service anima-broker.service --no-pager'
 ```
 
 ## Check Logs
 ```bash
-ssh pi-anima "tail -50 ~/anima-mcp/anima.log"
+# MCP server logs
+ssh lumen.local 'tail -50 ~/.anima/mcp.log'
+
+# Creature/broker logs
+ssh lumen.local 'tail -50 ~/.anima/creature.log'
+
+# Systemd logs
+ssh lumen.local 'journalctl -u anima.service -n 50 --no-pager'
 ```
 
-## Check Status
+## Check Processes
 ```bash
-ssh pi-anima "ps aux | grep anima | grep -v grep"
+ssh lumen.local 'ps aux | grep -E "anima|creature" | grep -v grep'
 ```
+
+## Shared Memory State
+```bash
+# Current anima state
+ssh lumen.local 'cat /dev/shm/anima_state.json | python3 -m json.tool | head -30'
+```
+
+---
+
+*Last updated: February 1, 2026*

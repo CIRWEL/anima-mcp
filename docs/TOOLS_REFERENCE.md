@@ -1,6 +1,12 @@
 # Lumen MCP Tools Reference
 
-Quick reference for Lumen's MCP tools - how to check Lumen's state and get proactive recommendations.
+Quick reference for Lumen's MCP tools. For tool tiers, see `guides/ESSENTIAL_TOOLS.md`.
+
+**Tool Count:** 11 core + 12 extended = 23 total
+
+---
+
+## Core Tools (Always Available)
 
 ## `get_state`
 
@@ -172,3 +178,57 @@ print(steps[0].text)
 - `mood: "alert"`
 - `clarity > 0.7` AND `warmth > 0.4`
 - Face shows: normal/wide eyes, neutral/open mouth
+
+---
+
+## Extended Tools (Feature-Dependent)
+
+These tools appear when optional features are enabled.
+
+### Display Tools (requires TFT display)
+
+| Tool | Description |
+|------|-------------|
+| `switch_screen` | Switch display to different screen (identity, sensors, diagnostics, etc.) |
+| `leave_message` | Leave a message on Lumen's message board |
+| `leave_agent_note` | Leave an agent note (for inter-agent communication) |
+
+### Voice Tools (requires voice module)
+
+| Tool | Description |
+|------|-------------|
+| `say` | Make Lumen speak (text-to-speech) |
+| `voice_status` | Get current voice module status |
+| `set_voice_mode` | Set voice mode (autonomous, responsive, quiet) |
+
+### Memory & Learning Tools (requires enhanced learning)
+
+| Tool | Description |
+|------|-------------|
+| `query_memory` | Query Lumen's associative memory |
+| `learning_visualization` | Get visual representation of learning state |
+| `get_expression_mood` | Get current expression mood parameters |
+
+### Cognitive Tools (requires cognitive inference)
+
+| Tool | Description |
+|------|-------------|
+| `cognitive_query` | Run deeper cognitive inference |
+| `dialectic_synthesis` | Synthesize insights through dialectic process |
+| `merge_insights` | Merge multiple insights into coherent understanding |
+
+---
+
+## Tool Availability Check
+
+Use `diagnostics()` to see which features are enabled:
+```json
+{
+  "features": {
+    "voice_available": true/false,
+    "cognitive_available": true/false,
+    "enhanced_learning_available": true/false,
+    "display_available": true/false
+  }
+}
+```

@@ -89,18 +89,29 @@ class LumenVoice:
         # Internal state
         self._running = False
         self._voice_thread: Optional[threading.Thread] = None
+        self._initialized = False
+        self._warnings_logged = False  # Suppress repeated warnings
 
     def initialize(self) -> bool:
         """Initialize all voice components."""
+        # Only initialize once
+        if self._initialized:
+            return True
+
         print("[Voice] Initializing Lumen's voice...", file=sys.stderr, flush=True)
 
         # Initialize STT
-        if not self._stt.initialize():
-            print("[Voice] Warning: STT not available", file=sys.stderr, flush=True)
+        stt_ok = self._stt.initialize()
+        if not stt_ok and not self._warnings_logged:
+            print("[Voice] Warning: STT not available (speech-to-text disabled)", file=sys.stderr, flush=True)
 
         # Initialize TTS
-        if not self._tts.initialize():
-            print("[Voice] Warning: TTS not available", file=sys.stderr, flush=True)
+        tts_ok = self._tts.initialize()
+        if not tts_ok and not self._warnings_logged:
+            print("[Voice] Warning: TTS not available (text-to-speech disabled)", file=sys.stderr, flush=True)
+
+        self._warnings_logged = True
+        self._initialized = True
 
         print("[Voice] Voice system ready", file=sys.stderr, flush=True)
         return True
