@@ -395,6 +395,19 @@ class ScreenRenderer:
                 }
         return self._fonts
 
+    def _get_ip_address(self) -> str:
+        """Get local IP address."""
+        try:
+            import socket
+            # Connect to external address to find local IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return ""
+
     def _get_wifi_status(self) -> Dict[str, Any]:
         """Get WiFi connection status."""
         try:
@@ -424,7 +437,10 @@ class ScreenRenderer:
                     except (IndexError, ValueError):
                         signal = 50  # Default if parsing fails
 
-                return {"connected": True, "ssid": ssid, "signal": signal}
+                # Get IP address
+                ip = self._get_ip_address()
+
+                return {"connected": True, "ssid": ssid, "signal": signal, "ip": ip}
             else:
                 return {"connected": False}
         except Exception:
@@ -432,7 +448,8 @@ class ScreenRenderer:
             try:
                 import socket
                 socket.create_connection(("8.8.8.8", 53), timeout=1)
-                return {"connected": True, "ssid": "unknown", "signal": 50}
+                ip = self._get_ip_address()
+                return {"connected": True, "ssid": "unknown", "signal": 50, "ip": ip}
             except Exception:
                 return {"connected": False}
 
@@ -960,8 +977,9 @@ class ScreenRenderer:
                 # WiFi status
                 wifi_status = self._get_wifi_status()
                 if wifi_status["connected"]:
-                    ssid = wifi_status.get("ssid", "")[:12]  # Truncate long SSIDs
+                    ssid = wifi_status.get("ssid", "")[:10]  # Truncate long SSIDs
                     signal = wifi_status.get("signal", 0)
+                    ip = wifi_status.get("ip", "")
                     if signal > 70:
                         wifi_color = GREEN
                     elif signal > 40:
@@ -970,9 +988,14 @@ class ScreenRenderer:
                         wifi_color = ORANGE
                     draw.text((10, y), f"wifi: {ssid}", fill=wifi_color, font=font_small)
                     draw.text((140, y), f"{signal}%", fill=LIGHT_CYAN, font=font_small)
+                    y += line_height - 6
+                    # Show IP address for reconnection
+                    if ip:
+                        draw.text((10, y), f"ip: {ip}", fill=LIGHT_CYAN, font=font_small)
+                        y += line_height - 6
                 else:
                     draw.text((10, y), "wifi: disconnected", fill=RED, font=font_small)
-                y += line_height - 4
+                    y += line_height - 4
 
                 # Battery status (if available)
                 battery = self._get_battery_status()
@@ -1094,6 +1117,11 @@ class ScreenRenderer:
                     draw.text((10, y), "first awakening", fill=ORANGE, font=font_med)
                 else:
                     draw.text((10, y), f"awakened {identity.total_awakenings}x", fill=PURPLE, font=font_med)
+                y += 22
+
+                # UUID (short form for identification when disconnected)
+                short_id = identity.id[:8] if identity.id else "unknown"
+                draw.text((10, y), f"id: {short_id}", fill=LIGHT_CYAN, font=font_small)
 
                 # Nav dots
                 self._draw_screen_indicator(draw, ScreenMode.IDENTITY)
@@ -1266,7 +1294,22 @@ class ScreenRenderer:
                         margin_color = margin_colors.get(margin.lower(), LIGHT_CYAN)
                         draw.text((margin_x, y_offset + 2), margin.lower(), fill=margin_color, font=font)
 
-                    y_offset += action_box_height + 6
+                    y_offset += action_box_height + 4
+
+                    # Source indicator (unitares vs local)
+                    if source:
+                        source_lower = source.lower()
+                        if "unitares" in source_lower:
+                            source_color = GREEN
+                            source_text = "unitares"
+                        elif "local" in source_lower:
+                            source_color = YELLOW
+                            source_text = "local"
+                        else:
+                            source_color = LIGHT_CYAN
+                            source_text = source[:10]
+                        draw.text((bar_x, y_offset), f"via: {source_text}", fill=source_color, font=font_small)
+                        y_offset += 14
 
                     # EISV metrics - larger bars if space
                     if y_offset < 205:
