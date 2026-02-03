@@ -927,10 +927,10 @@ async def _update_display_loop():
                 
                 safe_call(try_learning, default=None, log_error=False)
             
-            # Lumen's voice: Every 120 iterations (~4 minutes), let Lumen express what it wants
+            # Lumen's voice: Every 300 iterations (~10 minutes), let Lumen express what it wants
             # Uses next_steps advocate to generate observations based on how Lumen feels
-            # (Reduced from 60 to make Lumen less chatty)
-            if loop_count % 120 == 0 and readings and anima and identity:
+            # (Increased from 120 to reduce repetitive chatter)
+            if loop_count % 300 == 0 and readings and anima and identity:
                 from .error_recovery import safe_call
                 from .messages import add_observation
                 from .eisv_mapper import anima_to_eisv
