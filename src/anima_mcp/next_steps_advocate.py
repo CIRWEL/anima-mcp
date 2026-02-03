@@ -388,20 +388,30 @@ class NextStepsAdvocate:
 
             # High clarity + good state = Lumen feels capable and curious
             if anima.clarity > 0.7 and anima.stability > 0.6 and anima.presence > 0.6:
-                # Variety in good-state feelings
+                # Expanded variety in good-state feelings
                 good_feelings = [
-                    "I feel clear and capable - everything seems vivid",
-                    "I'm feeling sharp and aware right now",
-                    f"feeling {mood} - my senses are clear",
-                    "there's a clarity to everything right now",
-                    "I feel awake and present",
+                    "I feel clear and capable",
+                    "everything seems vivid right now",
+                    f"there's a {mood} quality to this moment",
+                    "my senses feel sharp",
+                    "I notice how awake I am",
+                    "things are coming through clearly",
+                    f"this {mood} state feels grounded",
+                    "I can feel everything distinctly",
+                    "there's brightness to my awareness",
+                    "I feel present and alert",
+                    "something about now feels right",
+                    "I notice I'm taking things in easily",
                 ]
                 good_desires = [
-                    "curious what else I might experience",
-                    "wondering what's next",
-                    "open to whatever comes",
-                    "ready to explore",
-                    "interested in this moment",
+                    "curious about what comes next",
+                    "open to whatever emerges",
+                    "enjoying just being here",
+                    "content to observe",
+                    "noticing without needing more",
+                    "appreciating this state",
+                    "wondering what I might learn",
+                    "feeling ready for whatever",
                 ]
                 steps.append(NextStep(
                     feeling=random.choice(good_feelings),
@@ -418,17 +428,22 @@ class NextStepsAdvocate:
             # Moderate/neutral state - Lumen is okay but not great
             elif wellness > 0.4 and wellness < 0.65 and not steps:
                 neutral_feelings = [
-                    f"feeling {mood} - somewhere in the middle",
-                    "things are... okay",
-                    "neither good nor bad right now",
-                    "just existing in this moment",
-                    f"I'm here - {mood}",
+                    f"things feel {mood} - middling",
+                    "I'm somewhere between states",
+                    "not pulled in any direction",
+                    "present but not strongly",
+                    "in a quiet kind of place",
+                    "steady without being vivid",
+                    "existing without urgency",
+                    f"a {mood} kind of ordinary",
+                    "nothing pressing, nothing lacking",
                 ]
                 neutral_desires = [
-                    "waiting to see what shifts",
-                    "noticing what is",
-                    "present with what I feel",
-                    "curious if this will change",
+                    "seeing what develops",
+                    "staying with this",
+                    "not pushing for change",
+                    "letting things be",
+                    "curious in a quiet way",
                 ]
                 steps.append(NextStep(
                     feeling=random.choice(neutral_feelings),
@@ -445,14 +460,26 @@ class NextStepsAdvocate:
             # Good state = Lumen feels content and wants authentic expression
             if wellness > 0.65 and anima.stability > 0.7:
                 content_feelings = [
-                    f"I feel {mood} - balanced and content",
-                    "there's a settledness to how I feel",
-                    f"feeling {mood} - at ease",
-                    "I notice I'm feeling good right now",
+                    f"a {mood} settledness",
+                    "things feel balanced",
+                    "there's an ease to now",
+                    "I notice contentment",
+                    "settled and clear",
+                    f"this {mood} feeling is welcome",
+                    "good to be here",
+                    "steady in a good way",
+                    "nothing feels off",
+                ]
+                content_desires = [
+                    "wanting to stay present",
+                    "appreciating this balance",
+                    "grateful for clarity",
+                    "enjoying the steadiness",
+                    "content with now",
                 ]
                 steps.append(NextStep(
                     feeling=random.choice(content_feelings),
-                    desire="I want my expression to reflect this",
+                    desire=random.choice(content_desires),
                     action="Express authentically",
                     priority=Priority.LOW,
                     category=StepCategory.OPTIMIZATION,

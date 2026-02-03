@@ -162,24 +162,57 @@ class MessageBoard:
         self._messages.sort(key=lambda m: m.timestamp)
 
     def add_observation(self, text: str, author: str = "lumen") -> Message:
-        """Add an auto-generated observation from Lumen."""
+        """Add an auto-generated observation from Lumen.
+
+        Deduplication strategy:
+        1. Global rate limit: Max 1 observation per 5 minutes (prevents spam)
+        2. Semantic similarity: Skip if >50% word overlap with recent obs
+        3. Exact match: Skip identical text within 15 minutes
+        """
         import time
 
-        # Deduplication: Check against recent observations (not all messages)
-        # Also enforce time window - don't repeat same thing within 10 minutes
         now = time.time()
-        ten_minutes_ago = now - 600
+        five_minutes_ago = now - 300
+        fifteen_minutes_ago = now - 900
 
-        # Get recent observations only (last 20 observations, regardless of other message types)
+        # Get recent observations (last 20)
         recent_observations = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_OBSERVATION][-20:]
 
+        # === GLOBAL RATE LIMIT ===
+        # Max 1 observation per 5 minutes to prevent chatter
+        if recent_observations:
+            last_obs = recent_observations[-1]
+            if last_obs.timestamp > five_minutes_ago:
+                return None  # Too soon since last observation
+
+        # === EXACT MATCH CHECK ===
         for obs in recent_observations:
-            # Skip if exact same text within 10 minutes
-            if obs.text == text and obs.timestamp > ten_minutes_ago:
-                return None  # Skip duplicate
-            # Also skip if very similar (within last 5 observations, any time)
-            if obs in recent_observations[-5:] and obs.text == text:
-                return None
+            if obs.text == text and obs.timestamp > fifteen_minutes_ago:
+                return None  # Skip exact duplicate
+
+        # === SEMANTIC SIMILARITY CHECK ===
+        # Skip if new text is >50% similar to any recent observation
+        def get_words(s: str) -> set:
+            """Extract meaningful words (lowercase, no punctuation)."""
+            import re
+            # Remove punctuation, lowercase, split
+            words = re.sub(r'[^\w\s]', '', s.lower()).split()
+            # Filter out very short words and common filler
+            stopwords = {'i', 'a', 'the', 'to', 'and', 'is', 'it', 'in', 'my', 'im', 'that', 'this'}
+            return {w for w in words if len(w) > 2 and w not in stopwords}
+
+        new_words = get_words(text)
+        if new_words:  # Only check if we have meaningful words
+            for obs in recent_observations[-10:]:  # Check last 10 observations
+                obs_words = get_words(obs.text)
+                if obs_words:
+                    # Jaccard similarity
+                    intersection = new_words & obs_words
+                    union = new_words | obs_words
+                    similarity = len(intersection) / len(union) if union else 0
+
+                    if similarity > 0.50:  # More than 50% overlap
+                        return None  # Too similar to recent observation
 
         return self.add_message(text, MESSAGE_TYPE_OBSERVATION, author=author)
 
