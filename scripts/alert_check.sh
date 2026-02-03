@@ -24,7 +24,7 @@ if ! pgrep -f "ssh.*8766" > /dev/null; then
 fi
 
 # Check Pi services via SSH
-if ! ssh -o ConnectTimeout=5 pi-anima "systemctl is-active anima anima-broker" > /dev/null 2>&1; then
+if ! ssh -o ConnectTimeout=5 unitares-anima@lumen.tail76aee6.ts.net "systemctl is-active anima anima-broker" > /dev/null 2>&1; then
     log_alert "Pi services may be down"
     exit 1
 fi

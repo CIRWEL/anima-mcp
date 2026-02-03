@@ -403,9 +403,8 @@ async def _update_display_loop():
                         if prev_state:
                             prev_dir = prev_state.joystick_direction
                             # Only trigger on transition TO left/right (edge detection)
-                            # Skip screen navigation if Q&A is expanded (LEFT/RIGHT used for focus)
-                            qa_needs_lr = (current_mode == ScreenMode.QA and
-                                          (_screen_renderer._state.qa_expanded or _screen_renderer._state.qa_full_view))
+                            # Q&A navigation disabled (state vars not implemented)
+                            qa_needs_lr = False
 
                             if not qa_needs_lr:
                                 if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
@@ -464,22 +463,16 @@ async def _update_display_loop():
                                     _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.message_scroll_down()
 
-                        # Joystick navigation in Q&A screen (UP/DOWN scrolls, LEFT/RIGHT changes focus)
-                        if current_mode == ScreenMode.QA:
+                        # Joystick navigation in Questions/Visitors screens (same as messages)
+                        if current_mode in (ScreenMode.QUESTIONS, ScreenMode.VISITORS):
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
                                     _screen_renderer.trigger_input_feedback("up")
-                                    _screen_renderer.qa_scroll_up()
+                                    _screen_renderer.message_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
-                                    _screen_renderer.qa_scroll_down()
-                                elif current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
-                                    _screen_renderer.trigger_input_feedback("left")
-                                    _screen_renderer.qa_focus_next()
-                                elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
-                                    _screen_renderer.trigger_input_feedback("right")
-                                    _screen_renderer.qa_focus_next()
+                                    _screen_renderer.message_scroll_down()
                         
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
@@ -530,10 +523,10 @@ async def _update_display_loop():
                                         # In messages: toggle expansion of selected message
                                         _screen_renderer.message_toggle_expand()
                                         print(f"[Messages] Toggled message expansion", file=sys.stderr, flush=True)
-                                    elif current_mode == ScreenMode.QA:
-                                        # In Q&A: toggle expansion of selected Q&A pair
-                                        _screen_renderer.qa_toggle_expand()
-                                        print(f"[QA] Toggled Q&A expansion", file=sys.stderr, flush=True)
+                                    elif current_mode == ScreenMode.QUESTIONS:
+                                        # In Questions: toggle expansion of selected message
+                                        _screen_renderer.message_toggle_expand()
+                                        print(f"[Questions] Toggled message expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.NOTEPAD:
                                         # In notepad: go to face (Lumen manages canvas autonomously)
                                         # Lumen saves and clears on its own - no manual intervention needed
@@ -1407,22 +1400,14 @@ async def _update_display_loop():
                             save_render_to_file, render_schema_to_pixels,
                             compute_visual_integrity_stub, evaluate_vqa
                         )
-                        from .preferences import get_preference_system
                         import os
 
-                        # Try to get preferences (optional enhancement)
-                        preferences = None
-                        try:
-                            preferences = get_preference_system()
-                        except Exception:
-                            pass  # Non-fatal
-
-                        # Extract G_t (with preferences if available)
+                        # Extract G_t (with preferences from growth_system)
                         schema = get_current_schema(
                             identity=identity,
                             anima=anima,
                             readings=readings,
-                            preferences=preferences,
+                            growth_system=_growth,
                             include_preferences=True,
                             force_refresh=True,
                         )
@@ -1497,7 +1482,7 @@ async def _update_display_loop():
             interactive_screens = {
                 ScreenMode.NOTEPAD, ScreenMode.MESSAGES, ScreenMode.LEARNING,
                 ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY,
-                ScreenMode.DIAGNOSTICS, ScreenMode.QA, ScreenMode.SELF_GRAPH,
+                ScreenMode.DIAGNOSTICS, ScreenMode.QUESTIONS, ScreenMode.VISITORS,
             }
 
             if consecutive_errors > 0:
@@ -1681,8 +1666,8 @@ async def handle_switch_screen(arguments: dict) -> list[TextContent]:
         "notepad": ScreenMode.NOTEPAD,
         "learning": ScreenMode.LEARNING,
         "messages": ScreenMode.MESSAGES,
-        "qa": ScreenMode.QA,
-        "self_graph": ScreenMode.SELF_GRAPH,
+        "questions": ScreenMode.QUESTIONS,
+        "visitors": ScreenMode.VISITORS,
     }
     
     if mode_str in mode_map:
@@ -2166,6 +2151,78 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_git_pull(arguments: dict) -> list[TextContent]:
+    """
+    Pull latest code from git and optionally restart.
+    Enables remote deployments via MCP without SSH.
+    """
+    import subprocess
+    from pathlib import Path
+
+    restart = arguments.get("restart", False)
+
+    # Find repo root (where .git is)
+    repo_root = Path(__file__).parent.parent.parent  # anima-mcp/
+    git_dir = repo_root / ".git"
+
+    if not git_dir.exists():
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Not a git repository",
+            "path": str(repo_root)
+        }))]
+
+    try:
+        # Git fetch + pull
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        output = {
+            "success": result.returncode == 0,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip() if result.stderr else None,
+            "repo": str(repo_root),
+        }
+
+        if result.returncode == 0:
+            # Check what changed
+            diff_result = subprocess.run(
+                ["git", "log", "-1", "--oneline"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            output["latest_commit"] = diff_result.stdout.strip()
+
+            if restart:
+                output["restart"] = "Restarting server..."
+                # Schedule restart after response is sent
+                import asyncio
+                async def delayed_restart():
+                    await asyncio.sleep(1)
+                    import os
+                    os._exit(0)  # Exit - systemd/supervisor will restart
+                asyncio.create_task(delayed_restart())
+            else:
+                output["note"] = "Changes pulled. Use restart=true to apply, or manually restart."
+
+        return [TextContent(type="text", text=json.dumps(output, indent=2))]
+
+    except subprocess.TimeoutExpired:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Git pull timed out"
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Git pull failed: {e}"
+        }))]
+
+
 async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
     """Get learning visualization - shows why Lumen feels what it feels."""
     store = _get_store()
@@ -2622,6 +2679,20 @@ TOOLS_STANDARD = [
             },
         },
     ),
+    Tool(
+        name="git_pull",
+        description="Pull latest code from git repository and optionally restart. For remote deployments without SSH.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "restart": {
+                    "type": "boolean",
+                    "description": "Restart the server after pulling (default: false)",
+                    "default": False,
+                },
+            },
+        },
+    ),
 ]
 
 # ============================================================
@@ -2925,13 +2996,19 @@ def _get_voice():
 
             _voice_instance = AutonomousVoice()
 
-            # Connect voice to message board - when Lumen speaks, post as observation
+            # Connect voice to message board - when Lumen speaks, post appropriately
             def on_lumen_speaks(text: str, intent: SpeechIntent):
-                """Post autonomous speech to message board so agents can see it."""
-                # Add as observation with intent type
-                result = add_observation(f"[{intent.value}] {text}", author="lumen")
-                if result:
-                    print(f"[Voice->Board] Posted: {text}", file=sys.stderr, flush=True)
+                """Post autonomous speech to message board - questions as questions, others as observations."""
+                if intent == SpeechIntent.QUESTION:
+                    # Questions should be actual questions for agents to answer
+                    result = add_question(text, author="lumen", context="voice/autonomous")
+                    if result:
+                        print(f"[Voice->Board] Asked: {text}", file=sys.stderr, flush=True)
+                else:
+                    # Observations, feelings, etc.
+                    result = add_observation(text, author="lumen")
+                    if result:
+                        print(f"[Voice->Board] Posted: {text}", file=sys.stderr, flush=True)
 
             _voice_instance.set_on_speech(on_lumen_speaks)
             _voice_instance.start()
@@ -3598,8 +3675,8 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "notepad": ScreenMode.NOTEPAD,
             "learning": ScreenMode.LEARNING,
             "messages": ScreenMode.MESSAGES,
-            "qa": ScreenMode.QA,
-            "self_graph": ScreenMode.SELF_GRAPH,
+            "questions": ScreenMode.QUESTIONS,
+            "visitors": ScreenMode.VISITORS,
         }
         if screen in mode_map:
             _screen_renderer.set_mode(mode_map[screen])
@@ -3666,6 +3743,8 @@ HANDLERS = {
     "get_trajectory": handle_get_trajectory,
     "learning_visualization": handle_learning_visualization,
     "get_expression_mood": handle_get_expression_mood,
+    # Admin tools
+    "git_pull": handle_git_pull,
     # Voice tools
     "say": handle_say,
     "voice_status": handle_voice_status,
@@ -4113,10 +4192,10 @@ def run_sse_server(host: str, port: int):
 
         asyncio.create_task(server_warmup_task())
 
-        print(f"SSE server running at http://{host}:{port}", file=sys.stderr, flush=True)
-        print(f"  SSE transport: http://{host}:{port}/sse", file=sys.stderr, flush=True)
+        print(f"MCP server running at http://{host}:{port}", file=sys.stderr, flush=True)
         if HAS_STREAMABLE_HTTP:
-            print(f"  HTTP transport: http://{host}:{port}/mcp", file=sys.stderr, flush=True)
+            print(f"  Streamable HTTP: http://{host}:{port}/mcp (recommended)", file=sys.stderr, flush=True)
+        print(f"  SSE (legacy):    http://{host}:{port}/sse", file=sys.stderr, flush=True)
 
         # Start Streamable HTTP session manager as background task
         # Uses anyio task group pattern (same as governance-mcp)
@@ -4349,9 +4428,10 @@ def main():
     from pathlib import Path
 
     parser = argparse.ArgumentParser(description="Anima MCP Server")
-    parser.add_argument("--sse", action="store_true", help="Run SSE server (network)")
-    parser.add_argument("--host", default="0.0.0.0", help="SSE host (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8766, help="SSE port (default: 8766)")
+    parser.add_argument("--http", "--sse", action="store_true", dest="http_server",
+                        help="Run HTTP server (serves /mcp/ Streamable HTTP + /sse legacy)")
+    parser.add_argument("--host", default="0.0.0.0", help="HTTP server host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8766, help="HTTP server port (default: 8766)")
     args = parser.parse_args()
 
     # Determine DB persistence path (User Home > Project Root)
@@ -4370,8 +4450,8 @@ def main():
     wake(db_path, anima_id)
 
     try:
-        if args.sse:
-            run_sse_server(args.host, args.port)
+        if args.http_server:
+            run_sse_server(args.host, args.port)  # TODO: rename to run_http_server
         else:
             asyncio.run(run_stdio_server())
     except KeyboardInterrupt:

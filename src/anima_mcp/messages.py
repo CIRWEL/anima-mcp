@@ -199,8 +199,8 @@ class MessageBoard:
                         loop = asyncio.get_running_loop()
                         loop.create_task(extract())
                     except RuntimeError:
-                        # No running loop, try to run directly
-                        pass
+                        # No running loop, run synchronously
+                        asyncio.run(extract())
                 except Exception as e:
                     print(f"[Knowledge] Extraction scheduling failed: {e}", flush=True)
 

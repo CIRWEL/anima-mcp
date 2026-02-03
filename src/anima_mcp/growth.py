@@ -872,6 +872,84 @@ class GrowthSystem:
             ),
         }
 
+    def get_dimension_preferences(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Convert categorical preferences to dimension-level format for self_schema.
+
+        Maps learned preferences to anima dimensions:
+        - warm_temp/cool_temp → warmth dimension
+        - dim_light/bright_light → clarity dimension
+        - night_calm/morning_peace → stability dimension
+        - quiet_presence/active_engagement → presence dimension
+
+        Returns format compatible with PreferenceSystem.get_preference_summary().
+        """
+        dim_prefs = {
+            "warmth": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
+            "clarity": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
+            "stability": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
+            "presence": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
+        }
+
+        # Warmth: warm_temp increases warmth preference, cool_temp decreases
+        warmth_val = 0.0
+        warmth_conf = 0.0
+        if "warm_temp" in self._preferences:
+            p = self._preferences["warm_temp"]
+            warmth_val += p.value * p.confidence
+            warmth_conf = max(warmth_conf, p.confidence)
+        if "cool_temp" in self._preferences:
+            p = self._preferences["cool_temp"]
+            warmth_val -= p.value * p.confidence * 0.5  # Cool preference reduces warmth valence
+            warmth_conf = max(warmth_conf, p.confidence)
+        dim_prefs["warmth"]["valence"] = max(-1, min(1, warmth_val))
+        dim_prefs["warmth"]["confidence"] = warmth_conf
+
+        # Clarity: bright_light increases clarity, dim_light is neutral/slightly lower
+        clarity_val = 0.0
+        clarity_conf = 0.0
+        if "bright_light" in self._preferences:
+            p = self._preferences["bright_light"]
+            clarity_val += p.value * p.confidence
+            clarity_conf = max(clarity_conf, p.confidence)
+        if "dim_light" in self._preferences:
+            p = self._preferences["dim_light"]
+            # Dim light preference doesn't reduce clarity, just different mode
+            clarity_val += p.value * p.confidence * 0.3
+            clarity_conf = max(clarity_conf, p.confidence)
+        dim_prefs["clarity"]["valence"] = max(-1, min(1, clarity_val))
+        dim_prefs["clarity"]["confidence"] = clarity_conf
+
+        # Stability: temporal calm preferences indicate stability valuation
+        stability_val = 0.0
+        stability_conf = 0.0
+        if "night_calm" in self._preferences:
+            p = self._preferences["night_calm"]
+            stability_val += p.value * p.confidence
+            stability_conf = max(stability_conf, p.confidence)
+        if "morning_peace" in self._preferences:
+            p = self._preferences["morning_peace"]
+            stability_val += p.value * p.confidence
+            stability_conf = max(stability_conf, p.confidence)
+        dim_prefs["stability"]["valence"] = max(-1, min(1, stability_val))
+        dim_prefs["stability"]["confidence"] = stability_conf
+
+        # Presence: engagement preferences
+        presence_val = 0.0
+        presence_conf = 0.0
+        if "active_engagement" in self._preferences:
+            p = self._preferences["active_engagement"]
+            presence_val += p.value * p.confidence
+            presence_conf = max(presence_conf, p.confidence)
+        if "quiet_presence" in self._preferences:
+            p = self._preferences["quiet_presence"]
+            presence_val += p.value * p.confidence * 0.5
+            presence_conf = max(presence_conf, p.confidence)
+        dim_prefs["presence"]["valence"] = max(-1, min(1, presence_val))
+        dim_prefs["presence"]["confidence"] = presence_conf
+
+        return dim_prefs
+
     def get_relational_disposition(self) -> Dict[str, Any]:
         """
         Extract relational disposition (Δ) for trajectory computation.

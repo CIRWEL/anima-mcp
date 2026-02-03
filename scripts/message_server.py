@@ -17,14 +17,14 @@ import base64
 
 PORT = 8768
 PI_USER = "unitares-anima"
-PI_HOST = os.environ.get("LUMEN_HOST", "lumen")  # Use Tailscale hostname by default
+PI_HOST = os.environ.get("LUMEN_HOST", "lumen-local")  # SSH config alias (local network)
 
 
 def ssh_command(python_code: str, timeout: int = 10) -> tuple[bool, str]:
     """Run Python code on the Pi via SSH using base64 to avoid escaping issues."""
     encoded = base64.b64encode(python_code.encode()).decode()
     cmd = [
-        "ssh", "-o", "ConnectTimeout=5", f"{PI_USER}@{PI_HOST}",
+        "ssh", "-o", "ConnectTimeout=15", f"{PI_USER}@{PI_HOST}",
         f"cd anima-mcp && echo {encoded} | base64 -d | .venv/bin/python3"
     ]
     try:
@@ -81,33 +81,73 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def handle_get_state(self):
-        """Get Lumen's current state from shared memory."""
+        """Get Lumen's current state from database."""
         code = '''
 import json
-try:
-    with open("/dev/shm/anima_state.json") as f:
-        data = json.load(f).get("data", {})
-    anima = data.get("anima", {})
-    identity = data.get("identity", {})
-    readings = data.get("readings", {})
-    metacog = data.get("metacognition", {})
-    print(json.dumps({
-        "name": identity.get("name", "Lumen"),
-        "mood": anima.get("feeling", {}).get("mood", "unknown"),
-        "warmth": anima.get("warmth", 0),
-        "clarity": anima.get("clarity", 0),
-        "stability": anima.get("stability", 0),
-        "presence": anima.get("presence", 0),
-        "surprise": metacog.get("surprise", 0),
-        "cpu_temp": readings.get("cpu_temp_c", 0),
-        "ambient_temp": readings.get("ambient_temp_c", 0),
-        "light": readings.get("light_lux", 0),
-        "humidity": readings.get("humidity_pct", 0),
-        "awakenings": identity.get("awakenings", 0),
-        "timestamp": data.get("timestamp", "")
-    }))
-except Exception as e:
-    print(json.dumps({"error": str(e)}))
+import sqlite3
+from pathlib import Path
+
+db_path = Path.home() / "anima-mcp" / "anima.db"
+if not db_path.exists():
+    print(json.dumps({"error": "Database not found"}))
+else:
+    try:
+        conn = sqlite3.connect(str(db_path))
+        # Get latest state
+        state = conn.execute(
+            "SELECT warmth, clarity, stability, presence, timestamp FROM state_history ORDER BY timestamp DESC LIMIT 1"
+        ).fetchone()
+        # Get identity
+        identity = conn.execute(
+            "SELECT name, total_awakenings FROM identity LIMIT 1"
+        ).fetchone()
+        conn.close()
+
+        # Get real-time sensor readings (suppress init messages)
+        import sys, io
+        try:
+            old_stdout = sys.stdout
+            sys.stdout = io.StringIO()
+            from src.anima_mcp.sensors import PiSensors
+            s = PiSensors()
+            r = s.read()
+            sys.stdout = old_stdout
+            sensors = (r.cpu_temp_c, r.ambient_temp_c, r.light_lux, r.humidity_pct)
+        except:
+            sys.stdout = old_stdout
+            sensors = None
+
+        # Determine mood from state values
+        if state:
+            w, c, s, p = state[0], state[1], state[2], state[3]
+            wellness = (w + c + s + p) / 4
+            if wellness > 0.7:
+                mood = "content" if s > 0.8 else "curious"
+            elif wellness > 0.4:
+                mood = "calm" if s > 0.6 else "alert"
+            else:
+                mood = "uncomfortable"
+        else:
+            w, c, s, p = 0, 0, 0, 0
+            mood = "unknown"
+
+        print(json.dumps({
+            "name": identity[0] if identity else "Lumen",
+            "mood": mood,
+            "warmth": w,
+            "clarity": c,
+            "stability": s,
+            "presence": p,
+            "surprise": 0,
+            "cpu_temp": sensors[0] if sensors else 0,
+            "ambient_temp": sensors[1] if sensors else 0,
+            "light": sensors[2] if sensors else 0,
+            "humidity": sensors[3] if sensors else 0,
+            "awakenings": identity[1] if identity else 0,
+            "timestamp": state[4] if state else ""
+        }))
+    except Exception as e:
+        print(json.dumps({"error": str(e)}))
 '''
         success, output = ssh_command(code)
         if success:
@@ -285,14 +325,15 @@ except Exception as e:
 
         try:
             data = json.loads(post_data)
-            question_id = data.get('question_id', '')
+            question_id = data.get('question_id') or data.get('id', '')  # Accept both
             answer_text = data.get('answer', '').replace("'", "\\'").replace('"', '\\"')
+            author = data.get('author', 'claude').replace("'", "\\'").replace('"', '\\"')
 
             if not answer_text:
                 self.send_json({"error": "No answer provided"}, 400)
                 return
 
-            print(f"Answering question {question_id}: {answer_text[:50]}...")
+            print(f"[{author}] Answering question {question_id}: {answer_text[:50]}...")
             code = f'''
 from src.anima_mcp.messages import MessageBoard
 board = MessageBoard()
@@ -301,10 +342,10 @@ board._load()
 for m in board._messages:
     if m.message_id == "{question_id}":
         m.answered = True
-        m.answered_by = "user"
+        m.answered_by = "{author}"
         break
 # Add the answer
-board.add_agent_message("{answer_text}", agent_name="you", responds_to="{question_id}")
+board.add_agent_message("{answer_text}", agent_name="{author}", responds_to="{question_id}")
 print("ok")
 '''
             success, output = ssh_command(code)
@@ -332,8 +373,13 @@ def main():
     print()
 
     try:
-        socketserver.TCPServer.allow_reuse_address = True
-        with socketserver.TCPServer(("", PORT), LumenControlHandler) as httpd:
+        # Use ThreadingTCPServer to handle concurrent requests
+        # (prevents blocking when SSH commands are slow)
+        class ThreadedServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+            allow_reuse_address = True
+            daemon_threads = True
+
+        with ThreadedServer(("", PORT), LumenControlHandler) as httpd:
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")
