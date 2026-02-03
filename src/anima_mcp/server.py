@@ -463,8 +463,8 @@ async def _update_display_loop():
                                     _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.message_scroll_down()
 
-                        # Joystick navigation in Questions/Visitors screens (same as messages)
-                        if current_mode in (ScreenMode.QUESTIONS, ScreenMode.VISITORS):
+                        # Joystick navigation in Visitors screen (same as messages)
+                        if current_mode == ScreenMode.VISITORS:
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
@@ -473,6 +473,23 @@ async def _update_display_loop():
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.message_scroll_down()
+                        
+                        # Joystick navigation in Questions screen (Q&A specific)
+                        if current_mode == ScreenMode.QUESTIONS:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    _screen_renderer.trigger_input_feedback("up")
+                                    _screen_renderer.qa_scroll_up()
+                                elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    _screen_renderer.trigger_input_feedback("down")
+                                    _screen_renderer.qa_scroll_down()
+                                elif current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
+                                    _screen_renderer.trigger_input_feedback("left")
+                                    _screen_renderer.qa_focus_next()
+                                elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+                                    _screen_renderer.trigger_input_feedback("right")
+                                    _screen_renderer.qa_focus_next()
                         
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
@@ -523,10 +540,14 @@ async def _update_display_loop():
                                         # In messages: toggle expansion of selected message
                                         _screen_renderer.message_toggle_expand()
                                         print(f"[Messages] Toggled message expansion", file=sys.stderr, flush=True)
-                                    elif current_mode == ScreenMode.QUESTIONS:
-                                        # In Questions: toggle expansion of selected message
+                                    elif current_mode == ScreenMode.VISITORS:
+                                        # In Visitors: toggle expansion of selected message
                                         _screen_renderer.message_toggle_expand()
-                                        print(f"[Questions] Toggled message expansion", file=sys.stderr, flush=True)
+                                        print(f"[Visitors] Toggled message expansion", file=sys.stderr, flush=True)
+                                    elif current_mode == ScreenMode.QUESTIONS:
+                                        # In Questions: toggle Q&A expansion
+                                        _screen_renderer.qa_toggle_expand()
+                                        print(f"[Questions] Toggled Q&A expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.NOTEPAD:
                                         # In notepad: go to face (Lumen manages canvas autonomously)
                                         # Lumen saves and clears on its own - no manual intervention needed

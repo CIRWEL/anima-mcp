@@ -52,6 +52,8 @@ class ScreenState:
     # Message board interaction state
     message_scroll_index: int = 0  # Which message is currently selected/visible
     message_expanded_id: Optional[str] = None  # Message ID that is expanded (showing full text)
+    message_text_scroll: int = 0  # Line offset when scrolling within expanded message text
+    message_full_view: bool = False  # Full-screen view for message (maximum readability)
 
     # Q&A screen interaction state
     qa_scroll_index: int = 0  # Which Q&A pair is selected
@@ -1728,6 +1730,88 @@ class ScreenRenderer:
 
                 # Check if any message is expanded
                 has_expanded = self._state.message_expanded_id is not None
+                full_view = getattr(self._state, 'message_full_view', False)
+
+                # FULL VIEW MODE - entire screen for one message
+                if full_view and has_expanded:
+                    selected_msg = None
+                    for m in all_messages:
+                        if m.message_id == self._state.message_expanded_id:
+                            selected_msg = m
+                            break
+
+                    if selected_msg:
+                        # Determine colors based on message type
+                        if selected_msg.msg_type == MESSAGE_TYPE_USER:
+                            type_color = LIME
+                            author_text = "you"
+                        elif selected_msg.msg_type == MESSAGE_TYPE_AGENT:
+                            type_color = AMBER
+                            author_text = getattr(selected_msg, 'author', 'agent')
+                        elif selected_msg.msg_type == MESSAGE_TYPE_QUESTION:
+                            type_color = CYAN
+                            author_text = "question"
+                        else:
+                            type_color = SOFT_GOLD
+                            author_text = "lumen"
+
+                        # Full screen header
+                        draw.text((10, y_offset), author_text, fill=type_color, font=font_title)
+
+                        # Timestamp
+                        if hasattr(selected_msg, 'timestamp'):
+                            ts_str = selected_msg.age_str() if hasattr(selected_msg, 'age_str') else ""
+                            draw.text((180, y_offset), ts_str, fill=MUTED, font=font_small)
+
+                        y_offset += 18
+                        draw.line([(10, y_offset), (230, y_offset)], fill=(60, 80, 100), width=1)
+                        y_offset += 6
+
+                        # Full text area
+                        content_width = 220
+                        max_y = 215
+                        wrapped_lines = self._wrap_text(selected_msg.text, font_small, content_width)
+
+                        # Calculate visible lines
+                        available_height = max_y - y_offset
+                        max_visible_lines = max(1, available_height // 13)
+
+                        # Scroll handling
+                        text_scroll = self._state.message_text_scroll
+                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        self._state.message_text_scroll = text_scroll
+
+                        # Render text lines
+                        text_color = type_color if selected_msg.msg_type != MESSAGE_TYPE_OBSERVATION else SOFT_GOLD
+                        visible_lines_list = wrapped_lines[text_scroll:text_scroll + max_visible_lines]
+                        for line in visible_lines_list:
+                            draw.text((10, y_offset), line, fill=text_color, font=font_small)
+                            y_offset += 13
+
+                        # Scroll bar
+                        if len(wrapped_lines) > max_visible_lines:
+                            bar_top = 30
+                            bar_bottom = 210
+                            bar_height = bar_bottom - bar_top
+                            thumb_height = max(10, int(bar_height * max_visible_lines / len(wrapped_lines)))
+                            thumb_pos = bar_top + int((bar_height - thumb_height) * text_scroll / max_scroll) if max_scroll > 0 else bar_top
+
+                            draw.rectangle([233, bar_top, 237, bar_bottom], fill=(40, 50, 60))
+                            draw.rectangle([233, thumb_pos, 237, thumb_pos + thumb_height], fill=(100, 180, 220))
+
+                        # Bottom hint
+                        draw.text((10, 222), "▼ exit full view", fill=MUTED, font=font_small)
+                        scroll_pct = f"{int(100 * (text_scroll + max_visible_lines) / len(wrapped_lines))}%" if wrapped_lines else "100%"
+                        draw.text((180, 222), scroll_pct, fill=MUTED, font=font_small)
+
+                        # Update display and return
+                        self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
+                        if hasattr(self._display, '_image'):
+                            self._display._image = image
+                        if hasattr(self._display, '_show'):
+                            self._display._show()
+                        return
 
                 # Show fewer messages when one is expanded to make room for more lines
                 if has_expanded:
@@ -1808,10 +1892,20 @@ class ScreenRenderer:
                     line_height = 14
                     if is_expanded:
                         wrapped_lines = self._wrap_text(display_text, font_small, content_width)
-                        num_lines = min(len(wrapped_lines), 10)
+                        # Calculate how many lines can fit on screen
+                        available_height = max_y - inner_y - (12 if author_text else 0)
+                        max_visible_lines = max(1, available_height // line_height)
+                        # Use text scroll offset for this expanded message
+                        text_scroll = self._state.message_text_scroll if is_expanded else 0
+                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        if is_expanded:
+                            self._state.message_text_scroll = text_scroll
+                        num_lines = min(len(wrapped_lines), max_visible_lines)
                     else:
                         wrapped_lines = None  # Don't wrap - just truncate
                         num_lines = 1
+                        text_scroll = 0
 
                     msg_height = (num_lines * line_height) + (msg_padding * 2) + (12 if author_text else 0)
 
@@ -1834,15 +1928,31 @@ class ScreenRenderer:
 
                     # Message text
                     if is_expanded and wrapped_lines:
-                        # Show multiple wrapped lines (up to 10 in full focus mode)
-                        for line_idx, line in enumerate(wrapped_lines[:10]):
+                        # Show multiple wrapped lines with scrolling support
+                        available_height = max_y - inner_y
+                        max_visible_lines = max(1, available_height // line_height)
+                        text_scroll = self._state.message_text_scroll
+                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        self._state.message_text_scroll = text_scroll
+                        
+                        # Show visible lines starting from scroll offset
+                        visible_lines = wrapped_lines[text_scroll:text_scroll + max_visible_lines]
+                        for line in visible_lines:
                             if inner_y > max_y:
                                 break
                             draw.text((12, inner_y), line, fill=text_color, font=font_small)
                             inner_y += line_height
-                        # Show continuation indicator if truncated
-                        if len(wrapped_lines) > 10:
-                            draw.text((200, inner_y - line_height), "...", fill=MUTED, font=font_small)
+                        
+                        # Show scroll indicators if there's more content
+                        if len(wrapped_lines) > max_visible_lines:
+                            if text_scroll > 0:
+                                draw.text((220, inner_y - max_visible_lines * line_height + 2), "▲", fill=MUTED, font=font_small)
+                            if text_scroll < max_scroll:
+                                draw.text((220, inner_y - line_height), "▼", fill=MUTED, font=font_small)
+                            # Show scroll position indicator
+                            scroll_info = f"{text_scroll + 1}-{min(text_scroll + max_visible_lines, len(wrapped_lines))}/{len(wrapped_lines)}"
+                            draw.text((140, max_y - 10), scroll_info, fill=MUTED, font=font_small)
                     else:
                         # Single line, truncated directly (no _wrap_text call - faster)
                         first_line = display_text[:28] + "..." if len(display_text) > 28 else display_text
@@ -1886,8 +1996,8 @@ class ScreenRenderer:
 
                 # Bottom status (y=218 to avoid dot overlap)
                 draw.text((10, 218), f"{scroll_idx + 1}/{len(all_messages)}", fill=MUTED, font=font_small)
-                hint = "▼ expand" if not self._state.message_expanded_id else "▼ collapse"
-                draw.text((120, 218), hint, fill=MUTED, font=font_small)
+                hint = "▼ expand" if not self._state.message_expanded_id else "▼ full view"
+                draw.text((100, 218), hint, fill=MUTED, font=font_small)
 
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
@@ -1910,7 +2020,18 @@ class ScreenRenderer:
 
     def _render_questions(self):
         """Render Questions screen - Lumen's questions and answers."""
-        self._render_filtered_messages("questions", ["question", "answer"], include_answers=True)
+        # Use the proper Q&A renderer instead of filtered messages
+        try:
+            self._render_qa_legacy()
+        except Exception as e:
+            import traceback
+            print(f"[Questions Screen] Error in _render_qa_legacy: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            # Fallback: show error message
+            try:
+                self._display.render_text("Q&A\n\nError\nrendering", (10, 10))
+            except Exception:
+                pass
 
     def _render_visitors(self):
         """Render Visitors screen - messages from agents and humans."""
@@ -1920,7 +2041,7 @@ class ScreenRenderer:
     def _render_filtered_messages(self, title: str, filter_types: list, include_answers: bool):
         """Render a filtered message screen."""
         try:
-            from ..messages import get_board
+            from ..messages import get_board, MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT, MESSAGE_TYPE_QUESTION
 
             if hasattr(self._display, '_create_canvas'):
                 image, draw = self._display._create_canvas((0, 0, 0))
@@ -1945,14 +2066,22 @@ class ScreenRenderer:
             board._load()
             all_messages = board._messages
 
+            # Filter by type - map string types to message type constants
+            type_map = {
+                "question": MESSAGE_TYPE_QUESTION,
+                "agent": MESSAGE_TYPE_AGENT,
+                "user": MESSAGE_TYPE_USER
+            }
+            filter_type_constants = [type_map.get(t, t) for t in filter_types]
+            
             # Filter by type
             # If include_answers, also include agent messages with responds_to (those are answers to questions)
             if include_answers:
                 filtered = [m for m in all_messages
-                           if m.msg_type in filter_types
-                           or (m.msg_type == "agent" and getattr(m, 'responds_to', None))]
+                           if m.msg_type in filter_type_constants
+                           or (m.msg_type == MESSAGE_TYPE_AGENT and getattr(m, 'responds_to', None))]
             else:
-                filtered = [m for m in all_messages if m.msg_type in filter_types]
+                filtered = [m for m in all_messages if m.msg_type in filter_type_constants]
             filtered = list(reversed(filtered))  # Newest first
 
             y_offset = 6
@@ -1960,27 +2089,129 @@ class ScreenRenderer:
             # Title with count
             draw.text((10, y_offset), f"{title} ({len(filtered)})", fill=CYAN, font=font_title)
             y_offset += 22
+            
+            # Determine mode for later use
+            mode = ScreenMode.QUESTIONS if "question" in filter_types else ScreenMode.VISITORS
 
             if not filtered:
                 draw.text((60, 100), f"no {title} yet", fill=MUTED, font=font)
             else:
                 # Show messages with scroll support
+                # Use message_scroll_index for visitors screen too
                 scroll_idx = getattr(self._state, 'message_scroll_index', 0)
                 scroll_idx = max(0, min(scroll_idx, len(filtered) - 1))
+                self._state.message_scroll_index = scroll_idx
+
+                # Check if any message is expanded
+                expanded_id = getattr(self._state, 'message_expanded_id', None)
+                has_expanded = expanded_id is not None
+                full_view = getattr(self._state, 'message_full_view', False)
+
+                # FULL VIEW MODE - entire screen for one message
+                if full_view and has_expanded:
+                    selected_msg = None
+                    for m in filtered:
+                        if m.message_id == expanded_id:
+                            selected_msg = m
+                            break
+
+                    if selected_msg:
+                        # Full screen message view
+                        # Author header
+                        author = getattr(selected_msg, 'author', selected_msg.msg_type)
+                        if selected_msg.msg_type == MESSAGE_TYPE_QUESTION:
+                            type_color = CYAN
+                        elif selected_msg.msg_type == MESSAGE_TYPE_AGENT:
+                            type_color = GREEN
+                        else:
+                            type_color = AMBER
+
+                        draw.text((10, y_offset), f"{author}", fill=type_color, font=font_title)
+
+                        # Timestamp
+                        if hasattr(selected_msg, 'timestamp'):
+                            from datetime import datetime
+                            if isinstance(selected_msg.timestamp, (int, float)):
+                                ts = datetime.fromtimestamp(selected_msg.timestamp).strftime("%H:%M")
+                            else:
+                                ts = str(selected_msg.timestamp)[11:16]
+                            draw.text((180, y_offset), ts, fill=MUTED, font=font_small)
+
+                        y_offset += 18
+                        draw.line([(10, y_offset), (230, y_offset)], fill=(60, 80, 100), width=1)
+                        y_offset += 6
+
+                        # Full text area - use almost entire screen
+                        content_width = 220
+                        max_y = 215
+                        wrapped_lines = self._wrap_text(selected_msg.text, font_small, content_width)
+
+                        # Calculate visible lines (more space in full view)
+                        available_height = max_y - y_offset
+                        max_visible_lines = max(1, available_height // 13)
+
+                        # Scroll handling
+                        text_scroll = getattr(self._state, 'message_text_scroll', 0)
+                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        self._state.message_text_scroll = text_scroll
+
+                        # Render text lines
+                        visible_lines_list = wrapped_lines[text_scroll:text_scroll + max_visible_lines]
+                        for line in visible_lines_list:
+                            draw.text((10, y_offset), line, fill=SOFT_WHITE, font=font_small)
+                            y_offset += 13
+
+                        # Scroll bar on right edge
+                        if len(wrapped_lines) > max_visible_lines:
+                            bar_top = 30
+                            bar_bottom = 210
+                            bar_height = bar_bottom - bar_top
+                            thumb_height = max(10, int(bar_height * max_visible_lines / len(wrapped_lines)))
+                            thumb_pos = bar_top + int((bar_height - thumb_height) * text_scroll / max_scroll) if max_scroll > 0 else bar_top
+
+                            # Track
+                            draw.rectangle([233, bar_top, 237, bar_bottom], fill=(40, 50, 60))
+                            # Thumb
+                            draw.rectangle([233, thumb_pos, 237, thumb_pos + thumb_height], fill=(100, 140, 180))
+
+                        # Bottom hint
+                        draw.text((10, 222), "▼ exit full view", fill=MUTED, font=font_small)
+                        scroll_pct = f"{int(100 * (text_scroll + max_visible_lines) / len(wrapped_lines))}%" if wrapped_lines else "100%"
+                        draw.text((180, 222), scroll_pct, fill=MUTED, font=font_small)
+
+                        # Update display and return early
+                        self._draw_screen_indicator(draw, mode)
+                        if hasattr(self._display, '_image'):
+                            self._display._image = image
+                        if hasattr(self._display, '_show'):
+                            self._display._show()
+                        elif hasattr(self._display, 'render_image'):
+                            self._display.render_image(image)
+                        return
 
                 visible_count = 4  # Messages visible at once
                 start_idx = max(0, scroll_idx)
 
+                # Show fewer messages when one is expanded
+                if has_expanded:
+                    visible_count = 1
+                    start_idx = scroll_idx
+                else:
+                    visible_count = 4
+                    start_idx = max(0, scroll_idx)
+
                 for i, msg in enumerate(filtered[start_idx:start_idx + visible_count]):
                     is_selected = (i == 0)  # First visible is selected
+                    is_expanded = (expanded_id == msg.message_id)
 
                     # Type indicator color
-                    if msg.msg_type == "question":
+                    if msg.msg_type == MESSAGE_TYPE_QUESTION:
                         type_color = CYAN
-                    elif msg.msg_type == "agent" and getattr(msg, 'responds_to', None):
+                    elif msg.msg_type == MESSAGE_TYPE_AGENT and getattr(msg, 'responds_to', None):
                         # Agent message that answers a question
                         type_color = AMBER
-                    elif msg.msg_type in ["agent", "user"]:
+                    elif msg.msg_type in [MESSAGE_TYPE_AGENT, MESSAGE_TYPE_USER]:
                         type_color = GREEN
                     else:
                         type_color = MUTED
@@ -1988,26 +2219,25 @@ class ScreenRenderer:
                     # Author/type
                     author = getattr(msg, 'author', msg.msg_type)
 
-                    if is_selected:
-                        # EXPANDED VIEW for selected message
-                        # Word wrap the full text
-                        def wrap_text(text, max_chars=35):
-                            words = text.split()
-                            lines = []
-                            current_line = ""
-                            for word in words:
-                                if len(current_line) + len(word) + 1 <= max_chars:
-                                    current_line = f"{current_line} {word}".strip()
-                                else:
-                                    if current_line:
-                                        lines.append(current_line)
-                                    current_line = word[:max_chars]  # Truncate very long words
-                            if current_line:
-                                lines.append(current_line)
-                            return lines[:6]  # Max 6 lines
-
-                        wrapped = wrap_text(msg.text)
-                        box_height = 18 + len(wrapped) * 12 + 8
+                    if is_expanded:
+                        # EXPANDED VIEW for selected message - show full text with scrolling
+                        max_y = 210
+                        content_width = 200
+                        wrapped_lines = self._wrap_text(msg.text, font_small, content_width)
+                        
+                        # Calculate how many lines can fit
+                        available_height = max_y - y_offset - 20  # Leave room for author/timestamp
+                        max_visible_lines = max(1, available_height // 12)
+                        
+                        # Use text scroll offset
+                        text_scroll = getattr(self._state, 'message_text_scroll', 0)
+                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        self._state.message_text_scroll = text_scroll
+                        
+                        # Calculate box height
+                        visible_lines = min(len(wrapped_lines), max_visible_lines)
+                        box_height = 18 + visible_lines * 12 + 8
 
                         # Background
                         draw.rectangle([5, y_offset - 2, 235, y_offset + box_height], fill=(35, 55, 85))
@@ -2026,12 +2256,34 @@ class ScreenRenderer:
 
                         y_offset += 14
 
-                        # Full wrapped text
-                        for line in wrapped:
+                        # Show visible lines with scroll
+                        visible_lines_list = wrapped_lines[text_scroll:text_scroll + max_visible_lines]
+                        for line in visible_lines_list:
+                            if y_offset > max_y - 10:
+                                break
                             draw.text((10, y_offset), line, fill=SOFT_WHITE, font=font_small)
                             y_offset += 12
+                        
+                        # Show scroll indicators if there's more content
+                        if len(wrapped_lines) > max_visible_lines:
+                            if text_scroll > 0:
+                                draw.text((220, y_offset - max_visible_lines * 12 + 2), "▲", fill=MUTED, font=font_small)
+                            if text_scroll < max_scroll:
+                                draw.text((220, y_offset - 12), "▼", fill=MUTED, font=font_small)
+                            # Show scroll position
+                            scroll_info = f"{text_scroll + 1}-{min(text_scroll + max_visible_lines, len(wrapped_lines))}/{len(wrapped_lines)}"
+                            draw.text((140, max_y - 10), scroll_info, fill=MUTED, font=font_small)
 
                         y_offset += 8
+                    elif is_selected:
+                        # SELECTED but not expanded - show preview
+                        draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
+                        y_offset += 12
+
+                        # Truncated text preview
+                        text = msg.text[:50] + "..." if len(msg.text) > 50 else msg.text
+                        draw.text((10, y_offset), text, fill=MUTED, font=font_small)
+                        y_offset += 18
                     else:
                         # COMPACT VIEW for non-selected messages
                         draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
@@ -2045,28 +2297,54 @@ class ScreenRenderer:
                 # Scroll indicator
                 if len(filtered) > visible_count:
                     draw.text((200, 220), f"{scroll_idx + 1}/{len(filtered)}", fill=MUTED, font=font_small)
+                
+                # Expansion hint - show appropriate action
+                expanded_id = getattr(self._state, 'message_expanded_id', None)
+                if not expanded_id:
+                    hint = "▼ expand"
+                else:
+                    hint = "▼ full view"
+                draw.text((100, 220), hint, fill=MUTED, font=font_small)
 
             # Screen indicator
-            mode = ScreenMode.QUESTIONS if "question" in filter_types else ScreenMode.VISITORS
             self._draw_screen_indicator(draw, mode)
 
-            self._display.render_image(image)
+            # Always update display - ensure image is set and shown
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+            elif hasattr(self._display, 'render_image'):
+                self._display.render_image(image)
+            else:
+                print(f"[ScreenRenderer] Display has no _show or render_image method for {title}", file=sys.stderr, flush=True)
 
         except Exception as e:
             import traceback
             print(f"[ScreenRenderer] Error rendering {title}: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
-            self._display.render_text(f"{title.upper()}\n\nError", (10, 10))
+            try:
+                self._display.render_text(f"{title.upper()}\n\nError", (10, 10))
+            except Exception as e2:
+                print(f"[ScreenRenderer] Even error fallback failed for {title}: {e2}", file=sys.stderr, flush=True)
+                try:
+                    self._display.show_default()
+                except Exception:
+                    pass
 
     def _render_qa_legacy(self):
         """Render Q&A screen - Lumen's questions and agent answers with full threading (legacy)."""
         try:
             from ..messages import get_board, MESSAGE_TYPE_QUESTION, MESSAGE_TYPE_AGENT
 
-            if hasattr(self._display, '_create_canvas'):
-                image, draw = self._display._create_canvas((0, 0, 0))
-            else:
+            if not hasattr(self._display, '_create_canvas'):
                 self._display.render_text("Q&A\n\nNo display", (10, 10))
+                return
+            
+            image, draw = self._display._create_canvas((0, 0, 0))
+            if image is None or draw is None:
+                print("[QA Screen] Failed to create canvas", file=sys.stderr, flush=True)
+                self._display.render_text("Q&A\n\nCanvas error", (10, 10))
                 return
 
             # Colors
@@ -2296,16 +2574,31 @@ class ScreenRenderer:
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.QUESTIONS)
 
+            # Always update display - ensure image is set and shown
             if hasattr(self._display, '_image'):
                 self._display._image = image
+            else:
+                print("[QA Screen] Display has no _image attribute", file=sys.stderr, flush=True)
+            
             if hasattr(self._display, '_show'):
                 self._display._show()
+            elif hasattr(self._display, 'render_image'):
+                self._display.render_image(image)
+            else:
+                print("[QA Screen] Display has no _show or render_image method", file=sys.stderr, flush=True)
 
         except Exception as e:
             import traceback
             print(f"[QA Screen] Error: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
-            self._display.render_text("Q&A\n\nError", (10, 10))
+            try:
+                self._display.render_text("Q&A\n\nError", (10, 10))
+            except Exception as e2:
+                print(f"[QA Screen] Even error fallback failed: {e2}", file=sys.stderr, flush=True)
+                try:
+                    self._display.show_default()
+                except Exception:
+                    pass
 
     def qa_scroll_up(self):
         """Scroll up in Q&A screen - scroll text when expanded/full, change Q&A when collapsed."""
@@ -2373,17 +2666,34 @@ class ScreenRenderer:
         self._state.qa_text_scroll = 0  # Reset text scroll when changing focus
 
     def message_scroll_up(self):
-        """Scroll up in message board."""
-        if self._state.mode != ScreenMode.MESSAGES:
+        """Scroll up in message board - scroll text when expanded, change message when collapsed."""
+        if self._state.mode not in (ScreenMode.MESSAGES, ScreenMode.VISITORS):
             return
         
         try:
-            from ..messages import get_recent_messages
-            messages = get_recent_messages(50)
+            # Get messages based on mode
+            if self._state.mode == ScreenMode.MESSAGES:
+                from ..messages import get_recent_messages
+                messages = get_recent_messages(50)
+            else:  # VISITORS
+                from ..messages import get_board, MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT
+                board = get_board()
+                board._load()
+                all_messages = board._messages
+                messages = [m for m in all_messages if m.msg_type in [MESSAGE_TYPE_AGENT, MESSAGE_TYPE_USER]]
+                messages = list(reversed(messages))  # Newest first
+            
             if not messages:
                 return
             
-            # Clamp current index to valid range first
+            # If a message is expanded, scroll within its text
+            if self._state.message_expanded_id is not None:
+                if self._state.message_text_scroll > 0:
+                    self._state.message_text_scroll -= 1
+                    self._state.last_user_action_time = time.time()
+                    return
+            
+            # Otherwise, change selected message
             current_idx = self._state.message_scroll_index
             if current_idx < 0:
                 current_idx = 0
@@ -2395,23 +2705,50 @@ class ScreenRenderer:
             self._state.message_scroll_index = new_idx
             self._state.last_user_action_time = time.time()
             
-            # Clear expansion when scrolling (new message selected)
+            # Clear expansion and text scroll when scrolling (new message selected)
             self._state.message_expanded_id = None
+            self._state.message_text_scroll = 0
         except Exception:
             pass
     
     def message_scroll_down(self):
-        """Scroll down in message board."""
-        if self._state.mode != ScreenMode.MESSAGES:
+        """Scroll down in message board - scroll text when expanded, change message when collapsed."""
+        if self._state.mode not in (ScreenMode.MESSAGES, ScreenMode.VISITORS):
             return
         
         try:
-            from ..messages import get_recent_messages
-            messages = get_recent_messages(50)
+            # Get messages based on mode
+            if self._state.mode == ScreenMode.MESSAGES:
+                from ..messages import get_recent_messages
+                messages = get_recent_messages(50)
+            else:  # VISITORS
+                from ..messages import get_board, MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT
+                board = get_board()
+                board._load()
+                all_messages = board._messages
+                messages = [m for m in all_messages if m.msg_type in [MESSAGE_TYPE_AGENT, MESSAGE_TYPE_USER]]
+                messages = list(reversed(messages))  # Newest first
+            
             if not messages:
                 return
             
-            # Clamp current index to valid range first
+            # If a message is expanded, scroll within its text
+            if self._state.message_expanded_id is not None:
+                # Calculate max scroll (will be clamped in render, but check here too)
+                scroll_idx = self._state.message_scroll_index
+                if scroll_idx < len(messages):
+                    selected_msg = messages[scroll_idx]
+                    display_text = selected_msg.text
+                    wrapped_lines = self._wrap_text(display_text, self._get_fonts()['small'], 200)
+                    available_height = 210 - 30  # Approximate available space
+                    max_visible_lines = max(1, available_height // 14)
+                    max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
+                    if self._state.message_text_scroll < max_scroll:
+                        self._state.message_text_scroll += 1
+                        self._state.last_user_action_time = time.time()
+                        return
+            
+            # Otherwise, change selected message
             current_idx = self._state.message_scroll_index
             if current_idx < 0:
                 current_idx = 0
@@ -2424,36 +2761,58 @@ class ScreenRenderer:
             self._state.message_scroll_index = new_idx
             self._state.last_user_action_time = time.time()
             
-            # Clear expansion when scrolling (new message selected)
+            # Clear expansion and text scroll when scrolling (new message selected)
             self._state.message_expanded_id = None
+            self._state.message_text_scroll = 0
         except Exception:
             pass
     
     def message_toggle_expand(self):
-        """Toggle expansion of currently selected message."""
-        if self._state.mode != ScreenMode.MESSAGES:
+        """Toggle expansion of currently selected message.
+
+        Cycles through: collapsed → expanded → full view → collapsed
+        """
+        if self._state.mode not in (ScreenMode.MESSAGES, ScreenMode.VISITORS):
             return
-        
+
         try:
-            from ..messages import get_recent_messages
-            messages = get_recent_messages(50)
+            if self._state.mode == ScreenMode.MESSAGES:
+                from ..messages import get_recent_messages
+                messages = get_recent_messages(50)
+            else:  # VISITORS
+                from ..messages import get_board, MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT
+                board = get_board()
+                board._load()
+                all_messages = board._messages
+                # Filter to agent and user messages
+                messages = [m for m in all_messages if m.msg_type in [MESSAGE_TYPE_AGENT, MESSAGE_TYPE_USER]]
+                messages = list(reversed(messages))  # Newest first
+
             if not messages:
                 return
-            
+
             scroll_idx = self._state.message_scroll_index
             if scroll_idx < 0 or scroll_idx >= len(messages):
                 return
-            
+
             selected_msg = messages[scroll_idx]
-            
-            # Toggle expansion
-            if self._state.message_expanded_id == selected_msg.message_id:
-                # Collapse
+
+            # Cycle through states: collapsed → expanded → full view → collapsed
+            if self._state.message_full_view:
+                # Exit full view → collapse everything
+                self._state.message_full_view = False
                 self._state.message_expanded_id = None
+                self._state.message_text_scroll = 0
+            elif self._state.message_expanded_id == selected_msg.message_id:
+                # Already expanded → enter full view
+                self._state.message_full_view = True
+                self._state.message_text_scroll = 0
             else:
-                # Expand
+                # Not expanded → expand
                 self._state.message_expanded_id = selected_msg.message_id
-            
+                self._state.message_text_scroll = 0
+                self._state.message_full_view = False
+
             self._state.last_user_action_time = time.time()
         except Exception:
             pass
