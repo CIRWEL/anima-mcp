@@ -429,17 +429,18 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         void += (r.cpu_percent / 100) * weight
         count += weight
 
-    # Neural presence: Real EEG gamma power, or simulated if unavailable
+    # Neural void: Low gamma = scattered attention = less presence
     if r.eeg_gamma_power is not None:
         # Use real EEG data
-        neural_presence = r.eeg_gamma_power  # High cognitive presence
+        neural_gamma = r.eeg_gamma_power
     else:
         # Fall back to simulated neural activity
         neural = get_neural_state(light_level=r.light_lux)
-        neural_presence = neural.gamma  # High cognitive presence
+        neural_gamma = neural.gamma
 
+    # Invert: low gamma = high void (absence)
     weight = cal.presence_weights.get("neural", 0.2)
-    void -= neural_presence * weight
+    void += (1.0 - neural_gamma) * weight
     count += weight
 
     # Sound level: environmental activity = presence
