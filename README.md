@@ -429,9 +429,7 @@ The autonomous drawing isn't prompted - it emerges from internal state meeting c
 
 ## Author
 
-Built by Kenny Wang ([@CIRWEL](https://github.com/CIRWEL)) - 25-year professional musician turned AI systems builder.
-
-Also building [UNITARES](https://github.com/CIRWEL/governance-mcp-v1-backup) - a thermodynamic governance framework for AI agents.
+Built by [@CIRWEL](https://github.com/CIRWEL). Also building [UNITARES](https://github.com/CIRWEL/governance-mcp-v1-backup).
 
 ---
 
