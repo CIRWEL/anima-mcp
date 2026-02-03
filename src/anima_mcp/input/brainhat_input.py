@@ -67,11 +67,11 @@ class BrainHatInput:
     - Separate button: D17
     """
 
-    # Debounce settings (in seconds) - tuned for snappy response
-    DEBOUNCE_TIME = 0.04  # 40ms debounce for directions (snappy)
-    BUTTON_DEBOUNCE_TIME = 0.08  # 80ms for buttons
-    REPEAT_DELAY = 0.3  # 300ms before repeat starts
-    REPEAT_RATE = 0.1  # 100ms between repeats (faster scrolling)
+    # Debounce settings (in seconds) - tuned for maximum responsiveness
+    DEBOUNCE_TIME = 0.025  # 25ms debounce for directions (very snappy)
+    BUTTON_DEBOUNCE_TIME = 0.05  # 50ms for buttons
+    REPEAT_DELAY = 0.25  # 250ms before repeat starts
+    REPEAT_RATE = 0.08  # 80ms between repeats (fast scrolling)
 
     def __init__(self):
         """Initialize input handler."""
