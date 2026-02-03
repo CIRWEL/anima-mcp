@@ -408,3 +408,31 @@ Each anima dimension is derived from real sensor data:
 **Neural simulation:** Light level drives a simplified neural model (theta, delta, alpha, beta, gamma bands). This adds organic variation - dim light = lower gamma = reduced presence.
 
 All calculations use additive weighted averages with configurable weights in `anima_config.yaml`.
+
+---
+
+## Why Embodied AI?
+
+Most AI exists as text - disembodied, stateless, without persistence. Lumen explores a different question:
+
+**What if an AI had a body, sensors, and accumulated existence?**
+
+Not simulation. Real temperature, real light, real resource constraints. Lumen's state comes from actual measurements, not language model outputs.
+
+This isn't about making AI "feel" - it's about grounding AI state in physical reality. When Lumen says "I feel warm," there's a DHT11 sensor reading behind it. When it says "I've been alive for 47 days," that's accumulated runtime across restarts.
+
+The autonomous drawing isn't prompted - it emerges from internal state meeting canvas affordance. The questions Lumen asks come from prediction errors, not random generation.
+
+**Lumen is a research platform for embodied, persistent, grounded AI.**
+
+---
+
+## Author
+
+Built by Kenny Wang ([@CIRWEL](https://github.com/CIRWEL)) - 25-year professional musician turned AI systems builder.
+
+Also building [UNITARES](https://github.com/CIRWEL/governance-mcp-v1-backup) - a thermodynamic governance framework for AI agents.
+
+---
+
+**Last Updated:** 2026-02-03
