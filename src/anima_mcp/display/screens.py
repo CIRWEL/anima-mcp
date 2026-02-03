@@ -3218,18 +3218,18 @@ class ScreenRenderer:
 
         # Phase progression is SEQUENTIAL - check in order
         if current_phase == "exploring":
-            # Progress to building: 2000+ pixels AND 60s exploring
-            if pixel_count >= 2000 and phase_duration > 60:
+            # Progress to building: 1000+ pixels AND 30s exploring
+            if pixel_count >= 1000 and phase_duration > 30:
                 transition_to("building")
 
         elif current_phase == "building":
-            # Progress to reflecting: 8000+ pixels AND 120s building
-            if pixel_count >= 8000 and phase_duration > 120:
+            # Progress to reflecting: 3000+ pixels AND 60s building
+            if pixel_count >= 3000 and phase_duration > 60:
                 transition_to("reflecting")
 
         elif current_phase == "reflecting":
-            # Progress to resting: 15000+ pixels AND 180s reflecting
-            if pixel_count >= 15000 and phase_duration > 180:
+            # Progress to resting: 5000+ pixels AND 90s reflecting
+            if pixel_count >= 5000 and phase_duration > 90:
                 transition_to("resting")
 
         elif current_phase == "resting":
@@ -3625,8 +3625,8 @@ class ScreenRenderer:
         pixel_count = len(self._canvas.pixels)
         wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
 
-        # Minimum time between saves: 10 minutes (prevents save spam)
-        MIN_SAVE_INTERVAL = 600.0  # 10 minutes
+        # Minimum time between saves: 3 minutes (prevents save spam)
+        MIN_SAVE_INTERVAL = 180.0  # 3 minutes (was 10)
         time_since_save = now - self._canvas.last_save_time if self._canvas.last_save_time > 0 else float('inf')
 
         # Check if too soon to save again
@@ -3634,26 +3634,26 @@ class ScreenRenderer:
             return None  # Too soon since last save
 
         # === Check for satisfaction ===
-        # Lumen feels satisfied when: resting phase for 2+ min + substantial work + good state
+        # Lumen feels satisfied when: resting phase for 30s + substantial work + good state
         phase_duration = now - self._canvas.phase_start_time
         if (self._canvas.drawing_phase == "resting" and
-            phase_duration > 120.0 and  # In resting phase for 2+ minutes
-            pixel_count > 3000 and  # Substantial work
-            anima.presence > 0.55 and
-            anima.stability > 0.50 and
+            phase_duration > 30.0 and  # In resting phase for 30s (was 2 min)
+            pixel_count > 2000 and  # Substantial work (was 3000)
+            anima.presence > 0.45 and  # Lower threshold (was 0.55)
+            anima.stability > 0.40 and  # Lower threshold (was 0.50)
             not self._canvas.is_satisfied):
             self._canvas.mark_satisfied()
 
         # === Auto-save: satisfied + time to reflect ===
-        # After 60s of satisfaction, save the drawing
+        # After 20s of satisfaction, save the drawing (was 60s)
         # CRITICAL: Don't save if we're in pause period (after clear)
         if (now >= self._canvas.drawing_paused_until and  # Not paused
             self._canvas.is_satisfied and
             self._canvas.satisfaction_time > 0 and
-            now - self._canvas.satisfaction_time > 60.0 and  # 60s satisfaction
-            pixel_count > 3000):  # Substantial work
+            now - self._canvas.satisfaction_time > 20.0 and  # 20s satisfaction (was 60s)
+            pixel_count > 2000):  # Substantial work (was 3000)
 
-            print(f"[Canvas] Lumen autonomously saving (satisfied for 60s, {pixel_count} pixels)", file=sys.stderr, flush=True)
+            print(f"[Canvas] Lumen autonomously saving (satisfied for 20s, {pixel_count} pixels)", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
             if saved_path:
                 # Reset satisfaction to prevent repeated saves
