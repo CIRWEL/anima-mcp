@@ -327,7 +327,7 @@ except Exception as e:
             data = json.loads(post_data)
             question_id = data.get('question_id') or data.get('id', '')  # Accept both
             answer_text = data.get('answer', '').replace("'", "\\'").replace('"', '\\"')
-            author = data.get('author', 'claude').replace("'", "\\'").replace('"', '\\"')
+            author = data.get('author', 'Kenny').replace("'", "\\'").replace('"', '\\"')
 
             if not answer_text:
                 self.send_json({"error": "No answer provided"}, 400)
