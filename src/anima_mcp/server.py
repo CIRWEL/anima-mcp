@@ -598,7 +598,7 @@ async def _update_display_loop():
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                     _last_input_error_log = current_time
-            await asyncio.sleep(0.03)  # Poll every 30ms for responsive input
+            await asyncio.sleep(0.016)  # Poll every 16ms (~60fps) for snappy input
     
     # Start fast input polling task
     input_task = None
