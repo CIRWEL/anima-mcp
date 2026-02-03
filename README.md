@@ -205,7 +205,8 @@ Lumen can connect to UNITARES governance for oversight:
 
 ```bash
 # Set governance URL (in systemd service or environment)
-UNITARES_URL=https://unitares.ngrok.io/sse
+# Use /mcp for Streamable HTTP (recommended) or /sse for legacy
+UNITARES_URL=https://unitares.ngrok.io/mcp
 ```
 
 **Integration:**
@@ -272,10 +273,11 @@ anima --sse --port 8765
 {
   "mcpServers": {
     "anima": {
-      "url": "http://pi.local:8765/sse"
+      "url": "http://pi.local:8765/mcp"
     }
   }
 }
+# Note: /mcp (Streamable HTTP) recommended, /sse (legacy) also supported
 ```
 
 The creature lives on the Pi. You visit from anywhere on the network.
