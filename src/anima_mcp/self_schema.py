@@ -151,21 +151,23 @@ def extract_self_schema(
     identity=None,
     anima=None,
     readings=None,
-    preferences=None,  # Optional PreferenceSystem for preference nodes
+    growth_system=None,  # GrowthSystem for learned preferences
     include_preferences: bool = True,  # Whether to include preference nodes
+    preferences=None,  # Deprecated, ignored - use growth_system
 ) -> SelfSchema:
     """
     Extract G_t from Lumen's current state.
 
     Base PoC: 8 nodes (1 identity + 4 anima + 3 sensors), ~6 edges.
-    Enhanced: +N preference nodes (if include_preferences=True and preferences available).
+    Enhanced: +N preference nodes (if include_preferences=True and growth_system available).
 
     Args:
         identity: CreatureIdentity from identity store
         anima: AnimaState with warmth, clarity, stability, presence
         readings: SensorReadings with light, temp, humidity
-        preferences: Optional PreferenceSystem for learned preferences
+        growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
+        preferences: Deprecated, ignored
 
     Returns:
         SelfSchema (G_t) at current time
@@ -251,27 +253,30 @@ def extract_self_schema(
         ))
 
     # === PREFERENCE NODES (ring 3, optional) ===
-    if include_preferences and preferences:
+    # Use GrowthSystem for learned preferences (456K+ observations in DB)
+    pref_summary = None
+    if include_preferences and growth_system:
         try:
-            pref_summary = preferences.get_preference_summary()
-            for dim, pref_data in pref_summary.items():
-                # Only include confident preferences (confidence > 0.2)
-                if pref_data["confidence"] > 0.2 and dim in ["warmth", "clarity", "stability", "presence"]:
-                    # Use valence as node value (how much Lumen values this dimension)
-                    nodes.append(SchemaNode(
-                        node_id=f"pref_{dim}",
-                        node_type="preference",
-                        label=f"P{dim[0].upper()}",  # PW, PC, PS, PP
-                        value=max(0.0, min(1.0, (pref_data["valence"] + 1.0) / 2.0)),  # Normalize -1..1 to 0..1
-                        raw_value={
-                            "valence": pref_data["valence"],
-                            "optimal_range": pref_data["optimal_range"],
-                            "confidence": pref_data["confidence"],
-                        },
-                    ))
+            pref_summary = growth_system.get_dimension_preferences()
         except Exception:
-            # Non-fatal - preferences are optional enhancement
             pass
+
+    if pref_summary:
+        for dim, pref_data in pref_summary.items():
+            # Only include confident preferences (confidence > 0.2)
+            if pref_data.get("confidence", 0) > 0.2 and dim in ["warmth", "clarity", "stability", "presence"]:
+                # Use valence as node value (how much Lumen values this dimension)
+                nodes.append(SchemaNode(
+                    node_id=f"pref_{dim}",
+                    node_type="preference",
+                    label=f"P{dim[0].upper()}",  # PW, PC, PS, PP
+                    value=max(0.0, min(1.0, (pref_data.get("valence", 0) + 1.0) / 2.0)),  # Normalize -1..1 to 0..1
+                    raw_value={
+                        "valence": pref_data.get("valence", 0),
+                        "optimal_range": pref_data.get("optimal_range", (0.3, 0.7)),
+                        "confidence": pref_data.get("confidence", 0),
+                    },
+                ))
 
     # === EDGES (sensor → anima influences) ===
     for (source_id, target_id), weight in SENSOR_ANIMA_WEIGHTS.items():
@@ -284,26 +289,34 @@ def extract_self_schema(
             ))
 
     # === EDGES (preference → anima satisfaction) ===
-    if include_preferences and preferences and anima:
-        try:
-            pref_summary = preferences.get_preference_summary()
-            for dim in ["warmth", "clarity", "stability", "presence"]:
-                if dim in pref_summary:
-                    pref_data = pref_summary[dim]
-                    if pref_data["confidence"] > 0.2:
-                        # Edge weight = satisfaction level (how well current anima satisfies preference)
+    if include_preferences and pref_summary and anima:
+        for dim in ["warmth", "clarity", "stability", "presence"]:
+            if dim in pref_summary:
+                pref_data = pref_summary[dim]
+                if pref_data.get("confidence", 0) > 0.2:
+                    try:
                         anima_value = getattr(anima, dim, 0.5)
-                        satisfaction = preferences._preferences[dim].current_satisfaction(anima_value)
+                        # Calculate satisfaction: how well current anima matches preference
+                        if preferences and hasattr(preferences, '_preferences') and dim in preferences._preferences:
+                            satisfaction = preferences._preferences[dim].current_satisfaction(anima_value)
+                        else:
+                            # Simple satisfaction for growth_system: closer to 0.5 optimal range = higher satisfaction
+                            opt_range = pref_data.get("optimal_range", (0.3, 0.7))
+                            if opt_range[0] <= anima_value <= opt_range[1]:
+                                satisfaction = 1.0
+                            elif anima_value < opt_range[0]:
+                                satisfaction = max(0.0, 1.0 - (opt_range[0] - anima_value) * 2)
+                            else:
+                                satisfaction = max(0.0, 1.0 - (anima_value - opt_range[1]) * 2)
                         # Sign: positive if preference valence > 0 (Lumen values this), negative if < 0
-                        sign = 1.0 if pref_data["valence"] > 0 else -1.0
+                        sign = 1.0 if pref_data.get("valence", 0) > 0 else -1.0
                         edges.append(SchemaEdge(
                             source_id=f"pref_{dim}",
                             target_id=f"anima_{dim}",
                             weight=satisfaction * sign,
                         ))
-        except Exception:
-            # Non-fatal - preference edges are optional
-            pass
+                    except Exception:
+                        pass  # Non-fatal
 
     return SelfSchema(
         timestamp=now,
@@ -322,9 +335,10 @@ def get_current_schema(
     identity=None,
     anima=None,
     readings=None,
-    preferences=None,
+    growth_system=None,
     include_preferences: bool = True,
     force_refresh: bool = False,
+    preferences=None,  # Deprecated, ignored
 ) -> SelfSchema:
     """
     Get current G_t with caching.
@@ -333,9 +347,10 @@ def get_current_schema(
         identity: CreatureIdentity (optional, will try to get from store)
         anima: AnimaState (optional)
         readings: SensorReadings (optional)
-        preferences: PreferenceSystem (optional, for preference nodes)
+        growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
         force_refresh: Bypass cache
+        preferences: Deprecated, ignored
 
     Returns:
         Cached or freshly extracted SelfSchema
@@ -356,7 +371,7 @@ def get_current_schema(
         identity=identity,
         anima=anima,
         readings=readings,
-        preferences=preferences,
+        growth_system=growth_system,
         include_preferences=include_preferences,
     )
 

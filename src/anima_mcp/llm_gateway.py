@@ -3,8 +3,9 @@ LLM Gateway - Generative inner voice for Lumen.
 
 Multi-provider support with automatic failover:
 1. ngrok AI Gateway (routes to configured providers)
-2. Hugging Face Inference API (Phi-3, Phi-4)
-3. Direct Groq API (Llama models, free tier)
+2. Together.ai (Llama, Mixtral, fast inference)
+3. Hugging Face Inference API (Phi-3, Phi-4)
+4. Direct Groq API (Llama models, free tier)
 
 Lumen can now genuinely reflect, wonder, and express desires through LLM generation.
 """
@@ -34,18 +35,21 @@ class LLMGateway:
 
     Supports:
     - ngrok AI Gateway (multi-provider routing with failover)
+    - Together.ai (fast inference, many models)
     - Hugging Face Inference API (Phi models)
     - Direct Groq API (Llama, free tier)
     """
 
     # Provider endpoints
     NGROK_GATEWAY_URL = "https://ai-gateway.ngrok.app"
+    TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
     GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
     HF_INFERENCE_URL = "https://router.huggingface.co/hf"  # Updated from deprecated api-inference
 
     # Models by provider
     MODELS = {
         "groq": "llama-3.1-8b-instant",  # Fast, free tier
+        "together": "meta-llama/Llama-3.2-3B-Instruct-Turbo",  # Fast, small
         "phi": "microsoft/Phi-3.5-mini-instruct",  # Small, efficient
         "phi4": "microsoft/phi-4",  # Newest Phi
     }
@@ -56,11 +60,13 @@ class LLMGateway:
 
         Checks for API keys:
         - NGROK_API_KEY: ngrok AI Gateway (preferred - multi-provider)
+        - TOGETHER_API_KEY: Together.ai (fast inference)
         - HF_TOKEN: Hugging Face Inference API (for Phi models)
         - GROQ_API_KEY: Direct Groq API (fallback)
         """
         self.ngrok_key = os.environ.get("NGROK_API_KEY", "")
         self.ngrok_url = os.environ.get("NGROK_GATEWAY_URL", self.NGROK_GATEWAY_URL)
+        self.together_key = os.environ.get("TOGETHER_API_KEY", "")
         self.hf_token = os.environ.get("HF_TOKEN", "")
         self.groq_key = os.environ.get("GROQ_API_KEY", "")
 
@@ -70,6 +76,10 @@ class LLMGateway:
         if self.ngrok_key:
             self._providers.append(("ngrok", self.ngrok_url, self.ngrok_key))
             print("[LLMGateway] ngrok AI Gateway configured (multi-provider routing)", flush=True)
+
+        if self.together_key:
+            self._providers.append(("together", self.TOGETHER_API_URL, self.together_key))
+            print("[LLMGateway] Together.ai configured (Llama models)", flush=True)
 
         if self.hf_token:
             self._providers.append(("huggingface", self.HF_INFERENCE_URL, self.hf_token))
@@ -81,7 +91,7 @@ class LLMGateway:
 
         if not self._providers:
             print("[LLMGateway] No API keys found - generative reflection disabled", flush=True)
-            print("[LLMGateway] Set one of: NGROK_API_KEY, HF_TOKEN, or GROQ_API_KEY", flush=True)
+            print("[LLMGateway] Set one of: NGROK_API_KEY, TOGETHER_API_KEY, HF_TOKEN, or GROQ_API_KEY", flush=True)
 
     @property
     def enabled(self) -> bool:
@@ -146,11 +156,13 @@ class LLMGateway:
     async def _call_openai_compatible(
         self, client, url: str, api_key: str, system: str, prompt: str, provider: str
     ) -> Optional[str]:
-        """Call OpenAI-compatible API (ngrok gateway, Groq)."""
+        """Call OpenAI-compatible API (ngrok gateway, Together.ai, Groq)."""
         # Choose model based on provider
         if provider == "ngrok":
             # ngrok gateway routes to configured providers - try Phi first, then Llama
             model = self.MODELS.get("phi", self.MODELS["groq"])
+        elif provider == "together":
+            model = self.MODELS["together"]
         else:
             model = self.MODELS["groq"]
 

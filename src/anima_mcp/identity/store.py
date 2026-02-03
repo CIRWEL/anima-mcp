@@ -121,32 +121,58 @@ class IdentityStore:
         conn.commit()
 
     def _recalculate_stats(self, conn: sqlite3.Connection, creature_id: str) -> tuple[int, float]:
-        """Recalculate stats from events table (Source of Truth)."""
-        # Count wakes
-        count_row = conn.execute("SELECT COUNT(*) FROM events WHERE event_type = 'wake'").fetchone()
-        total_awakenings = count_row[0]
+        """Recalculate stats from events table (Source of Truth).
+
+        Awakenings are counted as:
+        - The first wake ever (birth), OR
+        - Wakes that follow a sleep within 5 minutes (graceful restart)
+
+        This prevents crash-restart loops from inflating the awakening count.
+        """
+        # Count REAL awakenings: first wake + wakes that follow a sleep
+        # A "real" awakening is when Lumen gracefully slept and then woke up
+        real_awakenings = conn.execute("""
+            SELECT COUNT(*) FROM events w
+            WHERE w.event_type = 'wake'
+            AND (
+                -- First wake ever (birth) - no previous wake exists
+                NOT EXISTS (
+                    SELECT 1 FROM events prev
+                    WHERE prev.event_type = 'wake'
+                    AND prev.timestamp < w.timestamp
+                )
+                OR
+                -- Wake following a sleep within 5 minutes (graceful cycle)
+                EXISTS (
+                    SELECT 1 FROM events s
+                    WHERE s.event_type = 'sleep'
+                    AND s.timestamp < w.timestamp
+                    AND (julianday(w.timestamp) - julianday(s.timestamp)) * 86400 < 300
+                )
+            )
+        """).fetchone()[0]
 
         # Sum alive time
         # json_extract returns NULL if key missing or data null. SUM ignores NULL.
         sum_row = conn.execute("SELECT SUM(json_extract(data, '$.session_seconds')) FROM events WHERE event_type = 'sleep'").fetchone()
         total_alive_seconds = sum_row[0] if sum_row[0] is not None else 0.0
 
-        return total_awakenings, total_alive_seconds
+        return real_awakenings, total_alive_seconds
 
-    def wake(self, creature_id: str, dedupe_window_seconds: int = 60) -> CreatureIdentity:
+    def wake(self, creature_id: str, dedupe_window_seconds: int = 300) -> CreatureIdentity:
         """
         Wake up the creature. Creates identity if first awakening.
         Recalculates stats from events table to ensure consistency.
 
-        Deduplicates wake events within dedupe_window_seconds (default 60s)
-        to prevent multiple awakenings during the same boot cycle.
+        Deduplicates wake events within dedupe_window_seconds (default 300s/5min)
+        to prevent crash-restart loops from logging excessive wake events.
 
         Call this when the MCP server starts.
-        
+
         Args:
             creature_id: UUID of the creature
-            dedupe_window_seconds: Only count as new awakening if last wake was
-                                   more than this many seconds ago (default: 60)
+            dedupe_window_seconds: Only log a new wake event if last wake was
+                                   more than this many seconds ago (default: 300)
         """
         conn = self._connect()
         now = datetime.now()

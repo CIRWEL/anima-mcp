@@ -554,6 +554,16 @@ class PilRenderer(DisplayRenderer):
         """Show minimal default screen (non-grey, non-distracting)."""
         self._show_waking_face()
 
+    def render_image(self, image: Image.Image) -> None:
+        """Render a PIL Image directly to the display."""
+        if not self._display:
+            return
+        try:
+            self._image = image
+            self._display.image(image)
+        except Exception as e:
+            print(f"[Display] Error rendering image: {e}", file=sys.stderr, flush=True)
+
     def save_image(self, path: str) -> None:
         """Save current image to file (for debugging)."""
         if self._image:

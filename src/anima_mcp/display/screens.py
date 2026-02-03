@@ -31,13 +31,14 @@ class ScreenMode(Enum):
     """Available display screens."""
     FACE = "face"                    # Default: Lumen's expressive face
     SENSORS = "sensors"              # Sensor readings (temp, humidity, etc.)
-    IDENTITY = "identity"           # Name, age, awakenings, alive time
-    DIAGNOSTICS = "diagnostics"     # System health, governance status
+    IDENTITY = "identity"            # Name, age, awakenings, alive time
+    DIAGNOSTICS = "diagnostics"      # System health, governance status
     LEARNING = "learning"            # Learning visualization - why Lumen feels what it feels
-    NOTEPAD = "notepad"             # Drawing canvas - Lumen's creative space
-    MESSAGES = "messages"           # Message board - Lumen's voice and observations
-    QA = "qa"                       # Q&A screen - Lumen's questions and agent answers
-    SELF_GRAPH = "self_graph"       # Self-schema G_t visualization (PoC StructScore)
+    SELF_GRAPH = "self_graph"        # Self-schema G_t visualization
+    NOTEPAD = "notepad"              # Drawing canvas - Lumen's creative space
+    MESSAGES = "messages"            # Message board - Lumen's observations only
+    QUESTIONS = "questions"          # Q&A - Lumen's questions and answers
+    VISITORS = "visitors"            # Messages from agents and humans
 
 
 @dataclass
@@ -543,8 +544,8 @@ class ScreenRenderer:
     
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""
-        # Cycle through all screens including notepad, Q&A, and self_graph
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.MESSAGES, ScreenMode.QA, ScreenMode.NOTEPAD, ScreenMode.SELF_GRAPH]
+        # Cycle through all screens including notepad, questions, and visitors
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -555,8 +556,8 @@ class ScreenRenderer:
 
     def previous_mode(self):
         """Cycle to previous screen mode (including notepad)."""
-        # Cycle through all screens including notepad, Q&A, and self_graph
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.MESSAGES, ScreenMode.QA, ScreenMode.NOTEPAD, ScreenMode.SELF_GRAPH]
+        # Cycle through all screens including notepad, questions, and visitors
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -574,9 +575,9 @@ class ScreenRenderer:
 
     def _draw_screen_indicator(self, draw, current_mode: ScreenMode):
         """Draw small dots at bottom showing current screen position."""
-        # Screen order (including notepad, Q&A, and self_graph in regular cycle)
+        # Screen order (including notepad, questions, and visitors in regular cycle)
         screens = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS,
-                   ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.MESSAGES, ScreenMode.QA, ScreenMode.NOTEPAD, ScreenMode.SELF_GRAPH]
+                   ScreenMode.DIAGNOSTICS, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD]
 
         try:
             current_idx = screens.index(current_mode)
@@ -792,10 +793,14 @@ class ScreenRenderer:
                     self._render_diagnostics(anima, readings, governance)
                 elif mode == ScreenMode.LEARNING:
                     self._render_learning(anima, readings)
+                elif mode == ScreenMode.SELF_GRAPH:
+                    self._render_self_graph(anima, readings, identity)
                 elif mode == ScreenMode.MESSAGES:
                     self._render_messages()
-                elif mode == ScreenMode.QA:
-                    self._render_qa()
+                elif mode == ScreenMode.QUESTIONS:
+                    self._render_questions()
+                elif mode == ScreenMode.VISITORS:
+                    self._render_visitors()
                 elif mode == ScreenMode.NOTEPAD:
                     try:
                         self._render_notepad(anima)
@@ -806,15 +811,6 @@ class ScreenRenderer:
                         # Fallback: show text version
                         try:
                             self._display.render_text("NOTEPAD\n\nError\nrendering", (10, 10))
-                        except Exception:
-                            pass
-                elif mode == ScreenMode.SELF_GRAPH:
-                    try:
-                        self._render_self_graph(anima, readings, identity)
-                    except Exception as e:
-                        print(f"[ScreenRenderer] Error rendering self_graph: {e}", file=sys.stderr, flush=True)
-                        try:
-                            self._display.render_text("SELF GRAPH\n\nError\nrendering", (10, 10))
                         except Exception:
                             pass
                 else:
@@ -1912,8 +1908,158 @@ class ScreenRenderer:
             traceback.print_exc(file=sys.stderr)
             self._display.render_text("MESSAGES\n\nError", (10, 10))
 
-    def _render_qa(self):
-        """Render Q&A screen - Lumen's questions and agent answers with full threading."""
+    def _render_questions(self):
+        """Render Questions screen - Lumen's questions and answers."""
+        self._render_filtered_messages("questions", ["question", "answer"], include_answers=True)
+
+    def _render_visitors(self):
+        """Render Visitors screen - messages from agents and humans."""
+        # Note: "user" is the actual msg_type for human messages (not "human")
+        self._render_filtered_messages("visitors", ["agent", "user"], include_answers=False)
+
+    def _render_filtered_messages(self, title: str, filter_types: list, include_answers: bool):
+        """Render a filtered message screen."""
+        try:
+            from ..messages import get_board
+
+            if hasattr(self._display, '_create_canvas'):
+                image, draw = self._display._create_canvas((0, 0, 0))
+            else:
+                self._display.render_text(f"{title.upper()}\n\nNo display", (10, 10))
+                return
+
+            # Colors
+            CYAN = (80, 220, 255)
+            AMBER = (255, 180, 60)
+            GREEN = (100, 220, 140)
+            MUTED = (140, 160, 180)
+            SOFT_WHITE = (220, 220, 230)
+
+            fonts = self._get_fonts()
+            font = fonts['medium']
+            font_small = fonts['small']
+            font_title = fonts['default']
+
+            # Get filtered messages
+            board = get_board()
+            board._load()
+            all_messages = board._messages
+
+            # Filter by type
+            # If include_answers, also include agent messages with responds_to (those are answers to questions)
+            if include_answers:
+                filtered = [m for m in all_messages
+                           if m.msg_type in filter_types
+                           or (m.msg_type == "agent" and getattr(m, 'responds_to', None))]
+            else:
+                filtered = [m for m in all_messages if m.msg_type in filter_types]
+            filtered = list(reversed(filtered))  # Newest first
+
+            y_offset = 6
+
+            # Title with count
+            draw.text((10, y_offset), f"{title} ({len(filtered)})", fill=CYAN, font=font_title)
+            y_offset += 22
+
+            if not filtered:
+                draw.text((60, 100), f"no {title} yet", fill=MUTED, font=font)
+            else:
+                # Show messages with scroll support
+                scroll_idx = getattr(self._state, 'message_scroll_index', 0)
+                scroll_idx = max(0, min(scroll_idx, len(filtered) - 1))
+
+                visible_count = 4  # Messages visible at once
+                start_idx = max(0, scroll_idx)
+
+                for i, msg in enumerate(filtered[start_idx:start_idx + visible_count]):
+                    is_selected = (i == 0)  # First visible is selected
+
+                    # Type indicator color
+                    if msg.msg_type == "question":
+                        type_color = CYAN
+                    elif msg.msg_type == "agent" and getattr(msg, 'responds_to', None):
+                        # Agent message that answers a question
+                        type_color = AMBER
+                    elif msg.msg_type in ["agent", "user"]:
+                        type_color = GREEN
+                    else:
+                        type_color = MUTED
+
+                    # Author/type
+                    author = getattr(msg, 'author', msg.msg_type)
+
+                    if is_selected:
+                        # EXPANDED VIEW for selected message
+                        # Word wrap the full text
+                        def wrap_text(text, max_chars=35):
+                            words = text.split()
+                            lines = []
+                            current_line = ""
+                            for word in words:
+                                if len(current_line) + len(word) + 1 <= max_chars:
+                                    current_line = f"{current_line} {word}".strip()
+                                else:
+                                    if current_line:
+                                        lines.append(current_line)
+                                    current_line = word[:max_chars]  # Truncate very long words
+                            if current_line:
+                                lines.append(current_line)
+                            return lines[:6]  # Max 6 lines
+
+                        wrapped = wrap_text(msg.text)
+                        box_height = 18 + len(wrapped) * 12 + 8
+
+                        # Background
+                        draw.rectangle([5, y_offset - 2, 235, y_offset + box_height], fill=(35, 55, 85))
+
+                        # Author
+                        draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
+
+                        # Timestamp next to author
+                        if hasattr(msg, 'timestamp'):
+                            from datetime import datetime
+                            if isinstance(msg.timestamp, (int, float)):
+                                ts = datetime.fromtimestamp(msg.timestamp).strftime("%H:%M")
+                            else:
+                                ts = str(msg.timestamp)[11:16]
+                            draw.text((180, y_offset), ts, fill=MUTED, font=font_small)
+
+                        y_offset += 14
+
+                        # Full wrapped text
+                        for line in wrapped:
+                            draw.text((10, y_offset), line, fill=SOFT_WHITE, font=font_small)
+                            y_offset += 12
+
+                        y_offset += 8
+                    else:
+                        # COMPACT VIEW for non-selected messages
+                        draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
+                        y_offset += 12
+
+                        # Truncated text
+                        text = msg.text[:50] + "..." if len(msg.text) > 50 else msg.text
+                        draw.text((10, y_offset), text, fill=MUTED, font=font_small)
+                        y_offset += 18
+
+                # Scroll indicator
+                if len(filtered) > visible_count:
+                    draw.text((200, 220), f"{scroll_idx + 1}/{len(filtered)}", fill=MUTED, font=font_small)
+
+            # Screen indicator
+            mode = ScreenMode.QUESTIONS if "question" in filter_types else ScreenMode.VISITORS
+            self._draw_screen_indicator(draw, mode)
+
+            self._display.render_image(image)
+
+        except Exception as e:
+            import traceback
+            print(f"[ScreenRenderer] Error rendering {title}: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            self._display.render_text(f"{title.upper()}\n\nError", (10, 10))
+
+    def _render_qa_legacy(self):
+        """Render Q&A screen - Lumen's questions and agent answers with full threading (legacy)."""
         try:
             from ..messages import get_board, MESSAGE_TYPE_QUESTION, MESSAGE_TYPE_AGENT
 
@@ -2148,7 +2294,7 @@ class ScreenRenderer:
                 draw.text((100, 218), hint, fill=MUTED, font=font_small)
 
             # Screen indicator dots
-            self._draw_screen_indicator(draw, ScreenMode.QA)
+            self._draw_screen_indicator(draw, ScreenMode.QUESTIONS)
 
             if hasattr(self._display, '_image'):
                 self._display._image = image
@@ -2163,7 +2309,7 @@ class ScreenRenderer:
 
     def qa_scroll_up(self):
         """Scroll up in Q&A screen - scroll text when expanded/full, change Q&A when collapsed."""
-        if self._state.mode != ScreenMode.QA:
+        if self._state.mode != ScreenMode.QUESTIONS:
             return
         if self._state.qa_full_view or self._state.qa_expanded:
             # Scroll within text
@@ -2174,7 +2320,7 @@ class ScreenRenderer:
 
     def qa_scroll_down(self):
         """Scroll down in Q&A screen - scroll text when expanded/full, change Q&A when collapsed."""
-        if self._state.mode != ScreenMode.QA:
+        if self._state.mode != ScreenMode.QUESTIONS:
             return
         if self._state.qa_full_view or self._state.qa_expanded:
             # Scroll within text (limit checked in render)
@@ -2189,7 +2335,7 @@ class ScreenRenderer:
 
     def qa_toggle_expand(self):
         """Toggle Q&A expansion: collapsed -> expanded -> full_view (when answer focused) -> collapsed."""
-        if self._state.mode != ScreenMode.QA:
+        if self._state.mode != ScreenMode.QUESTIONS:
             return
 
         if self._state.qa_full_view:
@@ -2214,7 +2360,7 @@ class ScreenRenderer:
 
     def qa_focus_next(self):
         """Switch focus between question and answer in expanded view."""
-        if self._state.mode != ScreenMode.QA:
+        if self._state.mode != ScreenMode.QUESTIONS:
             return
         if self._state.qa_full_view:
             # In full view, pressing left/right exits to expanded
@@ -3193,21 +3339,21 @@ class ScreenRenderer:
         """
         from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS, WIDTH, HEIGHT
-        from ..preferences import get_preference_system
+        from ..growth import get_growth_system
 
-        # Try to get preferences (optional enhancement)
-        preferences = None
+        # Get growth_system for learned preferences (uses DB, 456K+ observations)
+        growth_system = None
         try:
-            preferences = get_preference_system()
+            growth_system = get_growth_system()
         except Exception:
-            pass  # Non-fatal - preferences are optional
+            pass  # Non-fatal
 
         # Extract current G_t (with preferences if available)
         schema = get_current_schema(
             identity=identity,
             anima=anima,
             readings=readings,
-            preferences=preferences,
+            growth_system=growth_system,
             include_preferences=True,  # Include preferences in enhanced version
         )
 

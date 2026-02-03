@@ -554,7 +554,8 @@ class MetacognitiveMonitor:
             ])
 
         # High overall surprise but no specific source (expanded)
-        if not questions and error.surprise > 0.4:
+        # Lowered from 0.4 to 0.25 to catch more surprises without specific sources
+        if not questions and error.surprise > 0.25:
             questions.extend([
                 "something feels different - what changed?",
                 "why was i surprised just now?",
