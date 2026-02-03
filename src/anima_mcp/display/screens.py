@@ -413,9 +413,27 @@ class ScreenRenderer:
 
     def _get_wifi_status(self) -> Dict[str, Any]:
         """Get WiFi connection status."""
+        import subprocess
+
+        # Try nmcli first (works on modern Pi OS)
         try:
-            import subprocess
-            # Try iwconfig first (most reliable on Pi)
+            result = subprocess.run(
+                ['nmcli', '-t', '-f', 'ACTIVE,SSID,SIGNAL', 'dev', 'wifi'],
+                capture_output=True, text=True, timeout=2
+            )
+            for line in result.stdout.strip().split('\n'):
+                if line.startswith('yes:'):
+                    parts = line.split(':')
+                    if len(parts) >= 3:
+                        ssid = parts[1]
+                        signal = int(parts[2]) if parts[2].isdigit() else 50
+                        ip = self._get_ip_address()
+                        return {"connected": True, "ssid": ssid, "signal": signal, "ip": ip}
+        except Exception:
+            pass
+
+        # Fallback to iwconfig
+        try:
             result = subprocess.run(
                 ['iwconfig', 'wlan0'],
                 capture_output=True, text=True, timeout=2
@@ -423,14 +441,12 @@ class ScreenRenderer:
             output = result.stdout
 
             if 'ESSID:' in output and 'ESSID:off/any' not in output:
-                # Extract SSID
                 ssid = ""
                 if 'ESSID:"' in output:
                     start = output.index('ESSID:"') + 7
                     end = output.index('"', start)
                     ssid = output[start:end]
 
-                # Extract signal quality
                 signal = 0
                 if 'Link Quality=' in output:
                     try:
@@ -438,23 +454,21 @@ class ScreenRenderer:
                         num, denom = qual_str.split('/')
                         signal = int(100 * int(num) / int(denom))
                     except (IndexError, ValueError):
-                        signal = 50  # Default if parsing fails
+                        signal = 50
 
-                # Get IP address
                 ip = self._get_ip_address()
-
                 return {"connected": True, "ssid": ssid, "signal": signal, "ip": ip}
-            else:
-                return {"connected": False}
         except Exception:
-            # Fallback: check if we can resolve a hostname
-            try:
-                import socket
-                socket.create_connection(("8.8.8.8", 53), timeout=1)
-                ip = self._get_ip_address()
-                return {"connected": True, "ssid": "unknown", "signal": 50, "ip": ip}
-            except Exception:
-                return {"connected": False}
+            pass
+
+        # Final fallback: check network connectivity
+        try:
+            import socket
+            socket.create_connection(("8.8.8.8", 53), timeout=1)
+            ip = self._get_ip_address()
+            return {"connected": True, "ssid": "connected", "signal": 50, "ip": ip}
+        except Exception:
+            return {"connected": False}
 
     def _get_battery_status(self) -> Dict[str, Any]:
         """Get battery status (if UPS HAT or battery available)."""

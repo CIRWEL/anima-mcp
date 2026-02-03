@@ -200,19 +200,31 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     
     # Check if shared memory data is recent (within last 5 seconds)
     shm_stale = True
+    shm_valid = False
     if shm_data:
         try:
-            # Check timestamp in shared memory data (broker writes "timestamp" field)
-            timestamp_str = shm_data.get("timestamp")
-            if timestamp_str:
-                from datetime import datetime
-                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-                age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-                shm_stale = age_seconds > 5.0  # Consider stale if older than 5 seconds
-        except Exception:
-            pass  # If timestamp parsing fails, assume stale
+            # Check if we have the required fields
+            if "readings" in shm_data and "anima" in shm_data:
+                # Check timestamp in shared memory data (broker writes "timestamp" field)
+                timestamp_str = shm_data.get("timestamp")
+                if timestamp_str:
+                    from datetime import datetime
+                    timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+                    shm_stale = age_seconds > 5.0  # Consider stale if older than 5 seconds
+                    if not shm_stale:
+                        shm_valid = True
+                else:
+                    # No timestamp - assume fresh if data exists
+                    shm_valid = True
+        except Exception as e:
+            print(f"[Server] Error checking shared memory timestamp: {e}", file=sys.stderr, flush=True)
+            # If timestamp check fails but data exists, try to use it anyway
+            if shm_data and "readings" in shm_data and "anima" in shm_data:
+                shm_valid = True
     
-    if shm_data and "readings" in shm_data and "anima" in shm_data and not shm_stale:
+    # Try to use shared memory if valid
+    if shm_valid:
         try:
             # Reconstruct SensorReadings from shared memory
             readings = _readings_from_dict(shm_data["readings"])
@@ -231,12 +243,15 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             return readings, anima
         except Exception as e:
             print(f"[Server] Error reading from shared memory: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            # Fall through to sensor fallback
     
     # Fallback to direct sensor access if:
-    # 1. Shared memory is empty/stale, OR
-    # 2. Broker is not running (no I2C conflict risk)
-    if fallback_to_sensors:
-        # Check if broker is running
+    # 1. Shared memory is empty/stale/invalid, OR
+    # 2. fallback_to_sensors is True (always allow fallback)
+    if fallback_to_sensors or not shm_valid:
+        # Check if broker is running (for logging purposes)
         import subprocess
         broker_running = False
         try:
@@ -248,26 +263,38 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
         except Exception:
             pass  # If check fails, assume broker not running
         
-        # If broker is running but shared memory is stale/empty, warn but allow fallback
-        # (Better to have sensors than nothing, even if it means brief I2C conflict)
-        if broker_running and (not shm_data or shm_stale):
-            print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
-        
-        if not broker_running:
+        # Log why we're falling back
+        if broker_running and not shm_valid:
+            print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'invalid/empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
+        elif not broker_running:
             print("[Server] Broker not running - using direct sensor access", file=sys.stderr, flush=True)
         
         try:
             sensors = _get_sensors()
+            if sensors is None:
+                print("[Server] Sensors not initialized - cannot read", file=sys.stderr, flush=True)
+                return None, None
+            
             readings = sensors.read()
+            if readings is None:
+                print("[Server] Sensor read returned None", file=sys.stderr, flush=True)
+                return None, None
+            
             calibration = get_calibration()
 
             # Get anticipation from memory
             anticipation = anticipate_state(readings.to_dict() if readings else {})
 
             anima = sense_self_with_memory(readings, anticipation, calibration)
+            if anima is None:
+                print("[Server] Failed to create anima from readings", file=sys.stderr, flush=True)
+                return None, None
+            
             return readings, anima
         except Exception as e:
             print(f"[Server] Error reading sensors directly: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
     
     return None, None
 
@@ -587,11 +614,14 @@ async def _update_display_loop():
             
             # Read current state with error recovery
             # Read from shared memory (broker) or fallback to sensors
-            readings, anima = _get_readings_and_anima(fallback_to_sensors=not is_broker_running)
+            readings, anima = _get_readings_and_anima(fallback_to_sensors=True)  # Always allow fallback
             
             if readings is None or anima is None:
                 # Sensor read failed - skip this iteration
                 consecutive_errors += 1
+                if consecutive_errors == 1:
+                    # Log on first error to help diagnose
+                    print(f"[Loop] Failed to get readings/anima - broker={is_broker_running}, store={_store is not None}", file=sys.stderr, flush=True)
                 if consecutive_errors >= max_consecutive_errors:
                     print(f"[Loop] Too many consecutive errors ({consecutive_errors}), backing off", file=sys.stderr, flush=True)
                     await asyncio.sleep(min(base_delay * (2 ** min(consecutive_errors // 5, 4)), max_delay))
@@ -700,6 +730,12 @@ async def _update_display_loop():
                     def update_display():
                         # Derive face state independently - what Lumen wants to express
                         if anima is None:
+                            # Show default/error screen instead of blank
+                            if _screen_renderer:
+                                try:
+                                    _screen_renderer._display.show_default()
+                                except Exception:
+                                    pass
                             return False
                         face_state = derive_face_state(anima)
 
