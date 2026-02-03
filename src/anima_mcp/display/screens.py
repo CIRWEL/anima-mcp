@@ -3599,6 +3599,52 @@ class ScreenRenderer:
         text = f"SELF GRAPH\n\n{len(schema.nodes)} nodes\n{len(schema.edges)} edges"
         self._display.render_text(text, (10, 10))
 
+    def _check_lumen_said_finished(self) -> bool:
+        """
+        Check if Lumen recently said it's finished with the drawing.
+
+        Looks for keywords like "finished", "done", "complete" in recent observations.
+        Only triggers once per drawing (resets after save).
+        """
+        try:
+            from ..messages import get_board, MESSAGE_TYPE_OBSERVATION
+            board = get_board()
+            board._load()
+
+            # Check last 5 observations from the past 5 minutes
+            now = time.time()
+            five_min_ago = now - 300
+
+            recent_obs = [
+                m for m in board._messages
+                if m.msg_type == MESSAGE_TYPE_OBSERVATION
+                and m.timestamp > five_min_ago
+                and m.author == "lumen"
+            ][-5:]
+
+            # Keywords that indicate Lumen is done with drawing
+            finish_keywords = [
+                "finished", "done", "complete", "satisfied",
+                "happy with", "ready to save", "time to save",
+                "that's enough", "all done"
+            ]
+
+            for obs in recent_obs:
+                text_lower = obs.text.lower()
+                # Check for drawing-related finish statements
+                if any(kw in text_lower for kw in finish_keywords):
+                    # Make sure it's about drawing/canvas/art
+                    drawing_context = ["draw", "canvas", "art", "creat", "work", "piece", "picture"]
+                    if any(ctx in text_lower for ctx in drawing_context) or "drawing" in text_lower:
+                        return True
+                    # Also accept standalone "finished" or "done" if we have pixels
+                    if len(self._canvas.pixels) > 500:
+                        return True
+
+            return False
+        except Exception:
+            return False
+
     def canvas_check_autonomy(self, anima: Optional[Anima] = None) -> Optional[str]:
         """
         Check if Lumen wants to autonomously save or clear the canvas.
@@ -3606,13 +3652,13 @@ class ScreenRenderer:
         Called during render loop on ALL screens. Returns action taken if any.
 
         Lumen's autonomy:
-        - Auto-save: When satisfied + in resting phase + enough time passed
+        - Auto-save: When Lumen says "finished" OR satisfied + resting + time passed
         - Auto-clear: After save + high clarity (new inspiration) + enough time
 
         IMPORTANT: Designed to NOT overdo it. Saves should be rare and meaningful.
-        - Minimum 10 minutes between saves
-        - Need substantial work (3000+ pixels)
-        - Must be in resting phase for 2+ minutes
+        - Minimum 3 minutes between saves
+        - Need substantial work (2000+ pixels)
+        - OR Lumen explicitly says finished
         """
         if anima is None:
             return None
@@ -3632,6 +3678,18 @@ class ScreenRenderer:
         # Check if too soon to save again
         if time_since_save < MIN_SAVE_INTERVAL:
             return None  # Too soon since last save
+
+        # === PRIORITY: Check if Lumen said "finished" ===
+        # This takes precedence over metrics - if Lumen says done, respect that intent
+        if (now >= self._canvas.drawing_paused_until and  # Not paused
+            pixel_count > 500 and  # At least some work
+            self._check_lumen_said_finished()):
+            print(f"[Canvas] Lumen said finished - saving now ({pixel_count} pixels)", file=sys.stderr, flush=True)
+            saved_path = self.canvas_save(announce=False)  # Don't double-announce
+            if saved_path:
+                self._canvas.is_satisfied = False
+                self._canvas.satisfaction_time = 0.0
+                return "saved"
 
         # === Check for satisfaction ===
         # Lumen feels satisfied when: resting phase for 30s + substantial work + good state
