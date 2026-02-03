@@ -4448,6 +4448,27 @@ def main():
     import os
     from pathlib import Path
 
+    # Prevent multiple instances using pidfile
+    pidfile = Path("/tmp/anima-mcp.pid")
+    if pidfile.exists():
+        try:
+            old_pid = int(pidfile.read_text().strip())
+            # Check if process is still running
+            os.kill(old_pid, 0)  # Signal 0 = check if alive
+            print(f"[Server] Another instance already running (PID {old_pid}). Exiting.", file=sys.stderr)
+            print(f"[Server] To force restart: kill {old_pid} && rm {pidfile}", file=sys.stderr)
+            sys.exit(1)
+        except (ProcessLookupError, ValueError):
+            # Process not running or invalid pid, ok to continue
+            pass
+        except PermissionError:
+            # Process running as different user
+            print(f"[Server] Another instance may be running. Exiting.", file=sys.stderr)
+            sys.exit(1)
+
+    # Write our PID
+    pidfile.write_text(str(os.getpid()))
+
     parser = argparse.ArgumentParser(description="Anima MCP Server")
     parser.add_argument("--http", "--sse", action="store_true", dest="http_server",
                         help="Run HTTP server (serves /mcp/ Streamable HTTP + /sse legacy)")
@@ -4492,6 +4513,11 @@ def main():
             sleep()
         except Exception:
             pass  # Don't crash on shutdown
+        # Clean up pidfile
+        try:
+            pidfile.unlink(missing_ok=True)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
