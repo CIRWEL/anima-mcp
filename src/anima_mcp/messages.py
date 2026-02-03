@@ -83,7 +83,7 @@ class Message:
 class MessageBoard:
     """Message board storage."""
 
-    MAX_MESSAGES = 50  # Keep last N messages (increased for persistence)
+    MAX_MESSAGES = 200  # Keep more history for better context
 
     def __init__(self):
         self._messages_file = _get_persistent_path()

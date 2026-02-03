@@ -640,6 +640,10 @@ async def _update_display_loop():
                 # Observe current state and compare to prediction (returns prediction error)
                 prediction_error = metacog.observe(readings, anima)
 
+                # Log surprise level periodically (every 60 loops = ~2 min)
+                if prediction_error and loop_count % 60 == 0:
+                    print(f"[Metacog] Surprise level: {prediction_error.surprise:.3f} (threshold: 0.2)", file=sys.stderr, flush=True)
+
                 # Check if surprise warrants reflection
                 if prediction_error and prediction_error.surprise > 0.2:
                     should_reflect, reason = metacog.should_reflect(prediction_error)
