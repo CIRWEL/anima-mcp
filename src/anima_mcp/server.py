@@ -4488,26 +4488,50 @@ def main():
     import os
     from pathlib import Path
 
-    # Prevent multiple instances using pidfile
+    # Prevent multiple instances using pidfile (but allow if stale)
     pidfile = Path("/tmp/anima-mcp.pid")
     if pidfile.exists():
         try:
             old_pid = int(pidfile.read_text().strip())
             # Check if process is still running
             os.kill(old_pid, 0)  # Signal 0 = check if alive
-            print(f"[Server] Another instance already running (PID {old_pid}). Exiting.", file=sys.stderr)
-            print(f"[Server] To force restart: kill {old_pid} && rm {pidfile}", file=sys.stderr)
-            sys.exit(1)
+            # Process is running - check if it's actually serving
+            import socket
+            test_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            test_sock.settimeout(0.5)
+            try:
+                result = test_sock.connect_ex(('127.0.0.1', args.port if args.http_server else 0))
+                test_sock.close()
+                if result == 0:
+                    # Port is in use, likely another instance is serving
+                    print(f"[Server] Another instance already running (PID {old_pid}) and port appears in use. Exiting.", file=sys.stderr)
+                    print(f"[Server] To force restart: kill {old_pid} && rm {pidfile}", file=sys.stderr)
+                    sys.exit(1)
+            except Exception:
+                pass  # Port check failed, assume ok to continue
         except (ProcessLookupError, ValueError):
-            # Process not running or invalid pid, ok to continue
-            pass
+            # Process not running or invalid pid - remove stale pidfile
+            try:
+                pidfile.unlink()
+                print(f"[Server] Removed stale pidfile", file=sys.stderr, flush=True)
+            except Exception:
+                pass
         except PermissionError:
-            # Process running as different user
-            print(f"[Server] Another instance may be running. Exiting.", file=sys.stderr)
-            sys.exit(1)
+            # Process running as different user - try to continue anyway
+            print(f"[Server] Warning: PID file exists but can't check process (different user). Continuing...", file=sys.stderr, flush=True)
+        except Exception as e:
+            # Any other error - remove pidfile and continue
+            print(f"[Server] Error checking pidfile: {e}. Removing and continuing...", file=sys.stderr, flush=True)
+            try:
+                pidfile.unlink()
+            except Exception:
+                pass
 
     # Write our PID
-    pidfile.write_text(str(os.getpid()))
+    try:
+        pidfile.write_text(str(os.getpid()))
+    except Exception as e:
+        print(f"[Server] Warning: Could not write pidfile: {e}", file=sys.stderr, flush=True)
 
     parser = argparse.ArgumentParser(description="Anima MCP Server")
     parser.add_argument("--http", "--sse", action="store_true", dest="http_server",
@@ -4515,6 +4539,18 @@ def main():
     parser.add_argument("--host", default="0.0.0.0", help="HTTP server host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8766, help="HTTP server port (default: 8766)")
     args = parser.parse_args()
+    
+    # Register cleanup for PID file on exit
+    import atexit
+    def cleanup_pidfile():
+        try:
+            if pidfile.exists():
+                current_pid = pidfile.read_text().strip()
+                if current_pid == str(os.getpid()):
+                    pidfile.unlink()
+        except Exception:
+            pass
+    atexit.register(cleanup_pidfile)
 
     # Determine DB persistence path (User Home > Project Root)
     env_db = os.environ.get("ANIMA_DB")

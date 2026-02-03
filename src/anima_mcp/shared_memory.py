@@ -136,7 +136,7 @@ class SharedMemoryClient:
             return False
 
     def read(self) -> Optional[Dict[str, Any]]:
-        """Read data from shared memory."""
+        """Read data from shared memory (non-blocking, safe for concurrent access)."""
         if self.backend == "redis" and self._redis_client:
             try:
                 data_str = self._redis_client.get(REDIS_KEY)
@@ -151,8 +151,8 @@ class SharedMemoryClient:
         else:
             return self._read_file()
 
-    def _read_file(self, retries: int = 5) -> Optional[Dict[str, Any]]:
-        """Read from file implementation with file locking and retry logic."""
+    def _read_file(self, retries: int = 3) -> Optional[Dict[str, Any]]:
+        """Read from file implementation with non-blocking file locking and retry logic."""
         lock_path = self.filepath.with_suffix(".lock")
         last_error = None
         error_count = 0
@@ -163,8 +163,20 @@ class SharedMemoryClient:
                     return None
 
                 # Use "a" mode to avoid truncation race when multiple processes open lock file
+                # Try non-blocking lock first (LOCK_SH | LOCK_NB)
                 with open(lock_path, "a") as lock_file:
-                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH)  # Shared lock
+                    try:
+                        # Non-blocking shared lock - don't wait if locked
+                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    except BlockingIOError:
+                        # Lock is held - wait briefly then retry (for first attempt only)
+                        if attempt == 0:
+                            time.sleep(0.01)  # 10ms wait
+                            continue
+                        else:
+                            # After first retry, return None rather than blocking
+                            return None
+                    
                     try:
                         with open(self.filepath, "r") as f:
                             envelope = json.load(f)
