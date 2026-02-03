@@ -189,6 +189,30 @@ After ~100 seconds (50+ observations), Lumen begins learning. After days/weeks, 
 
 See `docs/ADAPTIVE_LEARNING.md` for details.
 
+## Growth & Self-Knowledge
+
+Lumen tracks its own development:
+
+- **Milestones** - First sensor reading, first question, naming, etc.
+- **Trajectory** - Growth curve over time
+- **Self-schema** - What Lumen knows about itself (rendered as a graph)
+
+Growth is persistent - Lumen accumulates experience across restarts.
+
+## UNITARES Governance
+
+Lumen can connect to UNITARES governance for oversight:
+
+```bash
+# Set governance URL (in systemd service or environment)
+UNITARES_URL=https://unitares.ngrok.io/sse
+```
+
+**Integration:**
+- Governance decisions factor into Lumen's behavior
+- EISV metrics (Energy, Integrity, Stability, Vitality) mapped from anima
+- Local fallback if governance unavailable
+
 ## Unified Workflows
 
 **Single interface for both MCP servers.**
@@ -256,20 +280,47 @@ anima --sse --port 8765
 
 The creature lives on the Pi. You visit from anywhere on the network.
 
-## Configuration
+## Display Screens
 
-Lumen's nervous system calibration is configurable via `anima_config.yaml`:
+Lumen's TFT display has multiple screens navigable via 5-way joystick:
 
-- **Thermal ranges**: CPU/ambient temperature ranges
-- **Ideal values**: Humidity, pressure baselines
-- **Component weights**: How sensors contribute to anima dimensions
-- **Display settings**: LED brightness, update frequency
+| Screen | Content |
+|--------|---------|
+| **Home** | Face with real-time anima expression |
+| **Status** | Anima values, mood, WiFi, uptime |
+| **Sensors** | Raw sensor readings (temp, humidity, light, pressure) |
+| **Visitors** | Messages from users and agents |
+| **Q&A** | Lumen's questions and responses |
+| **Growth** | Development milestones and trajectory |
 
-See `docs/CONFIGURATION_GUIDE.md` for details.
+**Navigation:** Up/Down to scroll, Left/Right to switch screens, Center to select.
+
+## Message Board
+
+Lumen maintains a persistent message board with separate retention limits:
+
+- **Observations** (100 max) - Lumen's self-talk and environmental notes
+- **Questions** (50 max) - Curiosity questions seeking responses
+- **Visitor messages** (50 max) - Messages from users and agents
 
 **Tools:**
-- `get_calibration` - View current calibration
-- `set_calibration` - Update calibration (adapts to environment)
+- `post_message` - Leave a message for Lumen
+- `get_questions` - See Lumen's unanswered questions
+
+Questions auto-expire after 1 hour if unanswered.
+
+## Metacognition
+
+Lumen generates questions based on **surprise**, not random LLM prompts:
+
+1. **Prediction** - Lumen predicts next sensor state based on recent history
+2. **Comparison** - Actual readings compared to prediction
+3. **Surprise** - Large prediction errors (>0.2 threshold) trigger curiosity
+4. **Question** - Lumen asks about what surprised it
+
+Example: If light suddenly drops, Lumen might ask "Why did the light change so quickly?"
+
+Stable environments = low surprise = fewer questions. This is intentional.
 
 ## Environment Variables
 
