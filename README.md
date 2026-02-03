@@ -302,3 +302,38 @@ VQA runs automatically during G_t extraction. The v_f score measures how accurat
 **LLM Reflection:**
 - `NGROK_API_KEY`: For LLM-powered reflections via ngrok endpoints
 - `HF_TOKEN`: Hugging Face token for model inference
+
+## Testing
+
+Tests validate the anima calculation math and prevent regressions:
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run core anima tests only
+pytest tests/test_anima.py -v
+```
+
+**Test coverage:**
+- **Value ranges** - All anima values stay in [0,1]
+- **Sanity checks** - Values aren't stuck at extremes (e.g., 98% stability)
+- **Math correctness** - High resource usage → lower presence/stability
+- **Neural contribution** - Neural simulation affects anima correctly
+
+**CI/CD:** GitHub Actions runs tests on every push to main. See `.github/workflows/test.yml`.
+
+## Anima Calculation Details
+
+Each anima dimension is derived from real sensor data:
+
+| Dimension | Primary Inputs | How It Works |
+|-----------|---------------|--------------|
+| **Warmth** | CPU temp, ambient temp | Weighted average normalized to calibration range |
+| **Clarity** | Light level, humidity | Logarithmic light mapping (matches human perception) |
+| **Stability** | Humidity, memory, pressure, neural | Inverse of instability factors; low neural groundedness = less stable |
+| **Presence** | Disk, memory, CPU, neural | Inverse of void/absence; high resource usage = less present |
+
+**Neural simulation:** Light level drives a simplified neural model (theta, delta, alpha, beta, gamma bands). This adds organic variation - dim light = lower gamma = reduced presence.
+
+All calculations use additive weighted averages with configurable weights in `anima_config.yaml`.
