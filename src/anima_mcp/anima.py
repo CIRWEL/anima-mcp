@@ -372,21 +372,22 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         instability += pressure_instability
         count += pressure_weight
 
-    # Neural stability: Real EEG theta+delta power, or simulated if unavailable
+    # Neural instability: Low theta+delta = scattered mind = instability
     temp_delta = None
     if r.ambient_temp_c is not None:
         temp_delta = r.ambient_temp_c - (cal.ambient_temp_min + cal.ambient_temp_max) / 2
-    
+
     if r.eeg_theta_power is not None and r.eeg_delta_power is not None:
-        # Use real EEG data
-        neural_stability = (r.eeg_theta_power + r.eeg_delta_power) / 2  # Deep grounding
+        # Use real EEG data - low theta+delta = instability
+        neural_groundedness = (r.eeg_theta_power + r.eeg_delta_power) / 2
     else:
         # Fall back to simulated neural activity
         neural = get_neural_state(light_level=r.light_lux, temp_delta=temp_delta)
-        neural_stability = (neural.theta + neural.delta) / 2  # Deep grounding
-    
+        neural_groundedness = (neural.theta + neural.delta) / 2
+
+    # Invert: low groundedness = high instability
     neural_weight = cal.stability_weights.get("neural", 0.2)
-    instability -= neural_stability * neural_weight
+    instability += (1.0 - neural_groundedness) * neural_weight
     count += neural_weight
 
     if count == 0:
