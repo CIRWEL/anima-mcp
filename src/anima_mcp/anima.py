@@ -76,6 +76,14 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
     stability = _sense_stability(readings, calibration)
     presence = _sense_presence(readings, calibration)
 
+    # Sanity check: flag suspiciously extreme values (likely bugs)
+    for name, value in [("warmth", warmth), ("clarity", clarity),
+                        ("stability", stability), ("presence", presence)]:
+        if value > 0.95 or value < 0.05:
+            import sys
+            print(f"[Anima] WARNING: {name}={value:.2f} is extreme - possible bug?",
+                  file=sys.stderr, flush=True)
+
     return Anima(
         warmth=warmth,
         clarity=clarity,
