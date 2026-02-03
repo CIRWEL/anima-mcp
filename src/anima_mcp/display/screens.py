@@ -1890,17 +1890,19 @@ class ScreenRenderer:
 
                     # Only wrap text when expanded (optimization: _wrap_text is slow)
                     line_height = 14
+                    msg_padding = 4
                     if is_expanded:
                         wrapped_lines = self._wrap_text(display_text, font_small, content_width)
                         # Calculate how many lines can fit on screen
-                        available_height = max_y - inner_y - (12 if author_text else 0)
+                        # Use y_offset + padding + author line height as starting point
+                        start_y = y_offset + msg_padding + (12 if author_text else 0)
+                        available_height = max_y - start_y
                         max_visible_lines = max(1, available_height // line_height)
                         # Use text scroll offset for this expanded message
-                        text_scroll = self._state.message_text_scroll if is_expanded else 0
+                        text_scroll = self._state.message_text_scroll
                         max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
                         text_scroll = min(text_scroll, max_scroll)
-                        if is_expanded:
-                            self._state.message_text_scroll = text_scroll
+                        self._state.message_text_scroll = text_scroll
                         num_lines = min(len(wrapped_lines), max_visible_lines)
                     else:
                         wrapped_lines = None  # Don't wrap - just truncate
@@ -2190,19 +2192,20 @@ class ScreenRenderer:
                             self._display.render_image(image)
                         return
 
-                visible_count = 4  # Messages visible at once
-                start_idx = max(0, scroll_idx)
-
-                # Show fewer messages when one is expanded
+                # Calculate visible window - selected message should always be visible
                 if has_expanded:
+                    # When expanded, only show the expanded message
                     visible_count = 1
                     start_idx = scroll_idx
                 else:
+                    # Normal view: show 4 messages with selected in view
                     visible_count = 4
-                    start_idx = max(0, scroll_idx)
+                    # Keep selected message visible by centering it when possible
+                    start_idx = max(0, min(scroll_idx, len(filtered) - visible_count))
 
                 for i, msg in enumerate(filtered[start_idx:start_idx + visible_count]):
-                    is_selected = (i == 0)  # First visible is selected
+                    # Message at scroll_idx is selected
+                    is_selected = (start_idx + i == scroll_idx)
                     is_expanded = (expanded_id == msg.message_id)
 
                     # Type indicator color
@@ -2276,14 +2279,17 @@ class ScreenRenderer:
 
                         y_offset += 8
                     elif is_selected:
-                        # SELECTED but not expanded - show preview
+                        # SELECTED but not expanded - show preview with highlight
+                        # Selection background
+                        draw.rectangle([5, y_offset - 2, 235, y_offset + 32], fill=(30, 50, 80), outline=(80, 140, 200), width=1)
+
                         draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
-                        y_offset += 12
+                        y_offset += 14
 
                         # Truncated text preview
-                        text = msg.text[:50] + "..." if len(msg.text) > 50 else msg.text
-                        draw.text((10, y_offset), text, fill=MUTED, font=font_small)
-                        y_offset += 18
+                        text = msg.text[:45] + "..." if len(msg.text) > 45 else msg.text
+                        draw.text((10, y_offset), text, fill=(220, 220, 230), font=font_small)
+                        y_offset += 22
                     else:
                         # COMPACT VIEW for non-selected messages
                         draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
