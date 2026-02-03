@@ -3689,7 +3689,11 @@ class ScreenRenderer:
             if saved_path:
                 self._canvas.is_satisfied = False
                 self._canvas.satisfaction_time = 0.0
-                return "saved"
+                # Clear canvas so Lumen can start fresh
+                print(f"[Canvas] Clearing canvas for new drawing", file=sys.stderr, flush=True)
+                self.canvas_clear(persist=True)
+                self._canvas.save_to_disk()
+                return "saved_and_cleared"
 
         # === Check for satisfaction ===
         # Lumen feels satisfied when: resting phase for 30s + substantial work + good state
@@ -3717,7 +3721,11 @@ class ScreenRenderer:
                 # Reset satisfaction to prevent repeated saves
                 self._canvas.is_satisfied = False
                 self._canvas.satisfaction_time = 0.0
-                return "saved"
+                # Clear canvas so Lumen can start fresh
+                print(f"[Canvas] Clearing canvas for new drawing", file=sys.stderr, flush=True)
+                self.canvas_clear(persist=True)
+                self._canvas.save_to_disk()
+                return "saved_and_cleared"
 
         # === Auto-clear: after save + new inspiration ===
         # If Lumen saved recently + clarity spike = wants to start fresh
