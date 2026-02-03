@@ -651,7 +651,7 @@
                 const response = await fetch(`${API_BASE}/answer`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question_id: questionId, answer: answer })
+                    body: JSON.stringify({ question_id: questionId, answer: answer, author: 'Kenny' })
                 });
 
                 if (response.ok) {
