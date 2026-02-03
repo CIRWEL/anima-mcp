@@ -79,11 +79,15 @@ class IdentityStore:
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
             # Use timeout and WAL mode for better concurrency between broker and anima
-            self._conn = sqlite3.connect(self.db_path, timeout=30.0)
+            # Shorter timeout for reads (5s) to prevent blocking, longer for writes (30s)
+            self._conn = sqlite3.connect(self.db_path, timeout=5.0)  # Reduced from 30s for faster failure
             self._conn.row_factory = sqlite3.Row
             # WAL mode allows concurrent reads while writing
             self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=30000")
+            # Shorter busy timeout for reads - fail fast rather than blocking
+            self._conn.execute("PRAGMA busy_timeout=5000")  # 5 seconds instead of 30
+            # Enable read uncommitted for better concurrency (safe with WAL)
+            self._conn.execute("PRAGMA read_uncommitted=1")
             self._init_schema()
         return self._conn
 

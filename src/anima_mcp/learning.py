@@ -39,10 +39,12 @@ class AdaptiveLearner:
         """Connect to database."""
         if self._conn is None:
             # Use timeout and WAL mode for better concurrency
-            self._conn = sqlite3.connect(self.db_path, timeout=30.0)
+            # Shorter timeout for faster failure (5s instead of 30s)
+            self._conn = sqlite3.connect(self.db_path, timeout=5.0)
             self._conn.row_factory = sqlite3.Row
             self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=30000")
+            self._conn.execute("PRAGMA busy_timeout=5000")  # 5 seconds instead of 30
+            self._conn.execute("PRAGMA read_uncommitted=1")  # Better concurrency with WAL
         return self._conn
     
     def detect_gap(self) -> Optional[timedelta]:

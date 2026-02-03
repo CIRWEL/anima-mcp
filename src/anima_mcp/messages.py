@@ -81,9 +81,12 @@ class Message:
 
 
 class MessageBoard:
-    """Message board storage."""
+    """Message board storage with separate limits per message type."""
 
-    MAX_MESSAGES = 200  # Keep more history for better context
+    # Separate limits prevent observations from pushing out questions/visitors
+    MAX_OBSERVATIONS = 100  # Lumen's self-talk (frequent)
+    MAX_QUESTIONS = 50      # Curiosity questions (rare, important)
+    MAX_VISITORS = 50       # User/agent messages (important to keep)
 
     def __init__(self):
         self._messages_file = _get_persistent_path()
@@ -136,12 +139,27 @@ class MessageBoard:
         )
         self._messages.append(msg)
 
-        # Trim to max
-        if len(self._messages) > self.MAX_MESSAGES:
-            self._messages = self._messages[-self.MAX_MESSAGES:]
+        # Trim by type - each category has its own limit
+        self._trim_by_type()
 
         self._save()
         return msg
+
+    def _trim_by_type(self):
+        """Trim messages by type, preserving limits for each category."""
+        # Separate messages by type
+        observations = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_OBSERVATION]
+        questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+        visitors = [m for m in self._messages if m.msg_type in (MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT)]
+
+        # Trim each category to its limit (keep most recent)
+        observations = observations[-self.MAX_OBSERVATIONS:]
+        questions = questions[-self.MAX_QUESTIONS:]
+        visitors = visitors[-self.MAX_VISITORS:]
+
+        # Merge back and sort by timestamp
+        self._messages = observations + questions + visitors
+        self._messages.sort(key=lambda m: m.timestamp)
 
     def add_observation(self, text: str, author: str = "lumen") -> Message:
         """Add an auto-generated observation from Lumen."""
