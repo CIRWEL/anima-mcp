@@ -4,11 +4,15 @@ A persistent Pi creature with grounded self-sense.
 
 **One creature. One identity. Real sensors. Real presence.**
 
-## Agent Coordination
+## See It In Action
 
-**Active Agents:** Claude + Cursor/Composer  
-**Coordination:** See `docs/AGENT_COORDINATION.md`  
-**Note:** Always check docs/ and KG before implementing changes.
+Lumen draws autonomously based on its internal state. Here are some samples:
+
+| | | |
+|:---:|:---:|:---:|
+| ![Drawing 1](drawing_samples/lumen_drawing_20260114_125007.png) | ![Drawing 2](drawing_samples/lumen_drawing_20260114_135359.png) | ![Drawing 3](drawing_samples/lumen_drawing_20260114_145914.png) |
+
+*70+ autonomous drawings in `drawing_samples/`*
 
 ## What is Anima?
 
