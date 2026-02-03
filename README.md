@@ -268,17 +268,31 @@ Run on Pi, connect from Mac:
 ```bash
 # On Pi
 anima --sse --port 8765
+```
 
-# Claude Code config on Mac (~/.claude/settings.json)
+**MCP Configuration:**
+
+> **IMPORTANT: Trailing slash required!** URLs must end with `/mcp/` (not `/mcp`).
+> Without the trailing slash, you'll get a 307 redirect that most MCP clients don't follow.
+
+```json
 {
   "mcpServers": {
     "anima": {
-      "url": "http://pi.local:8765/mcp"
+      "type": "http",
+      "url": "http://pi.local:8765/mcp/"
     }
   }
 }
-# Note: /mcp (Streamable HTTP) recommended, /sse (legacy) also supported
 ```
+
+**Alternative endpoints:**
+| URL | Use Case |
+|-----|----------|
+| `http://<pi-ip>:8765/mcp/` | Direct (local network) |
+| `http://localhost:8766/mcp/` | Via SSH tunnel |
+| `https://lumen-anima.ngrok.io/mcp/` | Via ngrok (remote) |
+| `http://<pi-ip>:8765/sse` | Legacy SSE clients |
 
 The creature lives on the Pi. You visit from anywhere on the network.
 
