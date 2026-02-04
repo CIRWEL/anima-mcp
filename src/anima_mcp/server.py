@@ -2451,6 +2451,80 @@ async def handle_system_service(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_system_power(arguments: dict) -> list[TextContent]:
+    """
+    Reboot or shutdown the Pi remotely.
+    Useful for recovery when services are stuck.
+    """
+    import subprocess
+
+    action = arguments.get("action", "status")
+    confirm = arguments.get("confirm", False)
+
+    ALLOWED_ACTIONS = ["status", "reboot", "shutdown"]
+    if action not in ALLOWED_ACTIONS:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Action '{action}' not allowed",
+            "allowed": ALLOWED_ACTIONS
+        }))]
+
+    try:
+        if action == "status":
+            # Get uptime and load
+            uptime = subprocess.run(
+                ["uptime"],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "action": "status",
+                "uptime": uptime.stdout.strip(),
+            }, indent=2))]
+
+        # Reboot and shutdown require confirmation
+        if not confirm:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Action '{action}' requires confirm=true",
+                "warning": "This will disconnect all sessions. Are you sure?",
+                "hint": f"Call again with confirm=true to {action}"
+            }, indent=2))]
+
+        if action == "reboot":
+            # Schedule reboot in 5 seconds to allow response to be sent
+            subprocess.Popen(
+                ["sudo", "shutdown", "-r", "+0"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "action": "reboot",
+                "message": "Rebooting now. Pi will be back in ~60 seconds."
+            }, indent=2))]
+
+        elif action == "shutdown":
+            subprocess.Popen(
+                ["sudo", "shutdown", "-h", "+0"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "action": "shutdown",
+                "message": "Shutting down. Manual power cycle required to restart."
+            }, indent=2))]
+
+    except subprocess.TimeoutExpired:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Command timed out"
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Power command failed: {e}"
+        }))]
+
+
 async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
     """Get learning visualization - shows why Lumen feels what it feels."""
     store = _get_store()
@@ -2950,6 +3024,26 @@ TOOLS_STANDARD = [
                 },
             },
             "required": ["service"],
+        },
+    ),
+    Tool(
+        name="system_power",
+        description="Reboot or shutdown the Pi remotely. For recovery when services are stuck. Requires confirm=true.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "description": "Power action: status (uptime), reboot, or shutdown",
+                    "enum": ["status", "reboot", "shutdown"],
+                    "default": "status",
+                },
+                "confirm": {
+                    "type": "boolean",
+                    "description": "Must be true to actually reboot/shutdown (safety)",
+                    "default": False,
+                },
+            },
         },
     ),
 ]
@@ -4005,6 +4099,7 @@ HANDLERS = {
     # Admin tools
     "git_pull": handle_git_pull,
     "system_service": handle_system_service,
+    "system_power": handle_system_power,
     # Voice tools
     "say": handle_say,
     "voice_status": handle_voice_status,
