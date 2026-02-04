@@ -52,6 +52,7 @@ from .workflow_templates import WorkflowTemplates
 from .expression_moods import ExpressionMoodTracker
 from .shared_memory import SharedMemoryClient
 from .growth import get_growth_system, GrowthSystem
+from .agency import get_action_selector, ActionType, Action, ActionOutcome
 
 
 # Global state
@@ -70,6 +71,9 @@ _shm_client: SharedMemoryClient | None = None
 _metacog_monitor = None  # MetacognitiveMonitor - prediction-error based self-awareness
 _unitares_bridge = None  # Singleton UnitaresBridge to avoid creating new sessions each check-in
 _growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
+# Agency state - for learning from action outcomes
+_last_action: Action | None = None
+_last_state_before: Dict[str, float] | None = None
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
@@ -683,6 +687,92 @@ async def _update_display_loop():
                 # Metacognition is enhancement, not critical path
                 if loop_count % 100 == 1:  # Log occasionally
                     print(f"[Metacog] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+            # === AGENCY: Action selection and learning ===
+            # This is where Lumen chooses what to do and learns from outcomes.
+            # The loop: state → action → consequence → learning → better action
+            global _last_action, _last_state_before
+            try:
+                action_selector = get_action_selector()
+
+                # Current state as dict for agency
+                current_state = {
+                    "warmth": anima.warmth,
+                    "clarity": anima.clarity,
+                    "stability": anima.stability,
+                    "presence": anima.presence,
+                }
+
+                # Get surprise level from metacognition
+                surprise_level = prediction_error.surprise if prediction_error else 0.0
+                surprise_sources = prediction_error.surprise_sources if prediction_error and hasattr(prediction_error, 'surprise_sources') else []
+
+                # LEARN: If there was a previous action, record its outcome
+                if _last_action is not None and _last_state_before is not None:
+                    action_selector.record_outcome(
+                        action=_last_action,
+                        state_before=_last_state_before,
+                        state_after=current_state,
+                        preference_satisfaction_before=sum(_last_state_before.values()) / 4.0,
+                        preference_satisfaction_after=sum(current_state.values()) / 4.0,
+                        surprise_after=surprise_level,
+                    )
+
+                # SELECT: Choose an action based on current state
+                action = action_selector.select_action(
+                    current_state=current_state,
+                    surprise_level=surprise_level,
+                    surprise_sources=surprise_sources,
+                    can_speak=False,  # TODO: wire up voice
+                )
+
+                # EXECUTE: Do the action
+                if action.action_type == ActionType.ASK_QUESTION:
+                    # Agency-driven question (different from metacog surprise questions)
+                    from .messages import add_question
+                    if action.motivation:
+                        # Generate a simple question from motivation
+                        question = f"why is {action.motivation.lower().replace('curious about ', '')}?"
+                        result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
+                        if result:
+                            print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
+
+                elif action.action_type == ActionType.FOCUS_ATTENTION:
+                    sensor = action.parameters.get("sensor")
+                    if sensor:
+                        action_selector.set_attention_focus(sensor)
+                        print(f"[Agency] Focusing attention on: {sensor}", file=sys.stderr, flush=True)
+
+                elif action.action_type == ActionType.ADJUST_SENSITIVITY:
+                    direction = action.parameters.get("direction", "increase")
+                    action_selector.adjust_sensitivity(direction)
+                    print(f"[Agency] Adjusted sensitivity: {direction}", file=sys.stderr, flush=True)
+
+                elif action.action_type == ActionType.LED_BRIGHTNESS:
+                    # Lumen choosing LED brightness (actual agency!)
+                    direction = action.parameters.get("direction")
+                    if direction and _leds and _leds.is_available():
+                        current_brightness = getattr(_leds, '_brightness', 0.1)
+                        if direction == "increase":
+                            new_brightness = min(0.3, current_brightness + 0.05)  # Cap at 0.3 to prevent blinding
+                        else:
+                            new_brightness = max(0.02, current_brightness - 0.05)
+                        _leds.set_brightness(new_brightness)
+                        print(f"[Agency] LED brightness: {current_brightness:.2f} → {new_brightness:.2f} ({direction})", file=sys.stderr, flush=True)
+
+                # Log action selection periodically
+                if loop_count % 120 == 0:  # Every ~4 minutes
+                    stats = action_selector.get_action_stats()
+                    print(f"[Agency] Stats: {stats.get('action_counts', {})} explore_rate={action_selector._exploration_rate:.2f}", file=sys.stderr, flush=True)
+
+                # Save for next iteration's learning
+                _last_action = action
+                _last_state_before = current_state.copy()
+
+            except Exception as e:
+                # Agency is enhancement, not critical path
+                if loop_count % 100 == 1:
+                    print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # Identity is fundamental - should always be available if wake() succeeded
             # If _store is None, that means wake() failed - log warning but continue
