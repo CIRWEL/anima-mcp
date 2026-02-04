@@ -61,13 +61,60 @@ COLORS = {
 
 
 def _get_anima_color(value: float) -> Tuple[int, int, int]:
-    """Get color for anima node based on value."""
-    if value > 0.6:
-        return COLORS["anima_high"]
-    elif value < 0.4:
-        return COLORS["anima_low"]
-    else:
-        return COLORS["anima_mid"]
+    """Get color for anima node based on value - brighter = higher value."""
+    # Interpolate brightness based on value
+    base_r, base_g, base_b = 60, 90, 150  # Base blue
+    brightness = 0.4 + value * 0.6  # 0.4 to 1.0 range
+    return (
+        min(255, int(base_r + (255 - base_r) * value * 0.7)),
+        min(255, int(base_g + (200 - base_g) * value * 0.8)),
+        min(255, int(base_b + (255 - base_b) * value * 0.5)),
+    )
+
+
+def _get_sensor_color(value: float) -> Tuple[int, int, int]:
+    """Get color for sensor node based on normalized value - brighter = higher."""
+    base_r, base_g, base_b = 60, 150, 60  # Base green
+    return (
+        min(255, int(base_r + (180 - base_r) * value)),
+        min(255, int(base_g + (255 - base_g) * value)),
+        min(255, int(base_b + (180 - base_b) * value)),
+    )
+
+
+def _draw_glow(
+    pixels: Dict[Tuple[int, int], Tuple[int, int, int]],
+    cx: int, cy: int, radius: int,
+    color: Tuple[int, int, int],
+    intensity: float,  # 0-1, how bright the glow
+):
+    """Draw a soft glow around a point for high-value nodes."""
+    if intensity < 0.5:
+        return  # No glow for low values
+
+    glow_radius = radius + int(intensity * 4)  # Glow extends based on intensity
+    for dy in range(-glow_radius, glow_radius + 1):
+        for dx in range(-glow_radius, glow_radius + 1):
+            dist_sq = dx * dx + dy * dy
+            if dist_sq <= glow_radius * glow_radius and dist_sq > radius * radius:
+                x, y = cx + dx, cy + dy
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    # Fade glow with distance
+                    dist = math.sqrt(dist_sq)
+                    fade = 1.0 - (dist - radius) / (glow_radius - radius)
+                    glow_color = (
+                        int(color[0] * fade * intensity * 0.5),
+                        int(color[1] * fade * intensity * 0.5),
+                        int(color[2] * fade * intensity * 0.5),
+                    )
+                    # Blend with existing
+                    existing = pixels.get((x, y), COLORS["background"])
+                    blended = (
+                        min(255, existing[0] + glow_color[0]),
+                        min(255, existing[1] + glow_color[1]),
+                        min(255, existing[2] + glow_color[2]),
+                    )
+                    pixels[(x, y)] = blended
 
 
 def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int) -> Tuple[int, int]:
@@ -218,23 +265,53 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
 
         node_positions[node.node_id] = pos
 
-    # Draw edges first (underneath nodes)
+    # Draw edges first (underneath nodes) - thicker and more visible
     for edge in schema.edges:
         if edge.source_id in node_positions and edge.target_id in node_positions:
             x0, y0 = node_positions[edge.source_id]
             x1, y1 = node_positions[edge.target_id]
 
-            # Color based on weight sign
-            if edge.weight >= 0:
-                color = COLORS["edge_positive"]
-            else:
-                color = COLORS["edge_negative"]
-
-            # Thickness based on weight magnitude (1-3 pixels)
+            # Color based on weight - brighter for stronger connections
             weight_magnitude = abs(edge.weight)
-            thickness = max(1, min(3, int(weight_magnitude * 3) + 1))
+            if edge.weight >= 0:
+                # Positive: green, brighter with strength
+                brightness = 0.5 + weight_magnitude * 0.5
+                color = (
+                    int(80 * brightness),
+                    int(180 * brightness),
+                    int(80 * brightness),
+                )
+            else:
+                # Negative: red, brighter with strength
+                brightness = 0.5 + weight_magnitude * 0.5
+                color = (
+                    int(180 * brightness),
+                    int(80 * brightness),
+                    int(80 * brightness),
+                )
+
+            # Thickness based on weight magnitude (2-4 pixels) - more visible
+            thickness = max(2, min(4, int(weight_magnitude * 4) + 2))
 
             _draw_line(pixels, x0, y0, x1, y1, color, thickness=thickness)
+
+    # Build node value lookup for glow
+    node_values = {n.node_id: n.value for n in schema.nodes}
+
+    # Draw glows first (underneath nodes)
+    for node in schema.nodes:
+        if node.node_id not in node_positions:
+            continue
+        x, y = node_positions[node.node_id]
+
+        if node.node_type == "identity":
+            _draw_glow(pixels, x, y, IDENTITY_RADIUS, COLORS["identity"], 0.8)
+        elif node.node_type == "anima":
+            color = _get_anima_color(node.value)
+            _draw_glow(pixels, x, y, ANIMA_RADIUS, color, node.value)
+        elif node.node_type == "sensor":
+            color = _get_sensor_color(node.value)
+            _draw_glow(pixels, x, y, SENSOR_RADIUS, color, node.value)
 
     # Draw nodes
     for node in schema.nodes:
@@ -249,7 +326,8 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             color = _get_anima_color(node.value)
             _draw_filled_circle(pixels, x, y, ANIMA_RADIUS, color)
         elif node.node_type == "sensor":
-            _draw_filled_circle(pixels, x, y, SENSOR_RADIUS, COLORS["sensor"])
+            color = _get_sensor_color(node.value)
+            _draw_filled_circle(pixels, x, y, SENSOR_RADIUS, color)
         elif node.node_type == "preference":
             _draw_filled_circle(pixels, x, y, PREFERENCE_RADIUS, COLORS["preference"])
 

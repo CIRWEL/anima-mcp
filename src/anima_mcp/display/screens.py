@@ -1469,126 +1469,127 @@ class ScreenRenderer:
 
             # Use cached fonts (loading from disk is slow)
             fonts = self._get_fonts()
-            font = fonts['small_med']
             font_small = fonts['tiny']
             font_title = fonts['default']
 
-            y_offset = 8
+            y_offset = 6
+            bar_x = 10
+            bar_width = 180
+            bar_height = 12  # Compact bars
 
-            # Get calibration data
+            # Get comfort zones from summary
+            comfort_zones = summary.get("comfort_zones", [])
             cal = summary.get("current_calibration", {})
-            humidity_ideal = cal.get("humidity_ideal", 50)
-            humidity_current = readings.humidity_pct if readings.humidity_pct else 0
 
-            # Determine main insight
-            is_too_dry = humidity_current < humidity_ideal - 10
-            is_too_damp = humidity_current > humidity_ideal + 10
+            # Find humidity and temp zones
+            humidity_zone = next((z for z in comfort_zones if z["sensor"] == "humidity"), None)
+            temp_zone = next((z for z in comfort_zones if z["sensor"] == "ambient_temp"), None)
 
-            # Title - what's happening
-            if is_too_dry:
-                title = "too dry"
+            # Determine overall status
+            statuses = [z["status"] for z in comfort_zones]
+            if "extreme" in statuses:
+                title = "stressed"
+                title_color = RED
+            elif "uncomfortable" in statuses:
+                title = "adjusting"
                 title_color = YELLOW
-            elif is_too_damp:
-                title = "too damp"
-                title_color = BLUE
             else:
                 title = "comfortable"
                 title_color = GREEN
 
             draw.text((10, y_offset), title, fill=title_color, font=font_title)
-            # Show refresh indicator if using stale data
             if showing_stale or self._learning_cache_refreshing:
                 draw.text((180, y_offset), "↻", fill=LIGHT_CYAN, font=font_title)
-            y_offset += 22
-
-            # === HUMIDITY BAR (Visual comfort zone) ===
-            draw.text((10, y_offset), "humidity", fill=LIGHT_CYAN, font=font_small)
-            y_offset += 14
-
-            bar_x = 10
-            bar_width = 180
-            bar_height = 16
-
-            # Background bar (full range 0-100%)
-            draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
-                          fill=DARK_GRAY, outline=LIGHT_CYAN)
-
-            # Comfort zone highlight (ideal ± 15%)
-            comfort_min = max(0, humidity_ideal - 15) / 100.0 * bar_width
-            comfort_max = min(100, humidity_ideal + 15) / 100.0 * bar_width
-            draw.rectangle([bar_x + int(comfort_min), y_offset + 2,
-                          bar_x + int(comfort_max), y_offset + bar_height - 2],
-                          fill=(30, 60, 30))  # Dark green zone
-
-            # Ideal marker (thin line)
-            ideal_x = bar_x + int(humidity_ideal / 100.0 * bar_width)
-            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=2)
-
-            # Current value marker (filled rectangle)
-            current_x = bar_x + int(humidity_current / 100.0 * bar_width)
-            marker_color = GREEN if abs(humidity_current - humidity_ideal) < 15 else (YELLOW if is_too_dry else BLUE)
-            draw.rectangle([current_x - 3, y_offset - 2, current_x + 3, y_offset + bar_height + 2],
-                          fill=marker_color)
-
-            # Labels
-            y_offset += bar_height + 4
-            draw.text((bar_x, y_offset), f"now: {humidity_current:.0f}%", fill=marker_color, font=font_small)
-            draw.text((bar_x + 90, y_offset), f"ideal: {humidity_ideal:.0f}%", fill=GREEN, font=font_small)
-            y_offset += 18
-
-            # === WARMTH GAUGE ===
-            draw.text((10, y_offset), "warmth", fill=LIGHT_CYAN, font=font_small)
-            y_offset += 14
-
-            warmth = anima.warmth
-            warmth_bar_width = int(warmth * bar_width)
-
-            # Background
-            draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
-                          fill=DARK_GRAY, outline=LIGHT_CYAN)
-
-            # Warmth fill (gradient effect)
-            if warmth > 0.6:
-                warmth_color = ORANGE
-            elif warmth < 0.3:
-                warmth_color = CYAN
-            else:
-                warmth_color = YELLOW
-
-            if warmth_bar_width > 0:
-                draw.rectangle([bar_x, y_offset, bar_x + warmth_bar_width, y_offset + bar_height],
-                              fill=warmth_color)
-
-            # Warmth percentage
-            y_offset += bar_height + 4
-            warmth_label = "cold" if warmth < 0.3 else "cool" if warmth < 0.5 else "warm" if warmth > 0.6 else "neutral"
-            draw.text((bar_x, y_offset), f"{warmth:.0%} ({warmth_label})", fill=warmth_color, font=font_small)
             y_offset += 20
 
-            # === CAUSE/EFFECT CONNECTION ===
-            if is_too_dry or is_too_damp:
-                # Draw connection arrow
-                draw.text((10, y_offset), "because:", fill=LIGHT_CYAN, font=font_small)
-                y_offset += 14
+            # === HUMIDITY BAR ===
+            if humidity_zone:
+                humidity_current = humidity_zone["current"] or 0
+                humidity_ideal = humidity_zone["ideal"]
+                h_status = humidity_zone["status"]
 
-                gap = abs(humidity_current - humidity_ideal)
-                if is_too_dry:
-                    cause_text = f"air is {gap:.0f}% drier than i learned"
-                    cause_color = YELLOW
-                else:
-                    cause_text = f"air is {gap:.0f}% damper than i learned"
-                    cause_color = BLUE
+                draw.text((bar_x, y_offset), f"humidity {humidity_current:.0f}%", fill=LIGHT_CYAN, font=font_small)
+                y_offset += 12
 
-                draw.text((10, y_offset), cause_text, fill=cause_color, font=font_small)
-                y_offset += 16
+                # Background + comfort zone
+                draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
+                              fill=DARK_GRAY, outline=(60, 60, 70))
+                c_min, c_max = humidity_zone["comfortable_range"]
+                comfort_x1 = bar_x + int(c_min / 100.0 * bar_width)
+                comfort_x2 = bar_x + int(c_max / 100.0 * bar_width)
+                draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
+                              fill=(25, 50, 25))
 
-                # Adaptation note
-                draw.text((10, y_offset), "adapting...", fill=PURPLE, font=font_small)
+                # Ideal line + current marker
+                ideal_x = bar_x + int(humidity_ideal / 100.0 * bar_width)
+                draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
+                current_x = bar_x + int(min(100, humidity_current) / 100.0 * bar_width)
+                h_color = GREEN if h_status == "comfortable" else YELLOW if h_status == "uncomfortable" else RED
+                draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=h_color)
+                y_offset += bar_height + 6
+
+            # === TEMPERATURE BAR ===
+            if temp_zone:
+                temp_current = temp_zone["current"] or 0
+                temp_ideal = temp_zone["ideal"]
+                t_status = temp_zone["status"]
+                t_range = temp_zone["comfortable_range"]
+
+                draw.text((bar_x, y_offset), f"temp {temp_current:.1f}°C", fill=LIGHT_CYAN, font=font_small)
+                y_offset += 12
+
+                # Normalize temp to 10-35°C range for display
+                t_min_display, t_max_display = 10, 35
+                def temp_to_x(t):
+                    return bar_x + int((t - t_min_display) / (t_max_display - t_min_display) * bar_width)
+
+                draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
+                              fill=DARK_GRAY, outline=(60, 60, 70))
+                comfort_x1 = max(bar_x, temp_to_x(t_range[0]))
+                comfort_x2 = min(bar_x + bar_width, temp_to_x(t_range[1]))
+                draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
+                              fill=(25, 50, 25))
+
+                ideal_x = temp_to_x(temp_ideal)
+                draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
+                current_x = max(bar_x, min(bar_x + bar_width, temp_to_x(temp_current)))
+                t_color = GREEN if t_status == "comfortable" else YELLOW if t_status == "uncomfortable" else RED
+                draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=t_color)
+                y_offset += bar_height + 6
+
+            # === WARMTH (Internal State) ===
+            warmth = anima.warmth
+            warmth_color = ORANGE if warmth > 0.6 else CYAN if warmth < 0.3 else YELLOW
+            draw.text((bar_x, y_offset), f"warmth {warmth:.0%}", fill=LIGHT_CYAN, font=font_small)
+            y_offset += 12
+
+            draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
+                          fill=DARK_GRAY, outline=(60, 60, 70))
+            warmth_fill = int(warmth * bar_width)
+            if warmth_fill > 0:
+                draw.rectangle([bar_x, y_offset, bar_x + warmth_fill, y_offset + bar_height], fill=warmth_color)
+            y_offset += bar_height + 8
+
+            # === STABILITY (Internal State) ===
+            stability = anima.stability
+            stab_color = GREEN if stability > 0.6 else YELLOW if stability > 0.3 else RED
+            draw.text((bar_x, y_offset), f"stability {stability:.0%}", fill=LIGHT_CYAN, font=font_small)
+            y_offset += 12
+
+            draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
+                          fill=DARK_GRAY, outline=(60, 60, 70))
+            stab_fill = int(stability * bar_width)
+            if stab_fill > 0:
+                draw.rectangle([bar_x, y_offset, bar_x + stab_fill, y_offset + bar_height], fill=stab_color)
+            y_offset += bar_height + 8
+
+            # === INSIGHT TEXT ===
+            insights = summary.get("why_feels_cold", [])
+            if insights:
+                insight = insights[0]
+                draw.text((bar_x, y_offset), insight.get("title", "")[:30], fill=PURPLE, font=font_small)
             else:
-                # Comfortable state
-                draw.text((10, y_offset), "environment matches", fill=GREEN, font=font_small)
-                y_offset += 14
-                draw.text((10, y_offset), "what i've learned", fill=GREEN, font=font_small)
+                draw.text((bar_x, y_offset), "learning from environment...", fill=(100, 100, 100), font=font_small)
 
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.LEARNING)
