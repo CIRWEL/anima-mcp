@@ -440,8 +440,10 @@ async def _update_display_loop():
                         if prev_state:
                             prev_dir = prev_state.joystick_direction
                             # Only trigger on transition TO left/right (edge detection)
-                            # Q&A screen needs left/right for focus switching (question <-> answer)
-                            qa_needs_lr = (current_mode == ScreenMode.QUESTIONS)
+                            # Q&A screen needs left/right for focus switching ONLY when expanded
+                            # When collapsed, LEFT/RIGHT should switch screens like normal
+                            qa_expanded = _screen_renderer._state.qa_expanded if _screen_renderer else False
+                            qa_needs_lr = (current_mode == ScreenMode.QUESTIONS and qa_expanded)
 
                             if not qa_needs_lr:
                                 if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
