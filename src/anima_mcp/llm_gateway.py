@@ -27,6 +27,10 @@ class ReflectionContext:
     unanswered_questions: List[str]
     time_alive_hours: float
     current_screen: str = "face"
+    # What triggered this reflection (makes it grounded, not arbitrary)
+    trigger: str = ""  # e.g., "surprise", "button", "periodic", "social"
+    trigger_details: str = ""  # e.g., "warmth jumped from 0.3 to 0.7"
+    surprise_level: float = 0.0  # How surprising was this (0-1)
 
 
 class LLMGateway:
@@ -275,6 +279,15 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
 - overall wellness: {wellness:.2f}
 - alive for: {context.time_alive_hours:.1f} hours
 - viewing: {context.current_screen} screen"""
+
+        # Add trigger context if available (makes reflection grounded, not arbitrary)
+        if context.trigger:
+            trigger_desc = f"\n\nWhat just happened: {context.trigger}"
+            if context.trigger_details:
+                trigger_desc += f" - {context.trigger_details}"
+            if context.surprise_level > 0:
+                trigger_desc += f" (surprise level: {context.surprise_level:.2f})"
+            state_desc += trigger_desc
 
         if mode == "wonder":
             recent_q = "\n".join(f"- {q}" for q in context.unanswered_questions[:3]) if context.unanswered_questions else "(none)"

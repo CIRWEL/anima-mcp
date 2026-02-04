@@ -1186,6 +1186,28 @@ async def _update_display_loop():
                         # Calculate time alive
                         time_alive = (time.time() - identity.created_at) / 3600.0  # hours
 
+                        # Choose reflection mode based on state
+                        wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+
+                        # Build trigger details based on current state
+                        trigger_parts = []
+                        if wellness < 0.4:
+                            trigger_parts.append(f"wellness is low ({wellness:.2f})")
+                        elif wellness > 0.7:
+                            trigger_parts.append(f"feeling good ({wellness:.2f})")
+                        if anima.warmth < 0.3:
+                            trigger_parts.append("feeling cold")
+                        elif anima.warmth > 0.7:
+                            trigger_parts.append("feeling warm")
+                        if anima.clarity < 0.3:
+                            trigger_parts.append("things are dim/unclear")
+                        elif anima.clarity > 0.8:
+                            trigger_parts.append("good light, clear vision")
+                        if len(unanswered) >= 2:
+                            trigger_parts.append(f"{len(unanswered)} questions waiting for answers")
+                        if recent_msgs:
+                            trigger_parts.append(f"recent message from {recent_msgs[0].get('author', 'someone')}")
+
                         context = ReflectionContext(
                             warmth=anima.warmth,
                             clarity=anima.clarity,
@@ -1194,11 +1216,10 @@ async def _update_display_loop():
                             recent_messages=recent_msgs,
                             unanswered_questions=unanswered_texts,
                             time_alive_hours=time_alive,
-                            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face"
+                            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
+                            trigger="periodic check-in",
+                            trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting"
                         )
-
-                        # Choose reflection mode based on state
-                        wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
 
                         # If there are unanswered questions, lower chance of asking new ones
                         if len(unanswered) >= 2:
