@@ -2809,6 +2809,16 @@ TOOLS_STANDARD = [
                     "description": "Restart the server after pulling (default: false)",
                     "default": False,
                 },
+                "stash": {
+                    "type": "boolean",
+                    "description": "Stash local changes before pulling (default: false)",
+                    "default": False,
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Hard reset to remote, discarding local changes (DANGER: loses local changes, default: false)",
+                    "default": False,
+                },
             },
         },
     ),
