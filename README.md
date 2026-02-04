@@ -69,9 +69,10 @@ anima
 # - docs/PI_SETUP_COMPLETE.md (complete walkthrough)
 ```
 
-### Network Access (SSE)
+### Network Access (Streamable HTTP)
 ```bash
-anima --sse --host 0.0.0.0 --port 8765
+anima --http --host 0.0.0.0 --port 8766
+# Serves: /mcp/ (Streamable HTTP) + /sse (legacy)
 ```
 
 **📖 Documentation:**
@@ -100,7 +101,7 @@ Lumen uses a **hardware broker pattern** that allows both scripts to run simulta
                      │ Shared Memory
                      ▼
 ┌──────────────────────────────────────────────────────────┐
-│ anima --sse (The Mind - MCP Server)                      │
+│ anima --http (The Mind - MCP Server)                     │
 │ - Reads from shared memory (no direct sensor access)     │
 │ - Provides MCP tools for external communication          │
 │ - Fast responses (reads from memory, not hardware)       │
@@ -121,12 +122,12 @@ Lumen uses a **hardware broker pattern** that allows both scripts to run simulta
 python3 stable_creature.py
 
 # Terminal 2: MCP server
-anima --sse --host 0.0.0.0 --port 8765
+anima --http --host 0.0.0.0 --port 8766
 ```
 
 **Or: MCP server only (standalone)**
 ```bash
-anima --sse --host 0.0.0.0 --port 8765
+anima --http --host 0.0.0.0 --port 8766
 # Falls back to direct sensor access automatically
 ```
 
@@ -265,13 +266,13 @@ Designed for Raspberry Pi 4 with BrainCraft HAT:
 
 Falls back to mock sensors on Mac. Display and LEDs update automatically every 2 seconds.
 
-## Network Access (SSE)
+## Network Access (Streamable HTTP)
 
 Run on Pi, connect from Mac:
 
 ```bash
 # On Pi
-anima --sse --port 8765
+anima --http --port 8766
 ```
 
 **MCP Configuration:**
@@ -284,7 +285,7 @@ anima --sse --port 8765
   "mcpServers": {
     "anima": {
       "type": "http",
-      "url": "http://pi.local:8765/mcp/"
+      "url": "http://pi.local:8766/mcp/"
     }
   }
 }
@@ -293,10 +294,10 @@ anima --sse --port 8765
 **Alternative endpoints:**
 | URL | Use Case |
 |-----|----------|
-| `http://<pi-ip>:8765/mcp/` | Direct (local network) |
+| `http://<pi-ip>:8766/mcp/` | Streamable HTTP (recommended) |
 | `http://localhost:8766/mcp/` | Via SSH tunnel |
 | `https://lumen-anima.ngrok.io/mcp/` | Via ngrok (remote) |
-| `http://<pi-ip>:8765/sse` | Legacy SSE clients |
+| `http://<pi-ip>:8766/sse` | Legacy SSE (backwards compatible) |
 
 The creature lives on the Pi. You visit from anywhere on the network.
 
