@@ -53,6 +53,7 @@ from .expression_moods import ExpressionMoodTracker
 from .shared_memory import SharedMemoryClient
 from .growth import get_growth_system, GrowthSystem
 from .agency import get_action_selector, ActionType, Action, ActionOutcome
+from .primitive_language import get_language_system, Utterance
 
 
 # Global state
@@ -74,6 +75,8 @@ _growth: GrowthSystem | None = None  # Growth system for learning, relationships
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
+# Primitive language state - emergent expression
+_last_primitive_utterance: Utterance | None = None
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
@@ -773,6 +776,59 @@ async def _update_display_loop():
                 # Agency is enhancement, not critical path
                 if loop_count % 100 == 1:
                     print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+            # === PRIMITIVE LANGUAGE: Emergent expression through learned tokens ===
+            # Lumen can express itself through primitive token combinations.
+            # Feedback shapes which patterns survive over time.
+            global _last_primitive_utterance
+            try:
+                lang = get_language_system(str(_store.db_path) if _store else "anima.db")
+
+                # Current state for language generation
+                lang_state = {
+                    "warmth": anima.warmth if anima else 0.5,
+                    "clarity": anima.clarity if anima else 0.5,
+                    "stability": anima.stability if anima else 0.5,
+                    "presence": anima.presence if anima else 0.0,
+                }
+
+                # Check if it's time to generate an utterance
+                should_speak, reason = lang.should_generate(lang_state)
+                if should_speak:
+                    utterance = lang.generate_utterance(lang_state)
+                    _last_primitive_utterance = utterance
+
+                    # Log the utterance
+                    print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason})", file=sys.stderr, flush=True)
+                    print(f"[PrimitiveLang] Pattern: {utterance.category_pattern()}", file=sys.stderr, flush=True)
+
+                    # Add to message board so it's visible
+                    from .messages import add_observation
+                    add_observation(
+                        f"[expression] {utterance.text()}",
+                        author="lumen",
+                        metadata={
+                            "primitive_tokens": utterance.tokens,
+                            "pattern": utterance.category_pattern(),
+                            "state": {
+                                "warmth": lang_state.get("warmth", 0.5),
+                                "clarity": lang_state.get("clarity", 0.5),
+                                "stability": lang_state.get("stability", 0.5),
+                                "presence": lang_state.get("presence", 0.0),
+                            },
+                        }
+                    )
+
+                # Log stats periodically
+                if loop_count % 300 == 0:  # Every ~10 minutes
+                    stats = lang.get_stats()
+                    if stats.get("total_utterances", 0) > 0:
+                        print(f"[PrimitiveLang] Stats: {stats.get('total_utterances')} utterances, avg_score={stats.get('average_score')}, interval={stats.get('current_interval_minutes'):.1f}m", file=sys.stderr, flush=True)
+
+            except Exception as e:
+                # Primitive language is enhancement, not critical path
+                if loop_count % 100 == 1:
+                    print(f"[PrimitiveLang] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # Identity is fundamental - should always be available if wake() succeeded
             # If _store is None, that means wake() failed - log warning but continue
@@ -2058,6 +2114,81 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     }))]
 
 
+async def handle_primitive_feedback(arguments: dict) -> list[TextContent]:
+    """
+    Give feedback on Lumen's primitive language expressions.
+
+    This is the training signal that shapes Lumen's emergent expression:
+    - resonate: Strong positive signal (like /resonate command Gemini suggested)
+    - confused: Negative signal (expression was unclear)
+    - stats: View learning progress
+    - recent: List recent utterances with scores
+    """
+    action = arguments.get("action", "stats")
+
+    try:
+        lang = get_language_system(str(_store.db_path) if _store else "anima.db")
+
+        if action == "resonate":
+            # Give strong positive feedback to last utterance
+            result = lang.record_explicit_feedback(positive=True)
+            if result:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": True,
+                    "action": "resonate",
+                    "message": "Positive feedback recorded - this pattern will be reinforced",
+                    "score": result["score"],
+                    "token_updates": result["token_updates"],
+                }))]
+            else:
+                return [TextContent(type="text", text=json.dumps({
+                    "error": "No recent utterance to give feedback on"
+                }))]
+
+        elif action == "confused":
+            # Give negative feedback
+            result = lang.record_explicit_feedback(positive=False)
+            if result:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": True,
+                    "action": "confused",
+                    "message": "Negative feedback recorded - this pattern will be discouraged",
+                    "score": result["score"],
+                    "token_updates": result["token_updates"],
+                }))]
+            else:
+                return [TextContent(type="text", text=json.dumps({
+                    "error": "No recent utterance to give feedback on"
+                }))]
+
+        elif action == "recent":
+            # List recent utterances
+            recent = lang.get_recent_utterances(10)
+            return [TextContent(type="text", text=json.dumps({
+                "action": "recent",
+                "utterances": recent,
+                "count": len(recent),
+            }))]
+
+        else:  # stats
+            # Get learning statistics
+            stats = lang.get_stats()
+            return [TextContent(type="text", text=json.dumps({
+                "action": "stats",
+                "primitive_language_system": stats,
+                "help": {
+                    "resonate": "Give positive feedback to last expression",
+                    "confused": "Give negative feedback to last expression",
+                    "recent": "View recent utterances with scores",
+                },
+            }))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Primitive language error: {str(e)}"
+        }))]
+
+
 async def handle_set_name(arguments: dict) -> list[TextContent]:
     """Set or change name. Safe, never crashes."""
     store = _get_store()
@@ -3262,6 +3393,21 @@ TOOLS_STANDARD = [
             },
         },
     ),
+    Tool(
+        name="primitive_feedback",
+        description="Give feedback on Lumen's primitive expressions. Use 'resonate' for meaningful expressions, 'confused' for unclear ones, or 'stats' to view learning progress.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["resonate", "confused", "stats", "recent"],
+                    "description": "resonate=positive feedback, confused=negative feedback, stats=view learning, recent=list recent utterances",
+                },
+            },
+            "required": ["action"],
+        },
+    ),
 ]
 
 # ============================================================
@@ -4328,6 +4474,7 @@ HANDLERS = {
     "configure_voice": handle_configure_voice,
     "manage_display": handle_manage_display,
     "lumen_qa": handle_lumen_qa,
+    "primitive_feedback": handle_primitive_feedback,
 }
 
 
