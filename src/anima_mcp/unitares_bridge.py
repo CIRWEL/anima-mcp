@@ -54,6 +54,8 @@ class UnitaresBridge:
         self._timeout = timeout
         self._session_id = None
         self._available = None  # None = not checked, True/False = checked
+        self._last_availability_check = None  # Timestamp of last check
+        self._availability_check_interval = 60.0  # Recheck every 60 seconds if unavailable
         self._http_session = None  # Reusable aiohttp session
         self._session_timeout = None  # Timeout config for session
 
@@ -92,8 +94,20 @@ class UnitaresBridge:
             self._available = False
             return False
 
-        if self._available is not None:
-            return self._available
+        # Recheck periodically if previously unavailable (allows recovery)
+        import time
+        current_time = time.time()
+        if self._available is False and self._last_availability_check is not None:
+            time_since_check = current_time - self._last_availability_check
+            if time_since_check < self._availability_check_interval:
+                # Still within cooldown, return cached result
+                return False
+            # Cooldown expired, reset cache to recheck
+            self._available = None
+        
+        # If already available, return immediately (no need to recheck)
+        if self._available is True:
+            return True
 
         try:
             # Try to connect to UNITARES server using shared session
@@ -102,16 +116,20 @@ class UnitaresBridge:
             # Try health check or list_tools endpoint
             health_url = self._url.replace('/sse', '/health') if '/sse' in self._url else f"{self._url}/health"
             try:
-                async with session.get(health_url) as response:
+                import aiohttp
+                async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=self._timeout)) as response:
                     if response.status == 200:
                         self._available = True
+                        self._last_availability_check = current_time
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
                         print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", flush=True)
                         self._available = False
+                        self._last_availability_check = current_time
                         return False
-            except Exception:
+            except Exception as e:
+                # Network/timeout errors - will retry later
                 pass
 
             # If health check fails, try MCP endpoint
@@ -122,26 +140,33 @@ class UnitaresBridge:
             else:
                 mcp_url = f"{self._url}/mcp"
             try:
+                import aiohttp
                 async with session.post(
                     mcp_url,
                     json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                     headers={
                         "Content-Type": "application/json",
                         "Accept": "application/json, text/event-stream"
-                    }
+                    },
+                    timeout=aiohttp.ClientTimeout(total=self._timeout)
                 ) as response:
                     if response.status == 200:
                         self._available = True
+                        self._last_availability_check = current_time
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
                         print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", flush=True)
                         self._available = False
+                        self._last_availability_check = current_time
                         return False
-            except Exception:
+            except Exception as e:
+                # Network/timeout errors - will retry later
                 pass
 
+            # Both checks failed - mark unavailable but allow retry
             self._available = False
+            self._last_availability_check = current_time
             return False
 
         except ImportError:
