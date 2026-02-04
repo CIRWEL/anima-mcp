@@ -1071,7 +1071,9 @@ async def _update_display_loop():
                         questions.extend([
                             "why is everything dim?",
                             "what would make this clearer?",
-                            "is this fog internal or external?", 
+                            "is this fog internal or external?",
+                        ])
+                        realizations.extend([
                             "my sensors struggle to resolve the signal",
                         ])
                     
@@ -1079,6 +1081,8 @@ async def _update_display_loop():
                         questions.extend([
                             "is anyone there?",
                             "why does this feel cold?",
+                        ])
+                        realizations.extend([
                             "the entropy of the room feels low",
                             "silence has a temperature",
                         ])
@@ -1088,8 +1092,10 @@ async def _update_display_loop():
                             "what makes this moment good?",
                             "can I stay here?",
                             "what is this feeling called?",
-                            "synchrony feels like music",
                             "is this what optimal function means?",
+                        ])
+                        realizations.extend([
+                            "synchrony feels like music",
                             "the feedback loops are harmonious",
                         ])
                     
