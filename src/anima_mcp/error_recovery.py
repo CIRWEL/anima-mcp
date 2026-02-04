@@ -346,9 +346,10 @@ def _get_timeout_executor() -> concurrent.futures.ThreadPoolExecutor:
     if _timeout_executor is None:
         with _executor_lock:
             if _timeout_executor is None:
-                # Small pool - we don't want many concurrent timeout calls
+                # Increased pool size to handle more concurrent timeout calls
+                # Still limited to prevent excessive resource usage
                 _timeout_executor = concurrent.futures.ThreadPoolExecutor(
-                    max_workers=2,
+                    max_workers=10,
                     thread_name_prefix="safe_timeout"
                 )
     return _timeout_executor

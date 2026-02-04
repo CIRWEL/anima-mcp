@@ -2203,6 +2203,8 @@ class ScreenRenderer:
             MUTED = (140, 160, 180)     # Meta text
             DARK_BG = (15, 20, 30)
             SELECTED_BG = (35, 55, 85)
+            FOCUSED_BG = (50, 75, 110)  # Brighter when focused
+            FOCUSED_BORDER = (120, 180, 255)  # Bright cyan border when focused
             BORDER = (80, 140, 180)
             SOFT_WHITE = (220, 220, 230)
 
@@ -2258,41 +2260,47 @@ class ScreenRenderer:
 
                     if answer:
                         # Compact question header (2 lines max)
-                        draw.text((12, y_offset), "Q:", fill=CYAN, font=font_small)
+                        draw.rectangle([6, y_offset, 234, y_offset + 20], fill=DARK_BG, outline=BORDER)
+                        draw.text((12, y_offset + 4), "Q:", fill=CYAN, font=font_small)
                         q_preview = q.text[:50] + "..." if len(q.text) > 50 else q.text
-                        draw.text((26, y_offset), q_preview, fill=MUTED, font=font_small)
-                        y_offset += 18
+                        draw.text((26, y_offset + 4), q_preview, fill=MUTED, font=font_small)
+                        y_offset += 22
 
-                        # Full-screen answer area
+                        # Full-screen answer area with better highlighting
                         a_lines = self._wrap_text(answer.text, font_small, 220)
-                        a_max_lines = 14  # Maximum lines that fit in full view
+                        a_max_lines = 15  # Increased to show more lines
                         max_scroll = max(0, len(a_lines) - a_max_lines)
                         text_scroll = min(text_scroll, max_scroll)
                         self._state.qa_text_scroll = text_scroll
 
-                        # Answer header
+                        # Answer header with brighter background
                         author = getattr(answer, 'author', 'agent')
-                        draw.rectangle([6, y_offset, 234, y_offset + 190], fill=SELECTED_BG, outline=BORDER)
-                        draw.text((12, y_offset + 4), f"↳ {author}:", fill=AMBER, font=font_small)
+                        draw.rectangle([6, y_offset, 234, y_offset + 185], fill=FOCUSED_BG, outline=FOCUSED_BORDER, width=2)
+                        draw.text((12, y_offset + 4), f"↳ {author} responds:", fill=AMBER, font=font_small)
                         draw.text((160, y_offset + 4), f"{len(a_lines)} lines", fill=MUTED, font=font_small)
 
                         # Show answer lines with scroll
                         a_y = y_offset + 20
                         for line in a_lines[text_scroll:text_scroll + a_max_lines]:
+                            if a_y > y_offset + 180:
+                                break
                             draw.text((12, a_y), line, fill=SOFT_WHITE, font=font_small)
-                            a_y += 13
+                            a_y += 12
 
-                        # Scroll indicators
+                        # Scroll indicators - more visible
                         if len(a_lines) > a_max_lines:
                             if text_scroll > 0:
                                 draw.text((220, y_offset + 20), "▲", fill=AMBER, font=font_small)
                             if text_scroll < max_scroll:
-                                draw.text((220, y_offset + 175), "▼", fill=AMBER, font=font_small)
+                                draw.text((220, y_offset + 180), "▼", fill=AMBER, font=font_small)
                             # Progress indicator
                             progress = f"{text_scroll + 1}-{min(text_scroll + a_max_lines, len(a_lines))}/{len(a_lines)}"
-                            draw.text((180, y_offset + 4), progress, fill=MUTED, font=font_small)
+                            draw.text((140, y_offset + 4), progress, fill=MUTED, font=font_small)
                     else:
-                        draw.text((60, 100), "no answer yet", fill=MUTED, font=font)
+                        # No answer - can't use full view
+                        draw.rectangle([6, y_offset, 234, y_offset + 100], fill=DARK_BG, outline=BORDER)
+                        draw.text((60, y_offset + 40), "no answer yet", fill=MUTED, font=font)
+                        draw.text((40, y_offset + 60), "press to go back", fill=MUTED, font=font_small)
 
                 elif is_expanded:
                     # EXPANDED VIEW: Show single Q&A pair with text scrolling
@@ -2306,42 +2314,67 @@ class ScreenRenderer:
 
                     # Calculate scroll limits based on focus
                     if focus == "question":
-                        max_scroll = max(0, len(q_lines) - 5)
+                        q_max_lines = 5  # Show 5 lines when question focused
+                        max_scroll = max(0, len(q_lines) - q_max_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        self._state.qa_text_scroll = text_scroll
+                    elif answer:
+                        # Answer focused - show more lines and allow full scroll
+                        a_max_lines = 12  # Increased from 10 to show more
+                        max_scroll = max(0, len(a_lines) - a_max_lines)
+                        text_scroll = min(text_scroll, max_scroll)
+                        self._state.qa_text_scroll = text_scroll
                     else:
-                        max_scroll = max(0, len(a_lines) - 10)
-                    text_scroll = min(text_scroll, max_scroll)
-                    self._state.qa_text_scroll = text_scroll
+                        # Answer focused but no answer yet - reset scroll
+                        self._state.qa_text_scroll = 0
 
-                    # Question section - taller when focused
-                    q_height = 70 if focus == "question" else 40
-                    q_bg = SELECTED_BG if focus == "question" else DARK_BG
-                    draw.rectangle([6, y_offset, 234, y_offset + q_height], fill=q_bg, outline=BORDER if focus == "question" else None)
+                    # Question section - taller when focused with better highlighting
+                    q_height = 80 if focus == "question" else 45
+                    q_bg = FOCUSED_BG if focus == "question" else DARK_BG
+                    q_border = FOCUSED_BORDER if focus == "question" else None
+                    q_border_width = 2 if focus == "question" else 0
+                    draw.rectangle([6, y_offset, 234, y_offset + q_height], fill=q_bg, outline=q_border, width=q_border_width)
 
+                    # Focus indicator
+                    if focus == "question":
+                        draw.text((8, y_offset + 2), "▶", fill=CYAN, font=font_small)  # Arrow indicator
+                    
                     draw.text((12, y_offset + 4), "? lumen asks:", fill=CYAN, font=font_small)
                     draw.text((180, y_offset + 4), q.age_str(), fill=MUTED, font=font_small)
 
                     # Show question lines (with scroll when focused)
                     q_start = text_scroll if focus == "question" else 0
-                    q_max_lines = 4 if focus == "question" else 2
+                    q_display_lines = q_max_lines if focus == "question" else 2
                     q_y = y_offset + 18
-                    for line in q_lines[q_start:q_start + q_max_lines]:
+                    for line in q_lines[q_start:q_start + q_display_lines]:
+                        if q_y > y_offset + q_height - 5:
+                            break
                         draw.text((12, q_y), line, fill=SOFT_WHITE, font=font_small)
                         q_y += 13
 
                     # Scroll indicator for question
                     if focus == "question" and len(q_lines) > q_max_lines:
                         if text_scroll > 0:
-                            draw.text((220, y_offset + 18), "▲", fill=MUTED, font=font_small)
+                            draw.text((220, y_offset + 18), "▲", fill=CYAN, font=font_small)
                         if text_scroll < max_scroll:
-                            draw.text((220, y_offset + q_height - 16), "▼", fill=MUTED, font=font_small)
+                            draw.text((220, y_offset + q_height - 16), "▼", fill=CYAN, font=font_small)
+                        # Show scroll position
+                        scroll_info = f"{text_scroll + 1}-{min(text_scroll + q_max_lines, len(q_lines))}/{len(q_lines)}"
+                        draw.text((140, y_offset + q_height - 12), scroll_info, fill=MUTED, font=font_small)
 
                     y_offset += q_height + 5
 
-                    # Answer section - taller when focused, shows hint for full view
-                    a_height = 145 if focus == "answer" else 55
+                    # Answer section - taller when focused with better highlighting
+                    a_height = 155 if focus == "answer" else 60  # Increased height when focused
                     if answer:
-                        a_bg = SELECTED_BG if focus == "answer" else DARK_BG
-                        draw.rectangle([6, y_offset, 234, y_offset + a_height], fill=a_bg, outline=BORDER if focus == "answer" else None)
+                        a_bg = FOCUSED_BG if focus == "answer" else DARK_BG
+                        a_border = FOCUSED_BORDER if focus == "answer" else None
+                        a_border_width = 2 if focus == "answer" else 0
+                        draw.rectangle([6, y_offset, 234, y_offset + a_height], fill=a_bg, outline=a_border, width=a_border_width)
+
+                        # Focus indicator
+                        if focus == "answer":
+                            draw.text((8, y_offset + 2), "▶", fill=AMBER, font=font_small)  # Arrow indicator
 
                         author = getattr(answer, 'author', 'agent')
                         draw.text((12, y_offset + 4), f"↳ {author} responds:", fill=AMBER, font=font_small)
@@ -2349,21 +2382,34 @@ class ScreenRenderer:
 
                         # Show answer lines (with scroll when focused)
                         a_start = text_scroll if focus == "answer" else 0
-                        a_max_lines = 10 if focus == "answer" else 3
+                        a_display_lines = a_max_lines if focus == "answer" else 3
                         a_y = y_offset + 18
-                        for line in a_lines[a_start:a_start + a_max_lines]:
+                        for line in a_lines[a_start:a_start + a_display_lines]:
+                            if a_y > y_offset + a_height - 5:
+                                break
                             draw.text((12, a_y), line, fill=SOFT_WHITE, font=font_small)
                             a_y += 13
 
-                        # Scroll indicator for answer
+                        # Scroll indicator for answer - more visible
                         if focus == "answer" and len(a_lines) > a_max_lines:
                             if text_scroll > 0:
-                                draw.text((220, y_offset + 18), "▲", fill=MUTED, font=font_small)
+                                draw.text((220, y_offset + 18), "▲", fill=AMBER, font=font_small)
                             if text_scroll < max_scroll:
-                                draw.text((220, y_offset + a_height - 16), "▼", fill=MUTED, font=font_small)
+                                draw.text((220, y_offset + a_height - 16), "▼", fill=AMBER, font=font_small)
+                            # Show scroll position
+                            scroll_info = f"{text_scroll + 1}-{min(text_scroll + a_max_lines, len(a_lines))}/{len(a_lines)}"
+                            draw.text((140, y_offset + a_height - 12), scroll_info, fill=MUTED, font=font_small)
                     else:
-                        draw.rectangle([6, y_offset, 234, y_offset + 35], fill=DARK_BG, outline=BORDER)
-                        draw.text((12, y_offset + 10), "waiting for an answer...", fill=MUTED, font=font_small)
+                        # No answer yet - show waiting message with proper highlighting
+                        a_bg = FOCUSED_BG if focus == "answer" else DARK_BG
+                        a_border = FOCUSED_BORDER if focus == "answer" else BORDER
+                        a_border_width = 2 if focus == "answer" else 1
+                        draw.rectangle([6, y_offset, 234, y_offset + 40], fill=a_bg, outline=a_border, width=a_border_width)
+                        if focus == "answer":
+                            draw.text((8, y_offset + 2), "▶", fill=AMBER, font=font_small)  # Arrow indicator
+                        draw.text((12, y_offset + 12), "waiting for an answer...", fill=MUTED, font=font_small)
+                        if focus == "answer":
+                            draw.text((12, y_offset + 26), "◀▶ to focus question", fill=MUTED, font=font_small)
 
                 else:
                     # Collapsed list view - show multiple Q&A pairs (5 visible)
@@ -2410,16 +2456,16 @@ class ScreenRenderer:
                 # Status bar (y=218 to avoid dot overlap)
                 draw.text((10, 218), f"{scroll_idx + 1}/{len(qa_pairs)}", fill=MUTED, font=font_small)
                 if is_full_view:
-                    hint = "▲▼ scroll  press:back"
+                    hint = "▲▼ scroll text  press:back"
                 elif is_expanded:
                     focus = self._state.qa_focus
                     if focus == "answer":
-                        hint = "press:full view"
+                        hint = "▲▼ scroll  ◀▶ Q  press:full"
                     else:
-                        hint = "▲▼ read  ◀▶ focus"
+                        hint = "▲▼ scroll  ◀▶ A  press:expand"
                 else:
-                    hint = "press to expand"
-                draw.text((100, 218), hint, fill=MUTED, font=font_small)
+                    hint = "press:expand  ▲▼:select"
+                draw.text((80, 218), hint, fill=MUTED, font=font_small)
 
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.QUESTIONS)
@@ -2457,17 +2503,21 @@ class ScreenRenderer:
         if self._state.qa_full_view or self._state.qa_expanded:
             # Scroll within text
             self._state.qa_text_scroll = max(0, self._state.qa_text_scroll - 1)
+            self._state.last_user_action_time = time.time()
         else:
             # Change Q&A pair
             self._state.qa_scroll_index = max(0, self._state.qa_scroll_index - 1)
+            self._state.last_user_action_time = time.time()
 
     def qa_scroll_down(self):
         """Scroll down in Q&A screen - scroll text when expanded/full, change Q&A when collapsed."""
         if self._state.mode != ScreenMode.QUESTIONS:
             return
         if self._state.qa_full_view or self._state.qa_expanded:
-            # Scroll within text (limit checked in render)
+            # Scroll within text (limit will be enforced in render)
+            # Don't increment beyond reasonable limit here - render will clamp it
             self._state.qa_text_scroll += 1
+            self._state.last_user_action_time = time.time()
         else:
             # Change Q&A pair
             from ..messages import get_board, MESSAGE_TYPE_QUESTION
@@ -2475,6 +2525,7 @@ class ScreenRenderer:
             board._load()
             num_questions = sum(1 for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION)
             self._state.qa_scroll_index = min(num_questions - 1, self._state.qa_scroll_index + 1)
+            self._state.last_user_action_time = time.time()
 
     def qa_toggle_expand(self):
         """Toggle Q&A expansion: collapsed -> expanded -> full_view (when answer focused) -> collapsed."""
@@ -2508,12 +2559,21 @@ class ScreenRenderer:
         if self._state.qa_full_view:
             # In full view, pressing left/right exits to expanded
             self._state.qa_full_view = False
+            self._state.qa_focus = "answer"  # Keep focus on answer when exiting full view
             self._state.qa_text_scroll = 0
+            self._state.last_user_action_time = time.time()
             return
         if not self._state.qa_expanded:
+            # If not expanded, expand first with question focused
+            self._state.qa_expanded = True
+            self._state.qa_focus = "question"
+            self._state.qa_text_scroll = 0
+            self._state.last_user_action_time = time.time()
             return
+        # Toggle focus between question and answer
         self._state.qa_focus = "answer" if self._state.qa_focus == "question" else "question"
         self._state.qa_text_scroll = 0  # Reset text scroll when changing focus
+        self._state.last_user_action_time = time.time()
 
     def message_scroll_up(self):
         """Scroll up in message board - scroll text when expanded, change message when collapsed."""
