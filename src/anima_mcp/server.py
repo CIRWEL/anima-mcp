@@ -1864,6 +1864,89 @@ async def handle_get_questions(arguments: dict) -> list[TextContent]:
     }))]
 
 
+async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
+    """
+    Unified Q&A tool: list Lumen's questions OR answer one.
+
+    Usage:
+    - lumen_qa() -> list unanswered questions
+    - lumen_qa(question_id="x", answer="...") -> answer question x
+    """
+    from .messages import get_board, MESSAGE_TYPE_QUESTION, add_agent_message
+
+    question_id = arguments.get("question_id")
+    answer = arguments.get("answer")
+    limit = arguments.get("limit", 5)
+    agent_name = arguments.get("agent_name", "agent")
+
+    # Convert limit to int if string
+    if isinstance(limit, str):
+        try:
+            limit = int(limit)
+        except ValueError:
+            limit = 5
+
+    board = get_board()
+    board._load(force=True)
+
+    # If question_id and answer provided -> answer mode
+    if question_id and answer:
+        # Find the question
+        question = None
+        for m in board._messages:
+            if m.message_id == question_id:
+                question = m
+                break
+
+        if not question:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "error": f"Question '{question_id}' not found"
+            }))]
+
+        if question.msg_type != MESSAGE_TYPE_QUESTION:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "error": f"Message '{question_id}' is not a question"
+            }))]
+
+        # Add answer via add_agent_message (handles responds_to linking)
+        result = add_agent_message(answer, agent_name=agent_name, responds_to=question_id)
+
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "action": "answered",
+            "question_id": question_id,
+            "question_text": question.text,
+            "answer": answer,
+            "agent_name": agent_name,
+            "message_id": result.get("message_id") if result else None
+        }))]
+
+    # Otherwise -> list mode
+    all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+    unanswered = [m for m in all_questions if not m.answered]
+
+    questions = unanswered[-limit:] if unanswered else []
+
+    return [TextContent(type="text", text=json.dumps({
+        "action": "list",
+        "questions": [
+            {
+                "id": q.message_id,
+                "text": q.text,
+                "context": q.context,
+                "age": q.age_str(),
+                "answered": q.answered,
+            }
+            for q in questions
+        ],
+        "unanswered_count": len(unanswered),
+        "total_questions": len(all_questions),
+        "usage": "To answer: lumen_qa(question_id='<id>', answer='your answer')"
+    }))]
+
+
 async def handle_set_name(arguments: dict) -> list[TextContent]:
     """Set or change name. Safe, never crashes."""
     store = _get_store()
@@ -2829,7 +2912,7 @@ TOOLS_ESSENTIAL = [
     ),
     Tool(
         name="get_questions",
-        description="Get Lumen's unanswered questions. Call FIRST before answering - you need the 'id' for responds_to in post_message.",
+        description="[DEPRECATED: use lumen_qa] Get Lumen's unanswered questions. Use lumen_qa() instead - it can list and answer in one tool.",
         inputSchema={
             "type": "object",
             "properties": {
@@ -3042,6 +3125,28 @@ TOOLS_STANDARD = [
                     "type": "boolean",
                     "description": "Must be true to actually reboot/shutdown (safety)",
                     "default": False,
+                },
+            },
+        },
+    ),
+    Tool(
+        name="lumen_qa",
+        description="Unified Q&A: list Lumen's unanswered questions OR answer one. Call with no args to list, call with question_id+answer to respond.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "question_id": {
+                    "type": "string",
+                    "description": "Question ID to answer (from list mode). Omit to list questions.",
+                },
+                "answer": {
+                    "type": "string",
+                    "description": "Your answer to the question. Required when question_id is provided.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max questions to return in list mode (default: 5)",
+                    "default": 5,
                 },
             },
         },
@@ -4111,6 +4216,7 @@ HANDLERS = {
     "cognitive_process": handle_cognitive_process,
     "configure_voice": handle_configure_voice,
     "manage_display": handle_manage_display,
+    "lumen_qa": handle_lumen_qa,
 }
 
 
