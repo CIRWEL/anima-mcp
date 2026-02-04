@@ -7,6 +7,10 @@ Endpoints:
   GET /state    - Get Lumen's current state (anima, identity, sensors)
   GET /qa       - Get questions and answers
   POST /answer  - Answer a question from Lumen
+
+Connection methods (in order of preference):
+  1. HTTP to Pi's anima-mcp server (via LUMEN_HTTP_URL env var or ngrok)
+  2. SSH fallback (via LUMEN_HOST env var)
 """
 import http.server
 import socketserver
@@ -14,17 +18,54 @@ import json
 import subprocess
 import os
 import base64
+import urllib.request
+import urllib.error
 
 PORT = 8768
 PI_USER = "unitares-anima"
 PI_HOST = os.environ.get("LUMEN_HOST", "lumen-local")  # SSH config alias (local network)
+
+# HTTP URL for Pi's anima-mcp server (preferred over SSH)
+# Examples: "http://localhost:8766", "https://lumen-anima.ngrok.io"
+LUMEN_HTTP_URL = os.environ.get("LUMEN_HTTP_URL", "")
+LUMEN_HTTP_AUTH = os.environ.get("LUMEN_HTTP_AUTH", "")  # "user:pass" for basic auth
+
+
+def http_call_tool(tool_name: str, arguments: dict = None, timeout: int = 10) -> tuple[bool, str]:
+    """Call an MCP tool on Pi's anima-mcp server via HTTP."""
+    if not LUMEN_HTTP_URL:
+        return False, "LUMEN_HTTP_URL not configured"
+
+    url = f"{LUMEN_HTTP_URL.rstrip('/')}/v1/tools/call"
+    data = json.dumps({"name": tool_name, "arguments": arguments or {}}).encode()
+
+    headers = {"Content-Type": "application/json"}
+    if LUMEN_HTTP_AUTH:
+        import base64 as b64
+        auth = b64.b64encode(LUMEN_HTTP_AUTH.encode()).decode()
+        headers["Authorization"] = f"Basic {auth}"
+
+    req = urllib.request.Request(url, data=data, headers=headers)
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result = json.loads(resp.read().decode())
+            if result.get("success") == False:
+                return False, result.get("error", "Tool call failed")
+            return True, json.dumps(result.get("result", result))
+    except urllib.error.HTTPError as e:
+        return False, f"HTTP {e.code}: {e.reason}"
+    except urllib.error.URLError as e:
+        return False, f"Connection failed: {e.reason}"
+    except Exception as e:
+        return False, str(e)
 
 
 def ssh_command(python_code: str, timeout: int = 10) -> tuple[bool, str]:
     """Run Python code on the Pi via SSH using base64 to avoid escaping issues."""
     encoded = base64.b64encode(python_code.encode()).decode()
     cmd = [
-        "ssh", "-o", "ConnectTimeout=15", f"{PI_USER}@{PI_HOST}",
+        "ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", f"{PI_USER}@{PI_HOST}",
         f"cd anima-mcp && echo {encoded} | base64 -d | .venv/bin/python3"
     ]
     try:
@@ -59,7 +100,12 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         elif self.path == '/voice':
             self.handle_get_voice()
         elif self.path == '/health':
-            self.send_json({"status": "ok", "host": PI_HOST})
+            self.send_json({
+                "status": "ok",
+                "http_url": LUMEN_HTTP_URL or None,
+                "ssh_host": PI_HOST,
+                "mode": "http" if LUMEN_HTTP_URL else "ssh"
+            })
         else:
             self.send_response(404)
             self.end_headers()
@@ -81,7 +127,18 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def handle_get_state(self):
-        """Get Lumen's current state from database."""
+        """Get Lumen's current state. Tries HTTP first, falls back to SSH."""
+        # Try HTTP first (faster, no SSH overhead)
+        if LUMEN_HTTP_URL:
+            success, output = http_call_tool("get_state")
+            if success:
+                try:
+                    self.send_json(json.loads(output))
+                    return
+                except json.JSONDecodeError:
+                    pass  # Fall through to SSH
+
+        # SSH fallback
         code = '''
 import json
 import sqlite3
@@ -362,12 +419,19 @@ def main():
     print(f"╭──────────────────────────────────────────╮")
     print(f"│  Lumen Control Server                    │")
     print(f"│  http://localhost:{PORT}                    │")
-    print(f"│  Connecting to: {PI_HOST}                │")
     print(f"╰──────────────────────────────────────────╯")
+    print()
+    if LUMEN_HTTP_URL:
+        print(f"  Mode: HTTP (preferred)")
+        print(f"  URL:  {LUMEN_HTTP_URL}")
+    else:
+        print(f"  Mode: SSH (fallback)")
+    print(f"  SSH:  {PI_USER}@{PI_HOST}")
     print()
     print("Endpoints:")
     print("  GET  /state   - Lumen's current state")
     print("  GET  /qa      - Questions & answers")
+    print("  GET  /health  - Connection status")
     print("  POST /message - Send message to Lumen")
     print("  POST /answer  - Answer Lumen's question")
     print()

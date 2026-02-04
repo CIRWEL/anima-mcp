@@ -4222,7 +4222,7 @@ def run_http_server(host: str, port: int):
             # Create session manager for Streamable HTTP
             _streamable_session_manager = StreamableHTTPSessionManager(
                 app=mcp._mcp_server,  # Access the underlying MCP server
-                json_response=False,  # Use SSE streams
+                json_response=True,  # Use JSON responses (proper Streamable HTTP)
                 stateless=True,  # Allow stateless for compatibility
             )
 
