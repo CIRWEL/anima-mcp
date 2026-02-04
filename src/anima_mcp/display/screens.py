@@ -2564,11 +2564,8 @@ class ScreenRenderer:
             self._state.last_user_action_time = time.time()
             return
         if not self._state.qa_expanded:
-            # If not expanded, expand first with question focused
-            self._state.qa_expanded = True
-            self._state.qa_focus = "question"
-            self._state.qa_text_scroll = 0
-            self._state.last_user_action_time = time.time()
+            # In collapsed view, LEFT/RIGHT does nothing (use button to expand)
+            # This prevents accidentally getting trapped in expanded mode
             return
         # Toggle focus between question and answer
         self._state.qa_focus = "answer" if self._state.qa_focus == "question" else "question"
