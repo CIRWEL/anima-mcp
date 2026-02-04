@@ -1808,10 +1808,32 @@ async def handle_leave_agent_note(arguments: dict) -> list[TextContent]:
 
 async def handle_get_questions(arguments: dict) -> list[TextContent]:
     """Get Lumen's unanswered questions - things Lumen is wondering about."""
-    from .messages import get_unanswered_questions
+    from .messages import get_unanswered_questions, get_board, MESSAGE_TYPE_QUESTION
 
     limit = arguments.get("limit", 5)
-    questions = get_unanswered_questions(limit)
+    # Convert limit to int if it's a string (MCP sometimes passes strings)
+    if isinstance(limit, str):
+        try:
+            limit = int(limit)
+        except ValueError:
+            limit = 5
+    elif limit is None:
+        limit = 5
+    
+    # Force reload to get latest questions
+    board = get_board()
+    board._load(force=True)
+    
+    # Get ALL questions first to see what's there
+    all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+    unanswered_questions = [m for m in all_questions if not m.answered]
+    
+    # Use unanswered questions, but if user wants more, show some answered ones too
+    questions = unanswered_questions[-limit:] if len(unanswered_questions) > 0 else []
+    
+    # If no unanswered but user asked for questions, include recent answered ones
+    if len(questions) == 0 and limit > 0:
+        questions = all_questions[-limit:]
 
     return [TextContent(type="text", text=json.dumps({
         "questions": [
@@ -1821,10 +1843,13 @@ async def handle_get_questions(arguments: dict) -> list[TextContent]:
                 "context": q.context,  # What triggered this question
                 "timestamp": q.timestamp,
                 "age": q.age_str(),
+                "answered": q.answered,  # Include answered status
             }
             for q in questions
         ],
         "count": len(questions),
+        "unanswered_count": len(unanswered_questions),
+        "total_questions": len(all_questions),
         "how_to_answer": "To answer a question: call leave_agent_note (or post_message) with responds_to='<id>' where <id> is the question's id field above. This links your answer to the question.",
         "note": "Questions auto-expire after 1 hour if unanswered."
     }))]
