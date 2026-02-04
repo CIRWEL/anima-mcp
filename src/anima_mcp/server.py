@@ -2249,6 +2249,8 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
     from pathlib import Path
 
     restart = arguments.get("restart", False)
+    stash = arguments.get("stash", False)  # Stash local changes before pull
+    force = arguments.get("force", False)  # Hard reset to remote (DANGER: loses local changes)
 
     # Find repo root (where .git is)
     repo_root = Path(__file__).parent.parent.parent  # anima-mcp/
@@ -2261,6 +2263,34 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
         }))]
 
     try:
+        # Stash local changes if requested
+        if stash:
+            stash_result = subprocess.run(
+                ["git", "stash", "push", "-m", "Auto-stash before git_pull"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            # Continue even if stash fails (might be nothing to stash)
+
+        # Hard reset if force requested (DANGER)
+        if force:
+            subprocess.run(
+                ["git", "fetch", "origin", "main"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=60
+            )
+            subprocess.run(
+                ["git", "reset", "--hard", "origin/main"],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
         # Git fetch + pull
         result = subprocess.run(
             ["git", "pull", "--ff-only"],
