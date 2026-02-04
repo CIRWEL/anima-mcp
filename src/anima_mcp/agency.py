@@ -351,6 +351,62 @@ class ActionSelector:
             "sensitivity_modifier": round(self._sensitivity_modifier, 3),
             "attention_focus": self._attention_focus,
             "recent_outcomes": len(self._outcome_history),
+            "question_feedback_count": len(getattr(self, '_question_feedback', [])),
+        }
+
+    def record_question_feedback(self, question: str, feedback: dict):
+        """
+        Record feedback on a question Lumen asked.
+
+        This is how Lumen learns which question patterns work:
+        - High score = question got engaged, substantive response
+        - Low score = question was confusing, incomplete, malformed
+
+        Over time, patterns that get good feedback should be favored.
+        """
+        if not hasattr(self, '_question_feedback'):
+            self._question_feedback = []
+
+        self._question_feedback.append({
+            "timestamp": datetime.now(),
+            "question": question,
+            "score": feedback["score"],
+            "signals": feedback["signals"],
+        })
+
+        # Keep last 100 feedback entries
+        if len(self._question_feedback) > 100:
+            self._question_feedback = self._question_feedback[-100:]
+
+        # Update ASK_QUESTION action value based on feedback
+        # Good feedback reinforces question-asking, bad feedback weakens it
+        current_value = self._action_values.get("ask_question", 0.5)
+        learning_rate = 0.15
+        reward = (feedback["score"] - 0.5) * 2  # Map 0-1 score to -1 to +1
+        new_value = current_value + learning_rate * reward
+        new_value = max(0.1, min(0.9, new_value))  # Clamp
+        self._action_values["ask_question"] = new_value
+
+    def get_question_feedback_summary(self) -> Dict[str, Any]:
+        """Get summary of question feedback for analysis."""
+        if not hasattr(self, '_question_feedback') or not self._question_feedback:
+            return {"count": 0}
+
+        recent = self._question_feedback[-20:]
+        scores = [f["score"] for f in recent]
+        avg_score = sum(scores) / len(scores)
+
+        # Count signal types
+        signal_counts = {}
+        for f in recent:
+            for s in f["signals"]:
+                signal_counts[s] = signal_counts.get(s, 0) + 1
+
+        return {
+            "count": len(self._question_feedback),
+            "recent_avg_score": round(avg_score, 3),
+            "signal_counts": signal_counts,
+            "ask_question_value": round(self._action_values.get("ask_question", 0.5), 3),
         }
 
 

@@ -274,6 +274,41 @@ class UnitaresBridge:
                     "age_seconds": identity.age_seconds() if hasattr(identity, 'age_seconds') else 0.0,
                 }
             
+            # Build arguments for process_agent_update
+            update_arguments = {
+                "complexity": complexity,
+                "response_text": status_text,
+                "parameters": [{"key": "sensor_data", "value": json.dumps(sensor_data)}]
+            }
+
+            # Add trajectory signature if available (enables lineage tracking in UNITARES)
+            try:
+                from .trajectory import compute_trajectory_signature
+                from .anima_history import get_anima_history
+                from .self_model import get_self_model
+                # Note: growth_system is global _growth in server.py, we get it if available
+                growth_system = None
+                try:
+                    from . import _growth
+                    growth_system = _growth
+                except (ImportError, AttributeError):
+                    pass
+
+                trajectory_sig = compute_trajectory_signature(
+                    growth_system=growth_system,
+                    self_model=get_self_model(),
+                    anima_history=get_anima_history(),
+                )
+                if trajectory_sig and trajectory_sig.observation_count > 0:
+                    sig_dict = trajectory_sig.to_dict()
+                    # Add identity_confidence for UNITARES
+                    sig_dict["identity_confidence"] = getattr(trajectory_sig, 'identity_confidence', 0.0)
+                    update_arguments["trajectory_signature"] = sig_dict
+                    print(f"[UnitaresBridge] Including trajectory (obs={trajectory_sig.observation_count}, conf={sig_dict.get('identity_confidence', 0):.2f})", flush=True)
+            except Exception as e:
+                # Non-blocking - trajectory is optional enhancement
+                print(f"[UnitaresBridge] Trajectory not available: {e}", flush=True)
+
             # MCP JSON-RPC request
             mcp_request = {
                 "jsonrpc": "2.0",
@@ -281,11 +316,7 @@ class UnitaresBridge:
                 "method": "tools/call",
                 "params": {
                     "name": "process_agent_update",
-                    "arguments": {
-                        "complexity": complexity,
-                        "response_text": status_text,
-                        "parameters": [{"key": "sensor_data", "value": json.dumps(sensor_data)}]
-                    }
+                    "arguments": update_arguments
                 }
             }
             

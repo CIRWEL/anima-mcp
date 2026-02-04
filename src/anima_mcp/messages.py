@@ -227,12 +227,26 @@ class MessageBoard:
             msg.responds_to = responds_to
             # Find the question being answered
             question_text = None
+            question_context = None
             for m in self._messages:
                 if m.message_id == responds_to and m.msg_type == MESSAGE_TYPE_QUESTION:
                     m.answered = True
                     question_text = m.text
+                    question_context = getattr(m, 'context', None)
                     break
             self._save()
+
+            # Compute feedback for agency learning (was this question well-formed?)
+            if question_text:
+                feedback = self._compute_question_feedback(question_text, text, question_context)
+                if feedback:
+                    try:
+                        from .agency import get_action_selector
+                        selector = get_action_selector()
+                        selector.record_question_feedback(question_text, feedback)
+                        print(f"[Feedback] Question '{question_text[:30]}...' got score {feedback['score']:.2f}", flush=True)
+                    except Exception as e:
+                        pass  # Agency not available, that's fine
 
             # Extract insight from Q&A (async, non-blocking)
             if question_text:
@@ -256,6 +270,57 @@ class MessageBoard:
                     print(f"[Knowledge] Extraction scheduling failed: {e}", flush=True)
 
         return msg
+
+    def _compute_question_feedback(self, question: str, response: str, context: Optional[str] = None) -> dict:
+        """
+        Compute feedback on question quality based on response.
+
+        This is how Lumen learns which question patterns get engagement.
+        Positive signals: long response, substantive content, no confusion markers
+        Negative signals: short response, "don't understand", questions back
+        """
+        response_lower = response.lower()
+
+        # Base score starts neutral
+        score = 0.5
+        signals = []
+
+        # Positive signals
+        if len(response) > 150:
+            score += 0.15
+            signals.append("long_response")
+        if len(response) > 300:
+            score += 0.1
+            signals.append("very_long_response")
+
+        # Negative signals - confusion/incompleteness markers
+        confusion_markers = ["don't understand", "unclear", "incomplete", "what do you mean",
+                           "not sure what", "could you clarify", "broken", "fragmented", "malformed"]
+        for marker in confusion_markers:
+            if marker in response_lower:
+                score -= 0.2
+                signals.append(f"confusion:{marker}")
+
+        # Questions back = confusion
+        if response.count("?") > 1:
+            score -= 0.1
+            signals.append("questions_back")
+
+        # Agency-generated questions get scrutinized more
+        if context and "agency" in context:
+            # Agency questions start with lower baseline
+            score -= 0.1
+            signals.append("agency_generated")
+
+        # Clamp score
+        score = max(0.0, min(1.0, score))
+
+        return {
+            "score": score,
+            "signals": signals,
+            "response_length": len(response),
+            "question_length": len(question),
+        }
 
     def add_question(self, text: str, author: str = "lumen", context: Optional[str] = None) -> Optional[Message]:
         """Add a question from Lumen - seeking response from agents/user.
