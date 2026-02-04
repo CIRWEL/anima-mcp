@@ -7,7 +7,10 @@ Minimal tools for a persistent creature:
 - set_name: Choose my name
 - read_sensors: Raw sensor values
 
-Supports both stdio (local) and SSE (network) transports.
+Transports:
+- stdio: Local single-client (default)
+- HTTP (--http): Multi-client with Streamable HTTP at /mcp/ (recommended)
+  Also serves legacy /sse endpoint for backwards compatibility
 
 Agent Coordination:
 - Active agents: Claude + Cursor/Composer
@@ -4165,8 +4168,13 @@ async def run_stdio_server():
         stop_display_loop()
 
 
-def run_sse_server(host: str, port: int):
-    """Run the MCP server over SSE (network) using FastMCP.
+def run_http_server(host: str, port: int):
+    """Run MCP server over HTTP with Streamable HTTP transport.
+
+    Endpoints:
+    - /mcp/  : Streamable HTTP (recommended, modern MCP transport)
+    - /sse   : Legacy SSE endpoint (backwards compatible)
+    - /health: Health check
 
     NOTE: Server operates locally even without network connectivity.
     WiFi is only needed for remote MCP clients to connect.
@@ -4174,12 +4182,12 @@ def run_sse_server(host: str, port: int):
     """
     import asyncio
 
-    async def _run_sse_server_async():
-        """Async inner function to run the SSE server with uvicorn."""
+    async def _run_http_server_async():
+        """Async inner function to run the HTTP server with uvicorn."""
         import uvicorn
 
         # Log that local operation continues regardless of network
-        print("[Server] Starting SSE server - Lumen operates autonomously even without WiFi", file=sys.stderr, flush=True)
+        print("[Server] Starting HTTP server (Streamable HTTP + legacy SSE)", file=sys.stderr, flush=True)
         print("[Server] Network connectivity only needed for remote MCP clients", file=sys.stderr, flush=True)
 
         # Check if FastMCP is available
@@ -4345,7 +4353,7 @@ def run_sse_server(host: str, port: int):
     signal.signal(signal.SIGTERM, shutdown_handler)
 
     # Run the async server
-    asyncio.run(_run_sse_server_async())
+    asyncio.run(_run_http_server_async())
     return  # Early return - skip the old code below
 
     # === Streamable HTTP transport (MCP 1.24.0+) ===
@@ -4594,7 +4602,7 @@ def main():
 
     try:
         if args.http_server:
-            run_sse_server(args.host, args.port)  # TODO: rename to run_http_server
+            run_http_server(args.host, args.port)
         else:
             asyncio.run(run_stdio_server())
     except KeyboardInterrupt:
