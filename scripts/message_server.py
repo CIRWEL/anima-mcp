@@ -99,6 +99,10 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_get_learning()
         elif self.path == '/voice':
             self.handle_get_voice()
+        elif self.path == '/gallery':
+            self.handle_get_gallery()
+        elif self.path.startswith('/gallery/'):
+            self.handle_get_gallery_image()
         elif self.path == '/health':
             self.send_json({
                 "status": "ok",
@@ -350,6 +354,72 @@ except Exception as e:
         else:
             self.send_json({"error": output}, 503)
 
+    def handle_get_gallery(self):
+        """Get list of Lumen's drawings."""
+        code = '''
+import json
+from pathlib import Path
+
+drawings_dir = Path.home() / "anima-mcp" / "drawings"
+if not drawings_dir.exists():
+    print(json.dumps({"drawings": [], "total": 0}))
+else:
+    files = sorted(drawings_dir.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    drawings = []
+    for f in files[:20]:  # Latest 20
+        drawings.append({
+            "filename": f.name,
+            "timestamp": f.stat().st_mtime,
+            "size": f.stat().st_size
+        })
+    print(json.dumps({"drawings": drawings, "total": len(list(drawings_dir.glob("*.png")))}))
+'''
+        success, output = ssh_command(code)
+        if success:
+            try:
+                self.send_json(json.loads(output))
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON", "raw": output}, 500)
+        else:
+            self.send_json({"error": output}, 503)
+
+    def handle_get_gallery_image(self):
+        """Serve a drawing image from the Pi."""
+        filename = self.path.split('/gallery/')[-1]
+        # Sanitize filename
+        if '/' in filename or '..' in filename:
+            self.send_response(400)
+            self.end_headers()
+            return
+
+        code = f'''
+import base64
+from pathlib import Path
+
+drawings_dir = Path.home() / "anima-mcp" / "drawings"
+img_path = drawings_dir / "{filename}"
+if img_path.exists():
+    with open(img_path, "rb") as f:
+        print(base64.b64encode(f.read()).decode())
+else:
+    print("NOT_FOUND")
+'''
+        success, output = ssh_command(code, timeout=15)
+        if success and output != "NOT_FOUND":
+            try:
+                img_data = base64.b64decode(output)
+                self.send_response(200)
+                self.send_header('Content-type', 'image/png')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Cache-Control', 'max-age=3600')
+                self.end_headers()
+                self.wfile.write(img_data)
+            except Exception as e:
+                self.send_json({"error": str(e)}, 500)
+        else:
+            self.send_response(404)
+            self.end_headers()
+
     def handle_post_message(self):
         """Send a message to Lumen."""
         content_length = int(self.headers['Content-Length'])
@@ -429,11 +499,13 @@ def main():
     print(f"  SSH:  {PI_USER}@{PI_HOST}")
     print()
     print("Endpoints:")
-    print("  GET  /state   - Lumen's current state")
-    print("  GET  /qa      - Questions & answers")
-    print("  GET  /health  - Connection status")
-    print("  POST /message - Send message to Lumen")
-    print("  POST /answer  - Answer Lumen's question")
+    print("  GET  /state       - Lumen's current state")
+    print("  GET  /qa          - Questions & answers")
+    print("  GET  /gallery     - List Lumen's drawings")
+    print("  GET  /gallery/<f> - Get drawing image")
+    print("  GET  /health      - Connection status")
+    print("  POST /message     - Send message to Lumen")
+    print("  POST /answer      - Answer Lumen's question")
     print()
 
     try:
