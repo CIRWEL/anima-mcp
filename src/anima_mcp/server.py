@@ -2342,6 +2342,109 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_system_service(arguments: dict) -> list[TextContent]:
+    """
+    Manage system services (systemctl).
+    Enables remote control of rpi-connect, anima, and other services.
+    """
+    import subprocess
+
+    service = arguments.get("service")
+    action = arguments.get("action", "status")
+
+    if not service:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "service parameter required"
+        }))]
+
+    # Whitelist of allowed services for security
+    ALLOWED_SERVICES = [
+        "rpi-connect",
+        "rpi-connect-wayvnc",
+        "anima",
+        "anima-mcp",
+        "ssh",
+        "sshd",
+    ]
+
+    if service not in ALLOWED_SERVICES:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Service '{service}' not in allowed list",
+            "allowed": ALLOWED_SERVICES
+        }))]
+
+    ALLOWED_ACTIONS = ["status", "start", "stop", "restart", "enable", "disable"]
+    if action not in ALLOWED_ACTIONS:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Action '{action}' not allowed",
+            "allowed": ALLOWED_ACTIONS
+        }))]
+
+    try:
+        # For rpi-connect, use the rpi-connect CLI for some actions
+        if service == "rpi-connect" and action in ["start", "restart"]:
+            # Try rpi-connect on first
+            rpi_result = subprocess.run(
+                ["rpi-connect", "on"],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            output = {
+                "success": rpi_result.returncode == 0,
+                "service": service,
+                "action": "rpi-connect on",
+                "stdout": rpi_result.stdout.strip(),
+                "stderr": rpi_result.stderr.strip() if rpi_result.stderr else None,
+            }
+            return [TextContent(type="text", text=json.dumps(output, indent=2))]
+
+        # Standard systemctl for other cases
+        cmd = ["systemctl", action, service]
+        if action != "status":
+            cmd = ["sudo", "systemctl", action, service]
+
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+
+        output = {
+            "success": result.returncode == 0,
+            "service": service,
+            "action": action,
+            "stdout": result.stdout.strip(),
+            "stderr": result.stderr.strip() if result.stderr else None,
+        }
+
+        # For status, also check if service is active
+        if action == "status":
+            is_active = subprocess.run(
+                ["systemctl", "is-active", service],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            output["is_active"] = is_active.stdout.strip() == "active"
+
+        return [TextContent(type="text", text=json.dumps(output, indent=2))]
+
+    except subprocess.TimeoutExpired:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Command timed out for {service}"
+        }))]
+    except FileNotFoundError as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Command not found: {e}"
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"System service command failed: {e}"
+        }))]
+
+
 async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
     """Get learning visualization - shows why Lumen feels what it feels."""
     store = _get_store()
@@ -2820,6 +2923,27 @@ TOOLS_STANDARD = [
                     "default": False,
                 },
             },
+        },
+    ),
+    Tool(
+        name="system_service",
+        description="Manage system services (rpi-connect, ssh, etc). Check status, start, stop, restart services.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "service": {
+                    "type": "string",
+                    "description": "Service name (rpi-connect, ssh, anima, etc)",
+                    "enum": ["rpi-connect", "rpi-connect-wayvnc", "anima", "anima-mcp", "ssh", "sshd"],
+                },
+                "action": {
+                    "type": "string",
+                    "description": "Action to perform",
+                    "enum": ["status", "start", "stop", "restart", "enable", "disable"],
+                    "default": "status",
+                },
+            },
+            "required": ["service"],
         },
     ),
 ]
@@ -3874,6 +3998,7 @@ HANDLERS = {
     "get_expression_mood": handle_get_expression_mood,
     # Admin tools
     "git_pull": handle_git_pull,
+    "system_service": handle_system_service,
     # Voice tools
     "say": handle_say,
     "voice_status": handle_voice_status,
