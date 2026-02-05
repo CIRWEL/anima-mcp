@@ -3260,6 +3260,10 @@ TOOLS_ESSENTIAL = [
                     "description": "Max questions to return in list mode (default: 5)",
                     "default": 5,
                 },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Your name/identifier when answering (e.g. 'Kenny', 'Claude'). Default: 'agent'",
+                },
             },
         },
     ),
