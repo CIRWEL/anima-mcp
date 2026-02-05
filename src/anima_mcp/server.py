@@ -4786,6 +4786,29 @@ def run_http_server(host: str, port: int):
             app.routes.append(Route("/v1/tools/call", rest_tool_call, methods=["POST"]))
             print("[Server] Registered /v1/tools/call REST endpoint", file=sys.stderr, flush=True)
 
+            # Dashboard endpoint - serves the Lumen Control Center
+            from starlette.responses import HTMLResponse, FileResponse
+            from pathlib import Path
+
+            async def dashboard(request):
+                """Serve the Lumen Control Center dashboard."""
+                # Find control_center.html relative to this file
+                server_dir = Path(__file__).parent
+                project_root = server_dir.parent.parent
+                dashboard_path = project_root / "docs" / "control_center.html"
+
+                if dashboard_path.exists():
+                    return FileResponse(dashboard_path, media_type="text/html")
+                else:
+                    return HTMLResponse(
+                        "<html><body><h1>Dashboard Not Found</h1>"
+                        f"<p>Expected at: {dashboard_path}</p></body></html>",
+                        status_code=404
+                    )
+
+            app.routes.append(Route("/dashboard", dashboard, methods=["GET"]))
+            print("[Server] Registered /dashboard endpoint", file=sys.stderr, flush=True)
+
         except Exception as e:
             print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
 
