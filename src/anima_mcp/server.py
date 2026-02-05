@@ -4890,11 +4890,13 @@ def run_http_server(host: str, port: int):
                 """POST /answer - Answer a question from Lumen."""
                 try:
                     body = await request.json()
-                    question_id = body.get("question_id")
+                    question_id = body.get("question_id") or body.get("id")
                     answer = body.get("answer")
+                    author = body.get("author", "Kenny")  # Preserve author name
                     result = await handle_lumen_qa({
                         "question_id": question_id,
-                        "answer": answer
+                        "answer": answer,
+                        "agent_name": author
                     })
                     if result and len(result) > 0:
                         data = json.loads(result[0].text)
