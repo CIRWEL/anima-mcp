@@ -1881,12 +1881,33 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
             "error": f"Error reading identity: {e}"
         }))]
 
+    # Clean sensor output - suppress nulls and group logically
+    raw_sensors = readings.to_dict()
+    sensors_clean = {
+        "environment": {},
+        "system": {},
+        "neural": {},
+    }
+    # Environment sensors
+    for k in ["ambient_temp_c", "humidity_pct", "light_lux", "pressure_hpa", "sound_level"]:
+        if raw_sensors.get(k) is not None:
+            sensors_clean["environment"][k] = raw_sensors[k]
+    # System sensors
+    for k in ["cpu_temp_c", "cpu_percent", "memory_percent", "disk_percent"]:
+        if raw_sensors.get(k) is not None:
+            sensors_clean["system"][k] = raw_sensors[k]
+    # Neural (computational proprioception) - only the power bands
+    for k in ["eeg_delta_power", "eeg_theta_power", "eeg_alpha_power", "eeg_beta_power", "eeg_gamma_power"]:
+        if raw_sensors.get(k) is not None:
+            short_key = k.replace("eeg_", "").replace("_power", "")
+            sensors_clean["neural"][short_key] = round(raw_sensors[k], 3)
+
     result = {
         "anima": {
-            "warmth": anima.warmth,
-            "clarity": anima.clarity,
-            "stability": anima.stability,
-            "presence": anima.presence,
+            "warmth": round(anima.warmth, 3),
+            "clarity": round(anima.clarity, 3),
+            "stability": round(anima.stability, 3),
+            "presence": round(anima.presence, 3),
         },
         "mood": anima.feeling()["mood"],
         "feeling": anima.feeling(),
@@ -1898,7 +1919,7 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
             "alive_seconds": round(identity.total_alive_seconds + store.get_session_alive_seconds()),
             "alive_ratio": round(identity.alive_ratio(), 3),
         },
-        "sensors": readings.to_dict(),
+        "sensors": sensors_clean,
         "is_pi": sensors.is_pi(),
     }
 
@@ -2284,9 +2305,9 @@ async def handle_set_name(arguments: dict) -> list[TextContent]:
 
 
 async def handle_read_sensors(arguments: dict) -> list[TextContent]:
-    """Read raw sensor values."""
+    """Read raw sensor values - returns only active sensors (nulls suppressed)."""
     sensors = _get_sensors()
-    
+
     # Read from shared memory (broker) or fallback to sensors
     readings, _ = _get_readings_and_anima()
     if readings is None:
@@ -2294,8 +2315,13 @@ async def handle_read_sensors(arguments: dict) -> list[TextContent]:
             "error": "Unable to read sensor data"
         }))]
 
+    # Filter out null values for cleaner output
+    raw = readings.to_dict()
+    active_readings = {k: v for k, v in raw.items() if v is not None}
+
     result = {
-        "readings": readings.to_dict(),
+        "timestamp": raw["timestamp"],
+        "readings": active_readings,
         "available_sensors": sensors.available_sensors(),
         "is_pi": sensors.is_pi(),
         "source": "shared_memory" if _shm_client and _shm_client.read() else "direct_sensors",
