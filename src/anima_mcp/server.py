@@ -2151,6 +2151,9 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         }))]
 
     # Otherwise -> list mode
+    # Auto-repair orphaned answered questions (answered=True but no actual answer)
+    repaired = board.repair_orphaned_answered()
+
     # Find questions that have NO actual answer (responds_to link), even if auto-expired
     all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
     question_ids = {q.message_id for q in all_questions}
