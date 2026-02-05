@@ -990,6 +990,17 @@ class ScreenRenderer:
                 draw.text((10, y), f"cpu: {cpu_temp:.1f}°C", fill=cpu_color, font=font)
                 y += line_height
                 draw.text((10, y), f"load: {readings.cpu_percent:.0f}%", fill=LIGHT_CYAN, font=font)
+                y += line_height
+
+                # Disk space
+                disk = readings.disk_percent
+                if disk > 80:
+                    disk_color = RED
+                elif disk > 60:
+                    disk_color = ORANGE
+                else:
+                    disk_color = GREEN
+                draw.text((10, y), f"disk: {disk:.0f}%", fill=disk_color, font=font)
                 y += line_height + 8
 
                 # WiFi status
