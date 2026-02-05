@@ -5,6 +5,7 @@ Messages are stored persistently so they survive reboots.
 """
 
 import json
+import sys
 import time
 import os
 import uuid
@@ -112,7 +113,7 @@ class MessageBoard:
                 self._messages = []
                 self._file_mtime = 0.0
         except Exception as e:
-            print(f"[MessageBoard] Load error: {e}", flush=True)
+            print(f"[MessageBoard] Load error: {e}", file=sys.stderr, flush=True)
             self._messages = []
             self._file_mtime = 0.0
 
@@ -125,7 +126,7 @@ class MessageBoard:
             if self._messages_file.exists():
                 self._file_mtime = self._messages_file.stat().st_mtime
         except Exception as e:
-            print(f"[MessageBoard] Save error: {e}", flush=True)
+            print(f"[MessageBoard] Save error: {e}", file=sys.stderr, flush=True)
 
     def add_message(self, text: str, msg_type: str = MESSAGE_TYPE_OBSERVATION, author: Optional[str] = None) -> Message:
         """Add a message to the board."""
@@ -254,10 +255,10 @@ class MessageBoard:
                     question_found = True
                     # Update responds_to to full ID
                     responds_to = q.message_id
-                    print(f"[MessageBoard] Matched partial ID '{responds_to[:8]}...' to question '{q.message_id}'", flush=True)
+                    print(f"[MessageBoard] Matched partial ID '{responds_to[:8]}...' to question '{q.message_id}'", file=sys.stderr, flush=True)
                 elif len(matching_questions) > 1:
                     # Multiple matches - ambiguous
-                    print(f"[MessageBoard] WARNING: Partial ID '{responds_to}' matches {len(matching_questions)} questions. Use full ID.", flush=True)
+                    print(f"[MessageBoard] WARNING: Partial ID '{responds_to}' matches {len(matching_questions)} questions. Use full ID.", file=sys.stderr, flush=True)
                     # Use the most recent one
                     q = matching_questions[-1]
                     q.answered = True
@@ -271,12 +272,12 @@ class MessageBoard:
             
             if not question_found:
                 # Question not found - warn but still save the message
-                print(f"[MessageBoard] WARNING: Question ID '{responds_to}' not found. Answer saved but won't link to Q&A screen.", flush=True)
+                print(f"[MessageBoard] WARNING: Question ID '{responds_to}' not found. Answer saved but won't link to Q&A screen.", file=sys.stderr, flush=True)
                 # Try to find similar IDs for helpful error
                 all_question_ids = [m.message_id for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
                 similar = [qid for qid in all_question_ids if responds_to in qid or qid.startswith(responds_to[:4])]
                 if similar:
-                    print(f"[MessageBoard] Similar question IDs: {similar[:3]}", flush=True)
+                    print(f"[MessageBoard] Similar question IDs: {similar[:3]}", file=sys.stderr, flush=True)
             
             self._save()
 
@@ -288,7 +289,7 @@ class MessageBoard:
                         from .agency import get_action_selector
                         selector = get_action_selector()
                         selector.record_question_feedback(question_text, feedback)
-                        print(f"[Feedback] Question '{question_text[:30]}...' got score {feedback['score']:.2f}", flush=True)
+                        print(f"[Feedback] Question '{question_text[:30]}...' got score {feedback['score']:.2f}", file=sys.stderr, flush=True)
                     except Exception as e:
                         pass  # Agency not available, that's fine
 
@@ -301,7 +302,7 @@ class MessageBoard:
                     async def extract():
                         insight = await extract_insight_from_answer(question_text, text, agent_name)
                         if insight:
-                            print(f"[Knowledge] Learned: {insight.text}", flush=True)
+                            print(f"[Knowledge] Learned: {insight.text}", file=sys.stderr, flush=True)
 
                     # Schedule extraction without blocking
                     try:
@@ -311,7 +312,7 @@ class MessageBoard:
                         # No running loop, run synchronously
                         asyncio.run(extract())
                 except Exception as e:
-                    print(f"[Knowledge] Extraction scheduling failed: {e}", flush=True)
+                    print(f"[Knowledge] Extraction scheduling failed: {e}", file=sys.stderr, flush=True)
 
         return msg
 
@@ -464,7 +465,7 @@ class MessageBoard:
                     m.timestamp < four_hours_ago):
                     m.answered = True  # Mark as expired/answered
                     expired_any = True
-                    print(f"[Questions] Expired old question: {m.text[:50]}...", flush=True)
+                    print(f"[Questions] Expired old question: {m.text[:50]}...", file=sys.stderr, flush=True)
             if expired_any:
                 self._save()
 

@@ -60,6 +60,10 @@ from .primitive_language import get_language_system, Utterance
 import threading
 _state_lock = threading.Lock()  # Thread safety for singleton initialization
 
+# Configuration constants
+SHM_STALE_THRESHOLD_SECONDS = 5.0  # Shared memory data older than this is considered stale
+INPUT_ERROR_LOG_INTERVAL = 5.0     # Minimum seconds between input error log messages
+
 _store: IdentityStore | None = None
 _sensors: SensorBackend | None = None
 _display: DisplayRenderer | None = None
@@ -228,7 +232,7 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
                     from datetime import datetime
                     timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                     age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-                    shm_stale = age_seconds > 5.0  # Consider stale if older than 5 seconds
+                    shm_stale = age_seconds > SHM_STALE_THRESHOLD_SECONDS
                     if not shm_stale:
                         shm_valid = True
                 else:
@@ -611,7 +615,7 @@ async def _update_display_loop():
                 import time
                 global _last_input_error_log
                 current_time = time.time()
-                if current_time - _last_input_error_log > 5.0:  # Log at most once per 5 seconds
+                if current_time - _last_input_error_log > INPUT_ERROR_LOG_INTERVAL:
                     print(f"[Input] Error in input polling: {e}", file=sys.stderr, flush=True)
                     import traceback
                     traceback.print_exc(file=sys.stderr)
@@ -734,7 +738,7 @@ async def _update_display_loop():
                     current_state=current_state,
                     surprise_level=surprise_level,
                     surprise_sources=surprise_sources,
-                    can_speak=False,  # TODO: wire up voice
+                    can_speak=False,  # Lumen speaks via text (message board), not audio
                 )
 
                 # EXECUTE: Do the action

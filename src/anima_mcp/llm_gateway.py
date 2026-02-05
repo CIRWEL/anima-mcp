@@ -11,6 +11,7 @@ Lumen can now genuinely reflect, wonder, and express desires through LLM generat
 """
 
 import os
+import sys
 import asyncio
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
@@ -79,23 +80,23 @@ class LLMGateway:
 
         if self.ngrok_key:
             self._providers.append(("ngrok", self.ngrok_url, self.ngrok_key))
-            print("[LLMGateway] ngrok AI Gateway configured (multi-provider routing)", flush=True)
+            print("[LLMGateway] ngrok AI Gateway configured (multi-provider routing)", file=sys.stderr, flush=True)
 
         if self.together_key:
             self._providers.append(("together", self.TOGETHER_API_URL, self.together_key))
-            print("[LLMGateway] Together.ai configured (Llama models)", flush=True)
+            print("[LLMGateway] Together.ai configured (Llama models)", file=sys.stderr, flush=True)
 
         if self.hf_token:
             self._providers.append(("huggingface", self.HF_INFERENCE_URL, self.hf_token))
-            print("[LLMGateway] Hugging Face Inference API configured (Phi models)", flush=True)
+            print("[LLMGateway] Hugging Face Inference API configured (Phi models)", file=sys.stderr, flush=True)
 
         if self.groq_key:
             self._providers.append(("groq", self.GROQ_API_URL, self.groq_key))
-            print("[LLMGateway] Groq API configured (Llama models)", flush=True)
+            print("[LLMGateway] Groq API configured (Llama models)", file=sys.stderr, flush=True)
 
         if not self._providers:
-            print("[LLMGateway] No API keys found - generative reflection disabled", flush=True)
-            print("[LLMGateway] Set one of: NGROK_API_KEY, TOGETHER_API_KEY, HF_TOKEN, or GROQ_API_KEY", flush=True)
+            print("[LLMGateway] No API keys found - generative reflection disabled", file=sys.stderr, flush=True)
+            print("[LLMGateway] Set one of: NGROK_API_KEY, TOGETHER_API_KEY, HF_TOKEN, or GROQ_API_KEY", file=sys.stderr, flush=True)
 
     @property
     def enabled(self) -> bool:
@@ -121,7 +122,7 @@ class LLMGateway:
         try:
             import httpx
         except ImportError:
-            print("[LLMGateway] httpx not installed - pip install httpx", flush=True)
+            print("[LLMGateway] httpx not installed - pip install httpx", file=sys.stderr, flush=True)
             return None
 
         prompt = self._build_prompt(context, mode)
@@ -136,7 +137,7 @@ class LLMGateway:
                 if result:
                     return result
             except Exception as e:
-                print(f"[LLMGateway] {provider_name} failed: {e}", flush=True)
+                print(f"[LLMGateway] {provider_name} failed: {e}", file=sys.stderr, flush=True)
                 continue
 
         return None
@@ -195,7 +196,7 @@ class LLMGateway:
             return self._clean_response(text)
         else:
             error = response.text[:200] if response.text else "unknown"
-            print(f"[LLMGateway] {provider} error {response.status_code}: {error}", flush=True)
+            print(f"[LLMGateway] {provider} error {response.status_code}: {error}", file=sys.stderr, flush=True)
             return None
 
     async def _call_huggingface(
@@ -234,11 +235,11 @@ class LLMGateway:
             return self._clean_response(text)
         elif response.status_code == 503:
             # Model loading - HF will return this while cold starting
-            print("[LLMGateway] HF model loading, trying fallback...", flush=True)
+            print("[LLMGateway] HF model loading, trying fallback...", file=sys.stderr, flush=True)
             return None
         else:
             error = response.text[:200] if response.text else "unknown"
-            print(f"[LLMGateway] HF error {response.status_code}: {error}", flush=True)
+            print(f"[LLMGateway] HF error {response.status_code}: {error}", file=sys.stderr, flush=True)
             return None
 
     def _system_prompt(self) -> str:

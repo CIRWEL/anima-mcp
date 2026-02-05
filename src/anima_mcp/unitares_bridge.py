@@ -7,6 +7,7 @@ Provides fallback local governance if UNITARES server is unavailable.
 
 import asyncio
 import json
+import sys
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from datetime import datetime
 
@@ -124,7 +125,7 @@ class UnitaresBridge:
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
-                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", flush=True)
+                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", file=sys.stderr, flush=True)
                         self._available = False
                         self._last_availability_check = current_time
                         return False
@@ -156,7 +157,7 @@ class UnitaresBridge:
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
-                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", flush=True)
+                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", file=sys.stderr, flush=True)
                         self._available = False
                         self._last_availability_check = current_time
                         return False
@@ -208,7 +209,7 @@ class UnitaresBridge:
             - source: "unitares" | "local" (which governance system responded)
         """
         # Debug: Log what we received
-        print(f"[UnitaresBridge] check_in called: is_first_check_in={is_first_check_in}, identity={identity is not None}", flush=True)
+        print(f"[UnitaresBridge] check_in called: is_first_check_in={is_first_check_in}, identity={identity is not None}", file=sys.stderr, flush=True)
 
         # Map anima to EISV first (always needed)
         eisv = anima_to_eisv(anima, readings, neural_weight, physical_weight)
@@ -218,27 +219,27 @@ class UnitaresBridge:
 
         # Sync identity metadata on first check-in (only if UNITARES is available)
         if is_first_check_in and identity and unitares_available:
-            print(f"[UnitaresBridge] First check-in - syncing identity for {identity.name if hasattr(identity, 'name') else 'unknown'}...", flush=True)
+            print(f"[UnitaresBridge] First check-in - syncing identity for {identity.name if hasattr(identity, 'name') else 'unknown'}...", file=sys.stderr, flush=True)
             try:
                 await self.sync_identity_metadata(identity)
             except Exception as e:
                 # Non-fatal - continue with governance check-in
-                print(f"[UnitaresBridge] Identity sync exception: {e}", flush=True)
+                print(f"[UnitaresBridge] Identity sync exception: {e}", file=sys.stderr, flush=True)
 
         # Check if UNITARES is available
         if unitares_available:
             try:
-                print(f"[UnitaresBridge] Calling UNITARES (agent_id={self._agent_id[:8] if self._agent_id else 'None'})", flush=True)
+                print(f"[UnitaresBridge] Calling UNITARES (agent_id={self._agent_id[:8] if self._agent_id else 'None'})", file=sys.stderr, flush=True)
                 result = await self._call_unitares(anima, readings, eisv, identity=identity)
-                print(f"[UnitaresBridge] UNITARES responded: {result.get('source', 'unknown')}", flush=True)
+                print(f"[UnitaresBridge] UNITARES responded: {result.get('source', 'unknown')}", file=sys.stderr, flush=True)
                 return result
             except Exception as e:
                 # Fallback to local governance on error
-                print(f"[UnitaresBridge] UNITARES error, falling back to local: {e}", flush=True)
+                print(f"[UnitaresBridge] UNITARES error, falling back to local: {e}", file=sys.stderr, flush=True)
                 return self._local_governance(anima, readings, eisv, error=str(e))
         else:
             # Use local governance
-            print("[UnitaresBridge] UNITARES not available, using local governance", flush=True)
+            print("[UnitaresBridge] UNITARES not available, using local governance", file=sys.stderr, flush=True)
             return self._local_governance(anima, readings, eisv)
     
     async def _call_unitares(
@@ -304,10 +305,10 @@ class UnitaresBridge:
                     # Add identity_confidence for UNITARES
                     sig_dict["identity_confidence"] = getattr(trajectory_sig, 'identity_confidence', 0.0)
                     update_arguments["trajectory_signature"] = sig_dict
-                    print(f"[UnitaresBridge] Including trajectory (obs={trajectory_sig.observation_count}, conf={sig_dict.get('identity_confidence', 0):.2f})", flush=True)
+                    print(f"[UnitaresBridge] Including trajectory (obs={trajectory_sig.observation_count}, conf={sig_dict.get('identity_confidence', 0):.2f})", file=sys.stderr, flush=True)
             except Exception as e:
                 # Non-blocking - trajectory is optional enhancement
-                print(f"[UnitaresBridge] Trajectory not available: {e}", flush=True)
+                print(f"[UnitaresBridge] Trajectory not available: {e}", file=sys.stderr, flush=True)
 
             # MCP JSON-RPC request
             mcp_request = {
@@ -376,10 +377,10 @@ class UnitaresBridge:
                                 except json.JSONDecodeError:
                                     pass  # Keep original if not JSON
                         # Log response structure to understand agent binding
-                        print(f"[UnitaresBridge] Response keys: {list(governance_result.keys())}", flush=True)
+                        print(f"[UnitaresBridge] Response keys: {list(governance_result.keys())}", file=sys.stderr, flush=True)
                         # Log agent binding info from UNITARES
                         bound_id = governance_result.get("resolved_agent_id") or governance_result.get("agent_signature", {}).get("agent_id")
-                        print(f"[UnitaresBridge] Bound to agent: {bound_id[:8] if bound_id else 'not specified'}", flush=True)
+                        print(f"[UnitaresBridge] Bound to agent: {bound_id[:8] if bound_id else 'not specified'}", file=sys.stderr, flush=True)
 
                         # Extract action and margin from UNITARES response
                         # UNITARES returns: {"action": "proceed", "margin": "comfortable", ...}
@@ -589,7 +590,7 @@ class UnitaresBridge:
             if self._agent_id:
                 headers["X-Agent-Id"] = self._agent_id
 
-            print(f"[UnitaresBridge] Syncing identity metadata for {creature_name}...", flush=True)
+            print(f"[UnitaresBridge] Syncing identity metadata for {creature_name}...", file=sys.stderr, flush=True)
 
             # Use shared session for connection pooling
             session = await self._get_session()
@@ -611,17 +612,17 @@ class UnitaresBridge:
                         result = await response.json()
 
                     if result and "result" in result and "error" not in result:
-                        print(f"[UnitaresBridge] Identity sync SUCCESS - {creature_name} labeled in UNITARES", flush=True)
+                        print(f"[UnitaresBridge] Identity sync SUCCESS - {creature_name} labeled in UNITARES", file=sys.stderr, flush=True)
                         return True
                     else:
                         error = result.get('error', 'unknown') if result else 'no response'
-                        print(f"[UnitaresBridge] Identity sync failed: {error}", flush=True)
+                        print(f"[UnitaresBridge] Identity sync failed: {error}", file=sys.stderr, flush=True)
                 else:
-                    print(f"[UnitaresBridge] Identity sync HTTP error: {response.status}", flush=True)
+                    print(f"[UnitaresBridge] Identity sync HTTP error: {response.status}", file=sys.stderr, flush=True)
             return False
         except Exception as e:
             # Non-fatal - metadata sync is optional
-            print(f"[UnitaresBridge] Identity sync error: {e}", flush=True)
+            print(f"[UnitaresBridge] Identity sync error: {e}", file=sys.stderr, flush=True)
             return False
 
 

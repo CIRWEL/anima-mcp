@@ -10,6 +10,7 @@ Design principle: The inner voice is for being. This is for thinking.
 """
 
 import os
+import sys
 import asyncio
 import json
 from typing import Optional, Dict, Any, List, Tuple
@@ -148,7 +149,7 @@ class CognitiveInference:
         self._has_ngrok = bool(self.ngrok_key)
 
         if not (self._has_groq or self._has_hf or self._has_ngrok):
-            print("[CognitiveInference] No API keys - cognitive inference disabled", flush=True)
+            print("[CognitiveInference] No API keys - cognitive inference disabled", file=sys.stderr, flush=True)
 
     @property
     def enabled(self) -> bool:
@@ -178,7 +179,7 @@ class CognitiveInference:
         try:
             import httpx
         except ImportError:
-            print("[CognitiveInference] httpx not installed", flush=True)
+            print("[CognitiveInference] httpx not installed", file=sys.stderr, flush=True)
             return None
 
         config = PROFILE_CONFIGS[profile]
@@ -255,10 +256,10 @@ class CognitiveInference:
                     text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                     return self._parse_response(text, config.json_mode)
                 else:
-                    print(f"[CognitiveInference] Groq error {response.status_code}: {response.text[:100]}", flush=True)
+                    print(f"[CognitiveInference] Groq error {response.status_code}: {response.text[:100]}", file=sys.stderr, flush=True)
                     return None
         except Exception as e:
-            print(f"[CognitiveInference] Groq exception: {e}", flush=True)
+            print(f"[CognitiveInference] Groq exception: {e}", file=sys.stderr, flush=True)
             return None
 
     async def _call_ngrok(
@@ -297,10 +298,10 @@ class CognitiveInference:
                     text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                     return self._parse_response(text, config.json_mode)
                 else:
-                    print(f"[CognitiveInference] ngrok error {response.status_code}", flush=True)
+                    print(f"[CognitiveInference] ngrok error {response.status_code}", file=sys.stderr, flush=True)
                     return None
         except Exception as e:
-            print(f"[CognitiveInference] ngrok exception: {e}", flush=True)
+            print(f"[CognitiveInference] ngrok exception: {e}", file=sys.stderr, flush=True)
             return None
 
     async def _call_huggingface(
@@ -348,10 +349,10 @@ class CognitiveInference:
 
                     return self._parse_response(text.strip(), config.json_mode)
                 else:
-                    print(f"[CognitiveInference] HF error {response.status_code}", flush=True)
+                    print(f"[CognitiveInference] HF error {response.status_code}", file=sys.stderr, flush=True)
                     return None
         except Exception as e:
-            print(f"[CognitiveInference] HF exception: {e}", flush=True)
+            print(f"[CognitiveInference] HF exception: {e}", file=sys.stderr, flush=True)
             return None
 
     def _parse_response(self, text: str, expect_json: bool) -> Dict[str, Any]:
