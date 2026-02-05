@@ -26,9 +26,6 @@ class SensorReadings:
     # Light (lux)
     light_lux: Optional[float] = None
 
-    # Sound (dB or raw amplitude)
-    sound_level: Optional[float] = None
-
     # System resources
     cpu_percent: Optional[float] = None
     memory_percent: Optional[float] = None
@@ -69,7 +66,6 @@ class SensorReadings:
             "ambient_temp_c": self.ambient_temp_c,
             "humidity_pct": self.humidity_pct,
             "light_lux": self.light_lux,
-            "sound_level": self.sound_level,
             "cpu_percent": self.cpu_percent,
             "memory_percent": self.memory_percent,
             "disk_percent": self.disk_percent,
