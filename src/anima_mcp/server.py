@@ -4809,6 +4809,96 @@ def run_http_server(host: str, port: int):
             app.routes.append(Route("/dashboard", dashboard, methods=["GET"]))
             print("[Server] Registered /dashboard endpoint", file=sys.stderr, flush=True)
 
+            # REST API endpoints for Control Center dashboard
+            # These map to MCP tools for convenient dashboard access
+
+            async def rest_state(request):
+                """GET /state - Get Lumen's current state."""
+                try:
+                    result = await handle_get_lumen_context({})
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                    return JSONResponse({"error": "No state available"}, status_code=500)
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            async def rest_qa(request):
+                """GET /qa - Get questions and answers."""
+                try:
+                    result = await handle_lumen_qa({})
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                    return JSONResponse({"questions": [], "unanswered_count": 0})
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            async def rest_answer(request):
+                """POST /answer - Answer a question from Lumen."""
+                try:
+                    body = await request.json()
+                    question_id = body.get("question_id")
+                    answer = body.get("answer")
+                    result = await handle_lumen_qa({
+                        "question_id": question_id,
+                        "answer": answer
+                    })
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                    return JSONResponse({"success": True})
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            async def rest_message(request):
+                """POST /message - Send a message to Lumen."""
+                try:
+                    body = await request.json()
+                    message = body.get("message", body.get("text", ""))
+                    result = await handle_post_message({"message": message, "source": "dashboard"})
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                    return JSONResponse({"success": True})
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            async def rest_learning(request):
+                """GET /learning - Get learning stats."""
+                try:
+                    result = await handle_get_growth({"include": ["stats"]})
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                    return JSONResponse({"stats": {}})
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            async def rest_voice(request):
+                """GET /voice - Get voice system status."""
+                try:
+                    result = await handle_configure_voice({"action": "status"})
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                    return JSONResponse({"mode": "text"})
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            async def rest_gallery(request):
+                """GET /gallery - Get expression gallery (placeholder)."""
+                return JSONResponse({"expressions": []})
+
+            app.routes.append(Route("/state", rest_state, methods=["GET"]))
+            app.routes.append(Route("/qa", rest_qa, methods=["GET"]))
+            app.routes.append(Route("/answer", rest_answer, methods=["POST"]))
+            app.routes.append(Route("/message", rest_message, methods=["POST"]))
+            app.routes.append(Route("/learning", rest_learning, methods=["GET"]))
+            app.routes.append(Route("/voice", rest_voice, methods=["GET"]))
+            app.routes.append(Route("/gallery", rest_gallery, methods=["GET"]))
+            print("[Server] Registered dashboard REST endpoints (/state, /qa, /message, /learning, /voice)", file=sys.stderr, flush=True)
+
         except Exception as e:
             print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
 
