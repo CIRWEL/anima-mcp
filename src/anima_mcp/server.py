@@ -4865,13 +4865,49 @@ def run_http_server(host: str, port: int):
                     return JSONResponse({"error": str(e)}, status_code=500)
 
             async def rest_learning(request):
-                """GET /learning - Get learning stats."""
+                """GET /learning - Get learning stats for dashboard."""
                 try:
-                    result = await handle_get_growth({"include": ["stats"]})
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        return JSONResponse(data)
-                    return JSONResponse({"stats": {}})
+                    # Combine data from multiple sources
+                    learning_data = {}
+
+                    # Get identity and anima from context
+                    context_result = await handle_get_lumen_context({})
+                    if context_result and len(context_result) > 0:
+                        context = json.loads(context_result[0].text)
+                        identity = context.get("identity", {})
+                        learning_data["awakenings"] = identity.get("awakenings", 0)
+                        learning_data["alive_hours"] = round(identity.get("alive_seconds", 0) / 3600, 1)
+
+                        # Anima means (current values as proxy for means)
+                        anima = context.get("anima", {})
+                        learning_data["mean_warmth"] = round(anima.get("warmth", 0.5), 2)
+                        learning_data["mean_clarity"] = round(anima.get("clarity", 0.5), 2)
+                        learning_data["mean_stability"] = round(anima.get("stability", 0.5), 2)
+                        learning_data["mean_presence"] = round(anima.get("presence", 0.5), 2)
+
+                    # Get trajectory for stability info
+                    trajectory_result = await handle_get_trajectory({})
+                    if trajectory_result and len(trajectory_result) > 0:
+                        trajectory = json.loads(trajectory_result[0].text)
+                        learning_data["samples_24h"] = trajectory.get("observation_count", 0)
+                        # Use stability_score as a proxy for trend (0.5 = neutral)
+                        stability = trajectory.get("stability_score", 0.5)
+                        learning_data["stability_trend"] = round(stability - 0.5, 2)  # Convert to trend
+                        learning_data["preferences_learned"] = trajectory.get("preferences_learned", 0)
+
+                    # Get primitive language stats
+                    prim_result = await handle_primitive_feedback({"action": "stats"})
+                    if prim_result and len(prim_result) > 0:
+                        prim_data = json.loads(prim_result[0].text)
+                        pls = prim_data.get("primitive_language_system", {})
+                        if pls.get("total_utterances", 0) > 0:
+                            learning_data["primitive_language"] = {
+                                "total_utterances": pls.get("total_utterances", 0),
+                                "scored": pls.get("scored_utterances", 0),
+                                "success_rate": round(pls.get("success_rate", 0) * 100, 1)
+                            }
+
+                    return JSONResponse(learning_data)
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
