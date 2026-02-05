@@ -2735,8 +2735,17 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 import asyncio
                 async def delayed_restart():
                     await asyncio.sleep(1)
-                    import os
-                    os._exit(0)  # Exit - systemd/supervisor will restart
+                    # Use systemctl to properly restart (os._exit(0) doesn't trigger Restart=on-failure)
+                    try:
+                        subprocess.run(
+                            ["sudo", "systemctl", "restart", "anima"],
+                            timeout=30,
+                            check=False
+                        )
+                    except Exception:
+                        # Fallback to exit if systemctl fails
+                        import os
+                        os._exit(1)  # Use non-zero exit to trigger Restart=on-failure
                 asyncio.create_task(delayed_restart())
             else:
                 output["note"] = "Changes pulled. Use restart=true to apply, or manually restart."
