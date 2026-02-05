@@ -4850,26 +4850,39 @@ def run_http_server(host: str, port: int):
                     return JSONResponse({"error": str(e)}, status_code=500)
 
             async def rest_qa(request):
-                """GET /qa - Get questions and answers (transformed for dashboard)."""
+                """GET /qa - Get questions and answers (matching message_server.py format)."""
                 try:
-                    result = await handle_lumen_qa({})
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        # Transform questions for dashboard compatibility
-                        # Dashboard expects 'question' field but API returns 'text'
-                        questions = data.get("questions", [])
-                        transformed = []
-                        for q in questions:
-                            transformed.append({
-                                "id": q.get("id"),
-                                "question": q.get("text", ""),  # Map text -> question
-                                "context": q.get("context"),
-                                "age": q.get("age"),
-                                "expired": q.get("expired", False),
-                                "answered": False  # Unanswered questions
-                            })
-                        return JSONResponse({"questions": transformed, "total": len(transformed)})
-                    return JSONResponse({"questions": [], "total": 0})
+                    from .messages import get_board, MESSAGE_TYPE_QUESTION
+
+                    board = get_board()
+                    board._load(force=True)
+
+                    # Get all questions
+                    questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+
+                    # Build Q&A pairs with answers
+                    qa_pairs = []
+                    for q in questions:
+                        # Find answer for this question
+                        answer = None
+                        for m in board._messages:
+                            if getattr(m, "responds_to", None) == q.message_id:
+                                answer = {"text": m.text, "author": m.author, "timestamp": m.timestamp}
+                                break
+                        qa_pairs.append({
+                            "id": q.message_id,
+                            "question": q.text,
+                            "answered": q.answered,
+                            "timestamp": q.timestamp,
+                            "answer": answer
+                        })
+
+                    # Reverse to show newest first, limit to 10
+                    qa_pairs.reverse()
+                    qa_pairs = qa_pairs[:10]
+
+                    unanswered = sum(1 for q in qa_pairs if not q["answered"])
+                    return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": unanswered})
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -4962,8 +4975,39 @@ def run_http_server(host: str, port: int):
                     return JSONResponse({"error": str(e)}, status_code=500)
 
             async def rest_gallery(request):
-                """GET /gallery - Get expression gallery (placeholder)."""
-                return JSONResponse({"expressions": []})
+                """GET /gallery - Get Lumen's drawings."""
+                try:
+                    import re
+                    from pathlib import Path
+                    drawings_dir = Path.home() / ".anima" / "drawings"
+
+                    if not drawings_dir.exists():
+                        return JSONResponse({"drawings": [], "total": 0})
+
+                    files = list(drawings_dir.glob("lumen_drawing*.png"))
+
+                    def parse_ts(f):
+                        m = re.search(r"(\d{8})_(\d{6})", f.name)
+                        if m:
+                            try:
+                                from datetime import datetime
+                                return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+                            except:
+                                pass
+                        return f.stat().st_mtime
+
+                    files = sorted(files, key=parse_ts, reverse=True)
+
+                    drawings = []
+                    for f in files[:30]:
+                        drawings.append({
+                            "filename": f.name,
+                            "timestamp": parse_ts(f),
+                            "size": f.stat().st_size
+                        })
+                    return JSONResponse({"drawings": drawings, "total": len(files)})
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
 
             app.routes.append(Route("/state", rest_state, methods=["GET"]))
             app.routes.append(Route("/qa", rest_qa, methods=["GET"]))
