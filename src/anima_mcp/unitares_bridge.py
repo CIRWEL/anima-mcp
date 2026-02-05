@@ -370,7 +370,7 @@ class UnitaresBridge:
                         # Log response structure to understand agent binding
                         print(f"[UnitaresBridge] Response keys: {list(governance_result.keys())}", flush=True)
                         # Log agent binding info from UNITARES
-                        bound_id = governance_result.get("agent_id") or governance_result.get("resolved_agent_id") or governance_result.get("agent_signature", {}).get("uuid")
+                        bound_id = governance_result.get("resolved_agent_id") or governance_result.get("agent_signature", {}).get("agent_id")
                         print(f"[UnitaresBridge] Bound to agent: {bound_id[:8] if bound_id else 'not specified'}", flush=True)
 
                         # Extract action and margin from UNITARES response
