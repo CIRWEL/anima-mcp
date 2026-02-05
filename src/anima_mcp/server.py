@@ -4813,24 +4813,63 @@ def run_http_server(host: str, port: int):
             # These map to MCP tools for convenient dashboard access
 
             async def rest_state(request):
-                """GET /state - Get Lumen's current state."""
+                """GET /state - Get Lumen's current state (flattened for dashboard)."""
                 try:
                     result = await handle_get_lumen_context({})
                     if result and len(result) > 0:
                         data = json.loads(result[0].text)
-                        return JSONResponse(data)
+                        # Flatten nested structure for dashboard compatibility
+                        identity = data.get("identity", {})
+                        anima = data.get("anima", {})
+                        sensors = data.get("sensors", {})
+                        mood_data = data.get("mood", {})
+
+                        flat = {
+                            # Identity
+                            "name": identity.get("name", "Lumen"),
+                            # Anima values (direct floats)
+                            "warmth": anima.get("warmth", 0.5),
+                            "clarity": anima.get("clarity", 0.5),
+                            "stability": anima.get("stability", 0.5),
+                            "presence": anima.get("presence", 0.5),
+                            # Mood (string)
+                            "mood": mood_data.get("mood", "unknown") if isinstance(mood_data, dict) else mood_data,
+                            # Sensors
+                            "ambient_temp": sensors.get("ambient_temp_c"),
+                            "light": sensors.get("light_lux"),
+                            "humidity": sensors.get("humidity_pct"),
+                            "cpu_temp": sensors.get("cpu_temp_c"),
+                            "timestamp": sensors.get("timestamp"),
+                            # Extra
+                            "surprise": 0.0,  # Not tracked currently
+                            "source": "anima-mcp"
+                        }
+                        return JSONResponse(flat)
                     return JSONResponse({"error": "No state available"}, status_code=500)
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
             async def rest_qa(request):
-                """GET /qa - Get questions and answers."""
+                """GET /qa - Get questions and answers (transformed for dashboard)."""
                 try:
                     result = await handle_lumen_qa({})
                     if result and len(result) > 0:
                         data = json.loads(result[0].text)
-                        return JSONResponse(data)
-                    return JSONResponse({"questions": [], "unanswered_count": 0})
+                        # Transform questions for dashboard compatibility
+                        # Dashboard expects 'question' field but API returns 'text'
+                        questions = data.get("questions", [])
+                        transformed = []
+                        for q in questions:
+                            transformed.append({
+                                "id": q.get("id"),
+                                "question": q.get("text", ""),  # Map text -> question
+                                "context": q.get("context"),
+                                "age": q.get("age"),
+                                "expired": q.get("expired", False),
+                                "answered": False  # Unanswered questions
+                            })
+                        return JSONResponse(transformed)
+                    return JSONResponse([])
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
