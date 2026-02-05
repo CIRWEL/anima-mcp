@@ -1323,6 +1323,14 @@ class ScreenRenderer:
                         draw.text((bar_x, y_offset), f"via: {source_text}", fill=source_color, font=font_small)
                         y_offset += 14
 
+                        # Show UNITARES agent_id (so user can find Lumen in UNITARES dashboard)
+                        unitares_agent_id = governance.get("unitares_agent_id")
+                        if unitares_agent_id and "unitares" in source_lower:
+                            # Show first 8 chars of the UUID for identification
+                            short_id = unitares_agent_id[:8] if len(unitares_agent_id) > 8 else unitares_agent_id
+                            draw.text((bar_x, y_offset), f"id: {short_id}", fill=LIGHT_CYAN, font=font_small)
+                            y_offset += 14
+
                     # EISV metrics - larger bars if space
                     if y_offset < 205:
                         eisv = governance.get("eisv")
@@ -1388,6 +1396,10 @@ class ScreenRenderer:
                 lines.append(f"margin: {margin}")
             if source:
                 lines.append(f"source: {source}")
+            # Show UNITARES agent_id for identification
+            unitares_agent_id = governance.get('unitares_agent_id')
+            if unitares_agent_id and source and "unitares" in source.lower():
+                lines.append(f"id: {unitares_agent_id[:8]}")
             eisv = governance.get('eisv')
             if eisv:
                 lines.append(f"EISV: E={eisv.get('E', 0):.0%} I={eisv.get('I', 0):.0%} S={eisv.get('S', 0):.0%} V={eisv.get('V', 0):.0%}")
