@@ -4813,39 +4813,60 @@ def run_http_server(host: str, port: int):
             # These map to MCP tools for convenient dashboard access
 
             async def rest_state(request):
-                """GET /state - Get Lumen's current state (flattened for dashboard)."""
+                """GET /state - Exact copy of message_server.py format."""
                 try:
-                    result = await handle_get_lumen_context({})
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        # Flatten nested structure for dashboard compatibility
-                        identity = data.get("identity", {})
-                        anima = data.get("anima", {})
-                        sensors = data.get("sensors", {})
-                        mood_data = data.get("mood", {})
+                    from .shared_memory import SharedMemoryClient
+                    from .anima import Anima, SensorReadings
+                    from .identity import IdentityStore
 
-                        flat = {
-                            # Identity
-                            "name": identity.get("name", "Lumen"),
-                            # Anima values (direct floats)
-                            "warmth": anima.get("warmth", 0.5),
-                            "clarity": anima.get("clarity", 0.5),
-                            "stability": anima.get("stability", 0.5),
-                            "presence": anima.get("presence", 0.5),
-                            # Mood (string)
-                            "mood": mood_data.get("mood", "unknown") if isinstance(mood_data, dict) else mood_data,
-                            # Sensors
-                            "ambient_temp": sensors.get("ambient_temp_c"),
-                            "light": sensors.get("light_lux"),
-                            "humidity": sensors.get("humidity_pct"),
-                            "cpu_temp": sensors.get("cpu_temp_c"),
-                            "timestamp": sensors.get("timestamp"),
-                            # Extra
-                            "surprise": 0.0,  # Not tracked currently
-                            "source": "anima-mcp"
-                        }
-                        return JSONResponse(flat)
-                    return JSONResponse({"error": "No state available"}, status_code=500)
+                    shm = SharedMemoryClient()
+                    shm_data = shm.read()
+
+                    if not shm_data or "anima" not in shm_data:
+                        return JSONResponse({"error": "No shared memory data"}, status_code=500)
+
+                    a = shm_data["anima"]
+                    r = shm_data.get("readings", {})
+
+                    readings = SensorReadings(
+                        timestamp=r.get("timestamp", ""),
+                        cpu_temp_c=r.get("cpu_temp_c"),
+                        ambient_temp_c=r.get("ambient_temp_c"),
+                        humidity_pct=r.get("humidity_pct"),
+                        light_lux=r.get("light_lux"),
+                        pressure_hpa=r.get("pressure_hpa"),
+                        cpu_percent=r.get("cpu_percent"),
+                        memory_percent=r.get("memory_percent"),
+                        disk_percent=r.get("disk_percent"),
+                    )
+
+                    anima = Anima(
+                        warmth=a.get("warmth", 0.5),
+                        clarity=a.get("clarity", 0.5),
+                        stability=a.get("stability", 0.5),
+                        presence=a.get("presence", 0.5),
+                        readings=readings,
+                    )
+
+                    feeling = anima.feeling()
+                    identity = IdentityStore()
+
+                    # Exact same format as message_server.py
+                    return JSONResponse({
+                        "name": identity.name or "Lumen",
+                        "mood": feeling["mood"],
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                        "surprise": 0,
+                        "cpu_temp": readings.cpu_temp_c or 0,
+                        "ambient_temp": readings.ambient_temp_c or 0,
+                        "light": readings.light_lux or 0,
+                        "humidity": readings.humidity_pct or 0,
+                        "awakenings": identity.total_awakenings,
+                        "timestamp": readings.timestamp,
+                    })
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -4919,49 +4940,73 @@ def run_http_server(host: str, port: int):
                     return JSONResponse({"error": str(e)}, status_code=500)
 
             async def rest_learning(request):
-                """GET /learning - Get learning stats for dashboard."""
+                """GET /learning - Exact copy of message_server.py format."""
                 try:
-                    # Combine data from multiple sources
-                    learning_data = {}
+                    import sqlite3
+                    from pathlib import Path
+                    from datetime import datetime, timedelta
 
-                    # Get identity and anima from context
-                    context_result = await handle_get_lumen_context({})
-                    if context_result and len(context_result) > 0:
-                        context = json.loads(context_result[0].text)
-                        identity = context.get("identity", {})
-                        learning_data["awakenings"] = identity.get("awakenings", 0)
-                        learning_data["alive_hours"] = round(identity.get("alive_seconds", 0) / 3600, 1)
+                    # Find database (same logic as message_server.py)
+                    db_path = None
+                    for p in [Path.home() / "anima-mcp" / "anima.db", Path.home() / ".anima" / "anima.db"]:
+                        if p.exists():
+                            db_path = p
+                            break
 
-                        # Anima averages (current values as proxy)
-                        anima = context.get("anima", {})
-                        learning_data["avg_warmth"] = round(anima.get("warmth", 0.5), 2)
-                        learning_data["avg_clarity"] = round(anima.get("clarity", 0.5), 2)
-                        learning_data["avg_stability"] = round(anima.get("stability", 0.5), 2)
-                        learning_data["avg_presence"] = round(anima.get("presence", 0.5), 2)
+                    if not db_path:
+                        return JSONResponse({"error": "No identity database"}, status_code=500)
 
-                    # Get trajectory for stability info
-                    trajectory_result = await handle_get_trajectory({})
-                    if trajectory_result and len(trajectory_result) > 0:
-                        trajectory = json.loads(trajectory_result[0].text)
-                        learning_data["samples_24h"] = trajectory.get("observation_count", 0)
-                        # Use stability_score as a proxy for trend (0.5 = neutral)
-                        stability = trajectory.get("stability_score", 0.5)
-                        learning_data["stability_trend"] = round(stability - 0.5, 2)  # Convert to trend
-                        learning_data["preferences_learned"] = trajectory.get("preferences_learned", 0)
+                    conn = sqlite3.connect(str(db_path))
 
-                    # Get primitive language stats
-                    prim_result = await handle_primitive_feedback({"action": "stats"})
-                    if prim_result and len(prim_result) > 0:
-                        prim_data = json.loads(prim_result[0].text)
-                        pls = prim_data.get("primitive_language_system", {})
-                        if pls.get("total_utterances", 0) > 0:
-                            learning_data["primitive_language"] = {
-                                "total_utterances": pls.get("total_utterances", 0),
-                                "scored": pls.get("scored_utterances", 0),
-                                "success_rate": round(pls.get("success_rate", 0) * 100, 1)
-                            }
+                    # Get identity stats
+                    identity = conn.execute("SELECT name, total_awakenings, total_alive_seconds FROM identity LIMIT 1").fetchone()
 
-                    return JSONResponse(learning_data)
+                    # Get recent state history for learning trends
+                    one_day_ago = (datetime.now() - timedelta(hours=24)).isoformat()
+                    recent_states = conn.execute(
+                        "SELECT warmth, clarity, stability, presence, timestamp FROM state_history WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 100",
+                        (one_day_ago,)
+                    ).fetchall()
+
+                    # Calculate averages and trends
+                    if recent_states:
+                        avg_warmth = sum(s[0] for s in recent_states) / len(recent_states)
+                        avg_clarity = sum(s[1] for s in recent_states) / len(recent_states)
+                        avg_stability = sum(s[2] for s in recent_states) / len(recent_states)
+                        avg_presence = sum(s[3] for s in recent_states) / len(recent_states)
+
+                        mid = len(recent_states) // 2
+                        if mid > 0:
+                            first_half = recent_states[mid:]
+                            second_half = recent_states[:mid]
+                            stability_trend = sum(s[2] for s in second_half) / len(second_half) - sum(s[2] for s in first_half) / len(first_half)
+                        else:
+                            stability_trend = 0
+                    else:
+                        avg_warmth = avg_clarity = avg_stability = avg_presence = 0
+                        stability_trend = 0
+
+                    # Get recent events
+                    events = conn.execute(
+                        "SELECT event_type, timestamp FROM events ORDER BY timestamp DESC LIMIT 10"
+                    ).fetchall()
+
+                    alive_hours = identity[2] / 3600 if identity else 0
+                    conn.close()
+
+                    # Exact same format as message_server.py
+                    return JSONResponse({
+                        "name": identity[0] if identity else "Unknown",
+                        "awakenings": identity[1] if identity else 0,
+                        "alive_hours": round(alive_hours, 1),
+                        "samples_24h": len(recent_states),
+                        "avg_warmth": round(avg_warmth, 3),
+                        "avg_clarity": round(avg_clarity, 3),
+                        "avg_stability": round(avg_stability, 3),
+                        "avg_presence": round(avg_presence, 3),
+                        "stability_trend": round(stability_trend, 3),
+                        "recent_events": [{"type": e[0], "time": e[1]} for e in events[:5]]
+                    })
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
