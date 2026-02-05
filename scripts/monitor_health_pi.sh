@@ -6,7 +6,8 @@ set -e
 
 # Configuration
 SERVICE_NAME="${SERVICE_NAME:-lumen}"
-HEALTH_URL="${HEALTH_URL:-http://localhost:8765/health}"
+# DEFINITIVE: anima-mcp runs on port 8766
+HEALTH_URL="${HEALTH_URL:-http://localhost:8766/health}"
 CHECK_INTERVAL="${CHECK_INTERVAL:-60}"
 MAX_FAILURES="${MAX_FAILURES:-3}"
 ALERT_LOG="${ALERT_LOG:-/tmp/anima_alerts.log}"

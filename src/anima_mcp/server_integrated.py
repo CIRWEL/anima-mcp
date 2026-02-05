@@ -6,7 +6,7 @@ Creature can check in with UNITARES governance system for proprioceptive feedbac
 
 Usage:
     # With UNITARES integration
-    anima --unitares http://127.0.0.1:8765/sse
+    anima --unitares http://127.0.0.1:8767/mcp/
     
     # Local governance only (fallback)
     anima
@@ -156,7 +156,7 @@ def create_integrated_server(unitares_url: Optional[str] = None) -> type:
     Create anima server with UNITARES governance integration.
     
     Args:
-        unitares_url: Optional URL to UNITARES server (e.g., "http://127.0.0.1:8765/sse")
+        unitares_url: Optional URL to UNITARES server (e.g., "http://127.0.0.1:8767/mcp/")
                      If None, will check UNITARES_URL environment variable
                      Falls back to local governance if unavailable
     
@@ -292,7 +292,7 @@ def main():
         "--unitares",
         type=str,
         default=None,
-        help="URL to UNITARES governance server (e.g., http://127.0.0.1:8765/sse)"
+        help="URL to UNITARES governance server (e.g., http://127.0.0.1:8767/mcp/)"
     )
     parser.add_argument(
         "--db",

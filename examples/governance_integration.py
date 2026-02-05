@@ -52,7 +52,7 @@ async def main():
     
     # Check governance
     print(f"\nChecking governance...")
-    unitares_url = os.environ.get("UNITARES_URL", "http://127.0.0.1:8765/sse")
+    unitares_url = os.environ.get("UNITARES_URL", "http://127.0.0.1:8767/mcp/")
     decision = await check_governance(anima, readings, unitares_url=unitares_url)
     
     print(f"\nGovernance Decision:")

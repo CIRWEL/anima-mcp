@@ -172,24 +172,24 @@ sudo journalctl -u lumen --since boot
 
 **Look for:**
 - ✅ `[Loop] tick N` messages (normal - display loop running)
-- ✅ `Server started on http://0.0.0.0:8765`
+- ✅ `Server started on http://0.0.0.0:8766`
 - ✅ No error messages
 
 ### 4.3 Test Health Endpoint
 
 ```bash
 # From Pi
-curl http://localhost:8765/health
+curl http://localhost:8766/health
 
 # From Mac (if on same network)
-curl http://pi.local:8765/health
+curl http://pi.local:8766/health
 ```
 
 ### 4.4 Test MCP Connection
 
 ```bash
 # From Mac, test SSE connection
-curl http://pi.local:8765/sse
+curl http://pi.local:8766/sse
 ```
 
 ---
@@ -277,7 +277,7 @@ See `docs/operations/NGROK_SETUP_COMPLETE.md` for detailed instructions.
 **Quick setup:**
 ```bash
 # On Pi
-ngrok http 8765 --url=your-custom-domain.ngrok.io
+ngrok http 8766 --url=your-custom-domain.ngrok.io
 ```
 
 ### 6.2 Configure Ngrok as Service
@@ -293,7 +293,7 @@ Requires=lumen.service
 [Service]
 Type=simple
 User=unitares-anima
-ExecStart=/usr/local/bin/ngrok http 8765 --url=your-custom-domain.ngrok.io --log=stdout
+ExecStart=/usr/local/bin/ngrok http 8766 --url=your-custom-domain.ngrok.io --log=stdout
 Restart=on-failure
 RestartSec=10
 
@@ -323,7 +323,7 @@ On Mac, edit `~/.cursor/mcp.json`:
   "mcpServers": {
     "anima": {
       "type": "sse",
-      "url": "http://pi.local:8765/sse"
+      "url": "http://pi.local:8766/sse"
     }
   }
 }
@@ -349,7 +349,7 @@ Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
 {
   "mcpServers": {
     "anima": {
-      "url": "http://pi.local:8765/sse"
+      "url": "http://pi.local:8766/sse"
     }
   }
 }
@@ -384,7 +384,7 @@ sudo systemctl status lumen
 sudo journalctl -u lumen -n 100
 
 # Common issues:
-# - Port 8765 already in use
+# - Port 8766 already in use
 # - Database permissions
 # - Missing dependencies
 # - Wrong paths in service file
@@ -413,7 +413,7 @@ df -h
 sudo systemctl status lumen
 
 # Check network connectivity
-curl http://localhost:8765/health
+curl http://localhost:8766/health
 ```
 
 ### Display/LEDs Not Working
@@ -511,7 +511,7 @@ cp ~/anima-mcp/anima.db ~/anima.db.backup.$(date +%Y%m%d)
 sudo ufw allow 22/tcp
 
 # Allow MCP port (local network only)
-sudo ufw allow from 192.168.1.0/24 to any port 8765
+sudo ufw allow from 192.168.1.0/24 to any port 8766
 
 # Enable firewall
 sudo ufw enable
@@ -561,8 +561,8 @@ sudo journalctl -u lumen -n 50  # Last 50 lines
 ### Testing
 
 ```bash
-curl http://localhost:8765/health
-curl http://pi.local:8765/sse
+curl http://localhost:8766/health
+curl http://pi.local:8766/sse
 ```
 
 ---

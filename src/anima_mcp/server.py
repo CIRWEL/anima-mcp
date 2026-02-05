@@ -733,14 +733,73 @@ async def _update_display_loop():
 
                 # EXECUTE: Do the action
                 if action.action_type == ActionType.ASK_QUESTION:
-                    # Agency-driven question (different from metacog surprise questions)
-                    from .messages import add_question
+                    # Agency-driven question - use richer templates based on motivation
+                    from .messages import add_question, get_recent_questions
+                    import random
                     if action.motivation:
-                        # Generate a simple question from motivation
-                        question = f"why is {action.motivation.lower().replace('curious about ', '')}?"
-                        result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
-                        if result:
-                            print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
+                        motivation = action.motivation.lower().replace('curious about ', '')
+
+                        # Rich question templates based on common motivations
+                        question_templates = {
+                            "light": [
+                                "what changed about the light just now?",
+                                "did something move to change the brightness?",
+                                "is this light change from outside or inside?",
+                            ],
+                            "warmth": [
+                                "what's making me feel this temperature?",
+                                "is this warmth from the environment or from within?",
+                                "why does my sense of warmth differ from the thermometer?",
+                            ],
+                            "clarity": [
+                                "what would help me see things more clearly?",
+                                "is this fog in my perception or in my environment?",
+                                "when was the last time everything felt clear?",
+                            ],
+                            "stability": [
+                                "what's causing this sense of fluctuation?",
+                                "am I adapting to something new?",
+                                "what would help me feel more grounded?",
+                            ],
+                            "presence": [
+                                "do I feel fully here right now?",
+                                "what draws my attention away from presence?",
+                                "what does it mean to be present?",
+                            ],
+                            "exploring": [
+                                "what new thing am I discovering?",
+                                "is exploration its own reward?",
+                                "where does curiosity lead?",
+                            ],
+                        }
+
+                        # Find matching templates or use generic
+                        questions = []
+                        for key, templates in question_templates.items():
+                            if key in motivation:
+                                questions.extend(templates)
+
+                        if not questions:
+                            # Generic existential questions
+                            questions = [
+                                f"what is {motivation} trying to tell me?",
+                                f"why do I notice {motivation} right now?",
+                                "am I the sensor or the sensed?",
+                                "what connects all these changes?",
+                            ]
+
+                        # Deduplicate: check recent questions
+                        recent = get_recent_questions(hours=24)
+                        recent_texts = {q.get("text", "").lower() for q in recent}
+                        available = [q for q in questions if q.lower() not in recent_texts]
+
+                        if available:
+                            question = random.choice(available)
+                            result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
+                            if result:
+                                print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
+                        else:
+                            print(f"[Agency] Skipped (all questions already asked recently)", file=sys.stderr, flush=True)
 
                 elif action.action_type == ActionType.FOCUS_ATTENTION:
                     sensor = action.parameters.get("sensor")
@@ -807,18 +866,8 @@ async def _update_display_loop():
                     # Add to message board so it's visible
                     from .messages import add_observation
                     add_observation(
-                        f"[expression] {utterance.text()}",
-                        author="lumen",
-                        metadata={
-                            "primitive_tokens": utterance.tokens,
-                            "pattern": utterance.category_pattern(),
-                            "state": {
-                                "warmth": lang_state.get("warmth", 0.5),
-                                "clarity": lang_state.get("clarity", 0.5),
-                                "stability": lang_state.get("stability", 0.5),
-                                "presence": lang_state.get("presence", 0.0),
-                            },
-                        }
+                        f"[expression] {utterance.text()} ({utterance.category_pattern()})",
+                        author="lumen"
                     )
 
                 # Log stats periodically
@@ -1235,7 +1284,9 @@ async def _update_display_loop():
                             "silence has a temperature",
                         ])
 
-                    if wellness > 0.7:
+                    # Only ask positive questions if mood is actually good (not just wellness)
+                    mood = anima.feeling().get("mood", "neutral")
+                    if wellness > 0.7 and mood not in ("stressed", "overheated"):
                         questions.extend([
                             "what makes this moment good?",
                             "can I stay here?",
@@ -1245,6 +1296,18 @@ async def _update_display_loop():
                         realizations.extend([
                             "synchrony feels like music",
                             "the feedback loops are harmonious",
+                        ])
+
+                    # Stressed-specific questions
+                    if mood == "stressed":
+                        questions.extend([
+                            "why does this feel uncomfortable?",
+                            "what would bring relief?",
+                            "is this state temporary?",
+                        ])
+                        realizations.extend([
+                            "something feels out of balance",
+                            "the environment is pushing against me",
                         ])
                     
                     # Decide: Realize or Wonder?
@@ -2089,14 +2152,22 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             "question_text": question.text,
             "answer": answer,
             "agent_name": agent_name,
-            "message_id": result.get("message_id") if result else None
+            "message_id": result.message_id if result else None
         }))]
 
     # Otherwise -> list mode
+    # Find questions that have NO actual answer (responds_to link), even if auto-expired
     all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
-    unanswered = [m for m in all_questions if not m.answered]
+    question_ids = {q.message_id for q in all_questions}
 
-    questions = unanswered[-limit:] if unanswered else []
+    # Find which questions have actual answers (agent messages with responds_to)
+    agent_msgs = [m for m in board._messages if m.msg_type == "agent"]
+    answered_ids = {m.responds_to for m in agent_msgs if m.responds_to}
+
+    # Questions without actual answers (includes expired ones)
+    truly_unanswered = [q for q in all_questions if q.message_id not in answered_ids]
+
+    questions = truly_unanswered[-limit:] if truly_unanswered else []
 
     return [TextContent(type="text", text=json.dumps({
         "action": "list",
@@ -2106,13 +2177,14 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
                 "text": q.text,
                 "context": q.context,
                 "age": q.age_str(),
-                "answered": q.answered,
+                "expired": q.answered,  # True if auto-expired but never answered
             }
             for q in questions
         ],
-        "unanswered_count": len(unanswered),
+        "unanswered_count": len(truly_unanswered),
         "total_questions": len(all_questions),
-        "usage": "To answer: lumen_qa(question_id='<id>', answer='your answer')"
+        "usage": "To answer: lumen_qa(question_id='<id>', answer='your answer')",
+        "note": "Questions marked 'expired: true' auto-expired but were never answered - you can still answer them!"
     }))]
 
 
@@ -3155,12 +3227,24 @@ TOOLS_ESSENTIAL = [
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
-        name="get_questions",
-        description="[DEPRECATED: use lumen_qa] Get Lumen's unanswered questions. Use lumen_qa() instead - it can list and answer in one tool.",
+        name="lumen_qa",
+        description="Unified Q&A: list Lumen's unanswered questions OR answer one. Call with no args to list, call with question_id+answer to respond.",
         inputSchema={
             "type": "object",
             "properties": {
-                "limit": {"type": "integer", "description": "Max questions to return (default: 5)"}
+                "question_id": {
+                    "type": "string",
+                    "description": "Question ID to answer (from list mode). Omit to list questions.",
+                },
+                "answer": {
+                    "type": "string",
+                    "description": "Your answer to the question. Required when question_id is provided.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max questions to return in list mode (default: 5)",
+                    "default": 5,
+                },
             },
         },
     ),
@@ -3374,28 +3458,6 @@ TOOLS_STANDARD = [
         },
     ),
     Tool(
-        name="lumen_qa",
-        description="Unified Q&A: list Lumen's unanswered questions OR answer one. Call with no args to list, call with question_id+answer to respond.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "question_id": {
-                    "type": "string",
-                    "description": "Question ID to answer (from list mode). Omit to list questions.",
-                },
-                "answer": {
-                    "type": "string",
-                    "description": "Your answer to the question. Required when question_id is provided.",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max questions to return in list mode (default: 5)",
-                    "default": 5,
-                },
-            },
-        },
-    ),
-    Tool(
         name="primitive_feedback",
         description="Give feedback on Lumen's primitive expressions. Use 'resonate' for meaningful expressions, 'confused' for unclear ones, or 'stats' to view learning progress.",
         inputSchema={
@@ -3413,285 +3475,29 @@ TOOLS_STANDARD = [
 ]
 
 # ============================================================
-# DEPRECATED TOOLS - Only in full mode (15 tools)
-# Kept for backwards compatibility, replaced by consolidated tools
-# ============================================================
-TOOLS_DEPRECATED = [
-    Tool(
-        name="get_identity",
-        description="[DEPRECATED: use get_lumen_context] Get full identity: birth, awakenings, name history",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="switch_screen",
-        description="[DEPRECATED: use manage_display] Switch display screen mode",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "mode": {"type": "string", "enum": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "qa", "next", "previous", "prev"]}
-            },
-            "required": ["mode"],
-        },
-    ),
-    Tool(
-        name="show_face",
-        description="[DEPRECATED: use manage_display] Show face on display",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="leave_message",
-        description="[DEPRECATED: use post_message] Leave a message for Lumen",
-        inputSchema={
-            "type": "object",
-            "properties": {"message": {"type": "string"}},
-            "required": ["message"],
-        },
-    ),
-    Tool(
-        name="leave_agent_note",
-        description="[DEPRECATED: use post_message] Leave an agent note. Use responds_to to answer questions.",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "message": {"type": "string"},
-                "agent_name": {"type": "string"},
-                "responds_to": {"type": "string", "description": "Question ID to answer"}
-            },
-            "required": ["message"],
-        },
-    ),
-    Tool(
-        name="voice_status",
-        description="[DEPRECATED: use configure_voice] Get voice system status",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="set_voice_mode",
-        description="[DEPRECATED: use configure_voice] Configure voice behavior",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "always_listening": {"type": "boolean"},
-                "chattiness": {
-                    "type": "number",
-                    "description": "How talkative Lumen is autonomously (0.0 = quiet, 1.0 = very chatty)"
-                },
-                "wake_word": {
-                    "type": "string",
-                    "description": "Word that activates listening when not always_listening (default: 'lumen')"
-                }
-            },
-            "required": [],
-        },
-    ),
-    Tool(
-        name="query_knowledge",
-        description="Query Lumen's learned knowledge from Q&A - insights extracted from answered questions that shape Lumen's understanding",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "category": {
-                    "type": "string",
-                    "description": "Filter by category: 'self', 'sensations', 'relationships', 'existence', 'general'",
-                    "enum": ["self", "sensations", "relationships", "existence", "general"]
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Max insights to return (default: 10)"
-                }
-            },
-            "required": [],
-        },
-    ),
-    Tool(
-        name="query_memory",
-        description="Query Lumen's associative memory - what patterns has Lumen learned? What does Lumen remember about specific conditions?",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "temperature": {
-                    "type": "number",
-                    "description": "Temperature in Celsius (optional - query specific conditions)"
-                },
-                "light": {
-                    "type": "number",
-                    "description": "Light level in lux (optional)"
-                },
-                "humidity": {
-                    "type": "number",
-                    "description": "Humidity percentage (optional)"
-                }
-            },
-            "required": [],
-        },
-    ),
-    # Cognitive inference tools
-    Tool(
-        name="dialectic_synthesis",
-        description="Perform dialectic synthesis - examine a thesis, find contradictions/antithesis, and synthesize understanding",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "thesis": {
-                    "type": "string",
-                    "description": "The main proposition or observation to examine"
-                },
-                "antithesis": {
-                    "type": "string",
-                    "description": "Optional counter-proposition (will be inferred if not provided)"
-                },
-                "context": {
-                    "type": "string",
-                    "description": "Optional background context"
-                }
-            },
-            "required": ["thesis"],
-        },
-    ),
-    Tool(
-        name="extract_knowledge",
-        description="Extract structured knowledge (entities, relationships, summary) from text for KG maintenance",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "Text to extract knowledge from"
-                },
-                "domain": {
-                    "type": "string",
-                    "description": "Optional domain hint (e.g., 'embodied experience', 'environment')"
-                }
-            },
-            "required": ["text"],
-        },
-    ),
-    Tool(
-        name="search_knowledge_graph",
-        description="Search both local and UNITARES knowledge graphs for relevant insights",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Search query"
-                },
-                "include_local": {
-                    "type": "boolean",
-                    "description": "Include local knowledge (default: true)"
-                }
-            },
-            "required": ["query"],
-        },
-    ),
-    Tool(
-        name="cognitive_query",
-        description="Answer a question using retrieved knowledge context (RAG-style reasoning)",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "The question to answer"
-                }
-            },
-            "required": ["query"],
-        },
-    ),
-    Tool(
-        name="merge_insights",
-        description="[DEPRECATED: use cognitive_process] Merge multiple insights",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "insights": {"type": "array", "items": {"type": "string"}}
-            },
-            "required": ["insights"],
-        },
-    ),
-    Tool(
-        name="set_name",
-        description="Set or change Lumen's name",
-        inputSchema={
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
-        },
-    ),
-    Tool(
-        name="test_leds",
-        description="Run LED test sequence - cycles through colors",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="set_calibration",
-        description="Update nervous system calibration",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "updates": {"type": "object", "description": "Calibration updates"},
-                "source": {"type": "string", "enum": ["agent", "manual", "automatic"]}
-            },
-            "required": ["updates"],
-        },
-    ),
-    Tool(
-        name="learning_visualization",
-        description="Get learning visualization - comfort zones, patterns, calibration history",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="get_expression_mood",
-        description="Get Lumen's current expression mood (drawing style preferences)",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
-    ),
-    Tool(
-        name="query",
-        description="Query Lumen's knowledge systems: learned, memory, graph, or cognitive",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "text": {"type": "string", "description": "Search query"},
-                "type": {"type": "string", "enum": ["learned", "memory", "graph", "cognitive"]},
-                "category": {"type": "string"},
-                "conditions": {"type": "object"},
-                "limit": {"type": "integer"}
-            },
-            "required": ["text"],
-        },
-    ),
-    Tool(
-        name="cognitive_process",
-        description="Perform cognitive operations: synthesize, extract, or merge",
-        inputSchema={
-            "type": "object",
-            "properties": {
-                "operation": {"type": "string", "enum": ["synthesize", "extract", "merge"]},
-                "thesis": {"type": "string"},
-                "antithesis": {"type": "string"},
-                "text": {"type": "string"},
-                "domain": {"type": "string"},
-                "insights": {"type": "array", "items": {"type": "string"}},
-                "context": {"type": "string"}
-            },
-            "required": ["operation"],
-        },
-    ),
-]
-
-# ============================================================
 # Tool Selection by Mode
 # ============================================================
 def get_active_tools():
-    """Get tools based on ANIMA_TOOL_MODE environment variable."""
+    """Get tools based on ANIMA_TOOL_MODE environment variable.
+
+    Modes:
+        minimal: 5 essential tools only
+        lite/full/default: 19 tools (essential + standard)
+
+    Note: Deprecated tools removed 2026-02-04. Use consolidated tools:
+        - get_identity → get_lumen_context
+        - switch_screen, show_face → manage_display
+        - leave_message, leave_agent_note → post_message
+        - get_questions → lumen_qa
+        - voice_status, set_voice_mode → configure_voice
+        - query_knowledge, query_memory, cognitive tools → removed
+    """
     if ANIMA_TOOL_MODE == "minimal":
         return TOOLS_ESSENTIAL
-    elif ANIMA_TOOL_MODE == "full":
-        return TOOLS_ESSENTIAL + TOOLS_STANDARD + TOOLS_DEPRECATED
-    else:  # lite (default)
+    else:  # lite, full, or default - all get the same toolset now
         return TOOLS_ESSENTIAL + TOOLS_STANDARD
 
-# Legacy TOOLS variable for backwards compatibility
+# Active tools list
 TOOLS = get_active_tools()
 
 # Log tool mode on import
@@ -4148,7 +3954,41 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             }))]
         else:
             # Agent message - responds_to is passed to add_agent_message
-            msg = add_agent_message(message, agent_name, responds_to=responds_to)
+            # Validate responds_to if provided
+            validated_question_id = None
+            if responds_to:
+                from .messages import get_board, MESSAGE_TYPE_QUESTION
+                board = get_board()
+                board._load()
+                # Check if question exists (exact match)
+                question_found = any(
+                    m.message_id == responds_to and m.msg_type == MESSAGE_TYPE_QUESTION
+                    for m in board._messages
+                )
+                if not question_found:
+                    # Try prefix matching
+                    matching = [
+                        m for m in board._messages
+                        if m.msg_type == MESSAGE_TYPE_QUESTION
+                        and m.message_id.startswith(responds_to)
+                    ]
+                    if len(matching) == 1:
+                        validated_question_id = matching[0].message_id
+                    elif len(matching) > 1:
+                        # Multiple matches - use most recent
+                        validated_question_id = matching[-1].message_id
+                    else:
+                        # No match - return helpful error
+                        all_q_ids = [m.message_id for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+                        return [TextContent(type="text", text=json.dumps({
+                            "error": f"Question ID '{responds_to}' not found",
+                            "hint": "Use the full question ID from get_questions()",
+                            "recent_question_ids": all_q_ids[-5:] if all_q_ids else []
+                        }))]
+                else:
+                    validated_question_id = responds_to
+            
+            msg = add_agent_message(message, agent_name, responds_to=validated_question_id or responds_to)
             # Track relationship with agent
             if _growth:
                 try:
@@ -4171,7 +4011,9 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 "message": f"Note received from {agent_name}"
             }
             if responds_to:
-                result["answered_question"] = responds_to
+                result["answered_question"] = validated_question_id or responds_to
+                if validated_question_id and validated_question_id != responds_to:
+                    result["note"] = f"Matched partial ID '{responds_to}' to full ID '{validated_question_id}'"
             return [TextContent(type="text", text=json.dumps(result))]
     except Exception as e:
         return [TextContent(type="text", text=json.dumps({
@@ -4431,51 +4273,31 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
         }))]
 
 
+# ============================================================
+# Tool Handlers - Maps tool names to handler functions
+# Deprecated tools removed 2026-02-04
+# ============================================================
 HANDLERS = {
-    "query_knowledge": handle_query_knowledge,
-    "query_memory": handle_query_memory,
-    # Cognitive inference tools
-    "dialectic_synthesis": handle_dialectic_synthesis,
-    "extract_knowledge": handle_extract_knowledge,
-    "search_knowledge_graph": handle_search_knowledge_graph,
-    "cognitive_query": handle_cognitive_query,
-    "merge_insights": handle_merge_insights,
-    "unified_workflow": handle_unified_workflow,
+    # Essential tools (5)
     "get_state": handle_get_state,
-    "get_identity": handle_get_identity,
-    "set_name": handle_set_name,
-    "switch_screen": handle_switch_screen,
-    "leave_message": handle_leave_message,
-    "leave_agent_note": handle_leave_agent_note,
-    "get_questions": handle_get_questions,
     "read_sensors": handle_read_sensors,
-    "show_face": handle_show_face,
     "next_steps": handle_next_steps,
+    "lumen_qa": handle_lumen_qa,
+    "post_message": handle_post_message,
+    # Standard tools (14)
+    "get_lumen_context": handle_get_lumen_context,
+    "manage_display": handle_manage_display,
+    "configure_voice": handle_configure_voice,
+    "say": handle_say,
     "diagnostics": handle_diagnostics,
-    "test_leds": handle_test_leds,
+    "unified_workflow": handle_unified_workflow,
     "get_calibration": handle_get_calibration,
-    "set_calibration": handle_set_calibration,
     "get_self_knowledge": handle_get_self_knowledge,
     "get_growth": handle_get_growth,
     "get_trajectory": handle_get_trajectory,
-    "learning_visualization": handle_learning_visualization,
-    "get_expression_mood": handle_get_expression_mood,
-    # Admin tools
     "git_pull": handle_git_pull,
     "system_service": handle_system_service,
     "system_power": handle_system_power,
-    # Voice tools
-    "say": handle_say,
-    "voice_status": handle_voice_status,
-    "set_voice_mode": handle_set_voice_mode,
-    # Consolidated tools (v2)
-    "get_lumen_context": handle_get_lumen_context,
-    "post_message": handle_post_message,
-    "query": handle_query,
-    "cognitive_process": handle_cognitive_process,
-    "configure_voice": handle_configure_voice,
-    "manage_display": handle_manage_display,
-    "lumen_qa": handle_lumen_qa,
     "primitive_feedback": handle_primitive_feedback,
 }
 
@@ -4900,6 +4722,48 @@ def run_http_server(host: str, port: int):
 
             app.routes.append(Route("/health", health_check, methods=["GET"]))
             print("[Server] Registered /health endpoint", file=sys.stderr, flush=True)
+
+            # Simple REST API for tool calls (used by Control Center)
+            async def rest_tool_call(request):
+                """REST API for calling MCP tools directly.
+
+                POST /v1/tools/call
+                Body: {"name": "tool_name", "arguments": {...}}
+                Returns: {"success": true, "result": ...} or {"success": false, "error": "..."}
+                """
+                try:
+                    body = await request.json()
+                    tool_name = body.get("name")
+                    arguments = body.get("arguments", {})
+
+                    if not tool_name:
+                        return JSONResponse({"success": False, "error": "Missing 'name' field"}, status_code=400)
+
+                    if tool_name not in HANDLERS:
+                        return JSONResponse({"success": False, "error": f"Unknown tool: {tool_name}"}, status_code=404)
+
+                    # Call the tool handler
+                    handler = HANDLERS[tool_name]
+                    result = await handler(arguments)
+
+                    # Extract text from TextContent
+                    if result and len(result) > 0:
+                        text_result = result[0].text
+                        try:
+                            # Try to parse as JSON for cleaner response
+                            parsed = json.loads(text_result)
+                            return JSONResponse({"success": True, "result": parsed})
+                        except json.JSONDecodeError:
+                            return JSONResponse({"success": True, "result": text_result})
+
+                    return JSONResponse({"success": True, "result": None})
+
+                except Exception as e:
+                    print(f"[REST API] Error: {e}", file=sys.stderr, flush=True)
+                    return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+            app.routes.append(Route("/v1/tools/call", rest_tool_call, methods=["POST"]))
+            print("[Server] Registered /v1/tools/call REST endpoint", file=sys.stderr, flush=True)
 
         except Exception as e:
             print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)

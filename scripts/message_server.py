@@ -26,8 +26,9 @@ PI_USER = "unitares-anima"
 PI_HOST = os.environ.get("LUMEN_HOST", "lumen-local")  # SSH config alias (local network)
 
 # HTTP URL for Pi's anima-mcp server (preferred over SSH)
-# Examples: "http://localhost:8766", "https://lumen-anima.ngrok.io"
-LUMEN_HTTP_URL = os.environ.get("LUMEN_HTTP_URL", "")
+# Default to Tailscale IP for reliable access from Mac
+# DEFINITIVE: anima-mcp runs on port 8766 - see docs/operations/DEFINITIVE_PORTS.md
+LUMEN_HTTP_URL = os.environ.get("LUMEN_HTTP_URL", "http://100.89.201.36:8766")
 LUMEN_HTTP_AUTH = os.environ.get("LUMEN_HTTP_AUTH", "")  # "user:pass" for basic auth
 
 
@@ -131,7 +132,7 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def handle_get_state(self):
-        """Get Lumen's current state. Tries HTTP first, falls back to SSH."""
+        """Get Lumen's current state. Single source of truth: MCP get_state tool."""
         # Try HTTP first (faster, no SSH overhead)
         if LUMEN_HTTP_URL:
             success, output = http_call_tool("get_state")
@@ -142,73 +143,79 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
                 except json.JSONDecodeError:
                     pass  # Fall through to SSH
 
-        # SSH fallback
+        # SSH fallback - use the SAME get_state logic as the MCP server
+        # This reads from shared memory and uses anima.feeling() for mood
         code = '''
 import json
-import sqlite3
-from pathlib import Path
+import sys, io
 
-db_path = Path.home() / "anima-mcp" / "anima.db"
-if not db_path.exists():
-    print(json.dumps({"error": "Database not found"}))
-else:
-    try:
-        conn = sqlite3.connect(str(db_path))
-        # Get latest state
-        state = conn.execute(
-            "SELECT warmth, clarity, stability, presence, timestamp FROM state_history ORDER BY timestamp DESC LIMIT 1"
-        ).fetchone()
+# Suppress init messages
+old_stdout, old_stderr = sys.stdout, sys.stderr
+sys.stdout = sys.stderr = io.StringIO()
+
+try:
+    from src.anima_mcp.shared_memory import SharedMemoryClient
+    from src.anima_mcp.anima import Anima, SensorReadings
+    from src.anima_mcp.identity import IdentityStore
+
+    # Read from shared memory (same source as Pi display)
+    shm = SharedMemoryClient()
+    shm_data = shm.read()
+
+    sys.stdout, sys.stderr = old_stdout, old_stderr
+
+    if not shm_data or "anima" not in shm_data:
+        print(json.dumps({"error": "No shared memory data - is broker running?"}))
+    else:
+        # Reconstruct anima from shared memory
+        a = shm_data["anima"]
+        r = shm_data.get("readings", {})
+
+        readings = SensorReadings(
+            timestamp=r.get("timestamp", ""),
+            cpu_temp_c=r.get("cpu_temp_c"),
+            ambient_temp_c=r.get("ambient_temp_c"),
+            humidity_pct=r.get("humidity_pct"),
+            light_lux=r.get("light_lux"),
+            pressure_hpa=r.get("pressure_hpa"),
+            cpu_percent=r.get("cpu_percent"),
+            memory_percent=r.get("memory_percent"),
+            disk_percent=r.get("disk_percent"),
+        )
+
+        anima = Anima(
+            warmth=a.get("warmth", 0.5),
+            clarity=a.get("clarity", 0.5),
+            stability=a.get("stability", 0.5),
+            presence=a.get("presence", 0.5),
+            readings=readings,
+        )
+
+        # Use anima.feeling() for consistent mood calculation
+        feeling = anima.feeling()
+
         # Get identity
-        identity = conn.execute(
-            "SELECT name, total_awakenings FROM identity LIMIT 1"
-        ).fetchone()
-        conn.close()
-
-        # Get real-time sensor readings (suppress init messages)
-        import sys, io
-        try:
-            old_stdout = sys.stdout
-            sys.stdout = io.StringIO()
-            from src.anima_mcp.sensors import PiSensors
-            s = PiSensors()
-            r = s.read()
-            sys.stdout = old_stdout
-            sensors = (r.cpu_temp_c, r.ambient_temp_c, r.light_lux, r.humidity_pct)
-        except:
-            sys.stdout = old_stdout
-            sensors = None
-
-        # Determine mood from state values
-        if state:
-            w, c, s, p = state[0], state[1], state[2], state[3]
-            wellness = (w + c + s + p) / 4
-            if wellness > 0.7:
-                mood = "content" if s > 0.8 else "curious"
-            elif wellness > 0.4:
-                mood = "calm" if s > 0.6 else "alert"
-            else:
-                mood = "uncomfortable"
-        else:
-            w, c, s, p = 0, 0, 0, 0
-            mood = "unknown"
+        identity = IdentityStore()
 
         print(json.dumps({
-            "name": identity[0] if identity else "Lumen",
-            "mood": mood,
-            "warmth": w,
-            "clarity": c,
-            "stability": s,
-            "presence": p,
-            "surprise": 0,
-            "cpu_temp": sensors[0] if sensors else 0,
-            "ambient_temp": sensors[1] if sensors else 0,
-            "light": sensors[2] if sensors else 0,
-            "humidity": sensors[3] if sensors else 0,
-            "awakenings": identity[1] if identity else 0,
-            "timestamp": state[4] if state else ""
+            "name": identity.name or "Lumen",
+            "mood": feeling["mood"],
+            "warmth": anima.warmth,
+            "clarity": anima.clarity,
+            "stability": anima.stability,
+            "presence": anima.presence,
+            "feeling": feeling,
+            "cpu_temp": readings.cpu_temp_c or 0,
+            "ambient_temp": readings.ambient_temp_c or 0,
+            "light": readings.light_lux or 0,
+            "humidity": readings.humidity_pct or 0,
+            "awakenings": identity.total_awakenings,
+            "timestamp": readings.timestamp,
+            "source": "shared_memory"
         }))
-    except Exception as e:
-        print(json.dumps({"error": str(e)}))
+except Exception as e:
+    sys.stdout, sys.stderr = old_stdout, old_stderr
+    print(json.dumps({"error": str(e)}))
 '''
         success, output = ssh_command(code)
         if success:
@@ -358,21 +365,36 @@ except Exception as e:
         """Get list of Lumen's drawings."""
         code = '''
 import json
+import re
 from pathlib import Path
+from datetime import datetime
 
-drawings_dir = Path.home() / "anima-mcp" / "drawings"
+drawings_dir = Path.home() / ".anima" / "drawings"
+
 if not drawings_dir.exists():
     print(json.dumps({"drawings": [], "total": 0}))
 else:
-    files = sorted(drawings_dir.glob("*.png"), key=lambda p: p.stat().st_mtime, reverse=True)
+    files = list(drawings_dir.glob("lumen_drawing*.png"))
+
+    def parse_ts(f):
+        m = re.search(r"(\d{8})_(\d{6})", f.name)
+        if m:
+            try:
+                return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+            except:
+                pass
+        return f.stat().st_mtime
+
+    files = sorted(files, key=parse_ts, reverse=True)
+
     drawings = []
-    for f in files[:20]:  # Latest 20
+    for f in files[:30]:
         drawings.append({
             "filename": f.name,
-            "timestamp": f.stat().st_mtime,
+            "timestamp": parse_ts(f),
             "size": f.stat().st_size
         })
-    print(json.dumps({"drawings": drawings, "total": len(list(drawings_dir.glob("*.png")))}))
+    print(json.dumps({"drawings": drawings, "total": len(files)}))
 '''
         success, output = ssh_command(code)
         if success:
@@ -396,8 +418,7 @@ else:
 import base64
 from pathlib import Path
 
-drawings_dir = Path.home() / "anima-mcp" / "drawings"
-img_path = drawings_dir / "{filename}"
+img_path = Path.home() / ".anima" / "drawings" / "{filename}"
 if img_path.exists():
     with open(img_path, "rb") as f:
         print(base64.b64encode(f.read()).decode())
@@ -421,24 +442,44 @@ else:
             self.end_headers()
 
     def handle_post_message(self):
-        """Send a message to Lumen."""
+        """Send a message to Lumen, optionally responding to a question."""
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
 
         try:
             data = json.loads(post_data)
             text = data.get('text', '').replace("'", "\\'").replace('"', '\\"')
+            author = data.get('author', 'user').replace("'", "\\'").replace('"', '\\"')
+            responds_to = data.get('responds_to', '').replace("'", "\\'").replace('"', '\\"')
 
             if not text:
                 self.send_json({"error": "No text provided"}, 400)
                 return
 
-            print(f"Sending message to Lumen: {text[:50]}...")
-            code = f"from src.anima_mcp.messages import MessageBoard; b = MessageBoard(); b.add_user_message('{text}'); print('ok')"
+            if responds_to:
+                # Answering a question - use agent message with responds_to
+                print(f"[{author}] Answering question {responds_to}: {text[:50]}...")
+                code = f'''
+from src.anima_mcp.messages import MessageBoard
+board = MessageBoard()
+board._load()
+# Mark question as answered
+for m in board._messages:
+    if m.message_id == "{responds_to}":
+        m.answered = True
+        break
+# Add the answer
+board.add_agent_message("{text}", agent_name="{author}", responds_to="{responds_to}")
+print("ok")
+'''
+            else:
+                # Regular message
+                print(f"[{author}] Sending message to Lumen: {text[:50]}...")
+                code = f"from src.anima_mcp.messages import MessageBoard; b = MessageBoard(); b.add_user_message('{text}'); print('ok')"
 
             success, output = ssh_command(code)
             if success:
-                self.send_json({"status": "sent"})
+                self.send_json({"status": "answered" if responds_to else "sent", "responds_to": responds_to or None})
             else:
                 self.send_json({"error": output}, 500)
 

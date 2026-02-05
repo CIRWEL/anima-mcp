@@ -32,7 +32,7 @@
 - ✅ `docs/CONFIGURATION_GUIDE.md` - Config system
 - ✅ `docs/ERROR_RECOVERY.md` - Error handling
 - ✅ `docs/ADAPTIVE_LEARNING.md` - Learning system
-- ⚠️ **`docs/operations/REBOOT_LOOP_PREVENTION.md`** - **CRITICAL: Port 8765 trap!**
+- ⚠️ **`docs/operations/REBOOT_LOOP_PREVENTION.md`** - **CRITICAL: Port 8766 trap!**
 
 ---
 
@@ -51,10 +51,10 @@
 ### Fixing a Bug
 
 1. **Reproduce** - Understand the issue
-2. **🚨 CRITICAL: Check port 8765 trap first!** - If service won't start or reboot loops:
+2. **🚨 CRITICAL: Check port 8766 trap first!** - If service won't start or reboot loops:
    ```bash
-   ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-     "lsof -i :8765 && pkill -f 'anima.*--sse'; systemctl --user reset-failed anima"
+   ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+     "lsof -i :8766 && pkill -f 'anima.*--sse'; systemctl --user reset-failed anima"
    ```
    See `docs/operations/REBOOT_LOOP_PREVENTION.md` for details.
 3. **Check logs** - What's actually happening?
@@ -220,7 +220,7 @@ Don't try:
 
 **Just do:**
 ```bash
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "systemctl --user restart anima"
 ```
 

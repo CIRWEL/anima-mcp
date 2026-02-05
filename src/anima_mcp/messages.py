@@ -224,16 +224,60 @@ class MessageBoard:
         """Add an agent message, optionally responding to a question."""
         msg = self.add_message(text, MESSAGE_TYPE_AGENT, author=agent_name)
         if responds_to:
-            msg.responds_to = responds_to
-            # Find the question being answered
+            # Validate that the question exists - require exact match
             question_text = None
             question_context = None
+            question_found = False
+            
+            # First try exact match
             for m in self._messages:
                 if m.message_id == responds_to and m.msg_type == MESSAGE_TYPE_QUESTION:
                     m.answered = True
                     question_text = m.text
                     question_context = getattr(m, 'context', None)
+                    question_found = True
                     break
+            
+            # If exact match failed, try prefix matching for better UX
+            if not question_found:
+                matching_questions = [
+                    m for m in self._messages 
+                    if m.msg_type == MESSAGE_TYPE_QUESTION 
+                    and m.message_id.startswith(responds_to)
+                ]
+                if len(matching_questions) == 1:
+                    # Single match - use it
+                    q = matching_questions[0]
+                    q.answered = True
+                    question_text = q.text
+                    question_context = getattr(q, 'context', None)
+                    question_found = True
+                    # Update responds_to to full ID
+                    responds_to = q.message_id
+                    print(f"[MessageBoard] Matched partial ID '{responds_to[:8]}...' to question '{q.message_id}'", flush=True)
+                elif len(matching_questions) > 1:
+                    # Multiple matches - ambiguous
+                    print(f"[MessageBoard] WARNING: Partial ID '{responds_to}' matches {len(matching_questions)} questions. Use full ID.", flush=True)
+                    # Use the most recent one
+                    q = matching_questions[-1]
+                    q.answered = True
+                    question_text = q.text
+                    question_context = getattr(q, 'context', None)
+                    question_found = True
+                    responds_to = q.message_id
+            
+            # Set responds_to (now with validated full ID if prefix matched)
+            msg.responds_to = responds_to
+            
+            if not question_found:
+                # Question not found - warn but still save the message
+                print(f"[MessageBoard] WARNING: Question ID '{responds_to}' not found. Answer saved but won't link to Q&A screen.", flush=True)
+                # Try to find similar IDs for helpful error
+                all_question_ids = [m.message_id for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+                similar = [qid for qid in all_question_ids if responds_to in qid or qid.startswith(responds_to[:4])]
+                if similar:
+                    print(f"[MessageBoard] Similar question IDs: {similar[:3]}", flush=True)
+            
             self._save()
 
             # Compute feedback for agency learning (was this question well-formed?)
@@ -332,13 +376,21 @@ class MessageBoard:
         """
         import time
 
-        # Deduplication: Don't ask similar questions within 1 hour
         now = time.time()
-        one_hour_ago = now - 3600
 
-        recent_questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION][-20:]
-        for q in recent_questions:
-            if q.timestamp > one_hour_ago:
+        # Rate limit: minimum 3 minutes between questions (prevents backlog)
+        MIN_QUESTION_INTERVAL = 180  # 3 minutes
+        recent_questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+        if recent_questions:
+            last_question_time = recent_questions[-1].timestamp
+            if now - last_question_time < MIN_QUESTION_INTERVAL:
+                return None  # Too soon since last question
+
+        # Deduplication: Don't ask similar questions within 4 hours
+        four_hours_ago = now - 14400
+
+        for q in recent_questions[-20:]:
+            if q.timestamp > four_hours_ago:
                 # Check for exact or similar questions
                 if self._questions_similar(text, q.text):
                     return None  # Skip similar question
@@ -397,19 +449,19 @@ class MessageBoard:
 
         Args:
             limit: Max questions to return
-            auto_expire: If True, mark questions older than 1 hour as expired (answered=True)
+            auto_expire: If True, mark questions older than 4 hours as expired (answered=True)
         """
         self._load()
 
         # Auto-expire old questions so Lumen can ask new ones
         if auto_expire:
             now = time.time()
-            one_hour_ago = now - 3600  # 1 hour expiry
+            four_hours_ago = now - 14400  # 4 hour expiry (was 1 hour)
             expired_any = False
             for m in self._messages:
                 if (m.msg_type == MESSAGE_TYPE_QUESTION and
                     not m.answered and
-                    m.timestamp < one_hour_ago):
+                    m.timestamp < four_hours_ago):
                     m.answered = True  # Mark as expired/answered
                     expired_any = True
                     print(f"[Questions] Expired old question: {m.text[:50]}...", flush=True)
@@ -417,6 +469,19 @@ class MessageBoard:
                 self._save()
 
         questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION and not m.answered]
+        return questions[-limit:]
+
+    def get_recent_questions(self, hours: int = 24, limit: int = 100) -> List[Message]:
+        """Get all questions (answered or not) from the last N hours.
+
+        Used for deduplication - prevents asking the same question repeatedly.
+        """
+        self._load()
+        cutoff = time.time() - (hours * 3600)
+        questions = [
+            m for m in self._messages
+            if m.msg_type == MESSAGE_TYPE_QUESTION and m.timestamp > cutoff
+        ]
         return questions[-limit:]
 
     def get_messages_for_lumen(self, since_timestamp: float = 0, limit: int = 5) -> List[Message]:
@@ -498,6 +563,15 @@ def add_question(text: str, author: str = "lumen", context: Optional[str] = None
 def get_unanswered_questions(limit: int = 5) -> List[Message]:
     """Convenience: get unanswered questions."""
     return get_board().get_unanswered_questions(limit)
+
+
+def get_recent_questions(hours: int = 24, limit: int = 100) -> List[dict]:
+    """Convenience: get recent questions for deduplication.
+
+    Returns list of dicts with 'text' field for easy comparison.
+    """
+    questions = get_board().get_recent_questions(hours, limit)
+    return [{"text": q.text, "timestamp": q.timestamp, "answered": q.answered} for q in questions]
 
 
 def get_messages_for_lumen(since_timestamp: float = 0, limit: int = 5) -> List[Message]:

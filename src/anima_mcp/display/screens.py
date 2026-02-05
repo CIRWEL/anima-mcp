@@ -1302,7 +1302,7 @@ class ScreenRenderer:
                     # Margin (right of action) - larger font
                     if margin:
                         margin_x = bar_x + action_box_width + 8
-                        margin_colors = {"comfortable": GREEN, "tight": YELLOW, "critical": RED}
+                        margin_colors = {"comfortable": GREEN, "tight": YELLOW, "warning": ORANGE, "critical": RED}
                         margin_color = margin_colors.get(margin.lower(), LIGHT_CYAN)
                         draw.text((margin_x, y_offset + 2), margin.lower(), fill=margin_color, font=font)
 
@@ -1485,17 +1485,29 @@ class ScreenRenderer:
             humidity_zone = next((z for z in comfort_zones if z["sensor"] == "humidity"), None)
             temp_zone = next((z for z in comfort_zones if z["sensor"] == "ambient_temp"), None)
 
-            # Determine overall status
-            statuses = [z["status"] for z in comfort_zones]
-            if "extreme" in statuses:
+            # Determine overall status from actual mood (synced with anima.feeling())
+            actual_mood = anima.feeling().get("mood", "neutral")
+            if actual_mood == "stressed":
                 title = "stressed"
                 title_color = RED
-            elif "uncomfortable" in statuses:
-                title = "adjusting"
-                title_color = YELLOW
-            else:
+            elif actual_mood == "overheated":
+                title = "overheated"
+                title_color = ORANGE
+            elif actual_mood in ("content", "alert"):
                 title = "comfortable"
                 title_color = GREEN
+            else:
+                # Check comfort zones as fallback
+                statuses = [z["status"] for z in comfort_zones]
+                if "extreme" in statuses:
+                    title = "stressed"
+                    title_color = RED
+                elif "uncomfortable" in statuses:
+                    title = "adjusting"
+                    title_color = YELLOW
+                else:
+                    title = "comfortable"
+                    title_color = GREEN
 
             draw.text((10, y_offset), title, fill=title_color, font=font_title)
             if showing_stale or self._learning_cache_refreshing:
@@ -1558,38 +1570,88 @@ class ScreenRenderer:
                 y_offset += bar_height + 6
 
             # === WARMTH (Internal State) ===
+            # Uses same visual style as sensor bars: comfort zone + ideal + marker
             warmth = anima.warmth
             warmth_color = ORANGE if warmth > 0.6 else CYAN if warmth < 0.3 else YELLOW
             draw.text((bar_x, y_offset), f"warmth {warmth:.0%}", fill=LIGHT_CYAN, font=font_small)
             y_offset += 12
 
+            # Background
             draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
                           fill=DARK_GRAY, outline=(60, 60, 70))
-            warmth_fill = int(warmth * bar_width)
-            if warmth_fill > 0:
-                draw.rectangle([bar_x, y_offset, bar_x + warmth_fill, y_offset + bar_height], fill=warmth_color)
-            y_offset += bar_height + 8
+            # Comfort zone (0.3 - 0.7 is comfortable for internal states)
+            comfort_x1 = bar_x + int(0.3 * bar_width)
+            comfort_x2 = bar_x + int(0.7 * bar_width)
+            draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
+                          fill=(25, 50, 25))
+            # Ideal line at 0.5
+            ideal_x = bar_x + int(0.5 * bar_width)
+            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
+            # Current marker
+            current_x = bar_x + int(warmth * bar_width)
+            draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=warmth_color)
+            y_offset += bar_height + 6
 
             # === STABILITY (Internal State) ===
+            # Uses same visual style as sensor bars: comfort zone + ideal + marker
             stability = anima.stability
             stab_color = GREEN if stability > 0.6 else YELLOW if stability > 0.3 else RED
             draw.text((bar_x, y_offset), f"stability {stability:.0%}", fill=LIGHT_CYAN, font=font_small)
             y_offset += 12
 
+            # Background
             draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
                           fill=DARK_GRAY, outline=(60, 60, 70))
-            stab_fill = int(stability * bar_width)
-            if stab_fill > 0:
-                draw.rectangle([bar_x, y_offset, bar_x + stab_fill, y_offset + bar_height], fill=stab_color)
+            # Comfort zone (0.5 - 1.0 is comfortable for stability - higher is better)
+            comfort_x1 = bar_x + int(0.5 * bar_width)
+            comfort_x2 = bar_x + int(1.0 * bar_width)
+            draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
+                          fill=(25, 50, 25))
+            # Ideal line at 0.8 (high stability is ideal)
+            ideal_x = bar_x + int(0.8 * bar_width)
+            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
+            # Current marker
+            current_x = bar_x + int(stability * bar_width)
+            draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=stab_color)
             y_offset += bar_height + 8
 
             # === INSIGHT TEXT ===
-            insights = summary.get("why_feels_cold", [])
-            if insights:
-                insight = insights[0]
-                draw.text((bar_x, y_offset), insight.get("title", "")[:30], fill=PURPLE, font=font_small)
+            # Show contextual message based on actual conditions
+            mood = anima.feeling().get("mood", "neutral")
+            insight_lines = []
+
+            if mood == "stressed":
+                # Explain why stressed - only temperature matters for Pi
+                if readings.ambient_temp_c and readings.ambient_temp_c > 38:
+                    insight_lines.append(f"temp {readings.ambient_temp_c:.0f}°C > 38°C limit")
+                    insight_lines.append("seeking cooler conditions")
+                elif readings.ambient_temp_c and readings.ambient_temp_c < 10:
+                    insight_lines.append(f"temp {readings.ambient_temp_c:.0f}°C < 10°C limit")
+                    insight_lines.append("seeking warmer conditions")
+                else:
+                    insight_lines.append("stability or presence low")
+                    insight_lines.append("system resources strained")
+            elif mood == "overheated":
+                insight_lines.append(f"warmth {anima.warmth:.0%} is high")
+                insight_lines.append("system running hot")
             else:
-                draw.text((bar_x, y_offset), "learning from environment...", fill=(100, 100, 100), font=font_small)
+                # Show learning insights if available
+                insights = summary.get("why_feels_cold", [])
+                if insights:
+                    title = insights[0].get("title", "")
+                    # Wrap long titles across 2 lines
+                    if len(title) > 28:
+                        insight_lines.append(title[:28])
+                        insight_lines.append(title[28:56])
+                    else:
+                        insight_lines.append(title)
+                else:
+                    insight_lines.append("learning from environment...")
+
+            # Draw insight lines
+            for i, line in enumerate(insight_lines[:3]):
+                color = PURPLE if mood not in ("stressed", "overheated") else ORANGE
+                draw.text((bar_x, y_offset + i * 12), line, fill=color, font=font_small)
 
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.LEARNING)
@@ -2236,9 +2298,18 @@ class ScreenRenderer:
 
             y_offset = 6
 
-            # Title with count
-            unanswered = sum(1 for q, a in qa_pairs if a is None)
-            title = f"questions ({unanswered} waiting)" if unanswered else "questions"
+            # Title with count - separate waiting (active) from expired
+            # q.answered=True means expired, a is None means no actual response
+            waiting = sum(1 for q, a in qa_pairs if a is None and not q.answered)
+            expired = sum(1 for q, a in qa_pairs if a is None and q.answered)
+            if waiting and expired:
+                title = f"questions ({waiting} waiting, {expired} expired)"
+            elif waiting:
+                title = f"questions ({waiting} waiting)"
+            elif expired:
+                title = f"questions ({expired} expired)"
+            else:
+                title = "questions"
             draw.text((10, y_offset), title, fill=CYAN, font=font_title)
             y_offset += 20
 

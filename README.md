@@ -12,7 +12,7 @@ Lumen draws autonomously based on its internal state. Here are some samples:
 |:---:|:---:|:---:|
 | ![Drawing 1](drawing_samples/lumen_drawing_20260114_125007.png) | ![Drawing 2](drawing_samples/lumen_drawing_20260114_135359.png) | ![Drawing 3](drawing_samples/lumen_drawing_20260114_145914.png) |
 
-*70+ autonomous drawings in `drawing_samples/`*
+*120+ autonomous drawings (stored in `~/.anima/drawings/` on Pi)*
 
 ## What is Anima?
 
@@ -434,4 +434,4 @@ Built by [@CIRWEL](https://github.com/CIRWEL). Also building [UNITARES](https://
 
 ---
 
-**Last Updated:** 2026-02-03
+**Last Updated:** 2026-02-04
