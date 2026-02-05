@@ -1060,8 +1060,7 @@ async def _update_display_loop():
                         print(f"[Sound] 🎵 Triggered dance for event: {sound_event} (sound={readings.sound_level:.1f}dB)", file=sys.stderr, flush=True)
                 _prev_sound_level = readings.sound_level
 
-            # Update autonomous voice with anima state and environment (every 10th iteration)
-            # Voice uses this to decide when/what to say based on Lumen's internal state
+            # Update voice system with anima state (for listening and text expression)
             if loop_count % 10 == 0:
                 try:
                     voice = _get_voice()
@@ -1078,7 +1077,6 @@ async def _update_display_loop():
                         else:
                             mood = "neutral"
 
-                        # Update voice with anima state
                         voice.update_state(
                             warmth=anima.warmth,
                             clarity=anima.clarity,
@@ -1087,7 +1085,6 @@ async def _update_display_loop():
                             mood=mood
                         )
 
-                        # Update voice with environment if readings available
                         if readings:
                             voice.update_environment(
                                 temperature=readings.ambient_temp_c or 22.0,
@@ -1095,8 +1092,7 @@ async def _update_display_loop():
                                 light_level=readings.light_lux or 500.0
                             )
                 except Exception as e:
-                    # Voice errors should never crash the main loop
-                    if loop_count % 100 == 0:  # Log sparingly
+                    if loop_count % 100 == 0:
                         print(f"[Voice] State update error: {e}", file=sys.stderr, flush=True)
 
             # Log update status every 20th iteration
@@ -1173,9 +1169,7 @@ async def _update_display_loop():
                             result = add_observation(observation, author="lumen")
                             if result:  # Only log if not duplicate
                                 print(f"[Lumen] Said: {observation}", file=sys.stderr, flush=True)
-                                # Note: Speech is handled by AutonomousVoice independently
-                                # to avoid duplicate speech sources. AutonomousVoice speaks
-                                # based on anima state and has its own deduplication.
+                                # Lumen expresses via text on message board (no audio TTS)
 
                                 # Share significant insights to UNITARES knowledge graph
                                 try:
@@ -3297,25 +3291,21 @@ TOOLS_STANDARD = [
     ),
     Tool(
         name="configure_voice",
-        description="Get or configure Lumen's voice system",
+        description="Get voice system status (listening, mode). Lumen speaks via text (message board) by default.",
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "configure"], "description": "Action (default: status)"},
-                "always_listening": {"type": "boolean", "description": "Enable always-listening"},
-                "chattiness": {"type": "number", "description": "Chattiness level 0-1"},
-                "wake_word": {"type": "string", "description": "Wake word to use"}
+                "action": {"type": "string", "enum": ["status"], "description": "Action (default: status)"},
             },
         },
     ),
     Tool(
         name="say",
-        description="Have Lumen speak. Voice reflects internal state (warmth, clarity, stability).",
+        description="Have Lumen express something. Posts to message board (text mode). Set LUMEN_VOICE_MODE=audio for TTS.",
         inputSchema={
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "What Lumen should say"},
-                "blocking": {"type": "boolean", "description": "Wait for speech to complete (default: true)"}
+                "text": {"type": "string", "description": "What Lumen should say/express"},
             },
             "required": ["text"],
         },
@@ -3505,11 +3495,13 @@ import sys
 print(f"[Server] Tool mode: {ANIMA_TOOL_MODE} ({len(TOOLS)} tools)", file=sys.stderr, flush=True)
 
 
-# Voice handler functions
+# Voice system (text output mode - Lumen speaks via message board, not audio)
+# VOICE_MODE controls how Lumen speaks: "text" (message board), "audio" (TTS), "both"
+VOICE_MODE = os.environ.get("LUMEN_VOICE_MODE", "text")  # Default: text only
 _voice_instance = None  # Global voice instance (lazy initialized)
 
 def _get_voice():
-    """Get or initialize the voice instance."""
+    """Get or initialize the voice instance (for listening capability)."""
     global _voice_instance
     if _voice_instance is None:
         try:
@@ -3519,23 +3511,23 @@ def _get_voice():
 
             _voice_instance = AutonomousVoice()
 
-            # Connect voice to message board - when Lumen speaks, post appropriately
+            # Connect voice output to message board (text mode)
             def on_lumen_speaks(text: str, intent: SpeechIntent):
-                """Post autonomous speech to message board - questions as questions, others as observations."""
-                if intent == SpeechIntent.QUESTION:
-                    # Questions should be actual questions for agents to answer
-                    result = add_question(text, author="lumen", context="voice/autonomous")
-                    if result:
-                        print(f"[Voice->Board] Asked: {text}", file=sys.stderr, flush=True)
-                else:
-                    # Observations, feelings, etc.
-                    result = add_observation(text, author="lumen")
-                    if result:
-                        print(f"[Voice->Board] Posted: {text}", file=sys.stderr, flush=True)
+                """When voice system wants to speak, post to message board instead of TTS."""
+                if VOICE_MODE in ("text", "both"):
+                    if intent == SpeechIntent.QUESTION:
+                        result = add_question(text, author="lumen", context="voice/autonomous")
+                        if result:
+                            print(f"[Voice->Text] Asked: {text}", file=sys.stderr, flush=True)
+                    else:
+                        result = add_observation(text, author="lumen")
+                        if result:
+                            print(f"[Voice->Text] Said: {text}", file=sys.stderr, flush=True)
+                # Note: Audio TTS intentionally disabled when VOICE_MODE="text"
 
             _voice_instance.set_on_speech(on_lumen_speaks)
             _voice_instance.start()
-            print("[Server] Voice system initialized (connected to message board)", file=sys.stderr, flush=True)
+            print(f"[Server] Voice system initialized (mode={VOICE_MODE}, listening enabled)", file=sys.stderr, flush=True)
         except ImportError:
             print("[Server] Voice module not available (missing dependencies)", file=sys.stderr, flush=True)
             return None
@@ -3546,32 +3538,43 @@ def _get_voice():
 
 
 async def handle_say(arguments: dict) -> list[TextContent]:
-    """Have Lumen speak."""
+    """Have Lumen speak - posts to message board (text mode) or uses TTS (audio mode)."""
     text = arguments.get("text", "")
-    blocking = arguments.get("blocking", True)
 
     if not text:
         return [TextContent(type="text", text=json.dumps({
             "error": "No text provided"
         }))]
 
-    voice = _get_voice()
-    if voice is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Voice system not available",
-            "hint": "Install dependencies: pip install sounddevice vosk piper-tts"
-        }))]
+    from .messages import add_observation
 
+    # Always post to message board (Lumen's text expression)
+    result = add_observation(text, author="lumen")
+
+    # Also show on display notepad
     try:
-        voice._voice.say(text, blocking=blocking)
-        return [TextContent(type="text", text=json.dumps({
-            "success": True,
-            "spoken": text
-        }))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": f"Speech failed: {e}"
-        }))]
+        if _store:
+            _store.add_note(f"[Lumen] {text}")
+    except Exception:
+        pass
+
+    # Only use audio TTS if mode is "audio" or "both"
+    if VOICE_MODE in ("audio", "both"):
+        voice = _get_voice()
+        if voice and hasattr(voice, '_voice'):
+            try:
+                voice._voice.say(text, blocking=False)
+            except Exception as e:
+                print(f"[Say] TTS error (text still posted): {e}", file=sys.stderr, flush=True)
+
+    print(f"[Lumen] Said: {text} (mode={VOICE_MODE})", file=sys.stderr, flush=True)
+
+    return [TextContent(type="text", text=json.dumps({
+        "success": True,
+        "said": text,
+        "mode": VOICE_MODE,
+        "posted_to": "message_board"
+    }))]
 
 
 async def handle_voice_status(arguments: dict) -> list[TextContent]:
@@ -3580,19 +3583,18 @@ async def handle_voice_status(arguments: dict) -> list[TextContent]:
     if voice is None:
         return [TextContent(type="text", text=json.dumps({
             "available": False,
+            "mode": VOICE_MODE,
             "error": "Voice system not available"
         }))]
 
     state = voice.state if hasattr(voice, 'state') else None
     return [TextContent(type="text", text=json.dumps({
         "available": True,
+        "mode": VOICE_MODE,
         "running": voice.is_running,
         "is_listening": state.is_listening if state else False,
-        "is_speaking": state.is_speaking if state else False,
         "last_heard": state.last_heard.text if state and state.last_heard else None,
-        "last_spoken": state.last_spoken if state else None,
         "chattiness": voice.chattiness,
-        "recent_utterances": [u.text for u in (state.utterance_history[-5:] if state else [])]
     }))]
 
 
@@ -4549,12 +4551,10 @@ def sleep():
             try:
                 loop = asyncio.get_event_loop()
                 if loop.is_running():
-                    # If loop is running, schedule the close (best effort)
                     loop.create_task(_close_unitares_bridge())
                 else:
                     loop.run_until_complete(_close_unitares_bridge())
             except RuntimeError:
-                # No event loop available - create a new one
                 asyncio.run(_close_unitares_bridge())
         except Exception as e:
             try:
