@@ -381,6 +381,7 @@ class UnitaresBridge:
                             "reason": governance_result.get("reason", "Governance check completed"),
                             "eisv": eisv.to_dict(),
                             "source": "unitares",
+                            "unitares_agent_id": bound_id,  # For display identification
                             "raw_response": governance_result
                         }
                     elif "error" in result:
