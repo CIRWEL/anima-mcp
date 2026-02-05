@@ -3585,17 +3585,17 @@ class ScreenRenderer:
                 self._canvas.draw_pixel(x, y, color)
 
     def canvas_clear(self, persist: bool = True):
-        """Clear the canvas - always saves first if there are pixels.
+        """Clear the canvas - saves first if there's a real drawing (50+ pixels).
 
-        No drawing is ever lost - we save before clearing.
+        Minimal threshold avoids saving noise/stray marks.
         """
         # Prevent clearing if we're already paused (prevents loops)
         now = time.time()
         if now < self._canvas.drawing_paused_until:
             return  # Already paused, don't clear again
 
-        # Always save before clearing (no pixel threshold - save everything)
-        if self._canvas.pixels:
+        # Save before clearing if there's actual drawing (50+ pixels, not just noise)
+        if len(self._canvas.pixels) >= 50:
             saved_path = self.canvas_save(announce=False)
             if saved_path:
                 print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
@@ -3842,11 +3842,11 @@ class ScreenRenderer:
                 return "saved_and_cleared"
 
         # === Check for satisfaction ===
-        # Lumen feels satisfied when: resting phase for 30s + has drawn something + good state
+        # Lumen feels satisfied when: resting phase for 30s + real drawing + good state
         phase_duration = now - self._canvas.phase_start_time
         if (self._canvas.drawing_phase == "resting" and
             phase_duration > 30.0 and  # In resting phase for 30s
-            pixel_count > 0 and  # Has drawn anything (no arbitrary threshold)
+            pixel_count >= 50 and  # Real drawing, not noise
             anima.presence > 0.45 and
             anima.stability > 0.40 and
             not self._canvas.is_satisfied):
@@ -3859,7 +3859,7 @@ class ScreenRenderer:
             self._canvas.is_satisfied and
             self._canvas.satisfaction_time > 0 and
             now - self._canvas.satisfaction_time > 20.0 and
-            pixel_count > 0):  # Has anything to save (no arbitrary threshold)
+            pixel_count >= 50):  # Real drawing, not noise
 
             print(f"[Canvas] Lumen autonomously saving (satisfied for 20s, {pixel_count} pixels)", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
