@@ -14,6 +14,7 @@ States:
 This creates a more natural, lifelike presence.
 """
 
+import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -198,7 +199,7 @@ class ActivityManager:
         self._current_level = new_level
         self._state_since = time.time()
 
-        print(f"[Activity] {old_level.value} -> {new_level.value} ({reason})", flush=True)
+        print(f"[Activity] {old_level.value} -> {new_level.value} ({reason})", file=sys.stderr, flush=True)
 
     def get_led_settings(self) -> dict:
         """Get LED-specific settings for current state."""
