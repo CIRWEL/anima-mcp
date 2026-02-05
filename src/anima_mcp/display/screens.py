@@ -348,6 +348,8 @@ class ScreenRenderer:
         # Message screen image cache (text rendering is slow - ~500ms)
         self._messages_cache_image: Optional[Any] = None
         self._messages_cache_hash: str = ""  # Hash of messages + scroll state
+        # UNITARES agent_id (for display on identity screen)
+        self._unitares_agent_id: Optional[str] = None
 
     def _get_messages_cache_hash(self, messages: list, scroll_idx: int, expanded_id: Optional[str]) -> str:
         """Compute hash of message screen state for cache invalidation."""
@@ -785,6 +787,10 @@ class ScreenRenderer:
 
         # Use lock to prevent concurrent renders (threading issue causes blank screen)
         with self._render_lock:
+            # Store UNITARES agent_id for identity screen display
+            if governance and governance.get("unitares_agent_id"):
+                self._unitares_agent_id = governance.get("unitares_agent_id")
+
             # Check Lumen's canvas autonomy (can save/clear regardless of screen)
             try:
                 self.canvas_check_autonomy(anima)
@@ -1135,6 +1141,11 @@ class ScreenRenderer:
                 short_id = identity.creature_id[:8] if identity.creature_id else "unknown"
                 draw.text((10, y), f"id: {short_id}", fill=LIGHT_CYAN, font=font_small)
 
+                # UNITARES agent_id (on right side if connected)
+                if self._unitares_agent_id:
+                    unitares_short = self._unitares_agent_id[:8]
+                    draw.text((130, y), f"gov: {unitares_short}", fill=GREEN, font=font_small)
+
                 # Nav dots
                 self._draw_screen_indicator(draw, ScreenMode.IDENTITY)
 
@@ -1323,14 +1334,6 @@ class ScreenRenderer:
                         draw.text((bar_x, y_offset), f"via: {source_text}", fill=source_color, font=font_small)
                         y_offset += 14
 
-                        # Show UNITARES agent_id (so user can find Lumen in UNITARES dashboard)
-                        unitares_agent_id = governance.get("unitares_agent_id")
-                        if unitares_agent_id and "unitares" in source_lower:
-                            # Show first 8 chars of the UUID for identification
-                            short_id = unitares_agent_id[:8] if len(unitares_agent_id) > 8 else unitares_agent_id
-                            draw.text((bar_x, y_offset), f"id: {short_id}", fill=LIGHT_CYAN, font=font_small)
-                            y_offset += 14
-
                     # EISV metrics - larger bars if space
                     if y_offset < 205:
                         eisv = governance.get("eisv")
@@ -1396,10 +1399,6 @@ class ScreenRenderer:
                 lines.append(f"margin: {margin}")
             if source:
                 lines.append(f"source: {source}")
-            # Show UNITARES agent_id for identification
-            unitares_agent_id = governance.get('unitares_agent_id')
-            if unitares_agent_id and source and "unitares" in source.lower():
-                lines.append(f"id: {unitares_agent_id[:8]}")
             eisv = governance.get('eisv')
             if eisv:
                 lines.append(f"EISV: E={eisv.get('E', 0):.0%} I={eisv.get('I', 0):.0%} S={eisv.get('S', 0):.0%} V={eisv.get('V', 0):.0%}")
