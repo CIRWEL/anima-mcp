@@ -43,11 +43,11 @@ echo "✅ ngrok setup complete!"
 echo ""
 echo "To start tunnel:"
 if [ "$DOMAIN" = "anima.ngrok.io" ]; then
-    echo "  ngrok http 8765"
+    echo "  ngrok http 8766"
     echo "  # Or for custom domain:"
-    echo "  ngrok http --url=$DOMAIN 8765"
+    echo "  ngrok http --url=$DOMAIN 8766"
 else
-    echo "  ngrok http --url=$DOMAIN 8765"
+    echo "  ngrok http --url=$DOMAIN 8766"
 fi
 echo ""
 echo "To get tunnel URL:"

@@ -3,7 +3,7 @@
 
 PI_IP="192.168.1.165"
 PI_USER="unitares-anima"
-PI_PORT="2222"
+PI_PORT="22"
 PI_PASSWORD="EISV-4E-CLDO"
 SSH_KEY="$HOME/.ssh/id_ed25519_pi"
 

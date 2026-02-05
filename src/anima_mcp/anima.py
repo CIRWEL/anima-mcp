@@ -54,7 +54,7 @@ class Anima:
             "clarity": _clarity_feeling(self.clarity),
             "stability": _stability_feeling(self.stability),
             "presence": _presence_feeling(self.presence),
-            "mood": _overall_mood(self.warmth, self.clarity, self.stability, self.presence),
+            "mood": _overall_mood(self.warmth, self.clarity, self.stability, self.presence, self.readings),
         }
 
 
@@ -526,16 +526,29 @@ def _presence_feeling(p: float) -> str:
         return "abundant, strong"
 
 
-def _overall_mood(warmth: float, clarity: float, stability: float, presence: float) -> str:
+def _overall_mood(warmth: float, clarity: float, stability: float, presence: float,
+                  readings: Optional[SensorReadings] = None) -> str:
     """What mood emerges from the anima state?"""
-    
+
     # Calculate overall "wellness" score
     wellness = (warmth + clarity + stability + presence) / 4.0
-    
+
+    # Check if physical environment is extreme (sync with reality, not just learned limits)
+    if readings is not None:
+        # Only temperature matters for Pi stress - electronics prefer dry conditions
+        # Relaxed for hot climates (Arizona desert can hit 40°C+ regularly)
+        ABSOLUTE_TEMP_MAX = 38.0  # 100°F - above this = physically stressful
+        ABSOLUTE_TEMP_MIN = 10.0  # 50°F - below this = physically stressful
+
+        if readings.ambient_temp_c is not None:
+            if readings.ambient_temp_c > ABSOLUTE_TEMP_MAX or readings.ambient_temp_c < ABSOLUTE_TEMP_MIN:
+                return "stressed"
+        # Note: Humidity not checked - low humidity doesn't stress electronics
+
     # Stressed: unstable or depleted (check first - overrides others)
     if stability < 0.3 or presence < 0.3:
         return "stressed"
-    
+
     # Overheated: too much energy (can be stressed too)
     if warmth > 0.8:
         return "overheated"

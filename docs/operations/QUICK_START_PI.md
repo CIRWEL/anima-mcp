@@ -66,7 +66,7 @@ sudo systemctl status lumen
 
 ```bash
 # On Pi
-curl http://localhost:8765/health
+curl http://localhost:8766/health
 
 # Test health monitoring
 sudo -u unitares-anima ~/monitor_health.sh --once
@@ -115,7 +115,7 @@ sudo journalctl -u lumen -n 100
 
 ```bash
 ~/monitor_health.sh --once
-curl http://localhost:8765/health
+curl http://localhost:8766/health
 ```
 
 ### Need More Help?

@@ -349,6 +349,7 @@
             padding: 10px;
             background: #0d0d12;
             border-radius: 8px;
+            border: 1px solid #333;
         }
 
         .learning-stat-value {
@@ -578,6 +579,10 @@
         <div class="card">
             <div class="message-form">
                 <textarea id="messageInput" class="message-input" placeholder="Type your message to Lumen..."></textarea>
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                    <input type="text" id="messageAuthor" value="Kenny" placeholder="Your name" style="width: 100px; padding: 6px 10px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #f0f0f0; font-size: 0.85rem;">
+                    <input type="text" id="messageRespondsTo" placeholder="responds_to (optional question ID)" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #f0f0f0; font-size: 0.85rem;">
+                </div>
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span id="messageStatus"></span>
                     <button onclick="sendMessage()" class="btn btn-primary">Send Message</button>
@@ -665,6 +670,9 @@
                     💧 ${data.humidity?.toFixed(0) || '?'}% &nbsp;
                     ${data.surprise > 0.1 ? `⚡ ${(data.surprise * 100).toFixed(0)}% surprise` : ''}
                 </div>
+                <div style="margin-top: 6px; font-size: 0.7rem; color: #555;">
+                    ${data.source ? `📡 ${data.source}` : ''} ${data.timestamp ? `@ ${new Date(data.timestamp).toLocaleTimeString()}` : ''}
+                </div>
             `;
             document.getElementById('stateContent').innerHTML = html;
         }
@@ -716,8 +724,9 @@
                     ` : `
                         <div class="qa-answer-form">
                             <textarea class="qa-answer-input" id="answer-${q.id}" placeholder="Type your answer..."></textarea>
-                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px;">
-                                <span id="status-${q.id}" style="font-size: 0.8rem;"></span>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 8px;">
+                                <input type="text" id="author-${q.id}" value="Kenny" placeholder="Your name" style="width: 100px; padding: 4px 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #f0f0f0; font-size: 0.85rem;">
+                                <span id="status-${q.id}" style="font-size: 0.8rem; flex: 1;"></span>
                                 <button class="btn btn-small btn-primary" onclick="submitAnswer('${q.id}')">Answer</button>
                             </div>
                         </div>
@@ -731,8 +740,10 @@
         // Submit answer
         async function submitAnswer(questionId) {
             const input = document.getElementById(`answer-${questionId}`);
+            const authorInput = document.getElementById(`author-${questionId}`);
             const status = document.getElementById(`status-${questionId}`);
             const answer = input.value.trim();
+            const author = authorInput.value.trim() || 'Anonymous';
 
             if (!answer) return;
 
@@ -743,7 +754,7 @@
                 const response = await fetch(`${API_BASE}/answer`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ question_id: questionId, answer: answer, author: 'Kenny' })
+                    body: JSON.stringify({ question_id: questionId, answer: answer, author: author })
                 });
 
                 if (response.ok) {
@@ -762,8 +773,12 @@
         // Send message
         async function sendMessage() {
             const input = document.getElementById('messageInput');
+            const authorInput = document.getElementById('messageAuthor');
+            const respondsToInput = document.getElementById('messageRespondsTo');
             const status = document.getElementById('messageStatus');
             const text = input.value.trim();
+            const author = authorInput.value.trim() || 'Anonymous';
+            const respondsTo = respondsToInput.value.trim() || null;
 
             if (!text) return;
 
@@ -771,17 +786,25 @@
             status.className = 'status-sending';
 
             try {
+                const payload = { text: text, author: author };
+                if (respondsTo) {
+                    payload.responds_to = respondsTo;
+                }
+
                 const response = await fetch(`${API_BASE}/message`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: text })
+                    body: JSON.stringify(payload)
                 });
 
                 if (response.ok) {
-                    status.textContent = 'Sent!';
+                    const result = await response.json();
+                    status.textContent = respondsTo ? `Answered question ${respondsTo}!` : 'Sent!';
                     status.className = 'status-success';
                     input.value = '';
+                    respondsToInput.value = '';
                     setTimeout(() => { status.textContent = ''; }, 3000);
+                    if (respondsTo) fetchQA();  // Refresh Q&A if we answered something
                 } else {
                     throw new Error('Server error');
                 }

@@ -86,7 +86,7 @@ try:
         print("     # or check stderr of running process")
     else:
         print("   ⚠️  Server not running")
-        print("   Start with: anima --sse --host 0.0.0.0 --port 8765")
+        print("   Start with: anima --sse --host 0.0.0.0 --port 8766")
     print()
     
     print("=" * 60)

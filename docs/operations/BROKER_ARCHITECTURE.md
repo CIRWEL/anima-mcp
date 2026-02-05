@@ -95,7 +95,7 @@ Lumen is now split into two systemd services that run independently:
 When iterating on MCP server code:
 
 ```bash
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "systemctl --user restart anima"
 ```
 
@@ -110,7 +110,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
 When debugging sensor issues:
 
 ```bash
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "systemctl --user restart anima-broker"
 ```
 
@@ -124,7 +124,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
 Watch the broker's terminal output:
 
 ```bash
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "journalctl --user -u anima-broker -f"
 ```
 
@@ -132,15 +132,15 @@ ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
 
 ```bash
 # Check both services
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "systemctl --user status anima anima-broker"
 
 # Check broker only
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "systemctl --user status anima-broker"
 
 # Check MCP server only
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
   "systemctl --user status anima"
 ```
 
@@ -185,14 +185,14 @@ sudo systemctl start redis-server
 
 ```bash
 # Copy service files to Pi
-scp -P 2222 systemd/anima-broker.service \
+scp -P 22 systemd/anima-broker.service \
   unitares-anima@192.168.1.165:~/.config/systemd/user/
 
-scp -P 2222 systemd/anima.service \
+scp -P 22 systemd/anima.service \
   unitares-anima@192.168.1.165:~/.config/systemd/user/
 
 # On Pi, reload systemd
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl --user daemon-reload"
 ```
 
@@ -200,15 +200,15 @@ ssh -p 2222 unitares-anima@192.168.1.165 \
 
 ```bash
 # Enable broker (starts automatically)
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl --user enable anima-broker"
 
 # Enable MCP server (starts automatically after broker)
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl --user enable anima"
 
 # Start both
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl --user start anima-broker anima"
 ```
 
@@ -220,11 +220,11 @@ ssh -p 2222 unitares-anima@192.168.1.165 \
 
 ```bash
 # Check broker logs
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "journalctl --user -u anima-broker -n 50"
 
 # Check if Redis is running (if using Redis)
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl status redis-server"
 ```
 
@@ -232,11 +232,11 @@ ssh -p 2222 unitares-anima@192.168.1.165 \
 
 ```bash
 # Check if broker is running
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl --user is-active anima-broker"
 
 # If not active, start it
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "systemctl --user start anima-broker"
 ```
 
@@ -246,7 +246,7 @@ If you see I2C errors, verify only broker is accessing hardware:
 
 ```bash
 # Check what's accessing I2C
-ssh -p 2222 unitares-anima@192.168.1.165 \
+ssh unitares-anima@192.168.1.165 \
   "lsof /dev/i2c-1 2>/dev/null || echo 'No I2C access detected'"
 ```
 

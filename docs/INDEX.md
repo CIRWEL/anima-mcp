@@ -11,10 +11,11 @@
 
 | Problem | Doc |
 |---------|-----|
-| Display frozen / server unresponsive | `operations/RESTART_GUIDE.md` |
+| Display frozen / server unresponsive | `ssh lumen.local 'sudo systemctl restart anima'` |
 | Code changes not working | `operations/QUICK_START_AGENTS.md` (Code Gotchas) |
-| How to deploy | See "Deploy Changes" below |
+| How to deploy | See "Deploy Changes" below or `../DEPLOYMENT.md` |
 | Architecture questions | `operations/BROKER_ARCHITECTURE.md` |
+| Web dashboard / Control Center | `CONTROL_CENTER.md` |
 
 ---
 
@@ -36,10 +37,10 @@
 | Doc | What it explains |
 |-----|------------------|
 | `concepts/NEURO_PSYCH_FRAMING.md` | The anima model (warmth, clarity, stability, presence) |
-| `concepts/ADAPTIVE_LEARNING.md` | How Lumen learns calibration over time |
-| `concepts/ERROR_RECOVERY.md` | Gap handling when sensors fail |
 | `LUMEN_EXPRESSION_PHILOSOPHY.md` | **Core:** How Lumen's expression should emerge authentically |
-| `LUMEN_NEXT_STEPS.md` | **Roadmap:** What Lumen needs next (from tool + project roadmap) |
+| `features/CONFIGURATION_GUIDE.md` | Nervous system calibration and config |
+
+**Archived concepts** (in `archive/2026-02/`): ADAPTIVE_LEARNING.md, ERROR_RECOVERY.md, GAP_HANDLING.md
 
 ## Theory
 
@@ -54,7 +55,7 @@
 
 **Key insight:** Identity is not a UUID, it's a dynamical invariant - the pattern that persists across time.
 
-**Lumen's identity status:** 798+ awakenings, lineage similarity 0.925 (stable), confidence 0.764.
+**Lumen's identity status:** Check current awakenings via `get_identity` tool.
 
 ## Architecture
 
@@ -67,15 +68,15 @@
 | Doc | When you need it |
 |-----|------------------|
 | `operations/BROKER_ARCHITECTURE.md` | **Current:** Body/Mind separation via systemd services |
-| `operations/PI_ACCESS.md` | SSH/rsync to Pi (PORT 2222!) |
-| `operations/HOLY_GRAIL_STARTUP.md` | Previous startup guide (superseded by broker architecture) |
-| `operations/QUICK_NGROK_SETUP.md` | **Quick ngrok setup** - Get everything on tunnels |
-| `operations/NGROK_TUNNEL_SETUP.md` | Detailed ngrok tunnel guide |
-| `operations/NETWORK_ACCESS_STRATEGY.md` | Tailscale vs ngrok comparison |
-| `operations/STARTUP_SERVICE.md` | systemd service setup |
-| `operations/TOGGLE_SCRIPTS.md` | When to use anima --sse vs stable_creature.py |
-| `operations/RESTORE_LUMEN.md` | If something breaks badly |
-| `SETUP_DISPLAY_AND_UNITARES.md` | **Setup guide:** Display diagnostics and UNITARES connection |
+| `operations/PI_ACCESS.md` | SSH/rsync to Pi (port 22, user unitares-anima) |
+| `operations/PI_DEPLOYMENT.md` | Complete deployment guide |
+| `operations/QUICK_START_AGENTS.md` | Code gotchas and agent coordination |
+| `operations/QUICK_START_PI.md` | Quick Pi setup reference |
+
+**Network access:**
+- **Tailscale** (recommended): Direct Pi access via 100.x.x.x IP
+- **Local**: lumen.local or 192.168.1.165
+- **ngrok** (legacy): See `archive/2026-02/NGROK_*.md`
 
 ## Features
 
@@ -87,13 +88,12 @@
 
 ## Common Mistakes
 
-- SSH port is **22** (standard), user is **unitares-anima**
-- User is **unitares-anima**, not pi
+- SSH: port **22**, user **unitares-anima**, key `~/.ssh/id_ed25519_pi`
 - Don't edit `server.py` without checking what other agents changed
 - Anima dataclass requires `readings` field - don't construct without it
-- EISV keys are **E/I/S/V**, not `energy/integrity/entropy/void`
 - Color constants in `screens.py` are **local to each function** - grep entire function after changes
-- Display frozen? Just `systemctl --user restart anima` - don't overthink it
+- Display frozen? `ssh lumen.local 'sudo systemctl restart anima'`
+- Use `lumen_qa` tool for Q&A (list questions or answer them)
 
 **See `operations/QUICK_START_AGENTS.md`** for detailed gotchas with code examples.
 
@@ -106,11 +106,8 @@ rsync -avz -e "ssh -i ~/.ssh/id_ed25519_pi" \
   /Users/cirwel/projects/anima-mcp/ \
   unitares-anima@lumen.local:/home/unitares-anima/anima-mcp/
 
-# Restart MCP server (mind) - broker stays running
+# Restart service
 ssh lumen.local 'sudo systemctl restart anima.service'
-
-# Or restart broker (body) if needed
-ssh lumen.local 'sudo systemctl restart anima-broker.service'
 
 # Check status
 ssh lumen.local 'sudo systemctl status anima.service --no-pager'

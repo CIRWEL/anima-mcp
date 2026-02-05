@@ -44,7 +44,7 @@ class UnitaresBridge:
         Initialize bridge.
 
         Args:
-            unitares_url: URL to UNITARES governance server (e.g., "http://127.0.0.1:8765/sse")
+            unitares_url: URL to UNITARES governance server (e.g., "http://127.0.0.1:8767/mcp/")
                          If None, will use local governance only
             agent_id: Agent ID for UNITARES (auto-generated if None)
             timeout: Request timeout in seconds
@@ -410,41 +410,48 @@ class UnitaresBridge:
         
         Uses simple thresholds based on EISV metrics.
         """
-        # Compute margin (distance to thresholds)
+        # Compute signed margins (positive = within bounds, negative = crossed)
         # UNITARES thresholds (from governance_config.py):
         RISK_THRESHOLD = 0.60
         COHERENCE_THRESHOLD = 0.40
         VOID_THRESHOLD = 0.15
-        
-        # Find nearest edge
-        distances = {
-            "risk": abs(eisv.entropy - RISK_THRESHOLD),
-            "coherence": abs(eisv.integrity - COHERENCE_THRESHOLD),
-            "void": abs(eisv.void - VOID_THRESHOLD)
+
+        # Signed margins: positive = room to threshold, negative = past threshold
+        margins = {
+            "risk": RISK_THRESHOLD - eisv.entropy,        # Higher entropy is worse
+            "coherence": eisv.integrity - COHERENCE_THRESHOLD,  # Lower integrity is worse
+            "void": VOID_THRESHOLD - eisv.void            # Higher void is worse
         }
-        nearest_edge = min(distances, key=distances.get)
-        min_distance = distances[nearest_edge]
-        
-        # Determine margin
-        if min_distance > 0.15:
-            margin = "comfortable"
-        elif min_distance > 0.05:
-            margin = "tight"
+
+        # Check if any threshold crossed
+        crossed = {k: v for k, v in margins.items() if v < 0}
+        valid = {k: v for k, v in margins.items() if v >= 0}
+
+        if crossed:
+            # At least one threshold crossed
+            worst_edge = min(crossed.items(), key=lambda x: x[1])[0]
+            distance_past = abs(crossed[worst_edge])
+
+            # warning: just crossed (< 0.1 past), critical: deep past (>= 0.1)
+            if distance_past >= 0.1:
+                margin = "critical"
+            else:
+                margin = "warning"
+
+            action = "pause"
+            reason = f"Crossed {worst_edge} threshold by {distance_past:.2f}"
+            nearest_edge = worst_edge
         else:
-            margin = "critical"
-        
-        # Determine action
-        # Critical thresholds: entropy > 0.6, void > 0.15, integrity < 0.4
-        if eisv.entropy > 0.6 or eisv.void > 0.15:
-            action = "pause"
-            reason = f"High entropy ({eisv.entropy:.2f}) or void ({eisv.void:.2f})"
-        elif eisv.integrity < 0.4:
-            action = "pause"
-            reason = f"Low integrity ({eisv.integrity:.2f})"
-        elif margin == "critical":
-            action = "pause"
-            reason = f"Near {nearest_edge} threshold (margin: {margin})"
-        else:
+            # All within bounds - find nearest edge
+            nearest_edge = min(valid.items(), key=lambda x: x[1])[0]
+            distance_to = valid[nearest_edge]
+
+            # comfortable: > 0.15 from edge, tight: <= 0.15
+            if distance_to > 0.15:
+                margin = "comfortable"
+            else:
+                margin = "tight"
+
             action = "proceed"
             reason = f"State healthy (margin: {margin})"
         

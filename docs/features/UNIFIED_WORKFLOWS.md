@@ -48,7 +48,7 @@ Single API to access both servers:
 from anima_mcp.workflow_orchestrator import get_orchestrator
 
 orchestrator = get_orchestrator(
-    unitares_url="http://192.168.1.164:8765/sse",
+    unitares_url="http://192.168.1.151:8767/mcp/",
     anima_store=store,
     anima_sensors=sensors
 )

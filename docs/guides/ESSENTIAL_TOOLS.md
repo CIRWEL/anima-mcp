@@ -66,19 +66,30 @@ read_sensors()
 
 ## Tier 2: Useful (Learn Next)
 
+### `lumen_qa`
+**What:** Unified Q&A - list Lumen's questions OR answer one
+**When:** Lumen asks questions and you want to respond
+**Usage:**
+```python
+lumen_qa()                                    # List unanswered questions
+lumen_qa(question_id="abc123", answer="...")  # Answer a question
+```
+
+**Key:** Answers are stored with author attribution and feed into Lumen's knowledge/learning system.
+
 ### `get_identity`
-**What:** Full identity history (birth, awakenings, name)  
-**When:** You want to know Lumen's history  
+**What:** Full identity history (birth, awakenings, name)
+**When:** You want to know Lumen's history
 **Returns:** Birth date, awakenings, alive time, name history
 
 ### `show_face`
-**What:** Display Lumen's current expression on screen  
-**When:** You want to see how Lumen looks  
+**What:** Display Lumen's current expression on screen
+**When:** You want to see how Lumen looks
 **Returns:** Face rendered (hardware on Pi, ASCII on Mac)
 
 ### `diagnostics`
-**What:** System health (LEDs, display, sensors)  
-**When:** Something seems wrong  
+**What:** System health (LEDs, display, sensors)
+**When:** Something seems wrong
 **Returns:** Hardware status, update loop health
 
 ---
@@ -102,17 +113,14 @@ Execute workflows across anima-mcp and unitares-governance
 ## Tool Count
 
 - **Tier 1 (Essential):** 3 tools
-- **Tier 2 (Useful):** 3 tools
+- **Tier 2 (Useful):** 4 tools (including `lumen_qa`)
 - **Tier 3 (Advanced):** 5 tools
-- **Core Total:** 11 tools
+- **Core Total:** 12 tools
 
-**Extended tools (12 more):** Available when optional features are enabled:
+**Extended tools:** Available when optional features are enabled:
 - Display: `switch_screen`, `leave_message`, `leave_agent_note`
 - Voice: `say`, `voice_status`, `set_voice_mode`
 - Memory: `query_memory`, `learning_visualization`, `get_expression_mood`
-- Cognitive: `cognitive_query`, `dialectic_synthesis`, `merge_insights`
-
-See `../TOOLS_REFERENCE.md` for full extended tool documentation.
 
 **Start with Tier 1. Explore Tier 2 when ready. Tier 3 and extended tools are optional.**
 
