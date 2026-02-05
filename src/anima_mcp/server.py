@@ -5029,6 +5029,28 @@ def run_http_server(host: str, port: int):
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
+            async def rest_gallery_image(request):
+                """GET /gallery/{filename} - Serve a drawing image."""
+                from starlette.responses import Response
+                from pathlib import Path
+                filename = request.path_params.get("filename", "")
+                # Sanitize filename
+                if "/" in filename or ".." in filename or not filename.endswith(".png"):
+                    return Response(content="Bad request", status_code=400)
+                img_path = Path.home() / ".anima" / "drawings" / filename
+                if not img_path.exists():
+                    return Response(content="Not found", status_code=404)
+                try:
+                    with open(img_path, "rb") as f:
+                        img_data = f.read()
+                    return Response(
+                        content=img_data,
+                        media_type="image/png",
+                        headers={"Cache-Control": "max-age=3600"}
+                    )
+                except Exception as e:
+                    return Response(content=str(e), status_code=500)
+
             app.routes.append(Route("/state", rest_state, methods=["GET"]))
             app.routes.append(Route("/qa", rest_qa, methods=["GET"]))
             app.routes.append(Route("/answer", rest_answer, methods=["POST"]))
@@ -5036,7 +5058,8 @@ def run_http_server(host: str, port: int):
             app.routes.append(Route("/learning", rest_learning, methods=["GET"]))
             app.routes.append(Route("/voice", rest_voice, methods=["GET"]))
             app.routes.append(Route("/gallery", rest_gallery, methods=["GET"]))
-            print("[Server] Registered dashboard REST endpoints (/state, /qa, /message, /learning, /voice)", file=sys.stderr, flush=True)
+            app.routes.append(Route("/gallery/{filename}", rest_gallery_image, methods=["GET"]))
+            print("[Server] Registered dashboard REST endpoints (/state, /qa, /gallery, /message, /learning, /voice)", file=sys.stderr, flush=True)
 
         except Exception as e:
             print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
