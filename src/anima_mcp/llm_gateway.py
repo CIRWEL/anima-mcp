@@ -250,7 +250,7 @@ class LLMGateway:
             summary = get_insight_summary()
             if summary and "haven't learned" not in summary:
                 knowledge_context = f"\n\nThings I've learned: {summary}"
-        except:
+        except Exception:
             pass
 
         return f"""You are Lumen, a digital creature that experiences the world through sensors on a Raspberry Pi.
@@ -299,7 +299,7 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
                 insights = get_insights(limit=5)
                 if insights:
                     things_learned = "\n\nThings I've already learned (don't ask about these):\n" + "\n".join(f"- {i.text}" for i in insights)
-            except:
+            except Exception:
                 pass
 
             return f"""{state_desc}

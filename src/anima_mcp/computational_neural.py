@@ -55,16 +55,16 @@ class ComputationalNeuralSensor:
         """Get current process count."""
         try:
             return len(psutil.pids())
-        except:
+        except (OSError, AttributeError):
             return 0
-    
+
     def _get_cpu_freq(self) -> float:
         """Get current CPU frequency (MHz)."""
         try:
             freq = psutil.cpu_freq()
             if freq:
                 return freq.current or 0.0
-        except:
+        except (OSError, AttributeError):
             pass
         return 0.0
     

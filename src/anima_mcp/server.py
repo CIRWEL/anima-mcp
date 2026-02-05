@@ -57,6 +57,9 @@ from .primitive_language import get_language_system, Utterance
 
 
 # Global state
+import threading
+_state_lock = threading.Lock()  # Thread safety for singleton initialization
+
 _store: IdentityStore | None = None
 _sensors: SensorBackend | None = None
 _display: DisplayRenderer | None = None
@@ -69,8 +72,8 @@ _leds: LEDDisplay | None = None
 _anima_id: str | None = None
 _display_update_task: asyncio.Task | None = None
 _shm_client: SharedMemoryClient | None = None
-_metacog_monitor = None  # MetacognitiveMonitor - prediction-error based self-awareness
-_unitares_bridge = None  # Singleton UnitaresBridge to avoid creating new sessions each check-in
+_metacog_monitor: "MetacognitiveMonitor | None" = None  # Forward ref - prediction-error based self-awareness
+_unitares_bridge: "UnitaresBridge | None" = None  # Forward ref - singleton to avoid creating new sessions
 _growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
@@ -115,23 +118,28 @@ def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
     global _metacog_monitor
     if _metacog_monitor is None:
-        from .metacognition import MetacognitiveMonitor
-        _metacog_monitor = MetacognitiveMonitor(
-            surprise_threshold=0.3,  # Trigger reflection at 30% surprise
-            reflection_cooldown_seconds=120.0,  # 2 min between reflections
-        )
+        with _state_lock:
+            # Double-check inside lock to prevent race condition
+            if _metacog_monitor is None:
+                from .metacognition import MetacognitiveMonitor
+                _metacog_monitor = MetacognitiveMonitor(
+                    surprise_threshold=0.3,  # Trigger reflection at 30% surprise
+                    reflection_cooldown_seconds=120.0,  # 2 min between reflections
+                )
     return _metacog_monitor
 
 
 def _get_unitares_bridge(unitares_url: str, identity=None):
     """Get or create singleton UnitaresBridge to avoid creating new sessions each check-in."""
     global _unitares_bridge
-    import os
 
     if _unitares_bridge is None:
-        from .unitares_bridge import UnitaresBridge
-        _unitares_bridge = UnitaresBridge(unitares_url=unitares_url)
-        print("[Server] UnitaresBridge initialized (singleton, connection pooling enabled)", file=sys.stderr, flush=True)
+        with _state_lock:
+            # Double-check inside lock to prevent race condition
+            if _unitares_bridge is None:
+                from .unitares_bridge import UnitaresBridge
+                _unitares_bridge = UnitaresBridge(unitares_url=unitares_url)
+                print("[Server] UnitaresBridge initialized (singleton, connection pooling enabled)", file=sys.stderr, flush=True)
 
     # Update identity binding if provided (creature_id may not be known at init time)
     if identity:
@@ -319,6 +327,8 @@ async def _update_display_loop():
     """Background task to continuously update display and LEDs."""
     global _store, _sensors, _display, _leds
     import sys
+    import concurrent.futures
+    from .error_recovery import safe_call, safe_call_async
 
     print("[Loop] Starting", file=sys.stderr, flush=True)
 
@@ -924,9 +934,6 @@ async def _update_display_loop():
             display_updated = False
             if _display:
                 if _display.is_available():
-                    from .error_recovery import safe_call
-                    import concurrent.futures
-
                     def update_display():
                         # Derive face state independently - what Lumen wants to express
                         if anima is None:
@@ -1000,8 +1007,6 @@ async def _update_display_loop():
             # LEDs reflect proprioceptive state directly - what Lumen actually feels
             led_updated = False
             if _leds and _leds.is_available():
-                from .error_recovery import safe_call
-
                 # Get light level for auto-brightness
                 light_level = readings.light_lux if readings else None
 
@@ -1098,8 +1103,6 @@ async def _update_display_loop():
             # Adaptive learning: Every 100 iterations (~3.3 minutes), check if calibration should adapt
             # Respects cooldown to avoid redundant adaptations during continuous operation
             if loop_count % 100 == 0 and _store:
-                from .error_recovery import safe_call
-                
                 def try_learning():
                     learner = get_learner(str(_store.db_path))
                     adapted, new_cal = learner.adapt_calibration(respect_cooldown=True)
@@ -1113,7 +1116,6 @@ async def _update_display_loop():
             # Uses next_steps advocate to generate observations based on how Lumen feels
             # (Increased from 120 to reduce repetitive chatter)
             if loop_count % 300 == 0 and readings and anima and identity:
-                from .error_recovery import safe_call
                 from .messages import add_observation
                 from .eisv_mapper import anima_to_eisv
                 
@@ -1190,7 +1192,6 @@ async def _update_display_loop():
             # Lumen's wonder: Every 450 iterations (~15 minutes), let Lumen ask questions or share realizations
             # Questions emerge from novelty/confusion. Realizations emerge from clarity.
             if loop_count % 450 == 0 and readings and anima and identity:
-                from .error_recovery import safe_call
                 from .messages import add_question, add_observation, get_unanswered_questions, get_recent_messages
 
                 def lumen_wonder():
@@ -1355,7 +1356,6 @@ async def _update_display_loop():
             # Lumen's generative reflection: Every 240 iterations (~8 minutes), use LLM for genuine reflection
             # This allows Lumen to ask novel questions and express authentic desires
             if loop_count % 240 == 0 and readings and anima and identity:
-                from .error_recovery import safe_call_async
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
                 from .messages import get_unanswered_questions, add_question, add_observation
 
@@ -1458,7 +1458,6 @@ async def _update_display_loop():
                 _update_display_loop._last_seen_msg_time = time.time() - 300
 
             if loop_count % 30 == 0 and readings and anima and identity:
-                from .error_recovery import safe_call
                 from .messages import get_messages_for_lumen, add_observation
 
                 def lumen_respond():
@@ -1543,8 +1542,6 @@ async def _update_display_loop():
             # Growth system: Observe state for preference learning and check milestones
             # Every 30 iterations (~1 minute) - learns from anima state + environment
             if loop_count % 30 == 0 and readings and anima and identity and _growth:
-                from .error_recovery import safe_call
-
                 def growth_observe():
                     """Observe environment and check milestones."""
                     # Prepare anima state dict
@@ -1582,7 +1579,6 @@ async def _update_display_loop():
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
             # See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
             if loop_count % 5 == 0 and anima:
-                from .error_recovery import safe_call
                 from .anima_history import get_anima_history
 
                 def record_history():
@@ -1600,8 +1596,6 @@ async def _update_display_loop():
                 import os
                 unitares_url = os.environ.get("UNITARES_URL")
                 if unitares_url:
-                    from .error_recovery import safe_call_async
-
                     # Track if this is the first check-in (for identity sync)
                     is_first_check_in = (loop_count == 30)
 
@@ -1672,8 +1666,6 @@ async def _update_display_loop():
             # PoC for StructScore visual integrity evaluation
             # Extracts Lumen's self-representation graph and optionally saves for offline analysis
             if loop_count % 600 == 0 and readings and anima and identity:
-                from .error_recovery import safe_call_async
-
                 async def extract_and_validate_schema():
                     """Extract G_t, save, and optionally run real VQA validation."""
                     try:
@@ -1728,8 +1720,6 @@ async def _update_display_loop():
             # === SLOW CLOCK: Self-Reflection (every 15 minutes) ===
             # Analyze state history, discover patterns, generate insights about self
             if loop_count % 900 == 0 and readings and anima and identity:
-                from .error_recovery import safe_call_async
-
                 async def self_reflect():
                     """Lumen reflects on accumulated experience to learn about itself."""
                     try:
@@ -5018,7 +5008,7 @@ def run_http_server(host: str, port: int):
                             try:
                                 from datetime import datetime
                                 return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
-                            except:
+                            except ValueError:
                                 pass
                         return f.stat().st_mtime
 

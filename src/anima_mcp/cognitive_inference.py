@@ -373,7 +373,7 @@ class CognitiveInference:
                 end = text.index("```", start)
                 try:
                     return json.loads(text[start:end].strip())
-                except:
+                except json.JSONDecodeError:
                     pass
 
             # Try to find { } boundaries
@@ -382,7 +382,7 @@ class CognitiveInference:
                 end = text.rindex("}") + 1
                 try:
                     return json.loads(text[start:end])
-                except:
+                except json.JSONDecodeError:
                     pass
 
             # Fallback: return as text

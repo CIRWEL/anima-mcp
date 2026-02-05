@@ -86,7 +86,7 @@ class SharedMemoryClient:
         try:
             r = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_connect_timeout=0.5)
             return r.ping()
-        except:
+        except Exception:
             return False
 
     def _ensure_file_dir(self):
@@ -208,11 +208,11 @@ class SharedMemoryClient:
             if self.backend == "redis" and self._redis_client:
                 try:
                     self._redis_client.delete(REDIS_KEY)
-                except:
+                except Exception:
                     pass
-            
+
             if self.filepath.exists():
                 try:
                     self.filepath.unlink()
-                except:
+                except OSError:
                     pass

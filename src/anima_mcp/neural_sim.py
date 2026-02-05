@@ -71,7 +71,7 @@ def get_neural_state(light_level: Optional[float] = None,
     if cpu_percent is None:
         try:
             cpu_percent = psutil.cpu_percent(interval=0.05)
-        except:
+        except (OSError, AttributeError):
             cpu_percent = 10.0
     
     cpu_norm = min(1.0, cpu_percent / 100.0)

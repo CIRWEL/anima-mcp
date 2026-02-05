@@ -139,7 +139,7 @@ class JoystickReader:
             # Read button (typically on pin 24)
             try:
                 button_pressed = self._seesaw.digital_read(24) == 0
-            except:
+            except (OSError, IOError):
                 button_pressed = False
             
             state = JoystickState(
