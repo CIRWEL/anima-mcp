@@ -147,19 +147,34 @@ class MessageBoard:
         return msg
 
     def _trim_by_type(self):
-        """Trim messages by type, preserving limits for each category."""
+        """Trim messages by type, preserving limits for each category.
+
+        IMPORTANT: Preserves agent messages that are answers to questions (have responds_to)
+        to maintain Q&A consistency. Without this, answered questions would show as
+        'expired' when their answer messages get trimmed.
+        """
         # Separate messages by type
         observations = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_OBSERVATION]
         questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+
+        # Get question IDs for checking responds_to links
+        question_ids = {q.message_id for q in questions}
+
+        # Separate visitors into answers (must preserve) and regular messages
         visitors = [m for m in self._messages if m.msg_type in (MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT)]
+        answers = [m for m in visitors if m.responds_to and m.responds_to in question_ids]
+        regular_visitors = [m for m in visitors if not (m.responds_to and m.responds_to in question_ids)]
 
         # Trim each category to its limit (keep most recent)
         observations = observations[-self.MAX_OBSERVATIONS:]
         questions = questions[-self.MAX_QUESTIONS:]
-        visitors = visitors[-self.MAX_VISITORS:]
+        # Keep all answers (capped at MAX_QUESTIONS since they map 1:1)
+        # Trim regular visitors to fill remaining space
+        answers = answers[-self.MAX_QUESTIONS:]
+        regular_visitors = regular_visitors[-(self.MAX_VISITORS - len(answers)):]
 
         # Merge back and sort by timestamp
-        self._messages = observations + questions + visitors
+        self._messages = observations + questions + answers + regular_visitors
         self._messages.sort(key=lambda m: m.timestamp)
 
     def add_observation(self, text: str, author: str = "lumen") -> Message:
@@ -471,6 +486,40 @@ class MessageBoard:
 
         questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION and not m.answered]
         return questions[-limit:]
+
+    def repair_orphaned_answered(self) -> int:
+        """Fix questions marked 'answered' but with no actual answer message.
+
+        This can happen when answer messages are trimmed but the question's
+        answered flag remains True. Resets answered=False for questions
+        that have no responds_to link pointing to them (except truly expired ones).
+
+        Returns: Number of questions repaired.
+        """
+        self._load()
+
+        # Find all answer links (responds_to pointing to questions)
+        answered_ids = {
+            m.responds_to for m in self._messages
+            if m.msg_type == MESSAGE_TYPE_AGENT and m.responds_to
+        }
+
+        # Find orphaned questions (answered=True but no actual answer, and not expired by age)
+        four_hours_ago = time.time() - 14400
+        repaired = 0
+        for m in self._messages:
+            if (m.msg_type == MESSAGE_TYPE_QUESTION and
+                m.answered and
+                m.message_id not in answered_ids and
+                m.timestamp >= four_hours_ago):  # Not old enough to be legitimately expired
+                m.answered = False
+                repaired += 1
+                print(f"[MessageBoard] Repaired orphaned question: {m.text[:50]}...", file=sys.stderr, flush=True)
+
+        if repaired:
+            self._save()
+
+        return repaired
 
     def get_recent_questions(self, hours: int = 24, limit: int = 100) -> List[Message]:
         """Get all questions (answered or not) from the last N hours.
