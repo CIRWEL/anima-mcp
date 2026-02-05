@@ -4838,7 +4838,7 @@ def run_http_server(host: str, port: int):
                         "light": readings.light_lux or 0,
                         "humidity": readings.humidity_pct or 0,
                         "awakenings": identity.total_awakenings if identity else 0,
-                        "timestamp": readings.timestamp,
+                        "timestamp": str(readings.timestamp) if readings.timestamp else "",
                     })
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
