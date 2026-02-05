@@ -4815,19 +4815,18 @@ def run_http_server(host: str, port: int):
             async def rest_state(request):
                 """GET /state - Format matching message_server.py."""
                 try:
-                    from .identity import IdentityStore
-
-                    # Use internal function with fallback (same as MCP get_state)
+                    # Use internal functions (same as MCP get_state)
                     readings, anima = _get_readings_and_anima()
                     if readings is None or anima is None:
                         return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
 
                     feeling = anima.feeling()
-                    identity = IdentityStore()
+                    store = _get_store()
+                    identity = store.get_identity() if store else None
 
                     # Format matching message_server.py
                     return JSONResponse({
-                        "name": identity.name or "Lumen",
+                        "name": identity.name if identity else "Lumen",
                         "mood": feeling["mood"],
                         "warmth": anima.warmth,
                         "clarity": anima.clarity,
@@ -4838,7 +4837,7 @@ def run_http_server(host: str, port: int):
                         "ambient_temp": readings.ambient_temp_c or 0,
                         "light": readings.light_lux or 0,
                         "humidity": readings.humidity_pct or 0,
-                        "awakenings": identity.total_awakenings,
+                        "awakenings": identity.total_awakenings if identity else 0,
                         "timestamp": readings.timestamp,
                     })
                 except Exception as e:
