@@ -4875,12 +4875,14 @@ def run_http_server(host: str, port: int):
                             "answer": answer
                         })
 
-                    # Reverse to show newest first, limit to 10
+                    # Count truly unanswered (no actual answer message) from ALL questions
+                    truly_unanswered = sum(1 for q in qa_pairs if q["answer"] is None)
+
+                    # Reverse to show newest first, limit to 10 for display
                     qa_pairs.reverse()
                     qa_pairs = qa_pairs[:10]
 
-                    unanswered = sum(1 for q in qa_pairs if not q["answered"])
-                    return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": unanswered})
+                    return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": truly_unanswered})
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
