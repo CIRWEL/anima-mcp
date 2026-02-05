@@ -602,7 +602,9 @@
     </div>
 
     <script>
-        const API_BASE = 'http://localhost:8768';
+        // Local file:// uses message_server.py, remote/ngrok uses Pi's REST endpoints
+        const isLocalFile = window.location.protocol === 'file:';
+        const API_BASE = isLocalFile ? 'http://localhost:8768' : '';
         let currentQuestionId = null;
         let lastUnansweredCount = 0;
         let notificationSound = null;
