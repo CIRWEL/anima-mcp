@@ -132,16 +132,18 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
 
     def handle_get_state(self):
-        """Get Lumen's current state. Single source of truth: MCP get_state tool."""
-        # Try HTTP first (faster, no SSH overhead)
+        """Get Lumen's current state via REST endpoint (same as ngrok)."""
+        # Try REST endpoint directly (same path as ngrok access)
         if LUMEN_HTTP_URL:
-            success, output = http_call_tool("get_state")
-            if success:
-                try:
-                    self.send_json(json.loads(output))
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/state"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    self.send_json(data)
                     return
-                except json.JSONDecodeError:
-                    pass  # Fall through to SSH
+            except Exception:
+                pass  # Fall through to SSH
 
         # SSH fallback - use the SAME get_state logic as the MCP server
         # This reads from shared memory and uses anima.feeling() for mood
@@ -227,7 +229,20 @@ except Exception as e:
             self.send_json({"error": output, "offline": True}, 503)
 
     def handle_get_qa(self):
-        """Get questions and answers from Lumen."""
+        """Get questions and answers from Lumen via REST endpoint."""
+        # Try REST endpoint first (same as ngrok)
+        if LUMEN_HTTP_URL:
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/qa"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    self.send_json(data)
+                    return
+            except Exception:
+                pass  # Fall through to SSH
+
+        # SSH fallback
         code = '''
 import json
 from src.anima_mcp.messages import get_board, MESSAGE_TYPE_QUESTION, MESSAGE_TYPE_AGENT
@@ -261,7 +276,20 @@ print(json.dumps({"questions": qa_pairs[:10], "total": len(qa_pairs), "unanswere
             self.send_json({"error": output}, 503)
 
     def handle_get_learning(self):
-        """Get Lumen's learning stats from identity store."""
+        """Get Lumen's learning stats via REST endpoint."""
+        # Try REST endpoint first
+        if LUMEN_HTTP_URL:
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/learning"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read().decode())
+                    self.send_json(data)
+                    return
+            except Exception:
+                pass  # Fall through to SSH
+
+        # SSH fallback
         code = '''
 import json
 import sqlite3
@@ -340,7 +368,20 @@ else:
             self.send_json({"error": output}, 503)
 
     def handle_get_voice(self):
-        """Get Lumen's voice/audio status."""
+        """Get Lumen's voice/audio status via REST endpoint."""
+        # Try REST endpoint first
+        if LUMEN_HTTP_URL:
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/voice"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    self.send_json(data)
+                    return
+            except Exception:
+                pass  # Fall through to SSH
+
+        # SSH fallback
         code = '''
 import json
 try:
@@ -362,7 +403,20 @@ except Exception as e:
             self.send_json({"error": output}, 503)
 
     def handle_get_gallery(self):
-        """Get list of Lumen's drawings."""
+        """Get list of Lumen's drawings via REST endpoint."""
+        # Try REST endpoint first
+        if LUMEN_HTTP_URL:
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/gallery"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    self.send_json(data)
+                    return
+            except Exception:
+                pass  # Fall through to SSH
+
+        # SSH fallback
         code = '''
 import json
 import re
@@ -406,7 +460,7 @@ else:
             self.send_json({"error": output}, 503)
 
     def handle_get_gallery_image(self):
-        """Serve a drawing image from the Pi."""
+        """Serve a drawing image from the Pi via REST endpoint."""
         filename = self.path.split('/gallery/')[-1]
         # Sanitize filename
         if '/' in filename or '..' in filename:
@@ -414,6 +468,24 @@ else:
             self.end_headers()
             return
 
+        # Try REST endpoint first (proxy the image)
+        if LUMEN_HTTP_URL:
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/gallery/{filename}"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    img_data = resp.read()
+                    self.send_response(200)
+                    self.send_header('Content-type', 'image/png')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.send_header('Cache-Control', 'max-age=3600')
+                    self.end_headers()
+                    self.wfile.write(img_data)
+                    return
+            except Exception:
+                pass  # Fall through to SSH
+
+        # SSH fallback
         code = f'''
 import base64
 from pathlib import Path
