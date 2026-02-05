@@ -3585,15 +3585,21 @@ class ScreenRenderer:
                 self._canvas.draw_pixel(x, y, color)
 
     def canvas_clear(self, persist: bool = True):
-        """Clear the canvas - pauses drawing for 5s so user sees it cleared.
+        """Clear the canvas - always saves first if there are pixels.
 
-        NOTE: This is for Lumen's autonomous clearing. Manual clearing removed.
+        No drawing is ever lost - we save before clearing.
         """
         # Prevent clearing if we're already paused (prevents loops)
         now = time.time()
         if now < self._canvas.drawing_paused_until:
             return  # Already paused, don't clear again
-        
+
+        # Always save before clearing (no pixel threshold - save everything)
+        if self._canvas.pixels:
+            saved_path = self.canvas_save(announce=False)
+            if saved_path:
+                print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
+
         self._canvas.clear()
         if persist:
             self._canvas.save_to_disk()
@@ -3836,24 +3842,24 @@ class ScreenRenderer:
                 return "saved_and_cleared"
 
         # === Check for satisfaction ===
-        # Lumen feels satisfied when: resting phase for 30s + substantial work + good state
+        # Lumen feels satisfied when: resting phase for 30s + has drawn something + good state
         phase_duration = now - self._canvas.phase_start_time
         if (self._canvas.drawing_phase == "resting" and
-            phase_duration > 30.0 and  # In resting phase for 30s (was 2 min)
-            pixel_count > 2000 and  # Substantial work (was 3000)
-            anima.presence > 0.45 and  # Lower threshold (was 0.55)
-            anima.stability > 0.40 and  # Lower threshold (was 0.50)
+            phase_duration > 30.0 and  # In resting phase for 30s
+            pixel_count > 0 and  # Has drawn anything (no arbitrary threshold)
+            anima.presence > 0.45 and
+            anima.stability > 0.40 and
             not self._canvas.is_satisfied):
             self._canvas.mark_satisfied()
 
         # === Auto-save: satisfied + time to reflect ===
-        # After 20s of satisfaction, save the drawing (was 60s)
+        # After 20s of satisfaction, save and start fresh
         # CRITICAL: Don't save if we're in pause period (after clear)
         if (now >= self._canvas.drawing_paused_until and  # Not paused
             self._canvas.is_satisfied and
             self._canvas.satisfaction_time > 0 and
-            now - self._canvas.satisfaction_time > 20.0 and  # 20s satisfaction (was 60s)
-            pixel_count > 2000):  # Substantial work (was 3000)
+            now - self._canvas.satisfaction_time > 20.0 and
+            pixel_count > 0):  # Has anything to save (no arbitrary threshold)
 
             print(f"[Canvas] Lumen autonomously saving (satisfied for 20s, {pixel_count} pixels)", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
