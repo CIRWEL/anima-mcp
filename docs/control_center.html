@@ -602,9 +602,9 @@
     </div>
 
     <script>
-        // Auto-detect API base: use relative URLs when served from Pi/ngrok, localhost when local
-        const isRemote = window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1';
-        const API_BASE = isRemote ? '' : 'http://localhost:8766';
+        // Auto-detect API base: use relative URLs when served from Pi/ngrok, localhost when local file://
+        const isLocal = window.location.protocol === 'file:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const API_BASE = isLocal ? 'http://localhost:8768' : '';
         let currentQuestionId = null;
         let lastUnansweredCount = 0;
         let notificationSound = null;

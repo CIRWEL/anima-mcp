@@ -4868,8 +4868,8 @@ def run_http_server(host: str, port: int):
                                 "expired": q.get("expired", False),
                                 "answered": False  # Unanswered questions
                             })
-                        return JSONResponse(transformed)
-                    return JSONResponse([])
+                        return JSONResponse({"questions": transformed, "total": len(transformed)})
+                    return JSONResponse({"questions": [], "total": 0})
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
@@ -4917,12 +4917,12 @@ def run_http_server(host: str, port: int):
                         learning_data["awakenings"] = identity.get("awakenings", 0)
                         learning_data["alive_hours"] = round(identity.get("alive_seconds", 0) / 3600, 1)
 
-                        # Anima means (current values as proxy for means)
+                        # Anima averages (current values as proxy)
                         anima = context.get("anima", {})
-                        learning_data["mean_warmth"] = round(anima.get("warmth", 0.5), 2)
-                        learning_data["mean_clarity"] = round(anima.get("clarity", 0.5), 2)
-                        learning_data["mean_stability"] = round(anima.get("stability", 0.5), 2)
-                        learning_data["mean_presence"] = round(anima.get("presence", 0.5), 2)
+                        learning_data["avg_warmth"] = round(anima.get("warmth", 0.5), 2)
+                        learning_data["avg_clarity"] = round(anima.get("clarity", 0.5), 2)
+                        learning_data["avg_stability"] = round(anima.get("stability", 0.5), 2)
+                        learning_data["avg_presence"] = round(anima.get("presence", 0.5), 2)
 
                     # Get trajectory for stability info
                     trajectory_result = await handle_get_trajectory({})
