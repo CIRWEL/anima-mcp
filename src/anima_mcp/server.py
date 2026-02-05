@@ -172,7 +172,6 @@ def _readings_from_dict(data: dict) -> SensorReadings:
         ambient_temp_c=data.get("ambient_temp_c"),
         humidity_pct=data.get("humidity_pct"),
         light_lux=data.get("light_lux"),
-        sound_level=data.get("sound_level"),
         cpu_percent=data.get("cpu_percent"),
         memory_percent=data.get("memory_percent"),
         disk_percent=data.get("disk_percent"),
@@ -389,9 +388,6 @@ async def _update_display_loop():
     max_consecutive_errors = 10
     base_delay = 0.2  # Further reduced for responsive joystick navigation
     max_delay = 30.0
-
-    # Sound tracking for sound-triggered dances
-    _prev_sound_level: float = None
 
     # Event for immediate re-render when screen mode changes
     mode_change_event = asyncio.Event()
@@ -1049,16 +1045,6 @@ async def _update_display_loop():
             elif _leds:
                 if loop_count == 1:
                     print(f"[Loop] LEDs not available (hardware issue?)", file=sys.stderr, flush=True)
-
-            # Sound-triggered dances: Check for sound events that might trigger an emotional dance
-            # This gives Lumen a way to respond to presence and activity through sound
-            if _leds and _leds.is_available() and readings and readings.sound_level is not None:
-                sound_event = _leds.check_sound_event(readings.sound_level, _prev_sound_level)
-                if sound_event:
-                    dance_started = _leds.trigger_dance_for_event(sound_event)
-                    if dance_started:
-                        print(f"[Sound] 🎵 Triggered dance for event: {sound_event} (sound={readings.sound_level:.1f}dB)", file=sys.stderr, flush=True)
-                _prev_sound_level = readings.sound_level
 
             # Update voice system with anima state (for listening and text expression)
             if loop_count % 10 == 0:
@@ -1889,7 +1875,7 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
         "neural": {},
     }
     # Environment sensors
-    for k in ["ambient_temp_c", "humidity_pct", "light_lux", "pressure_hpa", "sound_level"]:
+    for k in ["ambient_temp_c", "humidity_pct", "light_lux", "pressure_hpa"]:
         if raw_sensors.get(k) is not None:
             sensors_clean["environment"][k] = raw_sensors[k]
     # System sensors

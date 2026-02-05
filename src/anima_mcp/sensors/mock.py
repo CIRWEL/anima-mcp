@@ -52,7 +52,6 @@ class MockSensors(SensorBackend):
             ambient_temp_c=self._base_temp + random.gauss(0, 0.2),
             humidity_pct=self._base_humidity + random.gauss(0, 1),
             light_lux=self._base_light + random.gauss(0, 5),
-            sound_level=30 + random.gauss(0, 5),  # Quiet room
             cpu_percent=cpu_percent,
             memory_percent=memory.percent,
             disk_percent=disk.percent,
@@ -65,7 +64,6 @@ class MockSensors(SensorBackend):
             "ambient_temp_c (simulated)",
             "humidity_pct (simulated)",
             "light_lux (simulated)",
-            "sound_level (simulated)",
             "cpu_percent (real)",
             "memory_percent (real)",
             "disk_percent (real)",

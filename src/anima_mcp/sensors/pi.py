@@ -221,7 +221,6 @@ class PiSensors(SensorBackend):
             ambient_temp_c=ambient_temp,
             humidity_pct=humidity,
             light_lux=light,
-            sound_level=None,  # TODO: Add mic support
             cpu_percent=cpu_percent,
             memory_percent=memory.percent,
             disk_percent=disk.percent,

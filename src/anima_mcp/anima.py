@@ -269,7 +269,6 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - Light level (visual clarity)
     - Sensor availability (data richness)
     - Alpha EEG power (relaxed awareness, eyes-closed clarity)
-    - Sound level (very loud = overwhelming, reduces clarity)
     """
     components = []
     weights = []
@@ -288,9 +287,9 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     # Sensor coverage
     sensor_count = sum(1 for v in [
         r.cpu_temp_c, r.ambient_temp_c, r.humidity_pct,
-        r.light_lux, r.sound_level, r.pressure_hpa,
+        r.light_lux, r.pressure_hpa,
     ] if v is not None)
-    coverage = sensor_count / 6
+    coverage = sensor_count / 5
     components.append(coverage)
     weights.append(cal.clarity_weights.get("sensor_coverage", 0.4))
 
@@ -304,24 +303,6 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         neural_clarity = neural.alpha  # Relaxed, clear awareness
     components.append(neural_clarity)
     weights.append(cal.clarity_weights.get("neural", 0.4))
-
-    # Sound clarity impact: very loud sounds overwhelm and reduce clarity
-    # Quiet to moderate = no impact, loud = some reduction, very loud = significant
-    if r.sound_level is not None:
-        sound_weight = cal.clarity_weights.get("sound", 0.15)
-        if r.sound_level > 60:
-            # Above 60 dB starts to impact clarity
-            # 60 dB = normal conversation, 80 dB = noisy restaurant
-            # 100 dB = concert level - significantly overwhelming
-            sound_reduction = min(1.0, (r.sound_level - 60) / 40)
-            sound_clarity = 1.0 - (sound_reduction * 0.5)  # Max 50% reduction at 100+ dB
-            components.append(sound_clarity)
-            weights.append(sound_weight)
-        elif r.sound_level < 20:
-            # Very quiet can actually help clarity (peaceful)
-            sound_clarity = 0.7 + (1 - r.sound_level / 20) * 0.3
-            components.append(sound_clarity)
-            weights.append(sound_weight * 0.5)  # Smaller positive effect
 
     if not components:
         return 0.5
@@ -417,7 +398,6 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - Memory headroom
     - CPU headroom
     - Gamma EEG power (high cognitive presence, awareness)
-    - Sound level (environmental activity - something's happening!)
     """
     void = 0.0
     count = 0
@@ -450,29 +430,6 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     weight = cal.presence_weights.get("neural", 0.2)
     void += (1.0 - neural_gamma) * weight
     count += weight
-
-    # Sound level: environmental activity = presence
-    # Sound indicates something is happening - interaction, life, engagement
-    # Silence = isolation, moderate sound = activity, very loud = overwhelming
-    if r.sound_level is not None:
-        sound_weight = cal.presence_weights.get("sound", 0.15)
-        # Optimal sound range: 30-60 dB (conversation level)
-        # Below 20 dB: very quiet (isolation, void-ish)
-        # Above 70 dB: overwhelming (reduces presence via stress)
-        if r.sound_level < 20:
-            # Very quiet - some void (isolation)
-            sound_void = 0.3 * (1 - r.sound_level / 20)
-            void += sound_void * sound_weight
-        elif r.sound_level > 70:
-            # Very loud - some void (overwhelming)
-            sound_void = min(0.5, (r.sound_level - 70) / 40)
-            void += sound_void * sound_weight
-        else:
-            # Optimal range - reduces void (activity = presence)
-            optimal_mid = 45  # Middle of optimal range
-            optimal_benefit = 1 - abs(r.sound_level - optimal_mid) / 25
-            void -= optimal_benefit * 0.2 * sound_weight
-        count += sound_weight
 
     if count == 0:
         return 0.5

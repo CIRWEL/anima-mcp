@@ -122,7 +122,6 @@ class UnifiedWorkflowOrchestrator:
                     ambient_temp_c=readings_dict.get("ambient_temp_c"),
                     humidity_pct=readings_dict.get("humidity_pct"),
                     light_lux=readings_dict.get("light_lux"),
-                    sound_level=readings_dict.get("sound_level"),
                     cpu_percent=readings_dict.get("cpu_percent"),
                     memory_percent=readings_dict.get("memory_percent"),
                     disk_percent=readings_dict.get("disk_percent"),
