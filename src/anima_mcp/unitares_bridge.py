@@ -367,6 +367,14 @@ class UnitaresBridge:
                     # Parse MCP response
                     if "result" in result:
                         governance_result = result["result"]
+                        # MCP wraps tool results in content[0]["text"] as JSON string
+                        if "content" in governance_result and governance_result["content"]:
+                            content = governance_result["content"][0]
+                            if content.get("type") == "text" and content.get("text"):
+                                try:
+                                    governance_result = json.loads(content["text"])
+                                except json.JSONDecodeError:
+                                    pass  # Keep original if not JSON
                         # Log response structure to understand agent binding
                         print(f"[UnitaresBridge] Response keys: {list(governance_result.keys())}", flush=True)
                         # Log agent binding info from UNITARES
