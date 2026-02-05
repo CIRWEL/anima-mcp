@@ -249,7 +249,7 @@ for q in questions:
         "answer": answer
     })
 qa_pairs.reverse()
-print(json.dumps({"questions": qa_pairs[:10], "total": len(qa_pairs), "unanswered": sum(1 for q in qa_pairs if not q["answered"])}))
+print(json.dumps({"questions": qa_pairs[:10], "total": len(qa_pairs), "unanswered": sum(1 for q in qa_pairs if q["answer"] is None)}))
 '''
         success, output = ssh_command(code)
         if success:
