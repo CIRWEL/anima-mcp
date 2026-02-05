@@ -4813,45 +4813,19 @@ def run_http_server(host: str, port: int):
             # These map to MCP tools for convenient dashboard access
 
             async def rest_state(request):
-                """GET /state - Exact copy of message_server.py format."""
+                """GET /state - Format matching message_server.py."""
                 try:
-                    from .shared_memory import SharedMemoryClient
-                    from .anima import Anima, SensorReadings
                     from .identity import IdentityStore
 
-                    shm = SharedMemoryClient()
-                    shm_data = shm.read()
-
-                    if not shm_data or "anima" not in shm_data:
-                        return JSONResponse({"error": "No shared memory data"}, status_code=500)
-
-                    a = shm_data["anima"]
-                    r = shm_data.get("readings", {})
-
-                    readings = SensorReadings(
-                        timestamp=r.get("timestamp", ""),
-                        cpu_temp_c=r.get("cpu_temp_c"),
-                        ambient_temp_c=r.get("ambient_temp_c"),
-                        humidity_pct=r.get("humidity_pct"),
-                        light_lux=r.get("light_lux"),
-                        pressure_hpa=r.get("pressure_hpa"),
-                        cpu_percent=r.get("cpu_percent"),
-                        memory_percent=r.get("memory_percent"),
-                        disk_percent=r.get("disk_percent"),
-                    )
-
-                    anima = Anima(
-                        warmth=a.get("warmth", 0.5),
-                        clarity=a.get("clarity", 0.5),
-                        stability=a.get("stability", 0.5),
-                        presence=a.get("presence", 0.5),
-                        readings=readings,
-                    )
+                    # Use internal function with fallback (same as MCP get_state)
+                    readings, anima = _get_readings_and_anima()
+                    if readings is None or anima is None:
+                        return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
 
                     feeling = anima.feeling()
                     identity = IdentityStore()
 
-                    # Exact same format as message_server.py
+                    # Format matching message_server.py
                     return JSONResponse({
                         "name": identity.name or "Lumen",
                         "mood": feeling["mood"],
