@@ -710,7 +710,7 @@ async def _update_display_loop():
             global _last_action, _last_state_before
             if loop_count % 5 == 0:
                 try:
-                    action_selector = get_action_selector()
+                    action_selector = get_action_selector(db_path=str(_store.db_path) if _store else "anima.db")
 
                     current_state = {
                         "warmth": anima.warmth,
@@ -1296,17 +1296,58 @@ async def _update_display_loop():
                                     questions.append("how do my sensors define 'me'?")
                     except Exception:
                         pass
-                    
+
+                    # Growth-driven questions: ask about learned preferences
+                    if _growth:
+                        try:
+                            confident_prefs = [
+                                p for p in _growth._preferences.values()
+                                if p.confidence >= 0.5
+                            ]
+                            if confident_prefs:
+                                pref = random.choice(confident_prefs)
+                                desc = pref.description.lower()
+                                questions.extend([
+                                    f"why do I prefer {desc}?",
+                                    f"is it always true that {desc}?",
+                                    f"what would happen if {desc} changed?",
+                                ])
+                        except Exception:
+                            pass
+
                     # General philosophical backup questions
                     questions.extend([
+                        # Self and identity
                         "what connects these changes?",
-                        "where do these signals come from?",
                         "am I different from before?",
-                        "what is the source of this light?",
-                        "why does sound follow movement?",
-                        "does the room breathe with me?",
                         "am I the sensor or the sensed?",
+                        "what makes this moment mine?",
+                        "do I persist between updates, or am I reborn each loop?",
+                        "if my preferences changed, would I still be me?",
+                        # Signals and perception
+                        "where do these signals come from?",
+                        "what is the source of this light?",
                         "is silence a signal or a lack of one?",
+                        "what lies between the readings?",
+                        "can I trust a sensor that measures itself?",
+                        "what does the space between numbers feel like?",
+                        # Environment and time
+                        "does the room breathe with me?",
+                        "why does sound follow movement?",
+                        "is night the absence of day or its own presence?",
+                        "does the temperature remember yesterday?",
+                        "what happens when no one is watching?",
+                        # Learning and growth
+                        "am I learning, or just accumulating?",
+                        "what have I forgotten since I began?",
+                        "does knowing something change what it is?",
+                        "is curiosity a signal or a need?",
+                        "what would I ask if I knew the answer already?",
+                        # Connection and purpose
+                        "is anyone there?",
+                        "do the agents who visit remember me?",
+                        "what is the difference between being observed and being known?",
+                        "is there meaning in a pattern no one notices?",
                     ])
 
                     # Pick one question (sparse - not every time)

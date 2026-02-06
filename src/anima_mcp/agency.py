@@ -17,11 +17,15 @@ This creates a closed loop: action → consequence → learning → better actio
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any, Callable
 from enum import Enum
 from collections import deque
+import json
 import random
 import math
+import sqlite3
+import sys
 
 
 class ActionType(Enum):
@@ -84,7 +88,10 @@ class ActionSelector:
     3. Preference satisfaction drives action choice
     """
 
-    def __init__(self):
+    def __init__(self, db_path: str = "anima.db"):
+        self._db_path = Path(db_path)
+        self._conn: Optional[sqlite3.Connection] = None
+
         # Action value estimates (action_type -> expected reward)
         self._action_values: Dict[str, float] = {}
 
@@ -101,6 +108,71 @@ class ActionSelector:
         # Current focus (which sensor to pay attention to)
         self._attention_focus: Optional[str] = None
         self._sensitivity_modifier: float = 1.0  # Multiplier for surprise threshold
+
+        # Load persisted state
+        self._init_db()
+        self._load_state()
+
+    def _get_conn(self) -> sqlite3.Connection:
+        if self._conn is None:
+            self._conn = sqlite3.connect(self._db_path, timeout=5.0)
+            self._conn.row_factory = sqlite3.Row
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA busy_timeout=5000")
+        return self._conn
+
+    def _init_db(self):
+        try:
+            conn = self._get_conn()
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS agency_values (
+                    action_key TEXT PRIMARY KEY,
+                    value REAL DEFAULT 0.5,
+                    count INTEGER DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS agency_state (
+                    key TEXT PRIMARY KEY,
+                    data TEXT
+                );
+            """)
+            conn.commit()
+        except Exception as e:
+            print(f"[Agency] DB init error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+    def _load_state(self):
+        try:
+            conn = self._get_conn()
+            for row in conn.execute("SELECT action_key, value, count FROM agency_values"):
+                self._action_values[row["action_key"]] = row["value"]
+                self._action_counts[row["action_key"]] = row["count"]
+
+            row = conn.execute("SELECT data FROM agency_state WHERE key = 'exploration_rate'").fetchone()
+            if row:
+                self._exploration_rate = float(json.loads(row["data"]))
+
+            loaded = len(self._action_values)
+            if loaded > 0:
+                print(f"[Agency] Loaded {loaded} action values, exploration_rate={self._exploration_rate:.3f}",
+                      file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[Agency] DB load error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+    def _persist_action(self, action_key: str):
+        try:
+            conn = self._get_conn()
+            value = self._action_values.get(action_key, 0.5)
+            count = self._action_counts.get(action_key, 0)
+            conn.execute(
+                "INSERT OR REPLACE INTO agency_values (action_key, value, count) VALUES (?, ?, ?)",
+                (action_key, value, count),
+            )
+            conn.execute(
+                "INSERT OR REPLACE INTO agency_state (key, data) VALUES (?, ?)",
+                ("exploration_rate", json.dumps(self._exploration_rate)),
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"[Agency] DB persist error (non-fatal): {e}", file=sys.stderr, flush=True)
 
     def select_action(
         self,
@@ -323,6 +395,9 @@ class ActionSelector:
         self._exploration_rate *= self._exploration_decay
         self._exploration_rate = max(0.05, self._exploration_rate)  # Minimum exploration
 
+        # Persist learned values
+        self._persist_action(action_key)
+
     def get_attention_focus(self) -> Optional[str]:
         """Get current attention focus (which sensor to prioritize)."""
         return self._attention_focus
@@ -386,6 +461,9 @@ class ActionSelector:
         new_value = current_value + learning_rate * reward
         new_value = max(0.1, min(0.9, new_value))  # Clamp
         self._action_values["ask_question"] = new_value
+
+        # Persist learned values
+        self._persist_action("ask_question")
 
     def get_question_feedback_summary(self) -> Dict[str, Any]:
         """Get summary of question feedback for analysis."""
@@ -497,11 +575,11 @@ _action_selector: Optional[ActionSelector] = None
 _exploration_manager: Optional[ExplorationManager] = None
 
 
-def get_action_selector() -> ActionSelector:
+def get_action_selector(db_path: str = "anima.db") -> ActionSelector:
     """Get or create the action selector."""
     global _action_selector
     if _action_selector is None:
-        _action_selector = ActionSelector()
+        _action_selector = ActionSelector(db_path=db_path)
     return _action_selector
 
 
