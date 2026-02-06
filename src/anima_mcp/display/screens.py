@@ -559,6 +559,13 @@ class ScreenRenderer:
 
         if mode == ScreenMode.NOTEPAD:
             print(f"[ScreenRenderer] Switched to NOTEPAD from {old_mode.value}, pixels={len(self._canvas.pixels)}", file=sys.stderr, flush=True)
+        else:
+            # Not on notepad — clear drawing phase from neural sensor
+            try:
+                from ..computational_neural import get_computational_neural_sensor
+                get_computational_neural_sensor().drawing_phase = None
+            except Exception:
+                pass
     
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""
@@ -3488,6 +3495,12 @@ class ScreenRenderer:
                 self._canvas.drawing_phase = new_phase
                 self._canvas.phase_start_time = now
                 print(f"[Canvas] Phase: {old_phase} → {new_phase} ({pixel_count} pixels, {phase_duration:.0f}s in {old_phase})", file=sys.stderr, flush=True)
+                # Feed drawing phase into neural sensor
+                try:
+                    from ..computational_neural import get_computational_neural_sensor
+                    get_computational_neural_sensor().drawing_phase = new_phase
+                except Exception:
+                    pass
 
         # Reset to exploring if canvas is nearly empty (after clear)
         if pixel_count < 500:
