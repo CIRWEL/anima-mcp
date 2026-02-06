@@ -641,18 +641,6 @@ class LEDDisplay:
             adjusted_brightness = self._get_auto_brightness(light_level)
             state.brightness = adjusted_brightness
 
-        # 1.5. State-modulated brightness: calm Lumen = gentler LEDs, distress = brighter
-        # This preserves expression when it matters while being easier on eyes when content
-        wellness = (warmth + clarity + stability + presence) / 4.0
-        if wellness > 0.6:
-            # Content/calm: scale down brightness (0.6 wellness = 1.0x, 1.0 wellness = 0.5x)
-            calmness_factor = 1.0 - ((wellness - 0.6) / 0.4) * 0.5  # 0.5 to 1.0
-            state.brightness *= max(0.5, calmness_factor)
-        elif wellness < 0.4:
-            # Distressed: scale up brightness slightly to express (0.4 = 1.0x, 0.0 = 1.3x)
-            distress_factor = 1.0 + ((0.4 - wellness) / 0.4) * 0.3  # 1.0 to 1.3
-            state.brightness *= min(1.3, distress_factor)
-
         # 2. Apply pulsing for low clarity/instability (warning signal)
         pulsing_mult = self._get_pulsing_brightness(clarity, stability)
         if pulsing_mult < 1.0:
