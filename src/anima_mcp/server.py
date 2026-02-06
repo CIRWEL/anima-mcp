@@ -4861,9 +4861,11 @@ def run_http_server(host: str, port: int):
                     # Count truly unanswered (no actual answer message) from ALL questions
                     truly_unanswered = sum(1 for q in qa_pairs if q["answer"] is None)
 
-                    # Reverse to show newest first, limit to 10 for display
+                    # Reverse to show newest first
+                    limit = int(request.query_params.get("limit", "20"))
+                    limit = min(limit, 50)
                     qa_pairs.reverse()
-                    qa_pairs = qa_pairs[:10]
+                    qa_pairs = qa_pairs[:limit]
 
                     return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": truly_unanswered})
                 except Exception as e:
@@ -4872,10 +4874,11 @@ def run_http_server(host: str, port: int):
             async def rest_messages(request):
                 """GET /messages - Get recent message board entries."""
                 try:
-                    from .messages import get_recent_messages
+                    from .messages import get_board, get_recent_messages
                     limit = int(request.query_params.get("limit", "20"))
-                    limit = min(limit, 50)
+                    limit = min(limit, 100)
                     messages = get_recent_messages(limit)
+                    board = get_board()
                     return JSONResponse({
                         "messages": [
                             {
@@ -4888,7 +4891,8 @@ def run_http_server(host: str, port: int):
                             }
                             for m in messages
                         ],
-                        "total": len(messages),
+                        "total": len(board._messages),
+                        "returned": len(messages),
                     })
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
@@ -4917,7 +4921,12 @@ def run_http_server(host: str, port: int):
                 try:
                     body = await request.json()
                     message = body.get("message", body.get("text", ""))
-                    result = await handle_post_message({"message": message, "source": "dashboard"})
+                    author = body.get("author", "dashboard")
+                    responds_to = body.get("responds_to")
+                    payload = {"message": message, "source": "dashboard", "agent_name": author}
+                    if responds_to:
+                        payload["responds_to"] = responds_to
+                    result = await handle_post_message(payload)
                     if result and len(result) > 0:
                         data = json.loads(result[0].text)
                         return JSONResponse(data)

@@ -2,8 +2,7 @@
 <html lang="en">
 <!--
     Lumen Control Center
-    Live state, Q&A, and messaging interface.
-    Requires: python3 scripts/message_server.py
+    Live state, Q&A, messaging, learning, and gallery interface.
 -->
 
 <head>
@@ -75,6 +74,7 @@
             height: 10px;
             border-radius: 50%;
             background-color: #666;
+            transition: all 0.3s;
         }
 
         .status-online { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
@@ -89,6 +89,7 @@
 
         @media (max-width: 900px) {
             .grid { grid-template-columns: 1fr; }
+            body { padding: 12px 16px; }
         }
 
         .card {
@@ -157,20 +158,12 @@
             grid-column: span 2;
         }
 
-        .mood-text {
-            font-size: 1.8rem;
-            font-weight: 300;
-        }
-
-        .mood-name {
-            font-size: 0.9rem;
-            color: var(--text-secondary);
-            margin-top: 4px;
-        }
+        .mood-text { font-size: 1.8rem; font-weight: 300; }
+        .mood-name { font-size: 0.9rem; color: var(--text-secondary); margin-top: 4px; }
 
         /* Message Feed */
         .msg-feed {
-            max-height: 350px;
+            max-height: 400px;
             overflow-y: auto;
         }
 
@@ -180,9 +173,7 @@
             font-size: 0.85rem;
         }
 
-        .msg-item:last-child {
-            border-bottom: none;
-        }
+        .msg-item:last-child { border-bottom: none; }
 
         .msg-meta {
             font-size: 0.7rem;
@@ -190,18 +181,28 @@
             margin-bottom: 2px;
         }
 
-        .msg-text {
-            color: var(--text-secondary);
-        }
-
+        .msg-text { color: var(--text-secondary); }
         .msg-item.type-question .msg-text { color: var(--accent-cyan); }
         .msg-item.type-observation .msg-text { color: #888; font-style: italic; }
         .msg-item.type-user .msg-text { color: var(--accent-yellow); }
         .msg-item.type-agent .msg-text { color: var(--accent-purple); }
 
+        .load-more-link {
+            display: block;
+            text-align: center;
+            padding: 8px;
+            color: var(--accent-cyan);
+            font-size: 0.8rem;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .load-more-link:hover { opacity: 1; }
+
         /* Q&A Section */
         .qa-list {
-            max-height: 400px;
+            max-height: 500px;
             overflow-y: auto;
         }
 
@@ -237,9 +238,7 @@
             margin-top: 6px;
         }
 
-        .qa-answer-form {
-            margin-top: 10px;
-        }
+        .qa-answer-form { margin-top: 10px; }
 
         .qa-answer-input {
             width: 100%;
@@ -303,10 +302,7 @@
             color: var(--accent-cyan);
         }
 
-        .btn-small {
-            padding: 6px 12px;
-            font-size: 0.8rem;
-        }
+        .btn-small { padding: 6px 12px; font-size: 0.8rem; }
 
         .btn-primary {
             background: linear-gradient(135deg, rgba(0, 255, 255, 0.15), rgba(187, 134, 252, 0.15));
@@ -343,9 +339,7 @@
             transition: color 0.2s;
         }
 
-        .quick-link:hover {
-            color: var(--accent-cyan);
-        }
+        .quick-link:hover { color: var(--accent-cyan); }
 
         .refresh-btn {
             background: none;
@@ -356,9 +350,7 @@
             font-size: 1rem;
         }
 
-        .refresh-btn:hover {
-            color: var(--accent-cyan);
-        }
+        .refresh-btn:hover { color: var(--accent-cyan); }
 
         .no-data {
             color: var(--text-secondary);
@@ -383,18 +375,8 @@
             border: 1px solid #333;
         }
 
-        .learning-stat-value {
-            font-size: 1.5rem;
-            font-weight: 600;
-            color: var(--accent-purple);
-        }
-
-        .learning-stat-label {
-            font-size: 0.7rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-        }
-
+        .learning-stat-value { font-size: 1.5rem; font-weight: 600; color: var(--accent-purple); }
+        .learning-stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; }
         .trend-up { color: var(--accent-green); }
         .trend-down { color: var(--accent-orange); }
         .trend-neutral { color: var(--text-secondary); }
@@ -410,17 +392,9 @@
             margin-bottom: 15px;
         }
 
-        .voice-icon {
-            font-size: 1.5rem;
-        }
-
-        .voice-text {
-            flex: 1;
-        }
-
-        .voice-speaking {
-            animation: pulse 1s infinite;
-        }
+        .voice-icon { font-size: 1.5rem; }
+        .voice-text { flex: 1; }
+        .voice-speaking { animation: pulse 1s infinite; }
 
         @keyframes pulse {
             0%, 100% { opacity: 1; }
@@ -506,9 +480,7 @@
             cursor: pointer;
         }
 
-        .lightbox.show {
-            display: flex;
-        }
+        .lightbox.show { display: flex; }
 
         .lightbox img {
             max-width: 90%;
@@ -537,7 +509,7 @@
             </div>
             <div class="connection-status">
                 <div id="connectionDot" class="status-dot"></div>
-                <span id="connectionText">Checking...</span>
+                <span id="connectionText">Connecting...</span>
             </div>
         </header>
 
@@ -561,7 +533,7 @@
                 </h3>
                 <!-- Voice Status -->
                 <div id="voiceStatus" class="voice-status" style="display: none;">
-                    <span class="voice-icon">🔊</span>
+                    <span class="voice-icon"></span>
                     <div class="voice-text">
                         <div id="voiceState">Idle</div>
                     </div>
@@ -585,7 +557,7 @@
         </div>
 
         <!-- Message Feed -->
-        <div class="card">
+        <div class="card" style="margin-top: 20px;">
             <h3 class="card-title">
                 Message Board
                 <button class="refresh-btn" onclick="fetchMessages()" title="Refresh">&#x21bb;</button>
@@ -618,7 +590,7 @@
             </div>
         </div>
 
-        <!-- Message Board -->
+        <!-- Send Message -->
         <div class="section-title">Send Message to Lumen</div>
         <div class="card">
             <div class="message-form">
@@ -637,34 +609,23 @@
         <!-- Quick Links -->
         <div class="section-title">Quick Links</div>
         <div class="quick-links">
-            <a href="https://unitares.ngrok.io/dashboard" target="_blank" class="quick-link">UNITARES Dashboard</a>
+            <a href="/gallery-page" class="quick-link">Drawing Gallery</a>
             <a href="NEURO_PSYCH_FRAMING.html" target="_blank" class="quick-link">Neuro-Psych Framework</a>
-            <a href="INDEX.md" class="quick-link">Documentation</a>
             <span class="quick-link" style="cursor: default; color: #444;">|</span>
             <span class="quick-link" style="cursor: text; user-select: all;">ssh unitares-anima@lumen</span>
         </div>
     </div>
 
     <script>
-        // Local file:// uses message_server.py, remote/ngrok uses Pi's REST endpoints
-        const isLocalFile = window.location.protocol === 'file:';
-        const API_BASE = isLocalFile ? 'http://localhost:8768' : '';
-        let currentQuestionId = null;
+        const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:8768' : '';
         let lastUnansweredCount = 0;
-        let notificationSound = null;
+        let msgLimit = 20;
 
-        // Try to create notification sound (silent fallback if not supported)
-        try {
-            notificationSound = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2teleRoAQKTo+/+dWwYDbrT4/8VvDQBS0P//zV0EAG/l//+wPgMA');
-        } catch (e) { }
-
+        // ---- Notification ----
         function showNotification(message) {
             const badge = document.getElementById('notificationBadge');
             badge.textContent = message;
             badge.classList.add('show');
-            if (notificationSound) {
-                notificationSound.play().catch(() => {});
-            }
             setTimeout(() => badge.classList.remove('show'), 10000);
         }
 
@@ -673,23 +634,27 @@
             document.getElementById('notificationBadge').classList.remove('show');
         }
 
-        // Fetch state
+        // ---- Connection status ----
+        function updateConnection(online, text) {
+            const dot = document.getElementById('connectionDot');
+            const label = document.getElementById('connectionText');
+            dot.className = online ? 'status-dot status-online' : 'status-dot status-offline';
+            label.textContent = online ? `Connected to ${text}` : text;
+        }
+
+        // ---- State ----
         async function fetchState() {
             try {
                 const response = await fetch(`${API_BASE}/state`);
                 const data = await response.json();
-
                 if (data.error) {
                     updateConnection(false, data.error);
-                    document.getElementById('stateContent').innerHTML = `<div class="no-data">Offline: ${data.error}</div>`;
                     return;
                 }
-
                 updateConnection(true, data.name || 'Lumen');
                 renderState(data);
             } catch (e) {
-                updateConnection(false, 'Server not running');
-                document.getElementById('stateContent').innerHTML = `<div class="no-data">Run: python3 scripts/message_server.py</div>`;
+                updateConnection(false, 'Offline');
             }
         }
 
@@ -699,7 +664,7 @@
                 'uncomfortable': '😟', 'stressed': '😰', 'unknown': '🤖'
             }[data.mood] || '🤖';
 
-            const html = `
+            document.getElementById('stateContent').innerHTML = `
                 <div class="mood-display">
                     <div class="mood-text">${moodEmoji}</div>
                     <div class="mood-name">${data.name} is ${data.mood}</div>
@@ -711,16 +676,12 @@
                     ${renderStateItem('Presence', data.presence, '#96ceb4')}
                 </div>
                 <div style="margin-top: 12px; font-size: 0.8rem; color: var(--text-secondary);">
-                    🌡️ ${data.ambient_temp?.toFixed(1) || '?'}°C &nbsp;
-                    💡 ${data.light?.toFixed(0) || '?'} lux &nbsp;
-                    💧 ${data.humidity?.toFixed(0) || '?'}% &nbsp;
-                    ${data.surprise > 0.1 ? `⚡ ${(data.surprise * 100).toFixed(0)}% surprise` : ''}
-                </div>
-                <div style="margin-top: 6px; font-size: 0.7rem; color: #555;">
-                    ${data.source ? `📡 ${data.source}` : ''} ${data.timestamp ? `@ ${new Date(data.timestamp).toLocaleTimeString()}` : ''}
+                    ${data.ambient_temp != null ? `🌡️ ${data.ambient_temp.toFixed(1)}°C` : ''}
+                    ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
+                    ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
+                    ${data.surprise > 0.1 ? ` · ⚡ ${(data.surprise * 100).toFixed(0)}% surprise` : ''}
                 </div>
             `;
-            document.getElementById('stateContent').innerHTML = html;
         }
 
         function renderStateItem(label, value, color) {
@@ -732,23 +693,27 @@
                     <div class="state-bar">
                         <div class="state-bar-fill" style="width: ${pct}%; background: ${color};"></div>
                     </div>
-                </div>
-            `;
+                </div>`;
         }
 
-        // Fetch Q&A
+        // ---- Q&A (merged notification check - was separate duplicate fetch) ----
         async function fetchQA() {
             try {
                 const response = await fetch(`${API_BASE}/qa`);
                 const data = await response.json();
-
                 if (data.error) {
                     document.getElementById('qaContent').innerHTML = `<div class="no-data">${data.error}</div>`;
                     return;
                 }
 
+                // Notification check (was a separate checkNewQuestions timer hitting /qa again)
+                if (data.unanswered > lastUnansweredCount && lastUnansweredCount > 0) {
+                    showNotification('Lumen asked a new question!');
+                }
+                lastUnansweredCount = data.unanswered || 0;
+
                 document.getElementById('qaCount').textContent =
-                    data.unanswered > 0 ? `(${data.unanswered} unanswered)` : '';
+                    data.unanswered > 0 ? `(${data.unanswered} unanswered of ${data.total})` : `(${data.total} total)`;
                 renderQA(data.questions);
             } catch (e) {
                 document.getElementById('qaContent').innerHTML = `<div class="no-data">Could not load Q&A</div>`;
@@ -761,13 +726,16 @@
                 return;
             }
 
-            const html = questions.map(q => `
+            const html = questions.map(q => {
+                const age = formatAge(q.timestamp);
+                return `
                 <div class="qa-item ${q.answered ? '' : 'unanswered'}">
-                    <div class="qa-question">? ${q.question}</div>
+                    <div class="qa-question">? ${escapeHtml(q.question)}</div>
                     ${q.answer ? `
-                        <div class="qa-answer">${q.answer.text}</div>
-                        <div class="qa-meta">Answered by ${q.answer.author}</div>
+                        <div class="qa-answer">${escapeHtml(q.answer.text)}</div>
+                        <div class="qa-meta">Answered by ${escapeHtml(q.answer.author)} · ${formatAge(q.answer.timestamp)}</div>
                     ` : `
+                        <div class="qa-meta">Asked ${age}</div>
                         <div class="qa-answer-form">
                             <textarea class="qa-answer-input" id="answer-${q.id}" placeholder="Type your answer..."></textarea>
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 8px;">
@@ -777,13 +745,13 @@
                             </div>
                         </div>
                     `}
-                </div>
-            `).join('');
+                </div>`;
+            }).join('');
 
             document.getElementById('qaContent').innerHTML = html;
         }
 
-        // Submit answer
+        // ---- Submit answer ----
         async function submitAnswer(questionId) {
             const input = document.getElementById(`answer-${questionId}`);
             const authorInput = document.getElementById(`author-${questionId}`);
@@ -806,7 +774,7 @@
                 if (response.ok) {
                     status.textContent = 'Answered!';
                     status.className = 'status-success';
-                    setTimeout(() => fetchQA(), 1000);
+                    setTimeout(fetchQA, 1000);
                 } else {
                     throw new Error('Server error');
                 }
@@ -816,7 +784,7 @@
             }
         }
 
-        // Send message
+        // ---- Send message ----
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const authorInput = document.getElementById('messageAuthor');
@@ -833,9 +801,7 @@
 
             try {
                 const payload = { text: text, author: author };
-                if (respondsTo) {
-                    payload.responds_to = respondsTo;
-                }
+                if (respondsTo) payload.responds_to = respondsTo;
 
                 const response = await fetch(`${API_BASE}/message`, {
                     method: 'POST',
@@ -844,90 +810,77 @@
                 });
 
                 if (response.ok) {
-                    const result = await response.json();
                     status.textContent = respondsTo ? `Answered question ${respondsTo}!` : 'Sent!';
                     status.className = 'status-success';
                     input.value = '';
                     respondsToInput.value = '';
                     setTimeout(() => { status.textContent = ''; }, 3000);
-                    if (respondsTo) fetchQA();  // Refresh Q&A if we answered something
+                    fetchMessages();
+                    if (respondsTo) fetchQA();
                 } else {
                     throw new Error('Server error');
                 }
             } catch (e) {
-                status.textContent = 'Error: Is message_server.py running?';
+                status.textContent = 'Error sending message';
                 status.className = 'status-error';
             }
         }
 
-        // Connection status
-        function updateConnection(online, text) {
-            const dot = document.getElementById('connectionDot');
-            const label = document.getElementById('connectionText');
-            dot.className = online ? 'status-dot status-online' : 'status-dot status-offline';
-            label.textContent = online ? `Connected to ${text}` : text;
-        }
-
-        // Fetch message board
+        // ---- Messages (with load more) ----
         async function fetchMessages() {
             try {
-                const response = await fetch(`${API_BASE}/messages`);
+                const response = await fetch(`${API_BASE}/messages?limit=${msgLimit}`);
                 const data = await response.json();
                 if (data.error) {
                     document.getElementById('msgContent').innerHTML = `<div class="no-data">${data.error}</div>`;
                     return;
                 }
-                document.getElementById('msgCount').textContent = `${data.total} messages`;
-                renderMessages(data.messages);
+                const returned = data.returned || data.messages.length;
+                const total = data.total || returned;
+                document.getElementById('msgCount').textContent = `(${returned} of ${total} messages)`;
+                renderMessages(data.messages, total > returned);
             } catch (e) {
                 document.getElementById('msgContent').innerHTML = `<div class="no-data">Could not load messages</div>`;
             }
         }
 
-        function renderMessages(messages) {
+        function renderMessages(messages, hasMore) {
             if (!messages || messages.length === 0) {
                 document.getElementById('msgContent').innerHTML = `<div class="no-data">No messages yet</div>`;
                 return;
             }
-            // Show newest first
             const sorted = [...messages].sort((a, b) => b.timestamp - a.timestamp);
-            const html = sorted.map(m => {
+            let html = sorted.map(m => {
                 const age = formatAge(m.timestamp);
                 const author = m.author || m.type;
                 return `
                     <div class="msg-item type-${m.type}">
-                        <div class="msg-meta">${author} &middot; ${age}</div>
+                        <div class="msg-meta">${escapeHtml(author)} &middot; ${age}</div>
                         <div class="msg-text">${escapeHtml(m.text)}</div>
                     </div>`;
             }).join('');
+
+            if (hasMore) {
+                html += `<div class="load-more-link" onclick="loadMoreMessages()">Load more messages...</div>`;
+            }
+
             document.getElementById('msgContent').innerHTML = html;
         }
 
-        function formatAge(ts) {
-            const secs = (Date.now() / 1000) - ts;
-            if (secs < 60) return 'now';
-            if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
-            if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
-            return Math.floor(secs / 86400) + 'd ago';
+        function loadMoreMessages() {
+            msgLimit = Math.min(msgLimit + 30, 100);
+            fetchMessages();
         }
 
-        function escapeHtml(text) {
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
-        }
-
-        // Fetch learning stats
+        // ---- Learning ----
         async function fetchLearning() {
             try {
                 const response = await fetch(`${API_BASE}/learning`);
                 const data = await response.json();
-
                 if (data.error) {
                     document.getElementById('learningContent').innerHTML = `<div class="no-data">${data.error}</div>`;
                     return;
                 }
-
                 renderLearning(data);
             } catch (e) {
                 document.getElementById('learningContent').innerHTML = `<div class="no-data">Could not load learning stats</div>`;
@@ -935,10 +888,10 @@
         }
 
         function renderLearning(data) {
-            const trendIcon = data.stability_trend > 0.01 ? '↑' : data.stability_trend < -0.01 ? '↓' : '→';
+            const trendIcon = data.stability_trend > 0.01 ? '&uarr;' : data.stability_trend < -0.01 ? '&darr;' : '&rarr;';
             const trendClass = data.stability_trend > 0.01 ? 'trend-up' : data.stability_trend < -0.01 ? 'trend-down' : 'trend-neutral';
 
-            const html = `
+            document.getElementById('learningContent').innerHTML = `
                 <div class="learning-stats">
                     <div class="learning-stat">
                         <div class="learning-stat-value">${data.awakenings}</div>
@@ -954,18 +907,10 @@
                     </div>
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; font-size: 0.85rem;">
-                    <div>
-                        <div style="color: #ff6b6b;">W: ${(data.avg_warmth * 100).toFixed(0)}%</div>
-                    </div>
-                    <div>
-                        <div style="color: #4ecdc4;">C: ${(data.avg_clarity * 100).toFixed(0)}%</div>
-                    </div>
-                    <div>
-                        <div style="color: #45b7d1;">S: ${(data.avg_stability * 100).toFixed(0)}%</div>
-                    </div>
-                    <div>
-                        <div style="color: #96ceb4;">P: ${(data.avg_presence * 100).toFixed(0)}%</div>
-                    </div>
+                    <div style="color: #ff6b6b;">W: ${(data.avg_warmth * 100).toFixed(0)}%</div>
+                    <div style="color: #4ecdc4;">C: ${(data.avg_clarity * 100).toFixed(0)}%</div>
+                    <div style="color: #45b7d1;">S: ${(data.avg_stability * 100).toFixed(0)}%</div>
+                    <div style="color: #96ceb4;">P: ${(data.avg_presence * 100).toFixed(0)}%</div>
                 </div>
                 <div style="text-align: center; margin-top: 10px; font-size: 0.9rem;">
                     Stability Trend: <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span>
@@ -977,15 +922,13 @@
                     </div>
                 ` : ''}
             `;
-            document.getElementById('learningContent').innerHTML = html;
         }
 
-        // Fetch voice status
+        // ---- Voice ----
         async function fetchVoice() {
             try {
                 const response = await fetch(`${API_BASE}/voice`);
                 const data = await response.json();
-
                 const voiceDiv = document.getElementById('voiceStatus');
                 const voiceState = document.getElementById('voiceState');
                 const voiceIcon = voiceDiv.querySelector('.voice-icon');
@@ -1013,30 +956,15 @@
             }
         }
 
-        // Check for new questions (with notification)
-        async function checkNewQuestions() {
-            try {
-                const response = await fetch(`${API_BASE}/qa`);
-                const data = await response.json();
-
-                if (!data.error && data.unanswered > lastUnansweredCount && lastUnansweredCount > 0) {
-                    showNotification(`Lumen asked a new question!`);
-                }
-                lastUnansweredCount = data.unanswered || 0;
-            } catch (e) { }
-        }
-
-        // Fetch gallery
+        // ---- Gallery (limited to 12 for dashboard preview) ----
         async function fetchGallery() {
             try {
-                const response = await fetch(`${API_BASE}/gallery`);
+                const response = await fetch(`${API_BASE}/gallery?limit=12`);
                 const data = await response.json();
-
                 if (data.error) {
                     document.getElementById('galleryContent').innerHTML = `<div class="no-data">${data.error}</div>`;
                     return;
                 }
-
                 document.getElementById('galleryCount').textContent =
                     data.total > 0 ? `(${data.total} drawings)` : '';
                 renderGallery(data.drawings);
@@ -1050,7 +978,6 @@
                 document.getElementById('galleryContent').innerHTML = `<div class="no-data">No drawings yet</div>`;
                 return;
             }
-
             const html = drawings.map(d => {
                 const date = new Date(d.timestamp * 1000);
                 const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
@@ -1058,45 +985,60 @@
                     <div class="gallery-item" onclick="openLightbox('${d.filename}')">
                         <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
                         <div class="gallery-item-meta">${dateStr}</div>
-                    </div>
-                `;
+                    </div>`;
             }).join('');
-
             document.getElementById('galleryContent').innerHTML = html;
         }
 
         function openLightbox(filename) {
-            const lightbox = document.getElementById('lightbox');
-            const img = document.getElementById('lightboxImg');
-            img.src = `${API_BASE}/gallery/${filename}`;
-            lightbox.classList.add('show');
+            document.getElementById('lightboxImg').src = `${API_BASE}/gallery/${filename}`;
+            document.getElementById('lightbox').classList.add('show');
         }
 
         function closeLightbox() {
             document.getElementById('lightbox').classList.remove('show');
         }
 
-        // Close lightbox on escape key
+        // ---- Utilities ----
+        function formatAge(ts) {
+            const secs = (Date.now() / 1000) - ts;
+            if (secs < 60) return 'now';
+            if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+            if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+            return Math.floor(secs / 86400) + 'd ago';
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        // ---- Keyboard (only close lightbox if not typing) ----
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') closeLightbox();
+            if (e.key === 'Escape') {
+                const el = document.activeElement;
+                if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
+                closeLightbox();
+            }
         });
 
-        // Initialize
+        // ---- Initialize (staggered to avoid thundering herd) ----
         fetchState();
         fetchQA();
-        fetchMessages();
-        fetchLearning();
-        fetchVoice();
-        fetchGallery();
+        setTimeout(fetchMessages, 100);
+        setTimeout(fetchLearning, 200);
+        setTimeout(fetchVoice, 300);
+        setTimeout(fetchGallery, 400);
 
-        // Auto-refresh
-        setInterval(fetchState, 10000);
-        setInterval(fetchQA, 30000);
-        setInterval(fetchMessages, 30000);
-        setInterval(fetchLearning, 60000);
-        setInterval(fetchVoice, 5000);
-        setInterval(checkNewQuestions, 15000);
-        setInterval(fetchGallery, 120000);  // Refresh gallery every 2 minutes
+        // ---- Auto-refresh ----
+        setInterval(fetchState, 10000);      // 10s
+        setInterval(fetchQA, 20000);         // 20s (merged notification check - was 2 timers hitting /qa)
+        setInterval(fetchMessages, 30000);   // 30s
+        setInterval(fetchLearning, 60000);   // 60s
+        setInterval(fetchVoice, 15000);      // 15s (was 5s - too aggressive)
+        setInterval(fetchGallery, 120000);   // 2min
     </script>
 </body>
 
