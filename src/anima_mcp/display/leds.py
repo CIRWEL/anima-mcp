@@ -69,7 +69,7 @@ class LEDState:
     led0: Tuple[int, int, int]  # RGB for warmth (physical left, DotStar index 2)
     led1: Tuple[int, int, int]  # RGB for clarity (physical center, DotStar index 1)
     led2: Tuple[int, int, int]  # RGB for stability/presence (physical right, DotStar index 0)
-    brightness: float = 0.15  # Global brightness (0-1) - lower default to prevent self-illumination
+    brightness: float = 0.12  # Global brightness (0-1) - auto-brightness overrides this
 
 
 class LEDDisplay:
@@ -107,14 +107,14 @@ class LEDDisplay:
             self._expression_mode = expression_mode
         except ImportError:
             # Fallback if config not available
-            self._base_brightness = brightness if brightness is not None else 0.05  # Very dim - LEDs are extremely bright
+            self._base_brightness = brightness if brightness is not None else 0.12
             self._enable_breathing = enable_breathing if enable_breathing is not None else True
             self._pulsing_enabled = True
             self._color_transitions_enabled = True
             self._pattern_mode = "standard"
             self._auto_brightness_enabled = True
-            self._auto_brightness_min = 0.02  # Very dim minimum
-            self._auto_brightness_max = 0.08  # Low max - prevent blinding
+            self._auto_brightness_min = 0.04
+            self._auto_brightness_max = 0.20
             self._pulsing_threshold_clarity = 0.4
             self._pulsing_threshold_stability = 0.4
         
@@ -1405,7 +1405,7 @@ def derive_led_state(warmth: float, clarity: float,
             led0=led0,
             led1=led1,
             led2=led2,
-            brightness=0.15  # Base brightness (will be adjusted) - lower to prevent self-illumination
+            brightness=0.12  # Base brightness (auto-brightness overrides this)
         )
 
 
