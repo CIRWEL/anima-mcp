@@ -7,6 +7,7 @@ Provides fallback local governance if UNITARES server is unavailable.
 
 import asyncio
 import json
+import os
 import sys
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from datetime import datetime
@@ -59,6 +60,13 @@ class UnitaresBridge:
         self._availability_check_interval = 60.0  # Recheck every 60 seconds if unavailable
         self._http_session = None  # Reusable aiohttp session
         self._session_timeout = None  # Timeout config for session
+        # Basic auth for ngrok tunnels (format: "user:password")
+        self._basic_auth = None
+        auth_str = os.environ.get("UNITARES_AUTH")
+        if auth_str and ":" in auth_str:
+            import aiohttp
+            user, password = auth_str.split(":", 1)
+            self._basic_auth = aiohttp.BasicAuth(user, password)
 
     async def _get_session(self):
         """Get or create reusable HTTP session."""
@@ -74,7 +82,8 @@ class UnitaresBridge:
             self._session_timeout = aiohttp.ClientTimeout(total=self._timeout)
             self._http_session = aiohttp.ClientSession(
                 timeout=self._session_timeout,
-                connector=connector
+                connector=connector,
+                auth=self._basic_auth  # Basic auth for ngrok tunnels
             )
         return self._http_session
 
