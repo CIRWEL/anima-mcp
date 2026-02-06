@@ -1454,8 +1454,8 @@ class ScreenRenderer:
             draw.text((10, 26), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
 
             # ---- Vertical bar chart ----
-            bar_area_top = 46
-            bar_area_bottom = 180
+            bar_area_top = 58
+            bar_area_bottom = 184
             bar_area_height = bar_area_bottom - bar_area_top
             bar_width = 28
             bar_gap = 12
