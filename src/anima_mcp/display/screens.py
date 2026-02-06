@@ -3739,10 +3739,14 @@ class ScreenRenderer:
             if 0 <= x < 240 and 0 <= y < 240:
                 self._canvas.draw_pixel(x, y, color)
 
-    def canvas_clear(self, persist: bool = True):
+    def canvas_clear(self, persist: bool = True, already_saved: bool = False):
         """Clear the canvas - saves first if there's a real drawing (50+ pixels).
 
         Minimal threshold avoids saving noise/stray marks.
+
+        Args:
+            persist: Write cleared state to disk.
+            already_saved: Skip internal save (caller already saved).
         """
         # Prevent clearing if we're already paused (prevents loops)
         now = time.time()
@@ -3750,7 +3754,8 @@ class ScreenRenderer:
             return  # Already paused, don't clear again
 
         # Save before clearing if there's actual drawing (50+ pixels, not just noise)
-        if len(self._canvas.pixels) >= 50:
+        # Skip if caller already saved (prevents double growth observation)
+        if not already_saved and len(self._canvas.pixels) >= 50:
             saved_path = self.canvas_save(announce=False)
             if saved_path:
                 print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
@@ -4021,7 +4026,7 @@ class ScreenRenderer:
                 self._canvas.satisfaction_time = 0.0
                 # Clear canvas so Lumen can start fresh
                 print(f"[Canvas] Clearing canvas for new drawing", file=sys.stderr, flush=True)
-                self.canvas_clear(persist=True)
+                self.canvas_clear(persist=True, already_saved=True)
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
@@ -4053,7 +4058,7 @@ class ScreenRenderer:
                 self._canvas.satisfaction_time = 0.0
                 # Clear canvas so Lumen can start fresh
                 print(f"[Canvas] Clearing canvas for new drawing", file=sys.stderr, flush=True)
-                self.canvas_clear(persist=True)
+                self.canvas_clear(persist=True, already_saved=True)
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
