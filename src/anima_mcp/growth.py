@@ -168,6 +168,7 @@ class GrowthSystem:
         self._goals: Dict[str, Goal] = {}
         self._memories: List[MemorableEvent] = []
         self._curiosities: List[str] = []  # Things Lumen wants to explore
+        self._drawings_observed: int = 0
         self._initialize_db()
         self._load_all()
 
@@ -437,18 +438,14 @@ class GrowthSystem:
                 "I draw in the morning", 1.0
             ) or insight
 
-        # Record as autobiographical memory (every 10th drawing)
-        drawing_count = sum(
-            1 for p in self._preferences.values()
-            if p.category == PreferenceCategory.ACTIVITY and "drawing" in p.name
-        )
-        total_obs = sum(
-            p.observation_count for p in self._preferences.values()
-            if p.name == "drawing_wellbeing"
-        )
-        if total_obs in (1, 10, 50, 100):
+        # Record as autobiographical memory at milestone drawing counts
+        self._drawings_observed += 1
+        if self._drawings_observed in (1, 10, 50, 100, 200, 500):
+            ordinal = {1: "1st", 2: "2nd", 3: "3rd"}.get(
+                self._drawings_observed, f"{self._drawings_observed}th"
+            )
             self._record_memory(
-                f"Saved my {total_obs}{'st' if total_obs == 1 else 'th'} drawing ({pixel_count} pixels)",
+                f"Saved my {ordinal} drawing ({pixel_count} pixels)",
                 emotional_impact=0.5,
                 category="milestone"
             )
