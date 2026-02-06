@@ -4,7 +4,7 @@ Computational Neural Signals - Measuring Lumen's Own "Brain".
 Instead of measuring a human brain with EEG, we measure the Pi's computational state:
 - CPU activity patterns → Beta/Gamma (active processing)
 - Memory patterns → Alpha (idle/relaxed awareness)
-- Process activity → Theta (background processes)
+- I/O wait → Theta (background I/O activity)
 - System stability → Delta (deep system state)
 
 This is computational proprioception - Lumen sensing its own computational "brain".
@@ -21,7 +21,7 @@ from collections import deque
 class ComputationalNeuralState:
     """Neural-like signals derived from Pi's computational state."""
     delta: float   # 0-1: Deep system state (low CPU, stable)
-    theta: float   # 0-1: Background processes (process count variation)
+    theta: float   # 0-1: Background I/O activity (disk/network wait)
     alpha: float   # 0-1: Idle awareness (memory headroom, relaxed state)
     beta: float    # 0-1: Active processing (CPU activity)
     gamma: float   # 0-1: High cognitive load (CPU spikes, intense processing)
@@ -34,7 +34,7 @@ class ComputationalNeuralSensor:
     Maps system metrics to neural patterns:
     - CPU % → Beta/Gamma (active engagement)
     - Memory headroom → Alpha (relaxed clarity)
-    - Process variation → Theta (background activity)
+    - I/O wait → Theta (background I/O activity)
     - System stability → Delta (grounded state)
     """
     
@@ -48,15 +48,8 @@ class ComputationalNeuralSensor:
         self.window_size = window_size
         self._cpu_history = deque(maxlen=window_size)
         self._memory_history = deque(maxlen=window_size)
-        self._process_history = deque(maxlen=window_size)
+        self._last_cpu_times = None
         self._last_update = time.time()
-    
-    def _get_process_count(self) -> int:
-        """Get current process count."""
-        try:
-            return len(psutil.pids())
-        except (OSError, AttributeError):
-            return 0
 
     def _get_cpu_freq(self) -> float:
         """Get current CPU frequency (MHz)."""
@@ -93,7 +86,6 @@ class ComputationalNeuralSensor:
         # Update history
         self._cpu_history.append(cpu_percent)
         self._memory_history.append(memory_percent)
-        self._process_history.append(self._get_process_count())
         
         # Beta: Active CPU processing (0-100% → 0-1)
         # Higher CPU = more active processing
@@ -113,17 +105,24 @@ class ComputationalNeuralSensor:
         memory_headroom = (100.0 - memory_percent) / 100.0
         alpha = max(0.0, min(1.0, memory_headroom))
         
-        # Theta: Background processes (process count variation)
-        # More processes = more background activity
-        if len(self._process_history) > 1:
-            process_variation = max(self._process_history) - min(self._process_history)
-            process_mean = sum(self._process_history) / len(self._process_history)
-            if process_mean > 0:
-                theta = min(1.0, (process_variation / process_mean) * 0.5)
+        # Theta: Background I/O activity (disk/network wait)
+        # Measures time CPU spends waiting on I/O — the "subconscious" processing
+        try:
+            cpu_times = psutil.cpu_times()
+            if self._last_cpu_times is not None:
+                # Delta iowait / delta total time since last sample
+                prev = self._last_cpu_times
+                iowait_delta = (cpu_times.iowait or 0) - (prev.iowait or 0)
+                total_delta = sum(cpu_times) - sum(prev)
+                if total_delta > 0:
+                    theta = min(1.0, max(0.0, (iowait_delta / total_delta) * 10.0))
+                else:
+                    theta = 0.0
             else:
-                theta = 0.0
-        else:
-            theta = 0.3  # Default moderate background activity
+                theta = 0.05  # First reading — minimal background
+            self._last_cpu_times = cpu_times
+        except (OSError, AttributeError):
+            theta = 0.0
         
         # Delta: Deep system stability (inverse of CPU activity + temp stability)
         # Low CPU + stable temp = deep, grounded state
