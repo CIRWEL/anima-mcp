@@ -168,6 +168,65 @@
             font-style: italic;
         }
 
+        /* EISV mini bars */
+        .eisv-row {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 8px 10px;
+            background: #0d0d12;
+            border-radius: 6px;
+            border: 1px solid #222;
+        }
+        .eisv-item { flex: 1; }
+        .eisv-label {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            font-family: 'DM Mono', monospace;
+            display: flex;
+            justify-content: space-between;
+        }
+        .eisv-track {
+            height: 3px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 2px;
+            margin-top: 3px;
+        }
+        .eisv-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 1s ease;
+        }
+
+        /* Governance badge */
+        .gov-inline {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 6px;
+            padding: 6px 10px;
+            background: #0d0d12;
+            border-radius: 6px;
+            border: 1px solid #222;
+            font-size: 0.75rem;
+        }
+        .gov-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .gov-decision {
+            font-family: 'DM Mono', monospace;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+        .gov-detail {
+            color: var(--text-secondary);
+            font-size: 0.7rem;
+            margin-left: auto;
+        }
+
 
         /* Neural card */
         .eeg-row {
@@ -748,6 +807,43 @@
 
             const f = data.feeling || {};
 
+            // EISV mini bars
+            const eisv = data.eisv || {};
+            const eisvItems = [
+                { key: 'E', label: 'Energy', color: '#7ecf8b' },
+                { key: 'I', label: 'Integrity', color: '#8bcfa0' },
+                { key: 'S', label: 'Entropy', color: (eisv.S || 0) > 0.4 ? '#e8a87c' : '#6bb87a' },
+                { key: 'V', label: 'Void', color: (eisv.V || 0) > 0.1 ? '#e87c7c' : '#6bb87a' },
+            ];
+            const eisvHtml = Object.keys(eisv).length > 0 ? `
+                <div class="eisv-row">
+                    ${eisvItems.map(e => {
+                        const val = eisv[e.key] || 0;
+                        const pct = Math.min(val * 100, 100);
+                        return `<div class="eisv-item">
+                            <div class="eisv-label"><span>${e.key}</span><span>${val.toFixed(2)}</span></div>
+                            <div class="eisv-track"><div class="eisv-fill" style="width: ${pct}%; background: ${e.color};"></div></div>
+                        </div>`;
+                    }).join('')}
+                </div>` : '';
+
+            // Governance inline
+            const gov = data.governance || {};
+            let govHtml = '';
+            if (gov.decision) {
+                const isProc = gov.decision === 'PROCEED';
+                const isOff = gov.decision === 'OFFLINE';
+                const dc = isProc ? '#7ecf8b' : isOff ? '#666' : '#e8a87c';
+                const detail = gov.margin ? escapeHtml(gov.margin) : '';
+                const src = gov.source ? ` · ${escapeHtml(gov.source)}` : '';
+                govHtml = `
+                    <div class="gov-inline">
+                        <div class="gov-dot" style="background: ${dc}; box-shadow: 0 0 6px ${dc}60;"></div>
+                        <span class="gov-decision" style="color: ${dc};">${gov.decision}</span>
+                        <span class="gov-detail">${detail}${src}</span>
+                    </div>`;
+            }
+
             document.getElementById('stateContent').innerHTML = `
                 <div class="mood-display">
                     <div class="mood-text">${moodEmoji}</div>
@@ -764,6 +860,8 @@
                     ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
                     ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
                 </div>
+                ${eisvHtml}
+                ${govHtml}
             `;
         }
 
