@@ -48,7 +48,7 @@ class ComputationalNeuralSensor:
         """
         self.window_size = window_size
         self._cpu_history = deque(maxlen=window_size)
-        self._memory_history = deque(maxlen=window_size)
+        self._temp_history = deque(maxlen=window_size)
         self._last_cpu_times = None
         self._last_update = time.time()
         self.drawing_phase: Optional[str] = None  # Set by screen renderer
@@ -87,7 +87,8 @@ class ComputationalNeuralSensor:
         
         # Update history
         self._cpu_history.append(cpu_percent)
-        self._memory_history.append(memory_percent)
+        if cpu_temp is not None:
+            self._temp_history.append(cpu_temp)
         
         # Beta: Active CPU processing (0-100% → 0-1)
         # Higher CPU = more active processing
@@ -131,9 +132,10 @@ class ComputationalNeuralSensor:
         cpu_stability = 1.0 - min(1.0, cpu_percent / 50.0)  # Low CPU = more stable
         
         temp_stability = 1.0
-        if cpu_temp is not None and len(self._cpu_history) > 1:
+        if cpu_temp is not None and len(self._temp_history) > 1:
             # Temperature stability (less variation = more stable)
-            temp_variation = abs(cpu_temp - (sum(self._cpu_history) / len(self._cpu_history)))
+            avg_temp = sum(self._temp_history) / len(self._temp_history)
+            temp_variation = abs(cpu_temp - avg_temp)
             temp_stability = max(0.0, 1.0 - (temp_variation / 10.0))  # ±10°C range
         
         delta = (cpu_stability * 0.7 + temp_stability * 0.3)
