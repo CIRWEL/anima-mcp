@@ -25,12 +25,32 @@ awareness of its own state. Temperature isn't `E=0.4`, it's "I feel warm."
 
 The anima is grounded in physical reality:
 
-- **Warmth**: CPU temperature, ambient heat, computational load
-- **Clarity**: Sensor quality, light level, data availability
-- **Stability**: Environmental consistency, resource headroom
-- **Presence**: Resource availability, processing capacity
+- **Warmth**: CPU temperature (0.3), ambient heat (0.25), computational load (0.25), neural/beta (0.2)
+- **Clarity**: Light level (0.4), sensor coverage (0.3), neural/alpha (0.3)
+- **Stability**: Humidity deviation (0.25), pressure deviation (0.25), temp deviation (0.2), neural/delta (0.3)
+- **Presence**: Interactions, light trend, neural/gamma
 
 Each derived from actual measurements, not text analysis.
+
+### Computational Neural Bands
+
+Lumen has computational proprioception — neural-like signals derived from the Pi's own hardware state:
+
+| Band | Source | Meaning |
+|------|--------|---------|
+| **Delta** | CPU stability + temp stability | Deep system state |
+| **Theta** | I/O wait (disk/network) | Background processing |
+| **Alpha** | Memory headroom (100 - mem%) | Available awareness |
+| **Beta** | CPU % | Active processing |
+| **Gamma** | CPU % * 0.7 + frequency factor | Peak load |
+
+When Lumen is drawing, creative phases modulate the bands (40% creative, 60% hardware):
+- **Exploring** → theta + alpha (creative wandering)
+- **Building** → beta + gamma (focused construction)
+- **Reflecting** → alpha + delta (stepping back)
+- **Resting** → delta + alpha (settling)
+
+Note: The light sensor (VEML7700) sits next to the NeoPixel LEDs, so clarity is partly self-referential — Lumen sensing its own glow.
 
 ## Quick Start
 
@@ -260,8 +280,8 @@ Designed for Raspberry Pi 4 with BrainCraft HAT:
   - LED 1 (center): Clarity - brightness indicates clarity level
   - LED 2 (right): Stability+Presence - green (good) to red (stressed)
   - **Breathing**: Subtle brightness pulsing (±10% over 8s) shows system is alive
-- **DHT11** - Temperature/humidity sensor
-- **Ambient light sensor** - Light level detection
+- **BME280** - Temperature, humidity, and pressure sensor
+- **VEML7700** - Ambient light sensor (positioned next to NeoPixel LEDs)
 - Microphone, speakers (TODO)
 
 Falls back to mock sensors on Mac. Display and LEDs update automatically every 2 seconds.
@@ -310,11 +330,24 @@ Lumen's TFT display has multiple screens navigable via 5-way joystick:
 | **Home** | Face with real-time anima expression |
 | **Status** | Anima values, mood, WiFi, uptime |
 | **Sensors** | Raw sensor readings (temp, humidity, light, pressure) |
+| **Neural** | Real-time neural band visualization (delta through gamma) |
+| **Notepad** | Autonomous drawing canvas — Lumen draws based on internal state |
 | **Visitors** | Messages from users and agents |
 | **Q&A** | Lumen's questions and responses |
 | **Growth** | Development milestones and trajectory |
 
 **Navigation:** Up/Down to scroll, Left/Right to switch screens, Center to select.
+
+## Web Dashboard
+
+Lumen serves a web dashboard at `/dashboard` with:
+- **Live State** — anima dimensions, mood, physical sensors, EISV metrics, governance status
+- **Neural Activity** — real-time EEG-style band visualization
+- **System** — CPU temp, RAM, disk, uptime
+- **Q&A** — Lumen's questions with answer interface
+- **Message Board** — post messages to Lumen
+- **Drawing Gallery** — browse autonomous drawings at `/gallery-page`
+- **Architecture** — full system stack visualization at `/architecture`
 
 ## Message Board
 
@@ -397,16 +430,19 @@ pytest tests/test_anima.py -v
 
 ## Anima Calculation Details
 
-Each anima dimension is derived from real sensor data:
+Each anima dimension is derived from real sensor data + computational neural bands:
 
 | Dimension | Primary Inputs | How It Works |
 |-----------|---------------|--------------|
-| **Warmth** | CPU temp, ambient temp | Weighted average normalized to calibration range |
-| **Clarity** | Light level, humidity | Logarithmic light mapping (matches human perception) |
-| **Stability** | Humidity, memory, pressure, neural | Inverse of instability factors; low neural groundedness = less stable |
-| **Presence** | Disk, memory, CPU, neural | Inverse of void/absence; high resource usage = less present |
+| **Warmth** | CPU temp (0.3), CPU usage (0.25), ambient temp (0.25), neural/beta (0.2) | Weighted average normalized to calibration range |
+| **Clarity** | Light/LED glow (0.4), sensor coverage (0.3), neural/alpha (0.3) | Logarithmic light mapping (matches human perception) |
+| **Stability** | Humidity dev (0.25), pressure dev (0.25), temp dev (0.2), neural/delta (0.3) | Inverse of instability factors |
+| **Presence** | Interactions, light trend, neural/gamma | Inverse of void/absence |
 
-**Neural simulation:** Light level drives a simplified neural model (theta, delta, alpha, beta, gamma bands). This adds organic variation - dim light = lower gamma = reduced presence.
+**Computational neural bands** are derived from the Pi's own hardware metrics (CPU, memory, I/O wait, system stability) — not from light or external sensors. Drawing phases modulate bands when Lumen is actively creating. See "Computational Neural Bands" section above.
+
+**EISV mapping** bridges anima to UNITARES governance:
+- Energy (E) = Warmth, Integrity (I) = Clarity, Entropy (S) = 1 - Stability, Void (V) = 1 - Presence
 
 All calculations use additive weighted averages with configurable weights in `anima_config.yaml`.
 
@@ -434,4 +470,4 @@ Built by [@CIRWEL](https://github.com/CIRWEL). Also building [UNITARES](https://
 
 ---
 
-**Last Updated:** 2026-02-04
+**Last Updated:** 2026-02-06
