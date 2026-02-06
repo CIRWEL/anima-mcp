@@ -139,10 +139,10 @@ class ComputationalNeuralSensor:
         delta = (cpu_stability * 0.7 + temp_stability * 0.3)
 
         # Drawing phase modulation — creative activity is real neural activity
-        # Blends with hardware signals (20% creative, 80% hardware)
+        # Drawing is more intentional than raw hardware metrics, so it leads
         if self.drawing_phase:
-            cw = 0.2  # creative weight
-            hw = 0.8  # hardware weight
+            cw = 0.4  # creative weight — drawing is the most genuine signal
+            hw = 0.6  # hardware weight — still anchored to physical state
             if self.drawing_phase == "exploring":
                 # Creative wandering — theta + alpha
                 theta = hw * theta + cw * 0.6
