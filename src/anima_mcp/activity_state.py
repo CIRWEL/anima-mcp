@@ -178,16 +178,20 @@ class ActivityManager:
     ) -> Tuple[ActivityLevel, str]:
         """Convert activity score to level with reason."""
 
-        # Strong overrides
-        if inactivity > self._resting_after_inactivity and circadian < 0.3:
-            return ActivityLevel.RESTING, "night + long inactivity"
+        # Recent interaction means someone is genuinely here — stay awake
+        recently_engaged = inactivity < 10 * 60  # 10 minutes
 
-        if light is not None and light < 5 and circadian < 0.3:
-            return ActivityLevel.RESTING, "darkness + nighttime"
+        # Strong overrides — but only when truly alone
+        if not recently_engaged:
+            if inactivity > self._resting_after_inactivity and circadian < 0.3:
+                return ActivityLevel.RESTING, "night + long inactivity"
+
+            if light is not None and light < 5 and circadian < 0.3:
+                return ActivityLevel.RESTING, "darkness + nighttime"
 
         # Score-based
-        if score > 0.7:
-            return ActivityLevel.ACTIVE, "high activity score"
+        if score > 0.7 or recently_engaged:
+            return ActivityLevel.ACTIVE, "engaged" if recently_engaged else "high activity score"
         elif score > 0.4:
             return ActivityLevel.DROWSY, "moderate activity score"
         else:
