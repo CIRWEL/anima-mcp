@@ -4883,6 +4883,30 @@ def run_http_server(host: str, port: int):
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
+            async def rest_messages(request):
+                """GET /messages - Get recent message board entries."""
+                try:
+                    from .messages import get_recent_messages
+                    limit = int(request.query_params.get("limit", "20"))
+                    limit = min(limit, 50)
+                    messages = get_recent_messages(limit)
+                    return JSONResponse({
+                        "messages": [
+                            {
+                                "id": m.message_id,
+                                "text": m.text,
+                                "type": m.msg_type,
+                                "author": m.author,
+                                "timestamp": m.timestamp,
+                                "responds_to": m.responds_to,
+                            }
+                            for m in messages
+                        ],
+                        "total": len(messages),
+                    })
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
             async def rest_answer(request):
                 """POST /answer - Answer a question from Lumen."""
                 try:
@@ -5058,6 +5082,7 @@ def run_http_server(host: str, port: int):
             app.routes.append(Route("/qa", rest_qa, methods=["GET"]))
             app.routes.append(Route("/answer", rest_answer, methods=["POST"]))
             app.routes.append(Route("/message", rest_message, methods=["POST"]))
+            app.routes.append(Route("/messages", rest_messages, methods=["GET"]))
             app.routes.append(Route("/learning", rest_learning, methods=["GET"]))
             app.routes.append(Route("/voice", rest_voice, methods=["GET"]))
             app.routes.append(Route("/gallery", rest_gallery, methods=["GET"]))

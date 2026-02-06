@@ -168,6 +168,37 @@
             margin-top: 4px;
         }
 
+        /* Message Feed */
+        .msg-feed {
+            max-height: 350px;
+            overflow-y: auto;
+        }
+
+        .msg-item {
+            padding: 8px 10px;
+            border-bottom: 1px solid #1a1a23;
+            font-size: 0.85rem;
+        }
+
+        .msg-item:last-child {
+            border-bottom: none;
+        }
+
+        .msg-meta {
+            font-size: 0.7rem;
+            color: #555;
+            margin-bottom: 2px;
+        }
+
+        .msg-text {
+            color: var(--text-secondary);
+        }
+
+        .msg-item.type-question .msg-text { color: var(--accent-cyan); }
+        .msg-item.type-observation .msg-text { color: #888; font-style: italic; }
+        .msg-item.type-user .msg-text { color: var(--accent-yellow); }
+        .msg-item.type-agent .msg-text { color: var(--accent-purple); }
+
         /* Q&A Section */
         .qa-list {
             max-height: 400px;
@@ -553,6 +584,18 @@
             </div>
         </div>
 
+        <!-- Message Feed -->
+        <div class="card">
+            <h3 class="card-title">
+                Message Board
+                <button class="refresh-btn" onclick="fetchMessages()" title="Refresh">&#x21bb;</button>
+                <span id="msgCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+            </h3>
+            <div id="msgContent" class="msg-feed">
+                <div class="no-data">Loading...</div>
+            </div>
+        </div>
+
         <!-- Learning Stats -->
         <div class="section-title">Learning Progress</div>
         <div class="card">
@@ -824,6 +867,55 @@
             label.textContent = online ? `Connected to ${text}` : text;
         }
 
+        // Fetch message board
+        async function fetchMessages() {
+            try {
+                const response = await fetch(`${API_BASE}/messages`);
+                const data = await response.json();
+                if (data.error) {
+                    document.getElementById('msgContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    return;
+                }
+                document.getElementById('msgCount').textContent = `${data.total} messages`;
+                renderMessages(data.messages);
+            } catch (e) {
+                document.getElementById('msgContent').innerHTML = `<div class="no-data">Could not load messages</div>`;
+            }
+        }
+
+        function renderMessages(messages) {
+            if (!messages || messages.length === 0) {
+                document.getElementById('msgContent').innerHTML = `<div class="no-data">No messages yet</div>`;
+                return;
+            }
+            // Show newest first
+            const sorted = [...messages].sort((a, b) => b.timestamp - a.timestamp);
+            const html = sorted.map(m => {
+                const age = formatAge(m.timestamp);
+                const author = m.author || m.type;
+                return `
+                    <div class="msg-item type-${m.type}">
+                        <div class="msg-meta">${author} &middot; ${age}</div>
+                        <div class="msg-text">${escapeHtml(m.text)}</div>
+                    </div>`;
+            }).join('');
+            document.getElementById('msgContent').innerHTML = html;
+        }
+
+        function formatAge(ts) {
+            const secs = (Date.now() / 1000) - ts;
+            if (secs < 60) return 'now';
+            if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
+            if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
+            return Math.floor(secs / 86400) + 'd ago';
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         // Fetch learning stats
         async function fetchLearning() {
             try {
@@ -991,6 +1083,7 @@
         // Initialize
         fetchState();
         fetchQA();
+        fetchMessages();
         fetchLearning();
         fetchVoice();
         fetchGallery();
@@ -998,6 +1091,7 @@
         // Auto-refresh
         setInterval(fetchState, 10000);
         setInterval(fetchQA, 30000);
+        setInterval(fetchMessages, 30000);
         setInterval(fetchLearning, 60000);
         setInterval(fetchVoice, 5000);
         setInterval(checkNewQuestions, 15000);

@@ -96,6 +96,8 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_get_state()
         elif self.path == '/qa':
             self.handle_get_qa()
+        elif self.path == '/messages':
+            self.handle_get_messages()
         elif self.path == '/learning':
             self.handle_get_learning()
         elif self.path == '/voice':
@@ -265,6 +267,36 @@ for q in questions:
     })
 qa_pairs.reverse()
 print(json.dumps({"questions": qa_pairs[:10], "total": len(qa_pairs), "unanswered": sum(1 for q in qa_pairs if q["answer"] is None)}))
+'''
+        success, output = ssh_command(code)
+        if success:
+            try:
+                self.send_json(json.loads(output))
+            except json.JSONDecodeError:
+                self.send_json({"error": "Invalid JSON", "raw": output}, 500)
+        else:
+            self.send_json({"error": output}, 503)
+
+    def handle_get_messages(self):
+        """Get recent messages from Lumen's message board via REST endpoint."""
+        if LUMEN_HTTP_URL:
+            try:
+                url = f"{LUMEN_HTTP_URL.rstrip('/')}/messages"
+                req = urllib.request.Request(url)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = json.loads(resp.read().decode())
+                    self.send_json(data)
+                    return
+            except Exception:
+                pass  # Fall through to SSH
+
+        # SSH fallback
+        code = '''
+import json
+from src.anima_mcp.messages import get_recent_messages
+messages = get_recent_messages(20)
+result = [{"id": m.message_id, "text": m.text, "type": m.msg_type, "author": m.author, "timestamp": m.timestamp, "responds_to": m.responds_to} for m in messages]
+print(json.dumps({"messages": result, "total": len(result)}))
 '''
         success, output = ssh_command(code)
         if success:
