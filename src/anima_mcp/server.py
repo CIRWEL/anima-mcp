@@ -4032,6 +4032,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     Post a message to Lumen's message board.
     Consolidates: leave_message + leave_agent_note
     """
+    global _sm_clarity_before_interaction
     message = arguments.get("message", "").strip()
     source = arguments.get("source", "agent")
     agent_name = arguments.get("agent_name", "agent")
@@ -4063,7 +4064,6 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             except Exception:
                 pass
             # Snapshot clarity for self-model interaction observation
-            global _sm_clarity_before_interaction
             try:
                 _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
                 if cur_anima:
@@ -4137,7 +4137,6 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             try:
                 _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
                 if cur_anima:
-                    global _sm_clarity_before_interaction
                     _sm_clarity_before_interaction = cur_anima.clarity
             except Exception:
                 pass
