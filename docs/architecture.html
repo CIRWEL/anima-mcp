@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    Lumen Architecture - Multi-Layer Proprioception
+    Live visualization of the full sensing → feeling → governance stack.
+    Served at /architecture
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumen Architecture</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Inter:wght@300;400;500;600&display=swap');
+
+        :root {
+            --bg: #0c0c0f;
+            --card-bg: rgba(255,255,255,0.02);
+            --card-border: rgba(255,255,255,0.06);
+            --text-bright: rgba(255,255,255,0.9);
+            --text-mid: rgba(255,255,255,0.6);
+            --text-dim: rgba(255,255,255,0.35);
+            --text-faint: rgba(255,255,255,0.2);
+            --text-ghost: rgba(255,255,255,0.08);
+            --mono: 'DM Mono', monospace;
+            --sans: 'Inter', 'Helvetica Neue', sans-serif;
+            --accent-physical: #8bb8e8;
+            --accent-neural: #c49be8;
+            --accent-anima: #f0b87a;
+            --accent-eisv: #7ecf8b;
+            --accent-gov: #7ecf8b;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            min-height: 100vh;
+            background: var(--bg);
+            color: white;
+            font-family: var(--sans);
+            padding: 32px 24px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .container { max-width: 520px; width: 100%; }
+
+        /* Header */
+        .header { margin-bottom: 28px; text-align: center; }
+        .header-label {
+            font-size: 9px; color: var(--text-dim); font-family: var(--mono);
+            letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 6px;
+        }
+        .header-title {
+            font-size: 18px; font-weight: 300; color: var(--text-bright);
+            letter-spacing: 0.02em;
+        }
+        .header-status {
+            display: flex; align-items: center; justify-content: center;
+            gap: 8px; margin-top: 8px;
+        }
+        .header-status-text {
+            font-size: 10px; color: var(--text-dim); font-family: var(--mono);
+        }
+
+        /* Pulse dot */
+        .pulse-dot {
+            width: 5px; height: 5px; border-radius: 50%;
+            animation: pulse-glow 3s ease-in-out infinite;
+        }
+
+        /* Flow connector */
+        .flow-line {
+            display: flex; align-items: center; justify-content: center;
+            padding: 4px 0;
+        }
+        .flow-line-inner {
+            width: 2px; height: 32px;
+            background: linear-gradient(180deg, rgba(240,184,122,0.1), rgba(240,184,122,0.6), rgba(240,184,122,0.1));
+            border-radius: 1px; position: relative; overflow: hidden;
+        }
+        .flow-line-inner::after {
+            content: ''; position: absolute; top: 0; left: 0; right: 0;
+            height: 40%; background: rgba(240,184,122,0.8); border-radius: 1px;
+            animation: flow-down 2s ease-in-out infinite;
+        }
+
+        /* Layer card */
+        .layer-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 12px;
+            padding: 16px 20px;
+            position: relative; overflow: hidden; width: 100%;
+        }
+        .layer-card-glow {
+            position: absolute; top: 0; left: 0; right: 0; height: 1px;
+        }
+        .layer-card-header {
+            display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+        }
+        .layer-num {
+            font-size: 9px; font-family: var(--mono);
+            letter-spacing: 0.1em; opacity: 0.7;
+        }
+        .layer-title {
+            font-size: 13px; color: var(--text-bright); font-weight: 500;
+            letter-spacing: 0.02em;
+        }
+        .layer-subtitle {
+            font-size: 10px; color: var(--text-dim); font-family: var(--mono);
+            margin-left: auto;
+        }
+
+        /* Metric bar */
+        .metrics-grid {
+            display: grid; grid-template-columns: 1fr 1fr; gap: 12px;
+        }
+        .metric-bar { width: 100%; }
+        .metric-header {
+            display: flex; justify-content: space-between; align-items: baseline;
+            margin-bottom: 3px;
+        }
+        .metric-label {
+            font-size: 10px; color: rgba(255,255,255,0.5); font-family: var(--mono);
+            letter-spacing: 0.05em; text-transform: uppercase;
+        }
+        .metric-value {
+            font-size: 11px; color: rgba(255,255,255,0.8); font-family: var(--mono);
+        }
+        .metric-track {
+            height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px;
+        }
+        .metric-fill {
+            height: 100%; border-radius: 2px; transition: width 1s ease;
+        }
+
+        /* EEG bands */
+        .eeg-band {
+            display: flex; align-items: center; gap: 8px; height: 20px;
+        }
+        .eeg-name {
+            font-size: 10px; color: rgba(255,255,255,0.4); font-family: var(--mono);
+            width: 42px; text-align: right;
+        }
+        .eeg-track {
+            flex: 1; height: 8px; background: rgba(255,255,255,0.03);
+            border-radius: 4px; position: relative; overflow: hidden;
+        }
+        .eeg-fill {
+            height: 100%; border-radius: 4px; transition: width 1.5s ease;
+        }
+        .eeg-val {
+            font-size: 10px; font-family: var(--mono); width: 30px; text-align: right;
+        }
+        .eeg-freq {
+            font-size: 8px; color: var(--text-faint); font-family: var(--mono); width: 52px;
+        }
+
+        /* Governance decision */
+        .gov-row {
+            display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+        }
+        .gov-badge {
+            display: flex; align-items: center; gap: 8px;
+            padding: 6px 14px; border-radius: 20px;
+        }
+        .gov-badge-dot {
+            width: 7px; height: 7px; border-radius: 50%;
+            animation: pulse-glow 2s ease-in-out infinite;
+        }
+        .gov-badge-text {
+            font-size: 12px; font-family: var(--mono); font-weight: 600;
+            letter-spacing: 0.08em;
+        }
+        .gov-meta { display: flex; gap: 12px; }
+        .gov-meta-item { text-align: center; }
+        .gov-meta-label {
+            font-size: 8px; color: var(--text-dim); font-family: var(--mono);
+            letter-spacing: 0.08em; text-transform: uppercase;
+        }
+        .gov-meta-value {
+            font-size: 11px; color: var(--text-mid); font-family: var(--mono);
+        }
+
+        /* Feeling row */
+        .feeling-row {
+            margin-top: 8px; display: flex; gap: 12px; flex-wrap: wrap;
+        }
+        .feeling-tag {
+            font-size: 10px; font-family: var(--mono); font-style: italic;
+            color: rgba(240,184,122,0.7);
+        }
+
+        /* Footer */
+        .footer {
+            margin-top: 24px; text-align: center;
+        }
+        .footer-text {
+            font-size: 9px; color: rgba(255,255,255,0.15); font-family: var(--mono);
+        }
+        .footer-nav {
+            margin-top: 10px;
+        }
+        .footer-nav a {
+            font-size: 10px; color: rgba(255,255,255,0.3); font-family: var(--mono);
+            text-decoration: none; transition: color 0.2s;
+        }
+        .footer-nav a:hover { color: rgba(255,255,255,0.6); }
+
+        /* Error / loading */
+        .loading-state {
+            text-align: center; padding: 60px 20px; color: var(--text-dim);
+            font-family: var(--mono); font-size: 12px;
+        }
+
+        /* Animations */
+        @keyframes pulse-glow {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        @keyframes flow-down {
+            0% { transform: translateY(-100%); opacity: 0; }
+            30% { opacity: 1; }
+            70% { opacity: 1; }
+            100% { transform: translateY(250%); opacity: 0; }
+        }
+
+        /* Responsive */
+        @media (max-width: 500px) {
+            body { padding: 20px 16px; }
+            .metrics-grid { gap: 8px; }
+            .gov-row { gap: 10px; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div class="header-label">Multi-Layer Proprioception</div>
+            <div class="header-title">Lumen Architecture</div>
+            <div class="header-status">
+                <div class="pulse-dot" id="statusDot" style="background-color: #7ecf8b;"></div>
+                <span class="header-status-text" id="statusText">loading...</span>
+            </div>
+        </div>
+
+        <div id="content">
+            <div class="loading-state">Connecting to Lumen...</div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-text">4E Cognition &middot; Embodied &middot; Embedded &middot; Enactive &middot; Extended</div>
+            <div class="footer-nav">
+                <a href="/dashboard">Control Center</a> &nbsp;&middot;&nbsp;
+                <a href="/gallery-page">Gallery</a>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let data = null;
+
+        async function fetchLayers() {
+            try {
+                const response = await fetch(`${API_BASE}/layers`);
+                data = await response.json();
+                if (data.error) {
+                    document.getElementById('content').innerHTML =
+                        `<div class="loading-state">Error: ${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                render(data);
+            } catch (e) {
+                document.getElementById('content').innerHTML =
+                    `<div class="loading-state">Connection lost. Is Lumen running?</div>`;
+            }
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        function render(d) {
+            const id = d.identity || {};
+            const mood = d.mood || 'unknown';
+            const gov = d.governance || {};
+
+            // Status header
+            const govConnected = gov.connected;
+            document.getElementById('statusDot').style.backgroundColor =
+                govConnected ? '#7ecf8b' : '#e8a87c';
+            const parts = [mood];
+            if (id.awakenings) parts.push(`${id.awakenings} awakenings`);
+            if (id.alive_hours) parts.push(`${id.alive_hours}h alive`);
+            document.getElementById('statusText').textContent = parts.join(' \u00b7 ');
+
+            document.getElementById('content').innerHTML = `
+                ${renderPhysical(d.physical)}
+                ${flowLine()}
+                ${renderNeural(d.neural)}
+                ${flowLine()}
+                ${renderAnima(d.anima, d.feeling)}
+                ${flowLine()}
+                ${renderEISV(d.eisv)}
+                ${flowLine()}
+                ${renderGovernance(d.governance)}
+            `;
+        }
+
+        function flowLine() {
+            return `<div class="flow-line"><div class="flow-line-inner"></div></div>`;
+        }
+
+        function layerCard(num, title, subtitle, accent, content) {
+            return `
+                <div class="layer-card">
+                    <div class="layer-card-glow" style="background: linear-gradient(90deg, transparent, ${accent}40, transparent);"></div>
+                    <div class="layer-card-header">
+                        <span class="layer-num" style="color: ${accent};">L${num}</span>
+                        <span class="layer-title">${title}</span>
+                        <span class="layer-subtitle">${subtitle}</span>
+                    </div>
+                    ${content}
+                </div>`;
+        }
+
+        function metricBar(label, value, max, color, detail) {
+            const pct = Math.min((value / max) * 100, 100);
+            const displayDetail = detail || value.toFixed(2);
+            return `
+                <div class="metric-bar">
+                    <div class="metric-header">
+                        <span class="metric-label">${label}</span>
+                        <span class="metric-value">${displayDetail}</span>
+                    </div>
+                    <div class="metric-track">
+                        <div class="metric-fill" style="width: ${pct}%; background: ${color};"></div>
+                    </div>
+                </div>`;
+        }
+
+        function renderPhysical(p) {
+            if (!p) return '';
+            const c = 'var(--accent-physical)';
+            const content = `<div class="metrics-grid">
+                ${metricBar('temp', p.ambient_temp_c, 50, c, `${p.ambient_temp_c.toFixed(1)}\u00b0C`)}
+                ${metricBar('humidity', p.humidity_pct, 100, c, `${p.humidity_pct.toFixed(0)}%`)}
+                ${metricBar('light', p.light_lux, 5000, c, `${Math.round(p.light_lux)} lux`)}
+                ${metricBar('pressure', p.pressure_hpa, 1013, c, `${p.pressure_hpa.toFixed(0)} hPa`)}
+            </div>`;
+            return layerCard(1, 'Physical Sensors', 'exteroception', 'var(--accent-physical)', content);
+        }
+
+        function renderNeural(n) {
+            if (!n || Object.keys(n).length === 0) return '';
+            const bands = [
+                { name: '\u03b4 delta', key: 'delta', freq: '0.5\u20134 Hz', color: '#7a6ec4' },
+                { name: '\u03b8 theta', key: 'theta', freq: '4\u20138 Hz', color: '#9b8ed4' },
+                { name: '\u03b1 alpha', key: 'alpha', freq: '8\u201313 Hz', color: '#b8a4e8' },
+                { name: '\u03b2 beta',  key: 'beta',  freq: '13\u201330 Hz', color: '#d4b8f0' },
+                { name: '\u03b3 gamma', key: 'gamma', freq: '30\u2013100 Hz', color: '#e8ccf8' },
+            ];
+
+            const rows = bands.map(b => {
+                const val = n[b.key] || 0;
+                const pct = Math.max(val * 100, 2);
+                const valColor = val > 0 ? 'var(--text-mid)' : 'var(--text-faint)';
+                const glow = val > 0.3 ? `box-shadow: 0 0 8px ${b.color}40;` : '';
+                const bg = val > 0
+                    ? `background: linear-gradient(90deg, ${b.color}90, ${b.color});`
+                    : 'background: rgba(255,255,255,0.04);';
+                return `
+                    <div class="eeg-band">
+                        <span class="eeg-name">${b.name}</span>
+                        <div class="eeg-track">
+                            <div class="eeg-fill" style="width: ${pct}%; ${bg} ${glow}"></div>
+                        </div>
+                        <span class="eeg-val" style="color: ${valColor};">${val.toFixed(2)}</span>
+                        <span class="eeg-freq">${b.freq}</span>
+                    </div>`;
+            }).join('');
+
+            const content = `<div style="display: flex; flex-direction: column; gap: 4px;">${rows}</div>
+                <div style="margin-top: 8px; font-size: 9px; color: var(--text-faint); font-family: var(--mono); text-align: right;">
+                    computational proprioception
+                </div>`;
+            return layerCard(2, 'Neural Signals', 'interoception', 'var(--accent-neural)', content);
+        }
+
+        function renderAnima(a, feeling) {
+            if (!a) return '';
+            const c = 'var(--accent-anima)';
+            const colors = { warmth: '#e8a87c', clarity: '#f0c87a', stability: '#d4a87c', presence: '#e8b87c' };
+
+            const bars = `<div class="metrics-grid">
+                ${metricBar('warmth', a.warmth, 1, colors.warmth)}
+                ${metricBar('clarity', a.clarity, 1, colors.clarity)}
+                ${metricBar('stability', a.stability, 1, colors.stability)}
+                ${metricBar('presence', a.presence, 1, colors.presence)}
+            </div>`;
+
+            let feelingHtml = '';
+            if (feeling) {
+                const tags = ['warmth', 'clarity', 'stability', 'presence']
+                    .map(k => feeling[k] ? `<span class="feeling-tag">${escapeHtml(feeling[k])}</span>` : '')
+                    .filter(Boolean).join('');
+                if (tags) feelingHtml = `<div class="feeling-row">${tags}</div>`;
+            }
+
+            return layerCard('\u27e1', 'Anima State', 'felt experience', c, bars + feelingHtml);
+        }
+
+        function renderEISV(e) {
+            if (!e) return '';
+            const c = 'var(--accent-eisv)';
+            const sColor = e.S > 0.4 ? '#e8a87c' : '#6bb87a';
+            const vColor = e.V > 0.1 ? '#e87c7c' : '#6bb87a';
+            const sLabel = e.S < 0.3 ? 'low' : 'rising';
+            const vLabel = e.V < 0.05 ? 'clear' : 'gaps';
+
+            const content = `<div class="metrics-grid">
+                ${metricBar('Energy', e.E, 1, '#7ecf8b', `${e.E.toFixed(2)} \u00b7 capacity`)}
+                ${metricBar('Integrity', e.I, 1, '#8bcfa0', `${e.I.toFixed(2)} \u00b7 coherence`)}
+                ${metricBar('Entropy', e.S, 1, sColor, `${e.S.toFixed(2)} \u00b7 ${sLabel}`)}
+                ${metricBar('Void', e.V, 0.3, vColor, `${e.V.toFixed(2)} \u00b7 ${vLabel}`)}
+            </div>`;
+            return layerCard(3, 'EISV Metrics', 'computational proprioception', c, content);
+        }
+
+        function renderGovernance(g) {
+            if (!g) return '';
+            const isProceeding = g.decision === 'PROCEED';
+            const dc = isProceeding ? '#7ecf8b' : g.decision === 'OFFLINE' ? '#888' : '#e8a87c';
+            const bgc = isProceeding ? 'rgba(126,207,139,0.08)' : g.decision === 'OFFLINE' ? 'rgba(255,255,255,0.04)' : 'rgba(232,168,124,0.08)';
+
+            const meta = [
+                { label: 'margin', value: g.margin || 'n/a' },
+                { label: 'source', value: g.source || 'n/a' },
+            ].map(m => `
+                <div class="gov-meta-item">
+                    <div class="gov-meta-label">${m.label}</div>
+                    <div class="gov-meta-value">${escapeHtml(m.value)}</div>
+                </div>`).join('');
+
+            const content = `
+                <div class="gov-row">
+                    <div class="gov-badge" style="background: ${bgc}; border: 1px solid ${dc}25;">
+                        <div class="gov-badge-dot" style="background-color: ${dc}; box-shadow: 0 0 8px ${dc}60;"></div>
+                        <span class="gov-badge-text" style="color: ${dc};">${g.decision}</span>
+                    </div>
+                    <div class="gov-meta">${meta}</div>
+                </div>`;
+            return layerCard(4, 'Governance', 'self-regulation', 'var(--accent-gov)', content);
+        }
+
+        // Initial fetch + auto-refresh
+        fetchLayers();
+        setInterval(fetchLayers, 5000);
+    </script>
+</body>
+</html>

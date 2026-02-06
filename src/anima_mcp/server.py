@@ -5125,7 +5125,110 @@ def run_http_server(host: str, port: int):
                     )
 
             app.routes.append(Route("/gallery-page", rest_gallery_page, methods=["GET"]))
-            print("[Server] Registered dashboard REST endpoints (/state, /qa, /gallery, /gallery-page, /message, /learning, /voice)", file=sys.stderr, flush=True)
+
+            async def rest_layers(request):
+                """GET /layers - Full proprioception stack for architecture page."""
+                try:
+                    readings, anima = _get_readings_and_anima()
+                    if readings is None or anima is None:
+                        return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
+
+                    feeling = anima.feeling()
+                    store = _get_store()
+                    identity = store.get_identity() if store else None
+
+                    # Physical sensors
+                    physical = {
+                        "ambient_temp_c": readings.ambient_temp_c or 0,
+                        "humidity_pct": readings.humidity_pct or 0,
+                        "light_lux": readings.light_lux or 0,
+                        "pressure_hpa": readings.pressure_hpa or 0,
+                    }
+
+                    # Neural bands
+                    raw = readings.to_dict()
+                    neural = {}
+                    for k in ["eeg_delta_power", "eeg_theta_power", "eeg_alpha_power", "eeg_beta_power", "eeg_gamma_power"]:
+                        if raw.get(k) is not None:
+                            neural[k.replace("eeg_", "").replace("_power", "")] = round(raw[k], 3)
+
+                    # Anima
+                    anima_data = {
+                        "warmth": round(anima.warmth, 3),
+                        "clarity": round(anima.clarity, 3),
+                        "stability": round(anima.stability, 3),
+                        "presence": round(anima.presence, 3),
+                    }
+
+                    # EISV
+                    from .eisv_mapper import anima_to_eisv
+                    eisv = anima_to_eisv(anima, readings)
+                    eisv_data = eisv.to_dict()
+
+                    # Governance
+                    gov = _last_governance_decision or {}
+                    governance_data = {
+                        "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
+                        "margin": gov.get("margin", "unknown") if gov else "n/a",
+                        "source": gov.get("source", "") if gov else "",
+                        "connected": bool(gov),
+                    }
+                    if gov and gov.get("eisv"):
+                        governance_data["eisv"] = gov["eisv"]
+
+                    # System
+                    system = {
+                        "cpu_temp_c": readings.cpu_temp_c or 0,
+                        "cpu_percent": readings.cpu_percent or 0,
+                        "memory_percent": readings.memory_percent or 0,
+                        "disk_percent": readings.disk_percent or 0,
+                    }
+
+                    # Identity
+                    identity_data = {}
+                    if identity:
+                        alive_seconds = identity.total_alive_seconds + (store.get_session_alive_seconds() if store else 0)
+                        identity_data = {
+                            "name": identity.name,
+                            "awakenings": identity.total_awakenings,
+                            "alive_hours": round(alive_seconds / 3600, 1),
+                            "alive_ratio": round(identity.alive_ratio(), 3),
+                            "age_days": round(identity.age_seconds() / 86400, 1),
+                        }
+
+                    return JSONResponse({
+                        "physical": physical,
+                        "neural": neural,
+                        "anima": anima_data,
+                        "feeling": feeling,
+                        "eisv": eisv_data,
+                        "governance": governance_data,
+                        "system": system,
+                        "identity": identity_data,
+                        "mood": feeling.get("mood", "unknown"),
+                    })
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+
+            app.routes.append(Route("/layers", rest_layers, methods=["GET"]))
+
+            async def rest_architecture_page(request):
+                """Serve the Lumen Architecture page."""
+                server_dir = Path(__file__).parent
+                project_root = server_dir.parent.parent
+                page_path = project_root / "docs" / "architecture.html"
+                if page_path.exists():
+                    return FileResponse(page_path, media_type="text/html")
+                else:
+                    return HTMLResponse(
+                        "<html><body><h1>Architecture Page Not Found</h1>"
+                        f"<p>Expected at: {page_path}</p></body></html>",
+                        status_code=404
+                    )
+
+            app.routes.append(Route("/architecture", rest_architecture_page, methods=["GET"]))
+
+            print("[Server] Registered dashboard REST endpoints (/state, /qa, /gallery, /gallery-page, /layers, /architecture, /message, /learning, /voice)", file=sys.stderr, flush=True)
 
         except Exception as e:
             print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
