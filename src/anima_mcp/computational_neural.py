@@ -6,6 +6,7 @@ Instead of measuring a human brain with EEG, we measure the Pi's computational s
 - Memory patterns → Alpha (idle/relaxed awareness)
 - I/O wait → Theta (background I/O activity)
 - System stability → Delta (deep system state)
+- Drawing phase modulates bands (creative activity is real neural activity)
 
 This is computational proprioception - Lumen sensing its own computational "brain".
 """
@@ -50,6 +51,7 @@ class ComputationalNeuralSensor:
         self._memory_history = deque(maxlen=window_size)
         self._last_cpu_times = None
         self._last_update = time.time()
+        self.drawing_phase: Optional[str] = None  # Set by screen renderer
 
     def _get_cpu_freq(self) -> float:
         """Get current CPU frequency (MHz)."""
@@ -135,7 +137,30 @@ class ComputationalNeuralSensor:
             temp_stability = max(0.0, 1.0 - (temp_variation / 10.0))  # ±10°C range
         
         delta = (cpu_stability * 0.7 + temp_stability * 0.3)
-        
+
+        # Drawing phase modulation — creative activity is real neural activity
+        # Blends with hardware signals (20% creative, 80% hardware)
+        if self.drawing_phase:
+            cw = 0.2  # creative weight
+            hw = 0.8  # hardware weight
+            if self.drawing_phase == "exploring":
+                # Creative wandering — theta + alpha
+                theta = hw * theta + cw * 0.6
+                alpha = hw * alpha + cw * 0.4
+            elif self.drawing_phase == "building":
+                # Focused construction — beta + gamma
+                beta = hw * beta + cw * 0.5
+                gamma = hw * gamma + cw * 0.4
+                theta = hw * theta + cw * 0.3
+            elif self.drawing_phase == "reflecting":
+                # Stepping back — alpha dominant
+                alpha = hw * alpha + cw * 0.6
+                delta = hw * delta + cw * 0.3
+            elif self.drawing_phase == "resting":
+                # Done, settling — delta dominant
+                delta = hw * delta + cw * 0.5
+                alpha = hw * alpha + cw * 0.3
+
         return ComputationalNeuralState(
             delta=round(delta, 3),
             theta=round(theta, 3),
