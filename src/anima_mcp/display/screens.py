@@ -787,6 +787,9 @@ class ScreenRenderer:
 
         # Use lock to prevent concurrent renders (threading issue causes blank screen)
         with self._render_lock:
+            # Defer SPI push until after post-processing (single transfer per render)
+            self._display._deferred = True
+
             # Store UNITARES agent_id for identity screen display
             if governance and governance.get("unitares_agent_id"):
                 self._unitares_agent_id = governance.get("unitares_agent_id")
@@ -846,47 +849,35 @@ class ScreenRenderer:
                 except Exception:
                     pass
 
-            # === Post-processing: transitions, input feedback, loading ===
-            # NOTE: Only refresh display for transient effects (transition, input feedback, loading)
-            # Status bar is drawn but doesn't require extra refresh since screens already call _show()
+            # === Post-processing: transitions, input feedback, loading overlays ===
             try:
                 if hasattr(self._display, '_image') and self._display._image is not None:
                     from PIL import ImageDraw
                     image = self._display._image
-                    needs_refresh = False
 
                     # Apply screen transition (fade effect)
                     if self._state.transition_progress < 1.0:
                         image = self._apply_transition(image)
-                        needs_refresh = True
 
                     draw = ImageDraw.Draw(image)
 
-                    # Draw input feedback (joystick/button visual acknowledgment) - transient, needs refresh
+                    # Draw input feedback (joystick/button visual acknowledgment)
                     if time.time() < self._state.input_feedback_until:
                         self._draw_input_feedback(draw, image)
-                        needs_refresh = True
 
-                    # Status bar disabled for now - causes extra refresh overhead
-                    # TODO: Integrate into individual screen renders for efficiency
-                    # if mode != ScreenMode.FACE:
-                    #     self._draw_status_bar(draw)
-
-                    # Apply loading indicator overlay - transient, needs refresh
+                    # Apply loading indicator overlay
                     if self._state.is_loading:
                         result = self._draw_loading_indicator(None, image)
                         if result is not None:
                             image = result
-                            needs_refresh = True
 
-                    # Update display ONLY for transient effects (avoid double _show())
-                    if needs_refresh:
-                        self._display._image = image
-                        if hasattr(self._display, '_show'):
-                            self._display._show()
+                    self._display._image = image
             except Exception as e:
-                # Post-processing errors shouldn't break rendering
                 pass
+
+            # Single SPI push — all drawing is done, flush to hardware
+            self._display._deferred = False
+            self._display.flush()
 
         # Log slow renders to identify bottleneck
         render_time = time.time() - render_start
