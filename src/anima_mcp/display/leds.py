@@ -120,6 +120,9 @@ class LEDDisplay:
         
         self._dots = None
         self._brightness = self._base_brightness
+        # Hardware floor: absolute minimum brightness (separate from auto-brightness range).
+        # Activity state (RESTING=0.15x) can push below auto_brightness_min but not below this.
+        self._hardware_brightness_floor = 0.005
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_colors = [None, None, None]  # For color transitions
@@ -179,15 +182,15 @@ class LEDDisplay:
         return self._dots is not None
     
     def _get_breathing_brightness(self) -> float:
-        """Calculate breathing brightness (subtle sine wave)."""
+        """Calculate breathing brightness (subtle sine wave around base_brightness)."""
         if not self._enable_breathing:
             return self._base_brightness
-        
+
         # Slow breathing: 8 second cycle, ±10% of base brightness
         t = time.time()
         variation = self._base_brightness * 0.1  # ±10% of base
         breath = math.sin(t * math.pi / 4) * variation
-        return max(self._auto_brightness_min, min(0.5, self._base_brightness + breath))
+        return max(0.0, min(0.5, self._base_brightness + breath))
     
     def _detect_state_change(self, warmth: float, clarity: float, stability: float, presence: float) -> Optional[str]:
         """
@@ -440,22 +443,17 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Apply brightness (state.brightness already includes auto-adjust and pulsing)
-            # Then apply breathing on top if enabled
+            # Apply brightness (state.brightness already includes auto-adjust, pulsing, activity)
+            # Then apply breathing modulation on top
             if self._enable_breathing:
                 breathing_brightness = self._get_breathing_brightness()
-                # Breathing modulates the base brightness
-                # Protect against division by zero or invalid base_brightness
                 if self._base_brightness > 0:
                     final_brightness = state.brightness * (breathing_brightness / self._base_brightness)
                 else:
-                    final_brightness = state.brightness  # Fallback if base_brightness is 0
-                # Floor at auto_brightness_min (0.02) not 0.1 — DotStars are blinding
-                self._dots.brightness = max(self._auto_brightness_min, min(0.5, final_brightness))
+                    final_brightness = state.brightness
+                self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, final_brightness))
             else:
-                # Floor at auto_brightness_min (0.02) not 0.1 — DotStars are blinding
-                safe_brightness = max(self._auto_brightness_min, min(0.5, max(0.0, state.brightness)))
-                self._dots.brightness = safe_brightness
+                self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, max(0.0, state.brightness)))
 
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
@@ -579,7 +577,7 @@ class LEDDisplay:
                         final = self._cached_pipeline_brightness * breath_mod
                     else:
                         final = self._cached_pipeline_brightness
-                    self._dots.brightness = max(self._auto_brightness_min, min(0.5, final))
+                    self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, final))
                     self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
