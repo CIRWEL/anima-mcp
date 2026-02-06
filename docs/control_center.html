@@ -168,48 +168,57 @@
             font-style: italic;
         }
 
-        .neural-bands {
-            display: flex;
-            gap: 4px;
-            align-items: flex-end;
-            height: 24px;
-            margin-top: 10px;
-            padding: 8px 12px;
-            background: #0d0d12;
-            border-radius: 6px;
-            border: 1px solid #222;
-        }
 
-        .neural-band {
-            flex: 1;
-            border-radius: 2px 2px 0 0;
-            min-width: 0;
-            transition: height 0.5s ease;
-        }
-
-        .neural-label {
+        /* Neural card */
+        .eeg-row {
             display: flex;
-            justify-content: space-between;
-            font-size: 0.6rem;
+            align-items: center;
+            gap: 8px;
+            height: 22px;
+        }
+        .eeg-row-name {
+            font-size: 0.7rem;
             color: var(--text-secondary);
-            padding: 0 12px;
-            margin-top: 2px;
+            width: 50px;
+            text-align: right;
+            font-family: 'DM Mono', monospace, monospace;
+        }
+        .eeg-row-track {
+            flex: 1;
+            height: 8px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .eeg-row-fill {
+            height: 100%;
+            border-radius: 4px;
+            transition: width 1.5s ease;
+        }
+        .eeg-row-val {
+            font-size: 0.7rem;
+            font-family: 'DM Mono', monospace, monospace;
+            width: 32px;
+            text-align: right;
+            color: var(--text-secondary);
         }
 
-        .state-info-row {
+        /* System card */
+        .sys-metric {
             display: flex;
             justify-content: space-between;
+            align-items: center;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.04);
+        }
+        .sys-metric:last-child { border-bottom: none; }
+        .sys-metric-label {
             font-size: 0.75rem;
             color: var(--text-secondary);
-            margin-top: 8px;
-            padding: 6px 10px;
-            background: #0d0d12;
-            border-radius: 6px;
-            border: 1px solid #222;
         }
-
-        .state-info-row span {
-            white-space: nowrap;
+        .sys-metric-value {
+            font-size: 0.85rem;
+            font-family: 'DM Mono', monospace, monospace;
         }
 
         /* Message Feed */
@@ -607,6 +616,25 @@
             </div>
         </div>
 
+        <!-- Internals row: Neural + System -->
+        <div class="grid" style="margin-top: 20px;">
+            <div class="card">
+                <h3 class="card-title">
+                    Neural Activity
+                    <a href="/architecture" style="font-size: 0.75rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: auto; opacity: 0.7;">Full stack &rarr;</a>
+                </h3>
+                <div id="neuralContent">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+            <div class="card">
+                <h3 class="card-title">System</h3>
+                <div id="systemContent">
+                    <div class="no-data">Loading...</div>
+                </div>
+            </div>
+        </div>
+
         <!-- Message Feed -->
         <div class="card" style="margin-top: 20px;">
             <h3 class="card-title">
@@ -705,6 +733,8 @@
                 }
                 updateConnection(true, data.name || 'Lumen');
                 renderState(data);
+                renderNeural(data);
+                renderSystem(data);
             } catch (e) {
                 updateConnection(false, 'Offline');
             }
@@ -717,42 +747,6 @@
             }[data.mood] || '🤖';
 
             const f = data.feeling || {};
-
-            // Neural bands visualization
-            const neural = data.neural || {};
-            const bands = ['delta', 'theta', 'alpha', 'beta', 'gamma'];
-            const bandColors = ['#6366f1', '#8b5cf6', '#06b6d4', '#22c55e', '#f59e0b'];
-            let neuralHtml = '';
-            if (Object.keys(neural).length > 0) {
-                const barHtml = bands.map((b, i) => {
-                    const val = neural[b] || 0;
-                    const h = Math.max(2, val * 24);
-                    return `<div class="neural-band" style="height: ${h}px; background: ${bandColors[i]};" title="${b}: ${(val * 100).toFixed(0)}%"></div>`;
-                }).join('');
-                neuralHtml = `
-                    <div class="neural-bands">${barHtml}</div>
-                    <div class="neural-label"><span>δ</span><span>θ</span><span>α</span><span>β</span><span>γ</span></div>`;
-            }
-
-            // Uptime line
-            let uptimeHtml = '';
-            if (data.awakenings || data.alive_hours) {
-                const parts = [];
-                if (data.awakenings) parts.push(`${data.awakenings} awakenings`);
-                if (data.alive_hours) parts.push(`${data.alive_hours}h alive`);
-                if (data.alive_ratio) parts.push(`${(data.alive_ratio * 100).toFixed(0)}% uptime`);
-                uptimeHtml = `<div class="state-info-row"><span>⏱ ${parts.join(' · ')}</span></div>`;
-            }
-
-            // System health line
-            let sysHtml = '';
-            const sysParts = [];
-            if (data.cpu_temp) sysParts.push(`CPU ${data.cpu_temp.toFixed(0)}°C`);
-            if (data.memory_percent) sysParts.push(`RAM ${data.memory_percent.toFixed(0)}%`);
-            if (data.disk_percent) sysParts.push(`Disk ${data.disk_percent.toFixed(0)}%`);
-            if (sysParts.length > 0) {
-                sysHtml = `<div class="state-info-row"><span>🖥 ${sysParts.join(' · ')}</span></div>`;
-            }
 
             document.getElementById('stateContent').innerHTML = `
                 <div class="mood-display">
@@ -770,9 +764,6 @@
                     ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
                     ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
                 </div>
-                ${neuralHtml}
-                ${uptimeHtml}
-                ${sysHtml}
             `;
         }
 
@@ -788,6 +779,66 @@
                         <div class="state-bar-fill" style="width: ${pct}%; background: ${color};"></div>
                     </div>
                 </div>`;
+        }
+
+        function renderNeural(data) {
+            const neural = data.neural || {};
+            if (Object.keys(neural).length === 0) {
+                document.getElementById('neuralContent').innerHTML = '<div class="no-data">No neural data</div>';
+                return;
+            }
+            const bands = [
+                { key: 'delta', name: 'δ delta', color: '#7a6ec4' },
+                { key: 'theta', name: 'θ theta', color: '#9b8ed4' },
+                { key: 'alpha', name: 'α alpha', color: '#b8a4e8' },
+                { key: 'beta',  name: 'β beta',  color: '#d4b8f0' },
+                { key: 'gamma', name: 'γ gamma', color: '#e8ccf8' },
+            ];
+            const dominant = bands.reduce((best, b) =>
+                (neural[b.key] || 0) > (neural[best.key] || 0) ? b : best, bands[0]);
+
+            const rows = bands.map(b => {
+                const val = neural[b.key] || 0;
+                const pct = Math.max(val * 100, 2);
+                const glow = val > 0.3 ? `box-shadow: 0 0 6px ${b.color}40;` : '';
+                return `
+                    <div class="eeg-row">
+                        <span class="eeg-row-name">${b.name}</span>
+                        <div class="eeg-row-track">
+                            <div class="eeg-row-fill" style="width: ${pct}%; background: linear-gradient(90deg, ${b.color}90, ${b.color}); ${glow}"></div>
+                        </div>
+                        <span class="eeg-row-val">${val.toFixed(2)}</span>
+                    </div>`;
+            }).join('');
+
+            document.getElementById('neuralContent').innerHTML = `
+                ${rows}
+                <div style="margin-top: 8px; font-size: 0.75rem; color: ${dominant.color};">
+                    dominant: ${dominant.name.split(' ')[1]}
+                </div>
+            `;
+        }
+
+        function renderSystem(data) {
+            const metrics = [];
+            if (data.awakenings) metrics.push({ label: 'Awakenings', value: data.awakenings, color: 'var(--accent-cyan)' });
+            if (data.alive_hours) metrics.push({ label: 'Alive', value: `${data.alive_hours}h`, color: 'var(--accent-green)' });
+            if (data.alive_ratio) metrics.push({ label: 'Uptime', value: `${(data.alive_ratio * 100).toFixed(0)}%`, color: 'var(--accent-green)' });
+            if (data.cpu_temp) metrics.push({ label: 'CPU Temp', value: `${data.cpu_temp.toFixed(0)}°C`, color: data.cpu_temp > 70 ? 'var(--accent-orange)' : 'var(--text-primary)' });
+            if (data.memory_percent) metrics.push({ label: 'RAM', value: `${data.memory_percent.toFixed(0)}%`, color: data.memory_percent > 80 ? 'var(--accent-orange)' : 'var(--text-primary)' });
+            if (data.disk_percent) metrics.push({ label: 'Disk', value: `${data.disk_percent.toFixed(0)}%`, color: data.disk_percent > 80 ? 'var(--accent-orange)' : 'var(--text-primary)' });
+
+            if (metrics.length === 0) {
+                document.getElementById('systemContent').innerHTML = '<div class="no-data">No system data</div>';
+                return;
+            }
+
+            document.getElementById('systemContent').innerHTML = metrics.map(m => `
+                <div class="sys-metric">
+                    <span class="sys-metric-label">${m.label}</span>
+                    <span class="sys-metric-value" style="color: ${m.color};">${m.value}</span>
+                </div>
+            `).join('');
         }
 
         // ---- Q&A (merged notification check - was separate duplicate fetch) ----
