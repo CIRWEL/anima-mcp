@@ -64,25 +64,43 @@ def anima_to_eisv(
     # Normalize weights
     total_weight = neural_weight + physical_weight
     if total_weight > 0:
-        neural_weight = neural_weight / total_weight
-        physical_weight = physical_weight / total_weight
+        nw = neural_weight / total_weight
+        pw = physical_weight / total_weight
     else:
-        neural_weight = 0.0
-        physical_weight = 1.0
-    
-    # Energy (E): Derived from warmth (neural component already in anima)
-    E = anima.warmth
+        nw = 0.0
+        pw = 1.0
 
-    # Integrity (I): Derived from clarity (neural component already in anima)
+    # Check if readings have neural signals
+    has_neural = (
+        getattr(readings, 'eeg_beta_power', None) is not None
+        or getattr(readings, 'eeg_alpha_power', None) is not None
+    )
+
+    # Energy (E): Warmth + Beta/Gamma power (activation)
+    E = anima.warmth
+    if has_neural:
+        beta = getattr(readings, 'eeg_beta_power', None) or 0
+        gamma = getattr(readings, 'eeg_gamma_power', None) or 0
+        neural_energy = beta * 0.6 + gamma * 0.4
+        E = pw * anima.warmth + nw * neural_energy
+
+    # Integrity (I): Clarity + Alpha power (awareness)
     I = anima.clarity
+    if has_neural and getattr(readings, 'eeg_alpha_power', None) is not None:
+        I = pw * anima.clarity + nw * readings.eeg_alpha_power
     
     # Entropy (S): Inverse of Stability (high stability = low entropy)
     # Stability incorporates Theta/Delta (deep stability)
     S = 1.0 - anima.stability
     
-    # Void (V): Inverse of Presence (high presence = low void)
-    # Presence incorporates Gamma (cognitive presence)
-    V = 1.0 - anima.presence
+    # Void (V): Inverse of Presence, scaled to governance range.
+    # Governance V is a differential accumulator (dV/dt = κ(E-I) - δV) that
+    # naturally hovers near 0. Lumen's raw (1-presence) is 0.3-0.5 normally.
+    # Scale by 0.3 so governance thresholds (0.15) are meaningful:
+    #   presence 0.7 → V=0.09 (comfortable)
+    #   presence 0.5 → V=0.15 (at threshold)
+    #   presence 0.3 → V=0.21 (past threshold)
+    V = (1.0 - anima.presence) * 0.3
     
     # Clamp to [0, 1] range
     return EISVMetrics(
@@ -150,10 +168,25 @@ def generate_status_text(
         f"Presence: {anima.presence:.2f}",
     ]
     
+    # Add neural info if available
+    if readings:
+        alpha = getattr(readings, 'eeg_alpha_power', None)
+        beta = getattr(readings, 'eeg_beta_power', None)
+        gamma = getattr(readings, 'eeg_gamma_power', None)
+        if any(v is not None for v in [alpha, beta, gamma]):
+            neural_parts = ["Neural:"]
+            if alpha is not None:
+                neural_parts.append(f"Alpha={alpha:.2f}")
+            if beta is not None:
+                neural_parts.append(f"Beta={beta:.2f}")
+            if gamma is not None:
+                neural_parts.append(f"Gamma={gamma:.2f}")
+            status_parts.append(" ".join(neural_parts))
+
     # Add EISV if provided
     if eisv:
         status_parts.append(f"EISV: E={eisv.energy:.2f}, I={eisv.integrity:.2f}, S={eisv.entropy:.2f}, V={eisv.void:.2f}")
-    
+
     return ". ".join(status_parts) + "."
 
 

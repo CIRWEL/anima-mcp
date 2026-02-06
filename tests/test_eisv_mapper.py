@@ -81,8 +81,8 @@ def test_eisv_basic_mapping():
     # Entropy should be inverse of stability
     assert abs(eisv.entropy - (1.0 - 0.8)) < 0.1
     
-    # Void should be inverse of presence
-    assert abs(eisv.void - (1.0 - 0.7)) < 0.1
+    # Void should be scaled inverse of presence: (1 - 0.7) * 0.3 = 0.09
+    assert abs(eisv.void - (1.0 - 0.7) * 0.3) < 0.05
 
 
 def test_eisv_with_neural_signals():
