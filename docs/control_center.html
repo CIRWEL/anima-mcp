@@ -161,6 +161,57 @@
         .mood-text { font-size: 1.8rem; font-weight: 300; }
         .mood-name { font-size: 0.9rem; color: var(--text-secondary); margin-top: 4px; }
 
+        .state-feeling {
+            font-size: 0.7rem;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            font-style: italic;
+        }
+
+        .neural-bands {
+            display: flex;
+            gap: 4px;
+            align-items: flex-end;
+            height: 24px;
+            margin-top: 10px;
+            padding: 8px 12px;
+            background: #0d0d12;
+            border-radius: 6px;
+            border: 1px solid #222;
+        }
+
+        .neural-band {
+            flex: 1;
+            border-radius: 2px 2px 0 0;
+            min-width: 0;
+            transition: height 0.5s ease;
+        }
+
+        .neural-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.6rem;
+            color: var(--text-secondary);
+            padding: 0 12px;
+            margin-top: 2px;
+        }
+
+        .state-info-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            padding: 6px 10px;
+            background: #0d0d12;
+            border-radius: 6px;
+            border: 1px solid #222;
+        }
+
+        .state-info-row span {
+            white-space: nowrap;
+        }
+
         /* Message Feed */
         .msg-feed {
             max-height: 400px;
@@ -664,32 +715,74 @@
                 'uncomfortable': '😟', 'stressed': '😰', 'unknown': '🤖'
             }[data.mood] || '🤖';
 
+            const f = data.feeling || {};
+
+            // Neural bands visualization
+            const neural = data.neural || {};
+            const bands = ['delta', 'theta', 'alpha', 'beta', 'gamma'];
+            const bandColors = ['#6366f1', '#8b5cf6', '#06b6d4', '#22c55e', '#f59e0b'];
+            let neuralHtml = '';
+            if (Object.keys(neural).length > 0) {
+                const barHtml = bands.map((b, i) => {
+                    const val = neural[b] || 0;
+                    const h = Math.max(2, val * 24);
+                    return `<div class="neural-band" style="height: ${h}px; background: ${bandColors[i]};" title="${b}: ${(val * 100).toFixed(0)}%"></div>`;
+                }).join('');
+                neuralHtml = `
+                    <div class="neural-bands">${barHtml}</div>
+                    <div class="neural-label"><span>δ</span><span>θ</span><span>α</span><span>β</span><span>γ</span></div>`;
+            }
+
+            // Uptime line
+            let uptimeHtml = '';
+            if (data.awakenings || data.alive_hours) {
+                const parts = [];
+                if (data.awakenings) parts.push(`${data.awakenings} awakenings`);
+                if (data.alive_hours) parts.push(`${data.alive_hours}h alive`);
+                if (data.alive_ratio) parts.push(`${(data.alive_ratio * 100).toFixed(0)}% uptime`);
+                uptimeHtml = `<div class="state-info-row"><span>⏱ ${parts.join(' · ')}</span></div>`;
+            }
+
+            // System health line
+            let sysHtml = '';
+            const sysParts = [];
+            if (data.cpu_temp) sysParts.push(`CPU ${data.cpu_temp.toFixed(0)}°C`);
+            if (data.memory_percent) sysParts.push(`RAM ${data.memory_percent.toFixed(0)}%`);
+            if (data.disk_percent) sysParts.push(`Disk ${data.disk_percent.toFixed(0)}%`);
+            if (sysParts.length > 0) {
+                sysHtml = `<div class="state-info-row"><span>🖥 ${sysParts.join(' · ')}</span></div>`;
+            }
+
             document.getElementById('stateContent').innerHTML = `
                 <div class="mood-display">
                     <div class="mood-text">${moodEmoji}</div>
                     <div class="mood-name">${data.name} is ${data.mood}</div>
                 </div>
                 <div class="state-grid" style="margin-top: 12px;">
-                    ${renderStateItem('Warmth', data.warmth, '#ff6b6b')}
-                    ${renderStateItem('Clarity', data.clarity, '#4ecdc4')}
-                    ${renderStateItem('Stability', data.stability, '#45b7d1')}
-                    ${renderStateItem('Presence', data.presence, '#96ceb4')}
+                    ${renderStateItem('Warmth', data.warmth, '#ff6b6b', f.warmth)}
+                    ${renderStateItem('Clarity', data.clarity, '#4ecdc4', f.clarity)}
+                    ${renderStateItem('Stability', data.stability, '#45b7d1', f.stability)}
+                    ${renderStateItem('Presence', data.presence, '#96ceb4', f.presence)}
                 </div>
                 <div style="margin-top: 12px; font-size: 0.8rem; color: var(--text-secondary);">
                     ${data.ambient_temp != null ? `🌡️ ${data.ambient_temp.toFixed(1)}°C` : ''}
                     ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
                     ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
-                    ${data.surprise > 0.1 ? ` · ⚡ ${(data.surprise * 100).toFixed(0)}% surprise` : ''}
                 </div>
+                ${neuralHtml}
+                ${uptimeHtml}
+                ${sysHtml}
             `;
         }
 
-        function renderStateItem(label, value, color) {
+        function renderStateItem(label, value, color, feeling) {
             const pct = (value * 100).toFixed(0);
+            const feelingHtml = feeling ? `<div class="state-feeling">${escapeHtml(feeling)}</div>` : '';
             return `
                 <div class="state-item">
                     <div class="state-label">${label}</div>
                     <div class="state-value" style="color: ${color}">${pct}%</div>
+                    ${feelingHtml}
                     <div class="state-bar">
                         <div class="state-bar-fill" style="width: ${pct}%; background: ${color};"></div>
                     </div>

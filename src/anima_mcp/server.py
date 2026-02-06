@@ -4811,7 +4811,13 @@ def run_http_server(host: str, port: int):
                     store = _get_store()
                     identity = store.get_identity() if store else None
 
-                    # Format matching message_server.py
+                    # Build neural bands from raw sensor data
+                    raw = readings.to_dict()
+                    neural = {}
+                    for k in ["eeg_delta_power", "eeg_theta_power", "eeg_alpha_power", "eeg_beta_power", "eeg_gamma_power"]:
+                        if raw.get(k) is not None:
+                            neural[k.replace("eeg_", "").replace("_power", "")] = round(raw[k], 3)
+
                     return JSONResponse({
                         "name": identity.name if identity else "Lumen",
                         "mood": feeling["mood"],
@@ -4819,12 +4825,19 @@ def run_http_server(host: str, port: int):
                         "clarity": anima.clarity,
                         "stability": anima.stability,
                         "presence": anima.presence,
+                        "feeling": feeling,
                         "surprise": 0,
                         "cpu_temp": readings.cpu_temp_c or 0,
                         "ambient_temp": readings.ambient_temp_c or 0,
                         "light": readings.light_lux or 0,
                         "humidity": readings.humidity_pct or 0,
+                        "cpu_percent": readings.cpu_percent or 0,
+                        "memory_percent": readings.memory_percent or 0,
+                        "disk_percent": readings.disk_percent or 0,
+                        "neural": neural,
                         "awakenings": identity.total_awakenings if identity else 0,
+                        "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
+                        "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
                         "timestamp": str(readings.timestamp) if readings.timestamp else "",
                     })
                 except Exception as e:
