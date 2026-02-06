@@ -798,6 +798,10 @@ class ScreenRenderer:
             # Defer SPI push until after post-processing (single transfer per render)
             self._display._deferred = True
 
+            # Store latest state for use by canvas_save growth notifications
+            self._last_anima = anima
+            self._last_readings = readings
+
             # Store UNITARES agent_id for identity screen display
             if governance and governance.get("unitares_agent_id"):
                 self._unitares_agent_id = governance.get("unitares_agent_id")
@@ -3811,6 +3815,35 @@ class ScreenRenderer:
                     add_observation("finished a drawing")
                 except Exception as e:
                     print(f"[Notepad] Could not announce save: {e}", file=sys.stderr, flush=True)
+
+            # Notify growth system — learn from drawing activity
+            try:
+                anima = getattr(self, '_last_anima', None)
+                readings = getattr(self, '_last_readings', None)
+                if anima and readings:
+                    from ..growth import get_growth_system
+                    anima_state = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
+                    environment = {
+                        "light_lux": readings.light_lux or 0,
+                        "temp_c": readings.temperature or 22,
+                        "humidity": readings.humidity or 50,
+                    }
+                    phase = self._canvas.drawing_phase or "resting"
+                    insight = get_growth_system().observe_drawing(
+                        pixel_count=len(self._canvas.pixels),
+                        phase=phase,
+                        anima_state=anima_state,
+                        environment=environment,
+                    )
+                    if insight:
+                        print(f"[Growth] Drawing insight: {insight}", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[Notepad] Growth notify failed: {e}", file=sys.stderr, flush=True)
 
             return str(filepath)
 
