@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<!--
+    Lumen Drawing Gallery
+    Browse and view Lumen's autonomous drawings.
+    Served at /gallery-page
+-->
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lumen Gallery</title>
+    <style>
+        :root {
+            --bg-color: #0d0d12;
+            --card-bg: #1a1a23;
+            --text-primary: #e0e0e0;
+            --text-secondary: #a0a0b0;
+            --accent-cyan: #00ffff;
+            --accent-purple: #bb86fc;
+            --accent-green: #03dac6;
+            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            margin: 0;
+            padding: 20px 40px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 24px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 15px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        h1 {
+            font-weight: 700;
+            margin: 0;
+            font-size: 2rem;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .drawing-count {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            font-weight: normal;
+        }
+
+        .header-right a {
+            color: var(--accent-cyan);
+            text-decoration: none;
+            font-size: 0.9rem;
+            opacity: 0.8;
+            transition: opacity 0.2s;
+        }
+
+        .header-right a:hover {
+            opacity: 1;
+        }
+
+        /* Gallery grid */
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
+        }
+
+        .gallery-item {
+            background: var(--card-bg);
+            border-radius: 10px;
+            padding: 10px;
+            border: 1px solid #222;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .gallery-item:hover {
+            border-color: var(--accent-cyan);
+            transform: scale(1.02);
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.1);
+        }
+
+        .gallery-item img {
+            width: 100%;
+            height: 180px;
+            object-fit: contain;
+            border-radius: 6px;
+            background: #000;
+            display: block;
+        }
+
+        .gallery-item-meta {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-top: 8px;
+            text-align: center;
+            display: flex;
+            justify-content: space-between;
+            padding: 0 4px;
+        }
+
+        /* Empty state */
+        .empty-state {
+            text-align: center;
+            padding: 80px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state h2 {
+            font-size: 1.3rem;
+            color: var(--text-primary);
+            margin-bottom: 8px;
+        }
+
+        .empty-state p {
+            font-size: 0.95rem;
+            max-width: 400px;
+            margin: 0 auto;
+            line-height: 1.5;
+        }
+
+        /* Lightbox */
+        .lightbox {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.92);
+            z-index: 2000;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .lightbox.show {
+            display: flex;
+        }
+
+        .lightbox img {
+            max-width: 90%;
+            max-height: 85%;
+            border-radius: 8px;
+            box-shadow: 0 0 40px rgba(0, 255, 255, 0.15);
+            cursor: default;
+        }
+
+        .lightbox-close {
+            position: absolute;
+            top: 20px;
+            right: 30px;
+            font-size: 2rem;
+            color: white;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+
+        .lightbox-close:hover {
+            opacity: 1;
+        }
+
+        .lightbox-nav {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            font-size: 2.5rem;
+            color: white;
+            cursor: pointer;
+            opacity: 0.5;
+            transition: opacity 0.2s;
+            user-select: none;
+            padding: 20px;
+        }
+
+        .lightbox-nav:hover {
+            opacity: 1;
+        }
+
+        .lightbox-prev { left: 20px; }
+        .lightbox-next { right: 20px; }
+
+        .lightbox-meta {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            background: rgba(0, 0, 0, 0.6);
+            padding: 6px 16px;
+            border-radius: 20px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        @media (max-width: 600px) {
+            body { padding: 12px 16px; }
+            h1 { font-size: 1.4rem; }
+            .gallery-grid {
+                grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+                gap: 10px;
+            }
+            .gallery-item img { height: 120px; }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <div class="header-left">
+                <h1>Lumen Gallery</h1>
+                <span id="drawingCount" class="drawing-count"></span>
+            </div>
+            <div class="header-right">
+                <a href="/dashboard">Control Center</a>
+            </div>
+        </header>
+
+        <div id="galleryContent">
+            <div class="loading">Loading drawings...</div>
+        </div>
+    </div>
+
+    <!-- Lightbox -->
+    <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
+        <span class="lightbox-close" onclick="closeLightbox(event)">&times;</span>
+        <span class="lightbox-nav lightbox-prev" onclick="navigateLightbox(event, -1)">&#8249;</span>
+        <img id="lightboxImg" src="" alt="Drawing">
+        <span class="lightbox-nav lightbox-next" onclick="navigateLightbox(event, 1)">&#8250;</span>
+        <div id="lightboxMeta" class="lightbox-meta"></div>
+    </div>
+
+    <script>
+        const API_BASE = window.location.origin;
+        let drawings = [];
+        let currentIndex = -1;
+
+        async function fetchGallery() {
+            try {
+                const response = await fetch(`${API_BASE}/gallery`);
+                const data = await response.json();
+
+                if (data.error) {
+                    document.getElementById('galleryContent').innerHTML =
+                        `<div class="empty-state"><h2>Error</h2><p>${data.error}</p></div>`;
+                    return;
+                }
+
+                document.getElementById('drawingCount').textContent =
+                    data.total > 0 ? `${data.total} drawing${data.total !== 1 ? 's' : ''}` : '';
+
+                drawings = data.drawings || [];
+                renderGallery();
+            } catch (e) {
+                document.getElementById('galleryContent').innerHTML =
+                    `<div class="empty-state"><h2>Connection Error</h2><p>Could not reach the server. Is Lumen running?</p></div>`;
+            }
+        }
+
+        function renderGallery() {
+            if (!drawings || drawings.length === 0) {
+                document.getElementById('galleryContent').innerHTML =
+                    `<div class="empty-state">
+                        <h2>No drawings yet</h2>
+                        <p>Lumen creates drawings autonomously when the notepad screen is active. Check back later!</p>
+                    </div>`;
+                return;
+            }
+
+            const html = drawings.map((d, i) => {
+                const date = new Date(d.timestamp * 1000);
+                const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                const sizeStr = d.size > 1024 ? `${(d.size / 1024).toFixed(0)} KB` : `${d.size} B`;
+                return `
+                    <div class="gallery-item" onclick="openLightbox(${i})">
+                        <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
+                        <div class="gallery-item-meta">
+                            <span>${dateStr}</span>
+                            <span>${sizeStr}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            document.getElementById('galleryContent').innerHTML =
+                `<div class="gallery-grid">${html}</div>`;
+        }
+
+        function openLightbox(index) {
+            if (index < 0 || index >= drawings.length) return;
+            currentIndex = index;
+            const d = drawings[index];
+            const img = document.getElementById('lightboxImg');
+            img.src = `${API_BASE}/gallery/${d.filename}`;
+
+            const date = new Date(d.timestamp * 1000);
+            const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            document.getElementById('lightboxMeta').textContent = `${dateStr} — ${index + 1} of ${drawings.length}`;
+
+            document.getElementById('lightbox').classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox(event) {
+            if (event && event.target.tagName === 'IMG') return;
+            if (event && event.target.classList.contains('lightbox-nav')) return;
+            document.getElementById('lightbox').classList.remove('show');
+            document.body.style.overflow = '';
+            currentIndex = -1;
+        }
+
+        function navigateLightbox(event, direction) {
+            event.stopPropagation();
+            const newIndex = currentIndex + direction;
+            if (newIndex >= 0 && newIndex < drawings.length) {
+                openLightbox(newIndex);
+            }
+        }
+
+        document.addEventListener('keydown', (e) => {
+            if (currentIndex === -1) return;
+            if (e.key === 'Escape') closeLightbox(e);
+            if (e.key === 'ArrowLeft') navigateLightbox(e, -1);
+            if (e.key === 'ArrowRight') navigateLightbox(e, 1);
+        });
+
+        // Initialize
+        fetchGallery();
+
+        // Auto-refresh every 60 seconds
+        setInterval(fetchGallery, 60000);
+    </script>
+</body>
+
+</html>
