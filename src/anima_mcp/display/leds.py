@@ -1215,42 +1215,42 @@ def _create_gradient_palette(warmth: float, clarity: float, stability: float, pr
     Returns:
         Tuple of (led0, led1, led2) colors with rich gradients
     """
-    # LED 0: Warmth gradient (cold to hot spectrum)
+    # LED 0: Warmth gradient (creature warmth — violet when cold, amber when comfortable, orange when hot)
     if warmth < 0.2:
-        led0 = (0, 50, 200)  # Deep blue
+        led0 = (80, 60, 180)  # Cool violet
     elif warmth < 0.4:
         ratio = (warmth - 0.2) / 0.2
-        led0 = _interpolate_color((0, 50, 200), (0, 150, 255), ratio)  # Blue to cyan
+        led0 = _interpolate_color((80, 60, 180), (200, 140, 130), ratio)  # Violet to rose
     elif warmth < 0.6:
         ratio = (warmth - 0.4) / 0.2
-        led0 = _interpolate_color((0, 150, 255), (100, 255, 150), ratio)  # Cyan to green
+        led0 = _interpolate_color((200, 140, 130), (255, 190, 80), ratio)  # Rose to soft amber
     elif warmth < 0.8:
         ratio = (warmth - 0.6) / 0.2
-        led0 = _interpolate_color((100, 255, 150), (255, 220, 100), ratio)  # Green to yellow
+        led0 = _interpolate_color((255, 190, 80), (255, 120, 10), ratio)  # Soft amber to deep amber
     else:
         ratio = (warmth - 0.8) / 0.2
-        led0 = _interpolate_color((255, 220, 100), (255, 100, 0), ratio)  # Yellow to orange-red
+        led0 = _interpolate_color((255, 120, 10), (255, 50, 0), ratio)  # Deep amber to orange-red
     
-    # LED 1: Clarity gradient (dim to bright, with color shifts)
+    # LED 1: Clarity gradient (dim to bright, warm tones)
     clarity_brightness = int(clarity * 255)
     if clarity < 0.3:
-        # Low clarity: red-orange warning
-        led1 = (clarity_brightness, int(clarity_brightness * 0.3), 0)
+        # Low clarity: dim amber-orange
+        led1 = (clarity_brightness, int(clarity_brightness * 0.4), 0)
     elif clarity < 0.5:
-        # Medium-low: yellow-orange
+        # Medium-low: amber to warm yellow
         ratio = (clarity - 0.3) / 0.2
-        led1 = _interpolate_color((clarity_brightness, int(clarity_brightness * 0.3), 0),
-                                  (clarity_brightness, clarity_brightness, 0), ratio)
+        led1 = _interpolate_color((clarity_brightness, int(clarity_brightness * 0.4), 0),
+                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.2)), ratio)
     elif clarity < 0.7:
-        # Medium: yellow-white
+        # Medium: warm yellow to warm white
         ratio = (clarity - 0.5) / 0.2
-        led1 = _interpolate_color((clarity_brightness, clarity_brightness, 0),
-                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.5)), ratio)
+        led1 = _interpolate_color((clarity_brightness, clarity_brightness, int(clarity_brightness * 0.2)),
+                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.6)), ratio)
     else:
-        # High clarity: bright white with blue tint
+        # High clarity: warm white (slightly warm, not blue-tinted)
         ratio = (clarity - 0.7) / 0.3
-        led1 = _interpolate_color((clarity_brightness, clarity_brightness, int(clarity_brightness * 0.5)),
-                                  (clarity_brightness, clarity_brightness, clarity_brightness), ratio)
+        led1 = _interpolate_color((clarity_brightness, clarity_brightness, int(clarity_brightness * 0.6)),
+                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.85)), ratio)
     
     # LED 2: Stability + Presence gradient (red to green spectrum)
     combined = (stability + presence) / 2
@@ -1273,10 +1273,10 @@ def _create_gradient_palette(warmth: float, clarity: float, stability: float, pr
         led2 = _interpolate_color((150, 255, 50),
                                   (0, 255, 200), ratio)
     
-    # Add presence blue tint to LED 2
-    if presence > 0.6:
-        presence_tint = (presence - 0.6) * 0.4
-        led2 = blend_colors(led2, (0, 100, 255), ratio=presence_tint)
+    # Add presence tint to LED 2 (soft cyan, not pure blue)
+    if presence > 0.7:
+        presence_tint = (presence - 0.7) * 0.3
+        led2 = blend_colors(led2, (0, 180, 180), ratio=presence_tint)
     
     return (led0, led1, led2)
 
