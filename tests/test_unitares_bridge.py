@@ -79,9 +79,9 @@ async def test_local_governance_high_entropy():
     
     decision = await bridge.check_in(anima, readings)
     
-    # High entropy should trigger pause
+    # High entropy should trigger pause (local governance calls this "risk")
     assert decision["action"] == "pause"
-    assert "entropy" in decision["reason"].lower() or "void" in decision["reason"].lower()
+    assert "risk" in decision["reason"].lower()
 
 
 @pytest.mark.asyncio
@@ -98,12 +98,12 @@ async def test_local_governance_low_integrity():
         readings=create_test_readings()
     )
     readings = create_test_readings()
-    
+
     decision = await bridge.check_in(anima, readings)
-    
+
     # Low integrity should trigger pause
     assert decision["action"] == "pause"
-    assert "integrity" in decision["reason"].lower()
+    assert "coherence" in decision["reason"].lower()
 
 
 @pytest.mark.asyncio
