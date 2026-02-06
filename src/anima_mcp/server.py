@@ -52,6 +52,7 @@ from .workflow_templates import WorkflowTemplates
 from .expression_moods import ExpressionMoodTracker
 from .shared_memory import SharedMemoryClient
 from .growth import get_growth_system, GrowthSystem
+from .activity_state import get_activity_manager, ActivityManager
 from .agency import get_action_selector, ActionType, Action, ActionOutcome
 from .primitive_language import get_language_system, Utterance
 
@@ -79,6 +80,7 @@ _shm_client: SharedMemoryClient | None = None
 _metacog_monitor: "MetacognitiveMonitor | None" = None  # Forward ref - prediction-error based self-awareness
 _unitares_bridge: "UnitaresBridge | None" = None  # Forward ref - singleton to avoid creating new sessions
 _growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
+_activity: ActivityManager | None = None  # Activity/wakefulness cycle (circadian LED dimming)
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
@@ -984,19 +986,23 @@ async def _update_display_loop():
                 # Get light level for auto-brightness
                 light_level = readings.light_lux if readings else None
 
-                # Get activity brightness from shared memory (circadian/dusk-dawn dimming)
-                # Activity state is written by stable_creature.py with brightness_multiplier:
-                # - ACTIVE (day): 1.0
-                # - DROWSY (dusk/dawn): 0.5
-                # - RESTING (night): 0.15
+                # Get activity brightness from ActivityManager (circadian/interaction dimming)
+                # - ACTIVE (day/interaction): 1.0
+                # - DROWSY (dusk/dawn/30min idle): 0.5
+                # - RESTING (night/60min idle): 0.15
                 activity_brightness = 1.0
                 try:
-                    shm_client = _get_shm_client()
-                    shm_data = shm_client.read()
-                    if shm_data and "activity" in shm_data:
-                        activity_brightness = shm_data["activity"].get("brightness_multiplier", 1.0)
+                    global _activity
+                    if _activity is None:
+                        _activity = get_activity_manager()
+                    activity_state = _activity.get_state(
+                        presence=anima.presence,
+                        stability=anima.stability,
+                        light_level=light_level,
+                    )
+                    activity_brightness = activity_state.brightness_multiplier
                 except Exception:
-                    pass  # Default to 1.0 if shared memory unavailable
+                    pass  # Default to 1.0 if activity manager unavailable
 
                 def update_leds():
                     # LEDs derive their own state directly from anima - no face influence
@@ -3956,6 +3962,12 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     )
                 except Exception:
                     pass  # Non-fatal
+            # Wake Lumen on interaction (activity state)
+            try:
+                if _activity:
+                    _activity.record_interaction()
+            except Exception:
+                pass
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "message_id": msg_id,
@@ -4013,6 +4025,12 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     )
                 except Exception:
                     pass  # Non-fatal
+            # Wake Lumen on interaction (activity state)
+            try:
+                if _activity:
+                    _activity.record_interaction()
+            except Exception:
+                pass
             result = {
                 "success": True,
                 "message_id": msg.message_id,
@@ -4482,6 +4500,12 @@ def create_server() -> Server:
 
     @server.call_tool()
     async def call_tool(name: str, arguments: dict | None):
+        # Any MCP tool call = external interaction → wake Lumen
+        try:
+            if _activity:
+                _activity.record_interaction()
+        except Exception:
+            pass
         handler = HANDLERS.get(name)
         if not handler:
             return [TextContent(type="text", text=json.dumps({
@@ -4855,6 +4879,7 @@ def run_http_server(host: str, port: int):
                         "awakenings": identity.total_awakenings if identity else 0,
                         "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
                         "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
+                        "activity": _activity.get_status() if _activity else {"level": "active"},
                         "timestamp": str(readings.timestamp) if readings.timestamp else "",
                     })
                 except Exception as e:
