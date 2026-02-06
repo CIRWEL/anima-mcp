@@ -5073,7 +5073,23 @@ def run_http_server(host: str, port: int):
             app.routes.append(Route("/voice", rest_voice, methods=["GET"]))
             app.routes.append(Route("/gallery", rest_gallery, methods=["GET"]))
             app.routes.append(Route("/gallery/{filename}", rest_gallery_image, methods=["GET"]))
-            print("[Server] Registered dashboard REST endpoints (/state, /qa, /gallery, /message, /learning, /voice)", file=sys.stderr, flush=True)
+
+            async def rest_gallery_page(request):
+                """Serve the Lumen Drawing Gallery page."""
+                server_dir = Path(__file__).parent
+                project_root = server_dir.parent.parent
+                gallery_path = project_root / "docs" / "gallery.html"
+                if gallery_path.exists():
+                    return FileResponse(gallery_path, media_type="text/html")
+                else:
+                    return HTMLResponse(
+                        "<html><body><h1>Gallery Not Found</h1>"
+                        f"<p>Expected at: {gallery_path}</p></body></html>",
+                        status_code=404
+                    )
+
+            app.routes.append(Route("/gallery-page", rest_gallery_page, methods=["GET"]))
+            print("[Server] Registered dashboard REST endpoints (/state, /qa, /gallery, /gallery-page, /message, /learning, /voice)", file=sys.stderr, flush=True)
 
         except Exception as e:
             print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
