@@ -29,16 +29,23 @@
 
 1. **Read** `operations/AGENT_COORDINATION.md` - Multi-agent protocol
 2. **Check** `operations/PI_ACCESS.md` - SSH access details
-3. **Understand** `concepts/NEURO_PSYCH_FRAMING.md` - Why anima works this way
+3. **Understand** the anima model (warmth, clarity, stability, presence) and computational neural bands
 4. **Check Knowledge Graph** - Component relationships (if available)
 
 ## Key Concepts
 
 | Doc | What it explains |
 |-----|------------------|
-| `concepts/NEURO_PSYCH_FRAMING.md` | The anima model (warmth, clarity, stability, presence) |
 | `LUMEN_EXPRESSION_PHILOSOPHY.md` | **Core:** How Lumen's expression should emerge authentically |
 | `features/CONFIGURATION_GUIDE.md` | Nervous system calibration and config |
+
+**Key source files for understanding the system:**
+| File | What it does |
+|------|--------------|
+| `src/anima_mcp/anima.py` | Anima calculation (warmth, clarity, stability, presence) |
+| `src/anima_mcp/computational_neural.py` | Neural bands from Pi hardware (delta/theta/alpha/beta/gamma) + drawing phase modulation |
+| `src/anima_mcp/eisv_mapper.py` | EISV mapping for UNITARES governance |
+| `src/anima_mcp/display/screens.py` | All display screens including autonomous drawing |
 
 **Archived concepts** (in `archive/2026-02/`): ADAPTIVE_LEARNING.md, ERROR_RECOVERY.md, GAP_HANDLING.md
 
@@ -99,18 +106,23 @@
 
 ## Deploy Changes
 
+**Preferred method (via git + MCP tool):**
 ```bash
-# Deploy code (uses SSH config: lumen.local)
+# From Mac, in anima-mcp project:
+git add <files> && git commit -m "message" && git push
+
+# Then deploy to Pi via MCP:
+mcp__anima__git_pull(restart=true)
+```
+
+**Alternative (direct rsync):**
+```bash
 rsync -avz -e "ssh -i ~/.ssh/id_ed25519_pi" \
   --exclude='.venv' --exclude='*.db' --exclude='__pycache__' --exclude='.git' \
   /Users/cirwel/projects/anima-mcp/ \
   unitares-anima@lumen.local:/home/unitares-anima/anima-mcp/
 
-# Restart service
 ssh lumen.local 'sudo systemctl restart anima.service'
-
-# Check status
-ssh lumen.local 'sudo systemctl status anima.service --no-pager'
 ```
 
 ## Archive
