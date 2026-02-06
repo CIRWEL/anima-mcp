@@ -884,6 +884,19 @@ async def _update_display_loop():
                         )
                         _sm_clarity_before_interaction = None
 
+                    # 5. Observe sensor-anima correlations (for temp_clarity, light_warmth beliefs)
+                    if readings:
+                        sensor_vals = {}
+                        if readings.temperature is not None:
+                            sensor_vals["ambient_temp"] = readings.temperature
+                        if readings.light_lux is not None:
+                            sensor_vals["light"] = readings.light_lux
+                        if sensor_vals:
+                            sm.observe_correlation(
+                                sensor_values=sensor_vals,
+                                anima_values={"clarity": anima.clarity, "warmth": anima.warmth},
+                            )
+
                     # Save periodically (every ~10 min)
                     if loop_count % 300 == 0:
                         sm.save()

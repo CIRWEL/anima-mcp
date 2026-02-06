@@ -128,37 +128,54 @@ class SelfSchema:
         return qa_pairs
 
 
-# === Edge weight mappings (derived from anima.py) ===
-# These represent how sensors influence anima dimensions.
-# Positive = increases, Negative = decreases
+def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
+    """
+    Derive sensor→anima edge weights from NervousSystemCalibration.
 
-SENSOR_ANIMA_WEIGHTS = {
-    # light → anima
-    ("sensor_light", "anima_clarity"): 0.6,      # More light → clearer
-    ("sensor_light", "anima_warmth"): 0.3,       # Bright light → warmer feeling
+    Reads the actual nervous system wiring so the schema stays in sync
+    with config changes.  Falls back to minimal defaults in tests.
+    """
+    try:
+        from .config import get_calibration
+        cal = get_calibration()
+    except Exception:
+        return {
+            ("sensor_light", "anima_clarity"): 0.4,
+            ("sensor_temp", "anima_warmth"): 0.3,
+            ("sensor_humidity", "anima_stability"): -0.25,
+        }
 
-    # temperature → anima
-    ("sensor_temp", "anima_warmth"): 0.8,        # Higher temp → warmer
-    ("sensor_temp", "anima_stability"): -0.2,    # Extreme temps → less stable
+    weights: Dict[Tuple[str, str], float] = {}
 
-    # humidity → anima
-    ("sensor_humidity", "anima_stability"): -0.3,  # High humidity → less stable
-    ("sensor_humidity", "anima_presence"): 0.2,    # Humidity affects presence slightly
-}
+    # Warmth ← cpu_temp + ambient_temp (both map to sensor_temp node)
+    temp_to_warmth = cal.warmth_weights.get("cpu_temp", 0) + cal.warmth_weights.get("ambient_temp", 0)
+    if temp_to_warmth > 0:
+        weights[("sensor_temp", "anima_warmth")] = temp_to_warmth
+
+    # Clarity ← light
+    light_to_clarity = cal.clarity_weights.get("light", 0)
+    if light_to_clarity > 0:
+        weights[("sensor_light", "anima_clarity")] = light_to_clarity
+
+    # Stability ← humidity deviation (inverse: deviation hurts stability)
+    humidity_to_stability = cal.stability_weights.get("humidity_dev", 0)
+    if humidity_to_stability > 0:
+        weights[("sensor_humidity", "anima_stability")] = -humidity_to_stability
+
+    return weights
 
 
 def extract_self_schema(
     identity=None,
     anima=None,
     readings=None,
-    growth_system=None,  # GrowthSystem for learned preferences
-    include_preferences: bool = True,  # Whether to include preference nodes
-    preferences=None,  # Deprecated, ignored - use growth_system
+    growth_system=None,
+    include_preferences: bool = True,
 ) -> SelfSchema:
     """
     Extract G_t from Lumen's current state.
 
-    Base PoC: 8 nodes (1 identity + 4 anima + 3 sensors), ~6 edges.
+    Base: 8 nodes (1 identity + 4 anima + 3 sensors), ~3 edges from config.
     Enhanced: +N preference nodes (if include_preferences=True and growth_system available).
 
     Args:
@@ -167,10 +184,6 @@ def extract_self_schema(
         readings: SensorReadings with light, temp, humidity
         growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
-        preferences: Deprecated, ignored
-
-    Returns:
-        SelfSchema (G_t) at current time
     """
     now = datetime.now()
     nodes: List[SchemaNode] = []
@@ -278,9 +291,9 @@ def extract_self_schema(
                     },
                 ))
 
-    # === EDGES (sensor → anima influences) ===
-    for (source_id, target_id), weight in SENSOR_ANIMA_WEIGHTS.items():
-        # Only add edge if both nodes exist
+    # === EDGES (sensor → anima influences, derived from NervousSystemCalibration) ===
+    sensor_weights = _get_sensor_anima_weights()
+    for (source_id, target_id), weight in sensor_weights.items():
         if any(n.node_id == source_id for n in nodes) and any(n.node_id == target_id for n in nodes):
             edges.append(SchemaEdge(
                 source_id=source_id,
@@ -297,17 +310,13 @@ def extract_self_schema(
                     try:
                         anima_value = getattr(anima, dim, 0.5)
                         # Calculate satisfaction: how well current anima matches preference
-                        if preferences and hasattr(preferences, '_preferences') and dim in preferences._preferences:
-                            satisfaction = preferences._preferences[dim].current_satisfaction(anima_value)
+                        opt_range = pref_data.get("optimal_range", (0.3, 0.7))
+                        if opt_range[0] <= anima_value <= opt_range[1]:
+                            satisfaction = 1.0
+                        elif anima_value < opt_range[0]:
+                            satisfaction = max(0.0, 1.0 - (opt_range[0] - anima_value) * 2)
                         else:
-                            # Simple satisfaction for growth_system: closer to 0.5 optimal range = higher satisfaction
-                            opt_range = pref_data.get("optimal_range", (0.3, 0.7))
-                            if opt_range[0] <= anima_value <= opt_range[1]:
-                                satisfaction = 1.0
-                            elif anima_value < opt_range[0]:
-                                satisfaction = max(0.0, 1.0 - (opt_range[0] - anima_value) * 2)
-                            else:
-                                satisfaction = max(0.0, 1.0 - (anima_value - opt_range[1]) * 2)
+                            satisfaction = max(0.0, 1.0 - (anima_value - opt_range[1]) * 2)
                         # Sign: positive if preference valence > 0 (Lumen values this), negative if < 0
                         sign = 1.0 if pref_data.get("valence", 0) > 0 else -1.0
                         edges.append(SchemaEdge(
@@ -325,12 +334,6 @@ def extract_self_schema(
     )
 
 
-# === Caching ===
-_cached_schema: Optional[SelfSchema] = None
-_cache_time: Optional[datetime] = None
-_CACHE_TTL_SECONDS = 60.0  # 1 minute cache for slow-clock pattern
-
-
 def get_current_schema(
     identity=None,
     anima=None,
@@ -341,50 +344,24 @@ def get_current_schema(
     preferences=None,  # Deprecated, ignored
 ) -> SelfSchema:
     """
-    Get current G_t with caching.
+    Get current G_t.
+
+    Extraction is cheap (no I/O, just builds a small dataclass graph),
+    so no caching is needed.
 
     Args:
-        identity: CreatureIdentity (optional, will try to get from store)
+        identity: CreatureIdentity (optional)
         anima: AnimaState (optional)
         readings: SensorReadings (optional)
         growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
-        force_refresh: Bypass cache
+        force_refresh: Ignored (kept for API compat)
         preferences: Deprecated, ignored
-
-    Returns:
-        Cached or freshly extracted SelfSchema
     """
-    global _cached_schema, _cache_time
-
-    now = datetime.now()
-
-    # Return cache if fresh and not forcing refresh
-    # Note: Cache doesn't account for preferences flag, so we skip cache if preferences are requested
-    if not force_refresh and _cached_schema and _cache_time and not include_preferences:
-        age = (now - _cache_time).total_seconds()
-        if age < _CACHE_TTL_SECONDS:
-            return _cached_schema
-
-    # Extract fresh schema
-    schema = extract_self_schema(
+    return extract_self_schema(
         identity=identity,
         anima=anima,
         readings=readings,
         growth_system=growth_system,
         include_preferences=include_preferences,
     )
-
-    # Update cache (only if not including preferences, to keep cache simple)
-    if not include_preferences:
-        _cached_schema = schema
-        _cache_time = now
-
-    return schema
-
-
-def clear_cache():
-    """Clear the schema cache."""
-    global _cached_schema, _cache_time
-    _cached_schema = None
-    _cache_time = None
