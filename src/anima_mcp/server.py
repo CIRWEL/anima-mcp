@@ -2172,12 +2172,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     question_id = arguments.get("question_id")
     answer = arguments.get("answer")
     limit = arguments.get("limit", 5)
-    provided_agent_name = arguments.get("agent_name", "agent")
-
-    # Resolve caller identity from UNITARES (verified) before falling back to parameter
-    from .unitares_bridge import resolve_caller_identity
-    resolved_name = await resolve_caller_identity()
-    agent_name = resolved_name or provided_agent_name
+    agent_name = arguments.get("agent_name", "agent")
 
     # Convert limit to int if string
     if isinstance(limit, str):
@@ -4039,16 +4034,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     global _sm_clarity_before_interaction
     message = arguments.get("message", "").strip()
     source = arguments.get("source", "agent")
-    provided_agent_name = arguments.get("agent_name", "agent")
+    agent_name = arguments.get("agent_name", "agent")
     responds_to = arguments.get("responds_to")
-
-    # Resolve caller identity from UNITARES for agent sources
-    agent_name = provided_agent_name
-    if source == "agent":
-        from .unitares_bridge import resolve_caller_identity
-        resolved_name = await resolve_caller_identity()
-        if resolved_name:
-            agent_name = resolved_name
 
     if not message:
         return [TextContent(type="text", text=json.dumps({
