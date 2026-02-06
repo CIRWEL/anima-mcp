@@ -86,6 +86,9 @@ _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
 # Primitive language state - emergent expression
 _last_primitive_utterance: Utterance | None = None
+# Self-model state - cross-iteration tracking
+_sm_prev_stability: float | None = None
+_sm_clarity_before_interaction: float | None = None
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
@@ -838,6 +841,56 @@ async def _update_display_loop():
                 except Exception as e:
                     if loop_count % 100 == 1:
                         print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+            # === SELF-MODEL: Belief updates from experience ===
+            # Throttled: runs every 5th iteration (aligned with agency)
+            if loop_count % 5 == 0 and anima:
+                try:
+                    from .self_model import get_self_model
+                    sm = get_self_model()
+
+                    # 1. Observe surprise events
+                    surprise_level = prediction_error.surprise if prediction_error else 0.0
+                    surprise_sources = prediction_error.surprise_sources if prediction_error and hasattr(prediction_error, 'surprise_sources') else []
+                    if surprise_level > 0.1 and surprise_sources:
+                        sm.observe_surprise(surprise_level, surprise_sources)
+
+                    # 2. Observe stability changes (track across iterations)
+                    global _sm_prev_stability
+                    if _sm_prev_stability is not None:
+                        stability_delta = abs(anima.stability - _sm_prev_stability)
+                        if stability_delta > 0.05:
+                            sm.observe_stability_change(
+                                _sm_prev_stability, anima.stability,
+                                duration_seconds=base_delay * 5
+                            )
+                    _sm_prev_stability = anima.stability
+
+                    # 3. Observe time-of-day patterns (every ~5 min)
+                    if loop_count % 150 == 0:
+                        from datetime import datetime
+                        sm.observe_time_pattern(
+                            hour=datetime.now().hour,
+                            warmth=anima.warmth,
+                            clarity=anima.clarity,
+                        )
+
+                    # 4. Complete interaction observation (clarity before vs after)
+                    global _sm_clarity_before_interaction
+                    if _sm_clarity_before_interaction is not None:
+                        sm.observe_interaction(
+                            clarity_before=_sm_clarity_before_interaction,
+                            clarity_after=anima.clarity,
+                        )
+                        _sm_clarity_before_interaction = None
+
+                    # Save periodically (every ~10 min)
+                    if loop_count % 300 == 0:
+                        sm.save()
+
+                except Exception as e:
+                    if loop_count % 100 == 1:
+                        print(f"[SelfModel] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # === PRIMITIVE LANGUAGE: Emergent expression through learned tokens ===
             # Throttled: runs every 10th iteration (has internal cooldown timer too)
@@ -4009,6 +4062,14 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     _activity.record_interaction()
             except Exception:
                 pass
+            # Snapshot clarity for self-model interaction observation
+            global _sm_clarity_before_interaction
+            try:
+                _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
+                if cur_anima:
+                    _sm_clarity_before_interaction = cur_anima.clarity
+            except Exception:
+                pass
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "message_id": msg_id,
@@ -4070,6 +4131,14 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             try:
                 if _activity:
                     _activity.record_interaction()
+            except Exception:
+                pass
+            # Snapshot clarity for self-model interaction observation
+            try:
+                _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
+                if cur_anima:
+                    global _sm_clarity_before_interaction
+                    _sm_clarity_before_interaction = cur_anima.clarity
             except Exception:
                 pass
             result = {
