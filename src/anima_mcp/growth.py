@@ -13,6 +13,7 @@ All growth data persists in SQLite for continuity across sessions.
 """
 
 import sys
+import re
 import json
 import sqlite3
 import random
@@ -311,8 +312,21 @@ class GrowthSystem:
         for row in conn.execute("SELECT question FROM curiosities WHERE explored = 0 LIMIT 10"):
             self._curiosities.append(row["question"])
 
+        # Restore drawings counter from milestone memories to avoid duplicates after restart.
+        # Milestone descriptions look like "Saved my 1st drawing" or "Saved my 10th drawing".
+        for row in conn.execute(
+            "SELECT description FROM memories WHERE category = 'milestone' "
+            "AND description LIKE 'Saved my %drawing%'"
+        ):
+            m = re.search(r'Saved my (\d+)', row["description"])
+            if m:
+                count = int(m.group(1))
+                if count > self._drawings_observed:
+                    self._drawings_observed = count
+
         print(f"[Growth] Loaded {len(self._preferences)} preferences, {len(self._relationships)} relationships, "
-              f"{len(self._goals)} active goals, {len(self._memories)} memories", file=sys.stderr, flush=True)
+              f"{len(self._goals)} active goals, {len(self._memories)} memories, "
+              f"drawings_observed={self._drawings_observed}", file=sys.stderr, flush=True)
 
     # ==================== Preference Learning ====================
 
