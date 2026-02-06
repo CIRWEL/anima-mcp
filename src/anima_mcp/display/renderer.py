@@ -92,6 +92,7 @@ class PilRenderer(DisplayRenderer):
         self._last_blink_time: float = 0.0
         self._blink_in_progress: bool = False
         self._blink_start_time: float = 0.0
+        self._deferred: bool = False  # When True, _show() skips SPI push (caller must call flush())
         # Font cache (avoid loading from disk on every render)
         self._name_font: Optional[ImageFont.FreeTypeFont] = None
         self._init_display()
@@ -532,12 +533,21 @@ class PilRenderer(DisplayRenderer):
         self._show_waking_face()  # Show minimal default instead of blank
 
     def _show(self):
-        """Send image to display if available - safe, never crashes."""
+        """Send image to display if available - safe, never crashes.
+
+        When _deferred is True, the SPI push is skipped (image is still stored).
+        Call flush() to push the final image after all overlays are applied.
+        """
+        if self._deferred:
+            return  # Image stored in self._image, SPI push deferred to flush()
+        self._push_to_display()
+
+    def _push_to_display(self):
+        """Actually push self._image to SPI display hardware."""
         if self._display and self._image:
             try:
                 self._display.image(self._image)
             except Exception as e:
-                # Hardware error - mark display as unavailable, don't crash
                 print(f"[Display] Hardware error during show: {e}", file=sys.stderr, flush=True)
                 print("[Display] Marking display as unavailable", file=sys.stderr, flush=True)
                 self._display = None
@@ -545,6 +555,10 @@ class PilRenderer(DisplayRenderer):
             print("[Display] _show called but display hardware not available", file=sys.stderr, flush=True)
         elif not self._image:
             print("[Display] _show called but no image to display", file=sys.stderr, flush=True)
+
+    def flush(self):
+        """Push the current image to display. Call after deferred rendering is complete."""
+        self._push_to_display()
 
     def is_available(self) -> bool:
         """Check if display hardware is available."""

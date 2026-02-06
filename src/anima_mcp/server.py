@@ -208,16 +208,20 @@ def _readings_from_dict(data: dict) -> SensorReadings:
     )
 
 
+_last_shm_data = None  # Cached per-iteration shared memory read
+
 def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorReadings | None, Anima | None]:
     """
     Read sensor data from shared memory (broker) or fallback to direct sensor access.
-    
+
     Returns:
         Tuple of (readings, anima) or (None, None) if unavailable
     """
+    global _last_shm_data
     # Try shared memory first (broker mode)
     shm_client = _get_shm_client()
     shm_data = shm_client.read()
+    _last_shm_data = shm_data  # Cache for reuse within same iteration
     
     # Check if shared memory data is recent (within last 5 seconds)
     shm_stale = True
@@ -889,13 +893,10 @@ async def _update_display_loop():
             # Joystick button = cycle screens
             # Separate button = return to face screen
 
-            # Read governance from shared memory (broker writes it there)
-            # Fall back to _last_governance_decision if shared memory doesn't have it
+            # Read governance from cached shared memory (already read by _get_readings_and_anima)
             governance_decision_for_display = _last_governance_decision
-            shm_client = _get_shm_client()
-            shm_data = shm_client.read()
-            if shm_data and "governance" in shm_data and isinstance(shm_data["governance"], dict):
-                governance_decision_for_display = shm_data["governance"]
+            if _last_shm_data and "governance" in _last_shm_data and isinstance(_last_shm_data["governance"], dict):
+                governance_decision_for_display = _last_shm_data["governance"]
             
             # Initialize screen renderer if display is available
             if _display and _display.is_available():
@@ -1720,22 +1721,21 @@ async def _update_display_loop():
                     pass  # Non-fatal
 
             # Update delay depends on current screen mode
-            # Interactive screens (notepad, messages) need faster refresh for responsive joystick
-            # Non-interactive screens can use slower refresh to save CPU
+            # Face gets fastest refresh (200ms) — most visible, shows animations
+            # Interactive screens with scrolling/drawing get 300ms
+            # Static info screens get base_delay (200ms)
             current_mode = _screen_renderer.get_mode() if _screen_renderer else None
-            # All screens need responsive joystick for navigation
             interactive_screens = {
-                ScreenMode.NOTEPAD, ScreenMode.MESSAGES, ScreenMode.LEARNING,
-                ScreenMode.FACE, ScreenMode.SENSORS, ScreenMode.IDENTITY,
-                ScreenMode.DIAGNOSTICS, ScreenMode.QUESTIONS, ScreenMode.VISITORS,
+                ScreenMode.NOTEPAD, ScreenMode.MESSAGES,
+                ScreenMode.QUESTIONS, ScreenMode.VISITORS,
             }
 
             if consecutive_errors > 0:
                 delay = min(base_delay * (1.5 ** min(consecutive_errors, 3)), max_delay)
             elif current_mode in interactive_screens:
-                delay = 0.3  # Fast refresh (300ms) for interactive screens
+                delay = 0.3  # Scrollable screens: 300ms
             else:
-                delay = base_delay  # Normal refresh for static screens
+                delay = base_delay  # Face + info screens: 200ms
 
             # Wait for delay OR mode change event (whichever comes first)
             # This makes screen switching feel instant
