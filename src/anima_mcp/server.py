@@ -4820,6 +4820,13 @@ def run_http_server(host: str, port: int):
                         if raw.get(k) is not None:
                             neural[k.replace("eeg_", "").replace("_power", "")] = round(raw[k], 3)
 
+                    # EISV
+                    from .eisv_mapper import anima_to_eisv
+                    eisv = anima_to_eisv(anima, readings)
+
+                    # Governance
+                    gov = _last_governance_decision or {}
+
                     return JSONResponse({
                         "name": identity.name if identity else "Lumen",
                         "mood": feeling["mood"],
@@ -4837,6 +4844,13 @@ def run_http_server(host: str, port: int):
                         "memory_percent": readings.memory_percent or 0,
                         "disk_percent": readings.disk_percent or 0,
                         "neural": neural,
+                        "eisv": eisv.to_dict(),
+                        "governance": {
+                            "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
+                            "margin": gov.get("margin", "") if gov else "",
+                            "source": gov.get("source", "") if gov else "",
+                            "connected": bool(gov),
+                        },
                         "awakenings": identity.total_awakenings if identity else 0,
                         "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
                         "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
