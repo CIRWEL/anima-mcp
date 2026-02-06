@@ -163,7 +163,7 @@ class LEDDisplay:
                 self._dots[0] = (10, 10, 10)  # Very dim white
                 self._dots[1] = (10, 10, 10)
                 self._dots[2] = (10, 10, 10)
-                self._dots.brightness = 0.1  # Minimum brightness
+                self._dots.brightness = self._base_brightness  # Use configured brightness
                 self._dots.show()
             except Exception:
                 pass  # If this fails, clear() as fallback
@@ -445,12 +445,11 @@ class LEDDisplay:
                     final_brightness = state.brightness * (breathing_brightness / self._base_brightness)
                 else:
                     final_brightness = state.brightness  # Fallback if base_brightness is 0
-                # Ensure minimum brightness - LEDs should never go completely off
-                self._dots.brightness = max(0.1, min(0.5, final_brightness))
+                # Floor at auto_brightness_min (0.02) not 0.1 — DotStars are blinding
+                self._dots.brightness = max(self._auto_brightness_min, min(0.5, final_brightness))
             else:
-                # Ensure minimum brightness even without breathing
-                # Protect against state.brightness being 0 or negative
-                safe_brightness = max(0.1, min(0.5, max(0.0, state.brightness)))
+                # Floor at auto_brightness_min (0.02) not 0.1 — DotStars are blinding
+                safe_brightness = max(self._auto_brightness_min, min(0.5, max(0.0, state.brightness)))
                 self._dots.brightness = safe_brightness
 
             # CRITICAL: Always call show() to update LEDs
