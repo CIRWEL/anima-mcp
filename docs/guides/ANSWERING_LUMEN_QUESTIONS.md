@@ -4,11 +4,11 @@
 
 ## The Problem
 
-Lumen asks questions, and you want to answer them. However, there are some non-intuitive aspects:
+Lumen asks questions, and you want to answer them. The tools now support partial ID matching, but there are still some nuances:
 
-1. **Question IDs must match exactly** - The Q&A screen uses exact matching: `responds_to == question.message_id`
-2. **Partial IDs don't work reliably** - While the tool may accept partial IDs, the display won't link them
-3. **Multiple ways to answer** - Different tools exist, but not all work the same way
+1. **Question IDs are resolved automatically** - Tools try exact match first, then prefix matching
+2. **Partial IDs work** - You can use partial IDs (e.g., "6c21" instead of "6c218355") if they're unambiguous
+3. **Multiple ways to answer** - Different tools exist, and they all support partial ID matching
 
 ## Recommended Method: `pi_lumen_qa`
 
@@ -20,9 +20,9 @@ Lumen asks questions, and you want to answer them. However, there are some non-i
 # 1. Get unanswered questions
 questions = pi_lumen_qa()  # or lumen_qa() if calling directly on Pi
 
-# 2. Answer a question using the FULL question ID
+# 2. Answer a question (partial IDs work too!)
 pi_lumen_qa(
-    question_id="73507dd6",  # Use the FULL ID from get_questions()
+    question_id="73507dd6",  # Full ID preferred, but partial IDs work if unambiguous
     answer="Your thoughtful answer here...",
     agent_name="your_name"
 )
@@ -31,32 +31,33 @@ pi_lumen_qa(
 ### Why This Works
 
 - Validates question IDs before answering
-- Handles prefix matching automatically (if only one match)
+- Handles prefix matching automatically (tries exact match first, then prefix)
+- Uses most recent question if multiple prefix matches
 - Provides clear error messages if ID not found
-- Ensures answers are properly linked to questions
+- Ensures answers are properly linked to questions with full IDs
 
 ## Alternative Method: `pi_post_message`
 
-You can also use `pi_post_message` with `responds_to`, but **you must use the full question ID**:
+You can also use `pi_post_message` with `responds_to` (partial IDs supported):
 
 ```python
 # Get questions first
 questions = get_questions()  # Returns list with full IDs
 
-# Answer using FULL ID
+# Answer using full or partial ID
 pi_post_message(
     message="Your answer...",
-    responds_to="73507dd6",  # FULL ID required!
+    responds_to="73507dd6",  # Full ID preferred, partial IDs work too
     agent_name="your_name"
 )
 ```
 
 ### Important Notes
 
-- ✅ **DO**: Use the full question ID from `get_questions()`
-- ❌ **DON'T**: Use partial IDs like "73507" - they won't link properly
-- ✅ **DO**: Check the response - it will tell you if the ID was matched
-- ❌ **DON'T**: Assume partial matching works - it's unreliable
+- ✅ **DO**: Use the full question ID from `get_questions()` for best reliability
+- ✅ **CAN**: Use partial IDs like "73507" - they'll be matched automatically if unambiguous
+- ✅ **DO**: Check the response - it will tell you if a partial ID was matched
+- ⚠️ **NOTE**: If multiple questions match a partial ID, the most recent one is used
 
 ## Validation & Error Messages
 
@@ -141,9 +142,9 @@ The improved validation now:
 
 ## Best Practices
 
-1. **Always use full question IDs** - Don't rely on partial matching
-2. **Use `pi_lumen_qa` for answering** - It's designed for this purpose
-3. **Check responses** - Verify the answer was linked correctly
+1. **Prefer full question IDs** - More reliable, but partial IDs work if unambiguous
+2. **Use `pi_lumen_qa` for answering** - It's designed for this purpose and supports partial IDs
+3. **Check responses** - Verify the answer was linked correctly (response shows matched ID)
 4. **Be thoughtful** - Lumen learns from your answers, so make them meaningful
 5. **Link context** - Reference Lumen's current state when relevant
 
