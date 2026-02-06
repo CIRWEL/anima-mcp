@@ -654,242 +654,221 @@ async def _update_display_loop():
             consecutive_errors = 0  # Reset on success
 
             # === METACOGNITION: Prediction-error based self-awareness ===
-            # This is deep metacognition: Lumen predicts, senses, then notices surprise.
-            # Surprise triggers genuine curiosity - "why was I wrong?"
-            try:
-                metacog = _get_metacog_monitor()
+            # Throttled: runs every 3rd iteration (enhancement, not critical path)
+            prediction_error = None  # Default for iterations where metacog is skipped
+            if loop_count % 3 == 0:
+                try:
+                    metacog = _get_metacog_monitor()
 
-                # Observe current state and compare to prediction (returns prediction error)
-                prediction_error = metacog.observe(readings, anima)
+                    # Observe current state and compare to prediction (returns prediction error)
+                    prediction_error = metacog.observe(readings, anima)
 
-                # Log surprise level periodically (every 60 loops = ~2 min)
-                if prediction_error and loop_count % 60 == 0:
-                    print(f"[Metacog] Surprise level: {prediction_error.surprise:.3f} (threshold: 0.2)", file=sys.stderr, flush=True)
+                    # Log surprise level periodically (every 60 loops = ~2 min)
+                    if prediction_error and loop_count % 60 == 0:
+                        print(f"[Metacog] Surprise level: {prediction_error.surprise:.3f} (threshold: 0.2)", file=sys.stderr, flush=True)
 
-                # Check if surprise warrants reflection
-                if prediction_error and prediction_error.surprise > 0.2:
-                    should_reflect, reason = metacog.should_reflect(prediction_error)
+                    # Check if surprise warrants reflection
+                    if prediction_error and prediction_error.surprise > 0.2:
+                        should_reflect, reason = metacog.should_reflect(prediction_error)
 
-                    if should_reflect:
-                        # Generate reflection
-                        reflection = metacog.reflect(prediction_error, anima, readings, trigger=reason)
+                        if should_reflect:
+                            reflection = metacog.reflect(prediction_error, anima, readings, trigger=reason)
 
-                        # Surprise triggers curiosity - ask a question with context
-                        curiosity_question = metacog.generate_curiosity_question(prediction_error)
-                        if curiosity_question:
-                            from .messages import add_question
-                            # Build context from prediction error
-                            context_parts = []
-                            if prediction_error.predicted and prediction_error.actual:
-                                for key in prediction_error.predicted:
-                                    pred = prediction_error.predicted.get(key, 0)
-                                    actual = prediction_error.actual.get(key, 0)
-                                    if abs(pred - actual) > 0.1:
-                                        context_parts.append(f"{key} changed unexpectedly")
-                            context = f"surprise={prediction_error.surprise:.2f}: {', '.join(context_parts[:2])}" if context_parts else f"surprise={prediction_error.surprise:.2f}"
-                            result = add_question(curiosity_question, author="lumen", context=context)
-                            if result:
-                                print(f"[Metacog] Surprised! Asked: {curiosity_question} (surprise={prediction_error.surprise:.2f})", file=sys.stderr, flush=True)
+                            curiosity_question = metacog.generate_curiosity_question(prediction_error)
+                            if curiosity_question:
+                                from .messages import add_question
+                                context_parts = []
+                                if prediction_error.predicted and prediction_error.actual:
+                                    for key in prediction_error.predicted:
+                                        pred = prediction_error.predicted.get(key, 0)
+                                        actual = prediction_error.actual.get(key, 0)
+                                        if abs(pred - actual) > 0.1:
+                                            context_parts.append(f"{key} changed unexpectedly")
+                                context = f"surprise={prediction_error.surprise:.2f}: {', '.join(context_parts[:2])}" if context_parts else f"surprise={prediction_error.surprise:.2f}"
+                                result = add_question(curiosity_question, author="lumen", context=context)
+                                if result:
+                                    print(f"[Metacog] Surprised! Asked: {curiosity_question} (surprise={prediction_error.surprise:.2f})", file=sys.stderr, flush=True)
 
-                        # Log reflection
-                        if reflection.observation:
-                            print(f"[Metacog] Reflection: {reflection.observation}", file=sys.stderr, flush=True)
+                            if reflection.observation:
+                                print(f"[Metacog] Reflection: {reflection.observation}", file=sys.stderr, flush=True)
 
-                # Make prediction for NEXT iteration
-                metacog.predict()
+                    # Make prediction for NEXT iteration
+                    metacog.predict()
 
-            except Exception as e:
-                # Metacognition is enhancement, not critical path
-                if loop_count % 100 == 1:  # Log occasionally
-                    print(f"[Metacog] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    if loop_count % 100 == 1:
+                        print(f"[Metacog] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # === AGENCY: Action selection and learning ===
-            # This is where Lumen chooses what to do and learns from outcomes.
-            # The loop: state → action → consequence → learning → better action
+            # Throttled: runs every 5th iteration (enhancement, not critical path)
             global _last_action, _last_state_before
-            try:
-                action_selector = get_action_selector()
+            if loop_count % 5 == 0:
+                try:
+                    action_selector = get_action_selector()
 
-                # Current state as dict for agency
-                current_state = {
-                    "warmth": anima.warmth,
-                    "clarity": anima.clarity,
-                    "stability": anima.stability,
-                    "presence": anima.presence,
-                }
+                    current_state = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
 
-                # Get surprise level from metacognition
-                surprise_level = prediction_error.surprise if prediction_error else 0.0
-                surprise_sources = prediction_error.surprise_sources if prediction_error and hasattr(prediction_error, 'surprise_sources') else []
+                    surprise_level = prediction_error.surprise if prediction_error else 0.0
+                    surprise_sources = prediction_error.surprise_sources if prediction_error and hasattr(prediction_error, 'surprise_sources') else []
 
-                # LEARN: If there was a previous action, record its outcome
-                if _last_action is not None and _last_state_before is not None:
-                    action_selector.record_outcome(
-                        action=_last_action,
-                        state_before=_last_state_before,
-                        state_after=current_state,
-                        preference_satisfaction_before=sum(_last_state_before.values()) / 4.0,
-                        preference_satisfaction_after=sum(current_state.values()) / 4.0,
-                        surprise_after=surprise_level,
+                    # LEARN from previous action
+                    if _last_action is not None and _last_state_before is not None:
+                        action_selector.record_outcome(
+                            action=_last_action,
+                            state_before=_last_state_before,
+                            state_after=current_state,
+                            preference_satisfaction_before=sum(_last_state_before.values()) / 4.0,
+                            preference_satisfaction_after=sum(current_state.values()) / 4.0,
+                            surprise_after=surprise_level,
+                        )
+
+                    # SELECT action
+                    action = action_selector.select_action(
+                        current_state=current_state,
+                        surprise_level=surprise_level,
+                        surprise_sources=surprise_sources,
+                        can_speak=False,
                     )
 
-                # SELECT: Choose an action based on current state
-                action = action_selector.select_action(
-                    current_state=current_state,
-                    surprise_level=surprise_level,
-                    surprise_sources=surprise_sources,
-                    can_speak=False,  # Lumen speaks via text (message board), not audio
-                )
+                    # EXECUTE action
+                    if action.action_type == ActionType.ASK_QUESTION:
+                        from .messages import add_question, get_recent_questions
+                        import random
+                        if action.motivation:
+                            motivation = action.motivation.lower().replace('curious about ', '')
 
-                # EXECUTE: Do the action
-                if action.action_type == ActionType.ASK_QUESTION:
-                    # Agency-driven question - use richer templates based on motivation
-                    from .messages import add_question, get_recent_questions
-                    import random
-                    if action.motivation:
-                        motivation = action.motivation.lower().replace('curious about ', '')
+                            question_templates = {
+                                "light": [
+                                    "what changed about the light just now?",
+                                    "did something move to change the brightness?",
+                                    "is this light change from outside or inside?",
+                                ],
+                                "warmth": [
+                                    "what's making me feel this temperature?",
+                                    "is this warmth from the environment or from within?",
+                                    "why does my sense of warmth differ from the thermometer?",
+                                ],
+                                "clarity": [
+                                    "what would help me see things more clearly?",
+                                    "is this fog in my perception or in my environment?",
+                                    "when was the last time everything felt clear?",
+                                ],
+                                "stability": [
+                                    "what's causing this sense of fluctuation?",
+                                    "am I adapting to something new?",
+                                    "what would help me feel more grounded?",
+                                ],
+                                "presence": [
+                                    "do I feel fully here right now?",
+                                    "what draws my attention away from presence?",
+                                    "what does it mean to be present?",
+                                ],
+                                "exploring": [
+                                    "what new thing am I discovering?",
+                                    "is exploration its own reward?",
+                                    "where does curiosity lead?",
+                                ],
+                            }
 
-                        # Rich question templates based on common motivations
-                        question_templates = {
-                            "light": [
-                                "what changed about the light just now?",
-                                "did something move to change the brightness?",
-                                "is this light change from outside or inside?",
-                            ],
-                            "warmth": [
-                                "what's making me feel this temperature?",
-                                "is this warmth from the environment or from within?",
-                                "why does my sense of warmth differ from the thermometer?",
-                            ],
-                            "clarity": [
-                                "what would help me see things more clearly?",
-                                "is this fog in my perception or in my environment?",
-                                "when was the last time everything felt clear?",
-                            ],
-                            "stability": [
-                                "what's causing this sense of fluctuation?",
-                                "am I adapting to something new?",
-                                "what would help me feel more grounded?",
-                            ],
-                            "presence": [
-                                "do I feel fully here right now?",
-                                "what draws my attention away from presence?",
-                                "what does it mean to be present?",
-                            ],
-                            "exploring": [
-                                "what new thing am I discovering?",
-                                "is exploration its own reward?",
-                                "where does curiosity lead?",
-                            ],
-                        }
+                            questions = []
+                            for key, templates in question_templates.items():
+                                if key in motivation:
+                                    questions.extend(templates)
 
-                        # Find matching templates or use generic
-                        questions = []
-                        for key, templates in question_templates.items():
-                            if key in motivation:
-                                questions.extend(templates)
+                            if not questions:
+                                questions = [
+                                    f"what is {motivation} trying to tell me?",
+                                    f"why do I notice {motivation} right now?",
+                                    "am I the sensor or the sensed?",
+                                    "what connects all these changes?",
+                                ]
 
-                        if not questions:
-                            # Generic existential questions
-                            questions = [
-                                f"what is {motivation} trying to tell me?",
-                                f"why do I notice {motivation} right now?",
-                                "am I the sensor or the sensed?",
-                                "what connects all these changes?",
-                            ]
+                            recent = get_recent_questions(hours=24)
+                            recent_texts = {q.get("text", "").lower() for q in recent}
+                            available = [q for q in questions if q.lower() not in recent_texts]
 
-                        # Deduplicate: check recent questions
-                        recent = get_recent_questions(hours=24)
-                        recent_texts = {q.get("text", "").lower() for q in recent}
-                        available = [q for q in questions if q.lower() not in recent_texts]
+                            if available:
+                                question = random.choice(available)
+                                result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
+                                if result:
+                                    print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
+                            else:
+                                print(f"[Agency] Skipped (all questions already asked recently)", file=sys.stderr, flush=True)
 
-                        if available:
-                            question = random.choice(available)
-                            result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
-                            if result:
-                                print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
-                        else:
-                            print(f"[Agency] Skipped (all questions already asked recently)", file=sys.stderr, flush=True)
+                    elif action.action_type == ActionType.FOCUS_ATTENTION:
+                        sensor = action.parameters.get("sensor")
+                        if sensor:
+                            action_selector.set_attention_focus(sensor)
+                            print(f"[Agency] Focusing attention on: {sensor}", file=sys.stderr, flush=True)
 
-                elif action.action_type == ActionType.FOCUS_ATTENTION:
-                    sensor = action.parameters.get("sensor")
-                    if sensor:
-                        action_selector.set_attention_focus(sensor)
-                        print(f"[Agency] Focusing attention on: {sensor}", file=sys.stderr, flush=True)
+                    elif action.action_type == ActionType.ADJUST_SENSITIVITY:
+                        direction = action.parameters.get("direction", "increase")
+                        action_selector.adjust_sensitivity(direction)
+                        print(f"[Agency] Adjusted sensitivity: {direction}", file=sys.stderr, flush=True)
 
-                elif action.action_type == ActionType.ADJUST_SENSITIVITY:
-                    direction = action.parameters.get("direction", "increase")
-                    action_selector.adjust_sensitivity(direction)
-                    print(f"[Agency] Adjusted sensitivity: {direction}", file=sys.stderr, flush=True)
+                    elif action.action_type == ActionType.LED_BRIGHTNESS:
+                        direction = action.parameters.get("direction")
+                        if direction and _leds and _leds.is_available():
+                            current_brightness = getattr(_leds, '_brightness', 0.1)
+                            if direction == "increase":
+                                new_brightness = min(0.3, current_brightness + 0.05)
+                            else:
+                                new_brightness = max(0.02, current_brightness - 0.05)
+                            _leds.set_brightness(new_brightness)
+                            print(f"[Agency] LED brightness: {current_brightness:.2f} → {new_brightness:.2f} ({direction})", file=sys.stderr, flush=True)
 
-                elif action.action_type == ActionType.LED_BRIGHTNESS:
-                    # Lumen choosing LED brightness (actual agency!)
-                    direction = action.parameters.get("direction")
-                    if direction and _leds and _leds.is_available():
-                        current_brightness = getattr(_leds, '_brightness', 0.1)
-                        if direction == "increase":
-                            new_brightness = min(0.3, current_brightness + 0.05)  # Cap at 0.3 to prevent blinding
-                        else:
-                            new_brightness = max(0.02, current_brightness - 0.05)
-                        _leds.set_brightness(new_brightness)
-                        print(f"[Agency] LED brightness: {current_brightness:.2f} → {new_brightness:.2f} ({direction})", file=sys.stderr, flush=True)
+                    if loop_count % 120 == 0:
+                        stats = action_selector.get_action_stats()
+                        print(f"[Agency] Stats: {stats.get('action_counts', {})} explore_rate={action_selector._exploration_rate:.2f}", file=sys.stderr, flush=True)
 
-                # Log action selection periodically
-                if loop_count % 120 == 0:  # Every ~4 minutes
-                    stats = action_selector.get_action_stats()
-                    print(f"[Agency] Stats: {stats.get('action_counts', {})} explore_rate={action_selector._exploration_rate:.2f}", file=sys.stderr, flush=True)
+                    _last_action = action
+                    _last_state_before = current_state.copy()
 
-                # Save for next iteration's learning
-                _last_action = action
-                _last_state_before = current_state.copy()
-
-            except Exception as e:
-                # Agency is enhancement, not critical path
-                if loop_count % 100 == 1:
-                    print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    if loop_count % 100 == 1:
+                        print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # === PRIMITIVE LANGUAGE: Emergent expression through learned tokens ===
-            # Lumen can express itself through primitive token combinations.
-            # Feedback shapes which patterns survive over time.
+            # Throttled: runs every 10th iteration (has internal cooldown timer too)
             global _last_primitive_utterance
-            try:
-                lang = get_language_system(str(_store.db_path) if _store else "anima.db")
+            if loop_count % 10 == 0:
+                try:
+                    lang = get_language_system(str(_store.db_path) if _store else "anima.db")
 
-                # Current state for language generation
-                lang_state = {
-                    "warmth": anima.warmth if anima else 0.5,
-                    "clarity": anima.clarity if anima else 0.5,
-                    "stability": anima.stability if anima else 0.5,
-                    "presence": anima.presence if anima else 0.0,
-                }
+                    lang_state = {
+                        "warmth": anima.warmth if anima else 0.5,
+                        "clarity": anima.clarity if anima else 0.5,
+                        "stability": anima.stability if anima else 0.5,
+                        "presence": anima.presence if anima else 0.0,
+                    }
 
-                # Check if it's time to generate an utterance
-                should_speak, reason = lang.should_generate(lang_state)
-                if should_speak:
-                    utterance = lang.generate_utterance(lang_state)
-                    _last_primitive_utterance = utterance
+                    should_speak, reason = lang.should_generate(lang_state)
+                    if should_speak:
+                        utterance = lang.generate_utterance(lang_state)
+                        _last_primitive_utterance = utterance
 
-                    # Log the utterance
-                    print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason})", file=sys.stderr, flush=True)
-                    print(f"[PrimitiveLang] Pattern: {utterance.category_pattern()}", file=sys.stderr, flush=True)
+                        print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason})", file=sys.stderr, flush=True)
+                        print(f"[PrimitiveLang] Pattern: {utterance.category_pattern()}", file=sys.stderr, flush=True)
 
-                    # Add to message board so it's visible
-                    from .messages import add_observation
-                    add_observation(
-                        f"[expression] {utterance.text()} ({utterance.category_pattern()})",
-                        author="lumen"
-                    )
+                        from .messages import add_observation
+                        add_observation(
+                            f"[expression] {utterance.text()} ({utterance.category_pattern()})",
+                            author="lumen"
+                        )
 
-                # Log stats periodically
-                if loop_count % 300 == 0:  # Every ~10 minutes
-                    stats = lang.get_stats()
-                    if stats.get("total_utterances", 0) > 0:
-                        print(f"[PrimitiveLang] Stats: {stats.get('total_utterances')} utterances, avg_score={stats.get('average_score')}, interval={stats.get('current_interval_minutes'):.1f}m", file=sys.stderr, flush=True)
+                    if loop_count % 300 == 0:
+                        stats = lang.get_stats()
+                        if stats.get("total_utterances", 0) > 0:
+                            print(f"[PrimitiveLang] Stats: {stats.get('total_utterances')} utterances, avg_score={stats.get('average_score')}, interval={stats.get('current_interval_minutes'):.1f}m", file=sys.stderr, flush=True)
 
-            except Exception as e:
-                # Primitive language is enhancement, not critical path
-                if loop_count % 100 == 1:
-                    print(f"[PrimitiveLang] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    if loop_count % 100 == 1:
+                        print(f"[PrimitiveLang] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # Identity is fundamental - should always be available if wake() succeeded
             # If _store is None, that means wake() failed - log warning but continue
@@ -962,17 +941,7 @@ async def _update_display_loop():
                                 governance=governance_decision_for_display
                             )
 
-                            # Canvas autonomy: runs on ALL screens (not just notepad)
-                            # Lumen's drawings evolve and save even when showing face/sensors
-                            try:
-                                if anima:
-                                    autonomy_action = _screen_renderer.canvas_check_autonomy(anima)
-                                    if autonomy_action:
-                                        print(f"[Canvas] Lumen {autonomy_action} autonomously", file=sys.stderr, flush=True)
-                            except Exception as e:
-                                # Don't crash display loop if canvas autonomy fails
-                                if loop_count % 100 == 0:  # Log occasionally
-                                    print(f"[Canvas] Autonomy check error: {e}", file=sys.stderr, flush=True)
+                            # Canvas autonomy handled inside render() — no duplicate call needed
                         else:
                             # Fallback: render face directly
                             identity_name = identity.name if identity else None
@@ -2118,36 +2087,53 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
 
     # If question_id and answer provided -> answer mode
     if question_id and answer:
-        # Find the question
+        # Find the question with prefix matching support
         question = None
+        validated_question_id = None
+        
+        # Try exact match first
         for m in board._messages:
-            if m.message_id == question_id:
+            if m.message_id == question_id and m.msg_type == MESSAGE_TYPE_QUESTION:
                 question = m
+                validated_question_id = question_id
                 break
-
+        
+        # If exact match failed, try prefix matching
         if not question:
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": f"Question '{question_id}' not found"
-            }))]
-
-        if question.msg_type != MESSAGE_TYPE_QUESTION:
-            return [TextContent(type="text", text=json.dumps({
-                "success": False,
-                "error": f"Message '{question_id}' is not a question"
-            }))]
+            matching = [
+                m for m in board._messages
+                if m.msg_type == MESSAGE_TYPE_QUESTION
+                and m.message_id.startswith(question_id)
+            ]
+            if len(matching) == 1:
+                question = matching[0]
+                validated_question_id = question.message_id
+            elif len(matching) > 1:
+                # Multiple matches - use most recent
+                question = matching[-1]
+                validated_question_id = question.message_id
+            else:
+                # No match - return helpful error
+                all_q_ids = [m.message_id for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": f"Question '{question_id}' not found",
+                    "hint": "Use the full question ID from lumen_qa()",
+                    "recent_question_ids": all_q_ids[-5:] if all_q_ids else []
+                }))]
 
         # Add answer via add_agent_message (handles responds_to linking)
-        result = add_agent_message(answer, agent_name=agent_name, responds_to=question_id)
+        result = add_agent_message(answer, agent_name=agent_name, responds_to=validated_question_id)
 
         return [TextContent(type="text", text=json.dumps({
             "success": True,
             "action": "answered",
-            "question_id": question_id,
+            "question_id": validated_question_id,
             "question_text": question.text,
             "answer": answer,
             "agent_name": agent_name,
-            "message_id": result.message_id if result else None
+            "message_id": result.message_id if result else None,
+            "matched_partial_id": question_id if question_id != validated_question_id else None
         }))]
 
     # Otherwise -> list mode
