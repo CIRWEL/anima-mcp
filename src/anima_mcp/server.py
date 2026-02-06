@@ -4840,6 +4840,7 @@ def run_http_server(host: str, port: int):
                         "ambient_temp": readings.ambient_temp_c or 0,
                         "light": readings.light_lux or 0,
                         "humidity": readings.humidity_pct or 0,
+                        "pressure": readings.pressure_hpa or 0,
                         "cpu_percent": readings.cpu_percent or 0,
                         "memory_percent": readings.memory_percent or 0,
                         "disk_percent": readings.disk_percent or 0,

@@ -859,6 +859,7 @@
                     ${data.ambient_temp != null ? `🌡️ ${data.ambient_temp.toFixed(1)}°C` : ''}
                     ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
                     ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
+                    ${data.pressure ? ` · 🔵 ${data.pressure.toFixed(0)} hPa` : ''}
                 </div>
                 ${eisvHtml}
                 ${govHtml}
