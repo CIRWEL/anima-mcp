@@ -181,10 +181,11 @@ class LEDDisplay:
         if not self._enable_breathing:
             return self._base_brightness
         
-        # Slow breathing: 8 second cycle, ±10% variation
+        # Slow breathing: 8 second cycle, ±10% of base brightness
         t = time.time()
-        breath = math.sin(t * math.pi / 4) * 0.1  # ±0.1 over 8 seconds
-        return max(0.1, min(0.5, self._base_brightness + breath))
+        variation = self._base_brightness * 0.1  # ±10% of base
+        breath = math.sin(t * math.pi / 4) * variation
+        return max(self._auto_brightness_min, min(0.5, self._base_brightness + breath))
     
     def _detect_state_change(self, warmth: float, clarity: float, stability: float, presence: float) -> Optional[str]:
         """
@@ -569,7 +570,7 @@ class LEDDisplay:
                     # Apply minimal updates: breathing animation only
                     if self._enable_breathing:
                         breathing_brightness = self._get_breathing_brightness()
-                        self._dots.brightness = max(0.1, min(0.5, breathing_brightness))
+                        self._dots.brightness = max(self._auto_brightness_min, min(0.5, breathing_brightness))
                         self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
