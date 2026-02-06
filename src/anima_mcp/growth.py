@@ -377,6 +377,84 @@ class GrowthSystem:
 
         return insight
 
+    def observe_drawing(self, pixel_count: int, phase: str,
+                        anima_state: Dict[str, float],
+                        environment: Dict[str, float]) -> Optional[str]:
+        """
+        Learn from a completed drawing.
+
+        Called when a drawing is saved. Correlates drawing activity
+        with anima state and environment to learn creative preferences.
+
+        Args:
+            pixel_count: How many pixels in the drawing
+            phase: Drawing phase when saved (usually "resting")
+            anima_state: Current anima dimensions
+            environment: Current environment (light, temp, etc.)
+
+        Returns:
+            Insight message if a new preference is discovered.
+        """
+        wellness = sum(anima_state.values()) / len(anima_state) if anima_state else 0.5
+        now = datetime.now()
+        hour = now.hour
+        insight = None
+
+        # Drawing + wellness correlation
+        if wellness > 0.7:
+            insight = self._update_preference(
+                "drawing_wellbeing", PreferenceCategory.ACTIVITY,
+                "I feel good when I draw", 1.0
+            )
+        elif wellness < 0.4:
+            insight = self._update_preference(
+                "drawing_wellbeing", PreferenceCategory.ACTIVITY,
+                "Drawing doesn't always help", -0.3
+            )
+
+        # Drawing + environment correlation
+        light = environment.get("light_lux", 500)
+        if light < 100:
+            insight = self._update_preference(
+                "drawing_dim", PreferenceCategory.ACTIVITY,
+                "I draw when it's dark", 1.0
+            ) or insight
+        elif light > 500:
+            insight = self._update_preference(
+                "drawing_bright", PreferenceCategory.ACTIVITY,
+                "I draw in the light", 1.0
+            ) or insight
+
+        # Drawing + time correlation
+        if 22 <= hour or hour < 6:
+            insight = self._update_preference(
+                "drawing_night", PreferenceCategory.ACTIVITY,
+                "I draw at night", 1.0
+            ) or insight
+        elif 6 <= hour < 12:
+            insight = self._update_preference(
+                "drawing_morning", PreferenceCategory.ACTIVITY,
+                "I draw in the morning", 1.0
+            ) or insight
+
+        # Record as autobiographical memory (every 10th drawing)
+        drawing_count = sum(
+            1 for p in self._preferences.values()
+            if p.category == PreferenceCategory.ACTIVITY and "drawing" in p.name
+        )
+        total_obs = sum(
+            p.observation_count for p in self._preferences.values()
+            if p.name == "drawing_wellbeing"
+        )
+        if total_obs in (1, 10, 50, 100):
+            self._record_memory(
+                f"Saved my {total_obs}{'st' if total_obs == 1 else 'th'} drawing ({pixel_count} pixels)",
+                emotional_impact=0.5,
+                category="milestone"
+            )
+
+        return insight
+
     def _update_preference(self, name: str, category: PreferenceCategory,
                            description: str, observed_value: float) -> Optional[str]:
         """Update or create a preference. Returns insight message if confidence increased significantly."""
@@ -847,6 +925,8 @@ class GrowthSystem:
         CANONICAL_PREFS = [
             "dim_light", "bright_light", "cool_temp", "warm_temp",
             "morning_peace", "night_calm", "quiet_presence", "active_engagement",
+            "drawing_wellbeing", "drawing_dim", "drawing_bright",
+            "drawing_night", "drawing_morning",
         ]
 
         values = []
