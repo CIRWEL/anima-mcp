@@ -3830,8 +3830,8 @@ class ScreenRenderer:
                     }
                     environment = {
                         "light_lux": readings.light_lux or 0,
-                        "temp_c": readings.temperature or 22,
-                        "humidity": readings.humidity or 50,
+                        "temp_c": readings.ambient_temp_c or 22,
+                        "humidity": readings.humidity_pct or 50,
                     }
                     phase = self._canvas.drawing_phase or "resting"
                     insight = get_growth_system().observe_drawing(
