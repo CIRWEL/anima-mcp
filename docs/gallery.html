@@ -78,6 +78,21 @@
             opacity: 1;
         }
 
+        /* Date group headers */
+        .date-group {
+            margin-bottom: 28px;
+        }
+
+        .date-group-header {
+            font-size: 0.85rem;
+            color: var(--accent-cyan);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 12px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid #222;
+        }
+
         /* Gallery grid */
         .gallery-grid {
             display: grid;
@@ -117,6 +132,33 @@
             display: flex;
             justify-content: space-between;
             padding: 0 4px;
+        }
+
+        /* Load more button */
+        .load-more-container {
+            text-align: center;
+            padding: 30px 0;
+        }
+
+        .load-more-btn {
+            background: var(--card-bg);
+            color: var(--accent-cyan);
+            border: 1px solid var(--accent-cyan);
+            border-radius: 8px;
+            padding: 12px 32px;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: var(--font-family);
+        }
+
+        .load-more-btn:hover {
+            background: rgba(0, 255, 255, 0.1);
+        }
+
+        .load-more-btn:disabled {
+            opacity: 0.4;
+            cursor: default;
         }
 
         /* Empty state */
@@ -261,29 +303,64 @@
 
     <script>
         const API_BASE = window.location.origin;
+        const PAGE_SIZE = 50;
         let drawings = [];
+        let totalDrawings = 0;
+        let hasMore = false;
+        let loading = false;
         let currentIndex = -1;
 
-        async function fetchGallery() {
+        async function fetchGallery(append) {
+            if (loading) return;
+            loading = true;
+
+            const offset = append ? drawings.length : 0;
             try {
-                const response = await fetch(`${API_BASE}/gallery`);
+                const response = await fetch(`${API_BASE}/gallery?offset=${offset}&limit=${PAGE_SIZE}`);
                 const data = await response.json();
 
                 if (data.error) {
                     document.getElementById('galleryContent').innerHTML =
                         `<div class="empty-state"><h2>Error</h2><p>${data.error}</p></div>`;
+                    loading = false;
                     return;
                 }
 
-                document.getElementById('drawingCount').textContent =
-                    data.total > 0 ? `${data.total} drawing${data.total !== 1 ? 's' : ''}` : '';
+                totalDrawings = data.total || 0;
+                hasMore = data.has_more || false;
 
-                drawings = data.drawings || [];
+                document.getElementById('drawingCount').textContent =
+                    totalDrawings > 0 ? `${totalDrawings} drawing${totalDrawings !== 1 ? 's' : ''}` : '';
+
+                if (append) {
+                    drawings = drawings.concat(data.drawings || []);
+                } else {
+                    drawings = data.drawings || [];
+                }
+
                 renderGallery();
             } catch (e) {
-                document.getElementById('galleryContent').innerHTML =
-                    `<div class="empty-state"><h2>Connection Error</h2><p>Could not reach the server. Is Lumen running?</p></div>`;
+                if (!append) {
+                    document.getElementById('galleryContent').innerHTML =
+                        `<div class="empty-state"><h2>Connection Error</h2><p>Could not reach the server. Is Lumen running?</p></div>`;
+                }
             }
+            loading = false;
+        }
+
+        function formatDate(timestamp) {
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+        }
+
+        function formatTime(timestamp) {
+            const date = new Date(timestamp * 1000);
+            return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        }
+
+        function dayKey(timestamp) {
+            const date = new Date(timestamp * 1000);
+            return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
         }
 
         function renderGallery() {
@@ -296,23 +373,62 @@
                 return;
             }
 
-            const html = drawings.map((d, i) => {
-                const date = new Date(d.timestamp * 1000);
-                const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-                const sizeStr = d.size > 1024 ? `${(d.size / 1024).toFixed(0)} KB` : `${d.size} B`;
-                return `
-                    <div class="gallery-item" onclick="openLightbox(${i})">
-                        <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
-                        <div class="gallery-item-meta">
-                            <span>${dateStr}</span>
-                            <span>${sizeStr}</span>
+            // Group by date
+            const groups = [];
+            let currentDay = null;
+            let currentGroup = null;
+
+            drawings.forEach((d, i) => {
+                const dk = dayKey(d.timestamp);
+                if (dk !== currentDay) {
+                    currentDay = dk;
+                    currentGroup = { date: formatDate(d.timestamp), items: [] };
+                    groups.push(currentGroup);
+                }
+                currentGroup.items.push({ ...d, globalIndex: i });
+            });
+
+            let html = groups.map(group => {
+                const items = group.items.map(d => {
+                    const timeStr = formatTime(d.timestamp);
+                    const sizeStr = d.size > 1024 ? `${(d.size / 1024).toFixed(0)} KB` : `${d.size} B`;
+                    return `
+                        <div class="gallery-item" onclick="openLightbox(${d.globalIndex})">
+                            <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
+                            <div class="gallery-item-meta">
+                                <span>${timeStr}</span>
+                                <span>${sizeStr}</span>
+                            </div>
                         </div>
+                    `;
+                }).join('');
+
+                return `
+                    <div class="date-group">
+                        <div class="date-group-header">${group.date}</div>
+                        <div class="gallery-grid">${items}</div>
                     </div>
                 `;
             }).join('');
 
-            document.getElementById('galleryContent').innerHTML =
-                `<div class="gallery-grid">${html}</div>`;
+            if (hasMore) {
+                const remaining = totalDrawings - drawings.length;
+                html += `
+                    <div class="load-more-container">
+                        <button class="load-more-btn" onclick="loadMore(this)">
+                            Load more (${remaining} remaining)
+                        </button>
+                    </div>
+                `;
+            }
+
+            document.getElementById('galleryContent').innerHTML = html;
+        }
+
+        function loadMore(btn) {
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            fetchGallery(true);
         }
 
         function openLightbox(index) {
@@ -323,8 +439,8 @@
             img.src = `${API_BASE}/gallery/${d.filename}`;
 
             const date = new Date(d.timestamp * 1000);
-            const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
-            document.getElementById('lightboxMeta').textContent = `${dateStr} — ${index + 1} of ${drawings.length}`;
+            const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            document.getElementById('lightboxMeta').textContent = `${dateStr} — ${index + 1} of ${totalDrawings}`;
 
             document.getElementById('lightbox').classList.add('show');
             document.body.style.overflow = 'hidden';
@@ -354,10 +470,10 @@
         });
 
         // Initialize
-        fetchGallery();
+        fetchGallery(false);
 
-        // Auto-refresh every 60 seconds
-        setInterval(fetchGallery, 60000);
+        // Check for new drawings every 60 seconds (refresh first page)
+        setInterval(() => fetchGallery(false), 60000);
     </script>
 </body>
 

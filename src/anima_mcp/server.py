@@ -5031,14 +5031,26 @@ def run_http_server(host: str, port: int):
 
                     files = sorted(files, key=parse_ts, reverse=True)
 
+                    # Pagination support
+                    offset = int(request.query_params.get("offset", 0))
+                    limit = int(request.query_params.get("limit", 50))
+                    limit = min(limit, 100)  # cap at 100 per request
+                    page_files = files[offset:offset + limit]
+
                     drawings = []
-                    for f in files[:30]:
+                    for f in page_files:
                         drawings.append({
                             "filename": f.name,
                             "timestamp": parse_ts(f),
                             "size": f.stat().st_size
                         })
-                    return JSONResponse({"drawings": drawings, "total": len(files)})
+                    return JSONResponse({
+                        "drawings": drawings,
+                        "total": len(files),
+                        "offset": offset,
+                        "limit": limit,
+                        "has_more": offset + limit < len(files)
+                    })
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
 
