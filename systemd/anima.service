@@ -14,7 +14,7 @@ WorkingDirectory=/home/unitares-anima/anima-mcp
 Environment="ANIMA_ID=49e14444-b59e-48f1-83b8-b36a988c9975"
 Environment="ANIMA_DB=/home/unitares-anima/anima-mcp/anima.db"
 Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
-Environment="UNITARES_URL=https://unitares.ngrok.io/mcp/"
+Environment="UNITARES_URL=http://100.96.201.46:8767/mcp/"
 Environment="PYTHONUNBUFFERED=1"
 
 # Executable
