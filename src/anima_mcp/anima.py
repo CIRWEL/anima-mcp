@@ -277,8 +277,8 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     if r.light_lux is not None:
         import math
         light_range = cal.light_max_lux - cal.light_min_lux
-        if light_range > 0:
-            # Log scale mapping
+        if light_range > 0 and cal.light_max_lux > 1.0:
+            # Log scale mapping (requires light_max_lux > 1 to avoid log10 div-by-zero)
             light_clarity = math.log10(max(cal.light_min_lux, r.light_lux)) / math.log10(cal.light_max_lux)
             light_clarity = max(0, min(1, light_clarity))
             components.append(light_clarity)

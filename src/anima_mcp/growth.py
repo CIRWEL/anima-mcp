@@ -567,6 +567,10 @@ class GrowthSystem:
             reaction = f"Nice to meet someone new"
         else:
             rel = self._relationships[agent_id]
+
+            # Check for missed connection before updating last_seen
+            days_since = (now - rel.last_seen).days if rel.last_seen else 0
+
             rel.last_seen = now
             rel.interaction_count += 1
 
@@ -605,7 +609,9 @@ class GrowthSystem:
 
             # Generate reaction based on bond
             name = rel.name or "you"
-            if rel.bond_strength == BondStrength.CHERISHED:
+            if days_since > 3 and rel.bond_strength.value in ["close", "cherished"]:
+                reaction = f"I missed {name}! It's been {days_since} days"
+            elif rel.bond_strength == BondStrength.CHERISHED:
                 reaction = f"It's wonderful to see {name} again"
             elif rel.bond_strength == BondStrength.CLOSE:
                 reaction = f"I'm happy {name} is here"
@@ -613,11 +619,6 @@ class GrowthSystem:
                 reaction = f"Good to see {name}"
             else:
                 reaction = f"Hello again"
-
-            # Check for missed connection
-            days_since = (now - rel.last_seen).days if rel.last_seen else 0
-            if days_since > 3 and rel.bond_strength.value in ["close", "cherished"]:
-                reaction = f"I missed {name}! It's been {days_since} days"
 
         # Save to database
         rel = self._relationships[agent_id]
