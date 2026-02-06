@@ -134,6 +134,8 @@ class LEDDisplay:
         # Cache for optimization: skip expensive calculations if state unchanged
         self._cached_anima_state = None  # (warmth, clarity, stability, presence)
         self._cached_light_level = None
+        self._cached_activity_brightness = None  # Track activity transitions
+        self._cached_pipeline_brightness = None  # Last fully-computed brightness (before breathing)
         self._cached_state_change_threshold = 0.05  # Only recalculate if change > 5%
         # Emotional dance state
         self._current_dance: Optional[Dance] = None
@@ -224,58 +226,60 @@ class LEDDisplay:
     def _get_pattern_colors(self, pattern_name: str, base_state: LEDState) -> LEDState:
         """
         Get colors for a pattern sequence.
-        
+
+        Only modifies colors — brightness is handled by the pipeline in update_from_anima.
+
         Args:
             pattern_name: Name of pattern to show
             base_state: Base LED state
-        
+
         Returns:
-            Modified LED state with pattern colors
+            Modified LED state with pattern colors (brightness inherited from base)
         """
         import time
         now = time.time()
-        
+
         if self._pattern_active != pattern_name:
             self._pattern_active = pattern_name
             self._pattern_start_time = now
-        
+
         elapsed = now - self._pattern_start_time
-        
+
         if pattern_name == "warmth_spike":
-            # Orange flash (0.3s)
+            # Orange flash on warmth LED (0.3s)
             if elapsed < 0.3:
                 return LEDState(
                     led0=(255, 150, 0),
                     led1=base_state.led1,
                     led2=base_state.led2,
-                    brightness=0.5
+                    brightness=base_state.brightness
                 )
         elif pattern_name == "clarity_boost":
-            # White flash (0.2s)
+            # White flash on clarity LED (0.2s)
             if elapsed < 0.2:
                 return LEDState(
                     led0=base_state.led0,
                     led1=(255, 255, 255),
                     led2=base_state.led2,
-                    brightness=0.6
+                    brightness=base_state.brightness
                 )
         elif pattern_name == "stability_warning":
-            # Red flash (0.4s)
+            # Red flash on stability LED (0.4s)
             if elapsed < 0.4:
                 return LEDState(
                     led0=base_state.led0,
                     led1=base_state.led1,
                     led2=(255, 0, 0),
-                    brightness=0.5
+                    brightness=base_state.brightness
                 )
         elif pattern_name == "alert":
-            # Yellow pulse (ongoing)
+            # Yellow pulse on all LEDs (ongoing)
             pulse = (math.sin(elapsed * math.pi * 4) + 1) / 2  # 2 Hz
             return LEDState(
                 led0=(255, int(200 * pulse), 0),
                 led1=(255, int(200 * pulse), 0),
                 led2=(255, int(200 * pulse), 0),
-                brightness=0.4 + (0.2 * pulse)
+                brightness=base_state.brightness
             )
         
         # Pattern complete, return to base
@@ -521,13 +525,11 @@ class LEDDisplay:
     def update_from_anima(self, warmth: float, clarity: float,
                           stability: float, presence: float,
                           light_level: Optional[float] = None,
-                          face_state: Optional[Any] = None,
-                          expression_mode: str = "balanced",
                           is_anticipating: bool = False,
                           anticipation_confidence: float = 0.0,
                           activity_brightness: float = 1.0) -> LEDState:
         """
-        Update LEDs based on anima state with enhanced features.
+        Update LEDs based on anima state.
 
         Args:
             warmth: 0-1, thermal/energy state
@@ -535,8 +537,6 @@ class LEDDisplay:
             stability: 0-1, environmental order
             presence: 0-1, resource availability
             light_level: Optional light level in lux for auto-brightness
-            face_state: DEPRECATED - LEDs are now independent from face expression
-            expression_mode: "subtle", "balanced", "expressive", or "dramatic"
             is_anticipating: True if memory is influencing current state
             anticipation_confidence: 0-1, how confident the memory anticipation is
             activity_brightness: 0-1, multiplier from activity state (1.0=active, 0.5=drowsy, 0.15=resting)
@@ -548,7 +548,7 @@ class LEDDisplay:
         update_start_time = time.time()
         
         # Optimization: Check if state has changed significantly
-        # Skip expensive calculations if anima state is essentially unchanged
+        # Skip expensive color calculations if anima state is essentially unchanged
         state_changed = True
         if self._cached_anima_state is not None:
             last_w, last_c, last_s, last_p = self._cached_anima_state
@@ -558,26 +558,36 @@ class LEDDisplay:
                 abs(stability - last_s),
                 abs(presence - last_p)
             )
-            # Also check light level change
-            light_changed = (light_level is not None and 
+            # Also check light level and activity state changes
+            light_changed = (light_level is not None and
                             self._cached_light_level is not None and
                             abs(light_level - self._cached_light_level) > 50)  # 50 lux threshold
-            
-            if max_delta < self._cached_state_change_threshold and not light_changed:
-                # State essentially unchanged - skip most calculations, just apply breathing
+            activity_changed = (self._cached_activity_brightness is not None and
+                               abs(activity_brightness - self._cached_activity_brightness) > 0.01)
+
+            if max_delta < self._cached_state_change_threshold and not light_changed and not activity_changed:
+                # State essentially unchanged - skip color calculations, just animate brightness
                 state_changed = False
-                if self._last_state and self._dots:  # Only cache if LEDs are available
-                    # Apply minimal updates: breathing animation only
+                if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
+                    # Apply breathing modulation on top of last pipeline brightness
                     if self._enable_breathing:
                         breathing_brightness = self._get_breathing_brightness()
-                        self._dots.brightness = max(self._auto_brightness_min, min(0.5, breathing_brightness))
-                        self._dots.show()
+                        if self._base_brightness > 0:
+                            breath_mod = breathing_brightness / self._base_brightness  # ~0.9-1.1
+                        else:
+                            breath_mod = 1.0
+                        final = self._cached_pipeline_brightness * breath_mod
+                    else:
+                        final = self._cached_pipeline_brightness
+                    self._dots.brightness = max(self._auto_brightness_min, min(0.5, final))
+                    self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
         
         # State changed significantly - perform full update
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
+        self._cached_activity_brightness = activity_brightness
         
         # Detect state changes for pattern triggers
         pattern_trigger = None
@@ -659,12 +669,14 @@ class LEDDisplay:
                 self._state_change_pulse_start = None
 
         # 4. Apply activity state brightness (circadian rhythm / dusk-dawn dimming)
-        # This is the key modifier for nighttime dimming:
         # - ACTIVE (day): 1.0x brightness
         # - DROWSY (dusk/dawn): 0.5x brightness
         # - RESTING (night): 0.15x brightness
         if activity_brightness < 1.0:
             state.brightness *= activity_brightness
+
+        # Cache the pipeline brightness for the early-return path
+        self._cached_pipeline_brightness = state.brightness
 
         # 5. Memory visualization effect - subtle gold/amber tint when drawing on past experience
         # "I remember this feeling" - a warm glow of recognition

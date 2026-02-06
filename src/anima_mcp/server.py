@@ -1067,7 +1067,6 @@ async def _update_display_loop():
                         anima.warmth, anima.clarity,
                         anima.stability, anima.presence,
                         light_level=light_level,
-                        face_state=None,  # Independent - LEDs show raw proprioceptive state
                         is_anticipating=anima.is_anticipating,
                         anticipation_confidence=anticipation_confidence,
                         activity_brightness=activity_brightness
