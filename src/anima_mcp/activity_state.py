@@ -60,11 +60,12 @@ class ActivityManager:
 
         # Circadian schedule (hour -> base activity tendency)
         # 0.0 = strongly toward resting, 1.0 = strongly toward active
+        # Evening values lowered for gentler dusk transition
         self._circadian_schedule = {
             0: 0.1, 1: 0.1, 2: 0.1, 3: 0.1, 4: 0.1, 5: 0.2,  # Night
             6: 0.4, 7: 0.6, 8: 0.8, 9: 0.9, 10: 1.0, 11: 1.0,  # Morning
-            12: 0.9, 13: 0.8, 14: 0.9, 15: 1.0, 16: 1.0, 17: 0.9,  # Afternoon
-            18: 0.8, 19: 0.7, 20: 0.6, 21: 0.5, 22: 0.3, 23: 0.2,  # Evening
+            12: 0.9, 13: 0.8, 14: 0.9, 15: 1.0, 16: 1.0, 17: 0.8,  # Afternoon
+            18: 0.6, 19: 0.5, 20: 0.4, 21: 0.3, 22: 0.2, 23: 0.15,  # Evening (gentler dusk)
         }
 
         # State-specific settings

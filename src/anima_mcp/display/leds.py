@@ -107,14 +107,15 @@ class LEDDisplay:
             self._expression_mode = expression_mode
         except ImportError:
             # Fallback if config not available
-            self._base_brightness = brightness if brightness is not None else 0.12
+            # NOTE: These should match anima_config.yaml defaults
+            self._base_brightness = brightness if brightness is not None else 0.04
             self._enable_breathing = enable_breathing if enable_breathing is not None else True
             self._pulsing_enabled = True
             self._color_transitions_enabled = True
             self._pattern_mode = "standard"
             self._auto_brightness_enabled = True
-            self._auto_brightness_min = 0.04
-            self._auto_brightness_max = 0.20
+            self._auto_brightness_min = 0.02
+            self._auto_brightness_max = 0.06  # Lower max for gentler dusk behavior
             self._pulsing_threshold_clarity = 0.4
             self._pulsing_threshold_stability = 0.4
         
