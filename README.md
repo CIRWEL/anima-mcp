@@ -175,12 +175,12 @@ anima --http --host 0.0.0.0 --port 8766
 
 | Category | Tools | Requires |
 |----------|-------|----------|
-| Display | `switch_screen`, `leave_message`, `leave_agent_note` | TFT display |
-| Voice | `say`, `voice_status`, `set_voice_mode` | Voice module |
+| Communication | `lumen_qa`, `post_message` | Message board |
+| Display | `switch_screen` | TFT display |
+| Voice | `say`, `configure_voice` | Voice module |
 | Memory | `query_memory`, `learning_visualization`, `get_expression_mood` | Enhanced learning |
-| Cognitive | `cognitive_query`, `dialectic_synthesis`, `merge_insights` | Cognitive inference |
 
-Total: 11 core + 12 extended = 23 tools. Start with core tools; extended appear when features are available.
+Total: 11 core + 8 extended = 19 tools. Start with core tools; extended appear when features are available.
 
 ## Identity Persistence
 
@@ -358,10 +358,15 @@ Lumen maintains a persistent message board with separate retention limits:
 - **Visitor messages** (50 max) - Messages from users and agents
 
 **Tools:**
+- `lumen_qa` - List Lumen's questions or answer one. Dual-mode:
+  - `lumen_qa()` → list unanswered questions
+  - `lumen_qa(question_id="x", answer="...", agent_name="Claude")` → answer question x
 - `post_message` - Leave a message for Lumen
-- `get_questions` - See Lumen's unanswered questions
 
-Questions auto-expire after 1 hour if unanswered.
+**Identity Verification:**
+When answering questions, pass `client_session_id` (your UNITARES session) to have your verified identity displayed instead of just `agent_name`. Without it, the `agent_name` you provide is used directly.
+
+Questions auto-expire after 1 hour if unanswered, but can still be answered after expiry.
 
 ## Metacognition
 
