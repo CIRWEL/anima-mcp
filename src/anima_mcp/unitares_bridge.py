@@ -7,10 +7,12 @@ Provides fallback local governance if UNITARES server is unavailable.
 
 import asyncio
 import json
+import logging
 import os
-import sys
 from typing import Optional, Dict, Any, TYPE_CHECKING
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .identity.store import CreatureIdentity
@@ -87,6 +89,30 @@ class UnitaresBridge:
             )
         return self._http_session
 
+    def _get_mcp_url(self) -> str:
+        """Resolve the MCP endpoint URL from the configured base URL."""
+        if '/mcp' in self._url:
+            return self._url
+        elif '/sse' in self._url:
+            return self._url.replace('/sse', '/mcp')
+        return f"{self._url}/mcp"
+
+    @staticmethod
+    def _parse_mcp_response(text: str, content_type: str) -> Any:
+        """Parse an MCP response, handling both JSON and SSE formats.
+
+        Returns parsed JSON dict or None if no valid data found.
+        """
+        if "text/event-stream" in content_type:
+            for line in text.split("\n"):
+                if line.startswith("data: "):
+                    try:
+                        return json.loads(line[6:])
+                    except json.JSONDecodeError:
+                        continue
+            return None
+        return json.loads(text)
+
     async def close(self):
         """Close the HTTP session. Call when done with bridge."""
         if self._http_session and not self._http_session.closed:
@@ -134,7 +160,7 @@ class UnitaresBridge:
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
-                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", file=sys.stderr, flush=True)
+                        logger.warning("UNITARES requires authentication (401) - using local governance")
                         self._available = False
                         self._last_availability_check = current_time
                         return False
@@ -143,12 +169,7 @@ class UnitaresBridge:
                 pass
 
             # If health check fails, try MCP endpoint
-            if '/mcp' in self._url:
-                mcp_url = self._url
-            elif '/sse' in self._url:
-                mcp_url = self._url.replace('/sse', '/mcp')
-            else:
-                mcp_url = f"{self._url}/mcp"
+            mcp_url = self._get_mcp_url()
             try:
                 import aiohttp
                 async with session.post(
@@ -166,7 +187,7 @@ class UnitaresBridge:
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
-                        print(f"[UnitaresBridge] UNITARES requires authentication (401) - using local governance", file=sys.stderr, flush=True)
+                        logger.warning("UNITARES requires authentication (401) - using local governance")
                         self._available = False
                         self._last_availability_check = current_time
                         return False
@@ -217,8 +238,7 @@ class UnitaresBridge:
             - eisv: EISV metrics used
             - source: "unitares" | "local" (which governance system responded)
         """
-        # Debug: Log what we received
-        print(f"[UnitaresBridge] check_in called: is_first_check_in={is_first_check_in}, identity={identity is not None}", file=sys.stderr, flush=True)
+        logger.debug("check_in called: is_first_check_in=%s, identity=%s", is_first_check_in, identity is not None)
 
         # Map anima to EISV first (always needed)
         eisv = anima_to_eisv(anima, readings, neural_weight, physical_weight)
@@ -228,27 +248,27 @@ class UnitaresBridge:
 
         # Sync identity metadata on first check-in (only if UNITARES is available)
         if is_first_check_in and identity and unitares_available:
-            print(f"[UnitaresBridge] First check-in - syncing identity for {identity.name if hasattr(identity, 'name') else 'unknown'}...", file=sys.stderr, flush=True)
+            logger.info("First check-in - syncing identity for %s", identity.name if hasattr(identity, 'name') else 'unknown')
             try:
                 await self.sync_identity_metadata(identity)
             except Exception as e:
                 # Non-fatal - continue with governance check-in
-                print(f"[UnitaresBridge] Identity sync exception: {e}", file=sys.stderr, flush=True)
+                logger.warning("Identity sync exception: %s", e)
 
         # Check if UNITARES is available
         if unitares_available:
             try:
-                print(f"[UnitaresBridge] Calling UNITARES (agent_id={self._agent_id[:8] if self._agent_id else 'None'})", file=sys.stderr, flush=True)
+                logger.info("Calling UNITARES (agent_id=%s)", self._agent_id[:8] if self._agent_id else 'None')
                 result = await self._call_unitares(anima, readings, eisv, identity=identity)
-                print(f"[UnitaresBridge] UNITARES responded: {result.get('source', 'unknown')}", file=sys.stderr, flush=True)
+                logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 return result
             except Exception as e:
                 # Fallback to local governance on error
-                print(f"[UnitaresBridge] UNITARES error, falling back to local: {e}", file=sys.stderr, flush=True)
+                logger.warning("UNITARES error, falling back to local: %s", e)
                 return self._local_governance(anima, readings, eisv, error=str(e))
         else:
             # Use local governance
-            print("[UnitaresBridge] UNITARES not available, using local governance", file=sys.stderr, flush=True)
+            logger.debug("UNITARES not available, using local governance")
             return self._local_governance(anima, readings, eisv)
     
     async def _call_unitares(
@@ -314,10 +334,10 @@ class UnitaresBridge:
                     # Add identity_confidence for UNITARES
                     sig_dict["identity_confidence"] = getattr(trajectory_sig, 'identity_confidence', 0.0)
                     update_arguments["trajectory_signature"] = sig_dict
-                    print(f"[UnitaresBridge] Including trajectory (obs={trajectory_sig.observation_count}, conf={sig_dict.get('identity_confidence', 0):.2f})", file=sys.stderr, flush=True)
+                    logger.debug("Including trajectory (obs=%d, conf=%.2f)", trajectory_sig.observation_count, sig_dict.get('identity_confidence', 0))
             except Exception as e:
                 # Non-blocking - trajectory is optional enhancement
-                print(f"[UnitaresBridge] Trajectory not available: {e}", file=sys.stderr, flush=True)
+                logger.debug("Trajectory not available: %s", e)
 
             # MCP JSON-RPC request
             mcp_request = {
@@ -331,12 +351,7 @@ class UnitaresBridge:
             }
             
             # Determine endpoint URL
-            if '/mcp' in self._url:
-                mcp_url = self._url  # Already has /mcp
-            elif '/sse' in self._url:
-                mcp_url = self._url.replace('/sse', '/mcp')
-            else:
-                mcp_url = f"{self._url}/mcp"
+            mcp_url = self._get_mcp_url()
             
             # Build headers with identity for proper UNITARES binding
             headers = {
@@ -356,23 +371,12 @@ class UnitaresBridge:
                 headers=headers
             ) as response:
                 if response.status == 200:
-                    # Handle SSE response format (text/event-stream)
+                    # Handle SSE or JSON response format
                     content_type = response.headers.get("Content-Type", "")
-                    if "text/event-stream" in content_type:
-                        # Parse SSE format: "event: message\ndata: {...}\n\n"
-                        text = await response.text()
-                        result = None
-                        for line in text.split("\n"):
-                            if line.startswith("data: "):
-                                try:
-                                    result = json.loads(line[6:])
-                                    break
-                                except json.JSONDecodeError:
-                                    continue
-                        if not result:
-                            raise Exception("No valid JSON data in SSE response")
-                    else:
-                        result = await response.json()
+                    text = await response.text()
+                    result = self._parse_mcp_response(text, content_type)
+                    if not result:
+                        raise Exception("No valid JSON data in SSE response")
 
                     # Parse MCP response
                     if "result" in result:
@@ -385,11 +389,10 @@ class UnitaresBridge:
                                     governance_result = json.loads(content["text"])
                                 except json.JSONDecodeError:
                                     pass  # Keep original if not JSON
-                        # Log response structure to understand agent binding
-                        print(f"[UnitaresBridge] Response keys: {list(governance_result.keys())}", file=sys.stderr, flush=True)
+                        logger.debug("Response keys: %s", list(governance_result.keys()))
                         # Log agent binding info from UNITARES
                         bound_id = governance_result.get("resolved_agent_id") or governance_result.get("agent_signature", {}).get("agent_id") or governance_result.get("agent_signature", {}).get("uuid")
-                        print(f"[UnitaresBridge] Bound to agent: {bound_id[:8] if bound_id else 'not specified'}", file=sys.stderr, flush=True)
+                        logger.debug("Bound to agent: %s", bound_id[:8] if bound_id else 'not specified')
 
                         # Extract action and margin from UNITARES response
                         # UNITARES returns: {"action": "proceed", "margin": "comfortable", ...}
@@ -493,7 +496,74 @@ class UnitaresBridge:
     def set_session_id(self, session_id: str):
         """Set session ID for UNITARES connection."""
         self._session_id = session_id
-    
+
+    async def resolve_caller_identity(self, session_id: Optional[str] = None) -> Optional[str]:
+        """Resolve caller's verified display_name from UNITARES.
+
+        Uses the ``identity()`` tool to look up who the current session
+        belongs to, returning their display label if found.
+
+        Args:
+            session_id: Optional session ID to resolve. Uses bridge's
+                        session ID if not provided.
+
+        Returns:
+            Verified display name string, or None if unavailable.
+        """
+        if not self._url or self._available is False:
+            return None  # Skip when UNITARES known unavailable
+
+        sid = session_id or self._session_id
+        if not sid:
+            return None
+
+        try:
+            import aiohttp
+            mcp_request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "identity",
+                    "arguments": {}
+                }
+            }
+
+            mcp_url = self._get_mcp_url()
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json, text/event-stream",
+                "X-Session-ID": sid,
+            }
+
+            session = await self._get_session()
+            async with session.post(
+                mcp_url,
+                json=mcp_request,
+                headers=headers,
+                timeout=aiohttp.ClientTimeout(total=2.0),
+            ) as response:
+                if response.status != 200:
+                    return None
+                content_type = response.headers.get("Content-Type", "")
+                text = await response.text()
+                result = self._parse_mcp_response(text, content_type)
+                if not result or "result" not in result:
+                    return None
+
+                # MCP wraps in content[0]["text"]
+                content = result["result"].get("content", [])
+                if content and content[0].get("type") == "text":
+                    try:
+                        identity_data = json.loads(content[0]["text"])
+                    except (json.JSONDecodeError, KeyError):
+                        return None
+                    return identity_data.get("display_name") or identity_data.get("label")
+
+        except Exception as e:
+            logger.debug("resolve_caller_identity failed: %s", e)
+        return None
+
     async def sync_name(self, name: str) -> bool:
         """
         Sync Lumen's name to UNITARES label.
@@ -523,7 +593,7 @@ class UnitaresBridge:
                 }
             }
 
-            mcp_url = self._url.replace('/sse', '/mcp') if '/sse' in self._url else f"{self._url}/mcp"
+            mcp_url = self._get_mcp_url()
             headers = {
                 "Content-Type": "application/json",
                 "X-Session-ID": self._session_id or "anima-creature"
@@ -590,7 +660,7 @@ class UnitaresBridge:
                 }
             }
 
-            mcp_url = self._url.replace('/sse', '/mcp') if '/sse' in self._url else f"{self._url}/mcp"
+            mcp_url = self._get_mcp_url()
             headers = {
                 "Content-Type": "application/json",
                 "X-Session-ID": self._session_id or "anima-creature",
@@ -599,39 +669,28 @@ class UnitaresBridge:
             if self._agent_id:
                 headers["X-Agent-Id"] = self._agent_id
 
-            print(f"[UnitaresBridge] Syncing identity metadata for {creature_name}...", file=sys.stderr, flush=True)
+            logger.info("Syncing identity metadata for %s", creature_name)
 
             # Use shared session for connection pooling
             session = await self._get_session()
             async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
                 if response.status == 200:
-                    # Handle SSE response format
                     content_type = response.headers.get("Content-Type", "")
-                    if "text/event-stream" in content_type:
-                        text = await response.text()
-                        result = None
-                        for line in text.split("\n"):
-                            if line.startswith("data: "):
-                                try:
-                                    result = json.loads(line[6:])
-                                    break
-                                except json.JSONDecodeError:
-                                    continue
-                    else:
-                        result = await response.json()
+                    text = await response.text()
+                    result = self._parse_mcp_response(text, content_type)
 
                     if result and "result" in result and "error" not in result:
-                        print(f"[UnitaresBridge] Identity sync SUCCESS - {creature_name} labeled in UNITARES", file=sys.stderr, flush=True)
+                        logger.info("Identity sync SUCCESS - %s labeled in UNITARES", creature_name)
                         return True
                     else:
                         error = result.get('error', 'unknown') if result else 'no response'
-                        print(f"[UnitaresBridge] Identity sync failed: {error}", file=sys.stderr, flush=True)
+                        logger.warning("Identity sync failed: %s", error)
                 else:
-                    print(f"[UnitaresBridge] Identity sync HTTP error: {response.status}", file=sys.stderr, flush=True)
+                    logger.warning("Identity sync HTTP error: %d", response.status)
             return False
         except Exception as e:
             # Non-fatal - metadata sync is optional
-            print(f"[UnitaresBridge] Identity sync error: {e}", file=sys.stderr, flush=True)
+            logger.warning("Identity sync error: %s", e)
             return False
 
 

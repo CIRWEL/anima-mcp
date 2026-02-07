@@ -223,6 +223,82 @@ async def test_margin_calculation():
         assert decision["margin"] in ["comfortable", "tight", "critical"]
 
 
+def test_get_mcp_url_with_mcp():
+    """Test _get_mcp_url when URL already contains /mcp."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    assert bridge._get_mcp_url() == "http://localhost:8767/mcp"
+
+
+def test_get_mcp_url_with_sse():
+    """Test _get_mcp_url converts /sse to /mcp."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/sse")
+    assert bridge._get_mcp_url() == "http://localhost:8767/mcp"
+
+
+def test_get_mcp_url_bare():
+    """Test _get_mcp_url appends /mcp to bare URL."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767")
+    assert bridge._get_mcp_url() == "http://localhost:8767/mcp"
+
+
+def test_parse_mcp_response_json():
+    """Test parsing a plain JSON response."""
+    result = UnitaresBridge._parse_mcp_response(
+        '{"result": {"content": []}}',
+        "application/json"
+    )
+    assert result == {"result": {"content": []}}
+
+
+def test_parse_mcp_response_sse():
+    """Test parsing an SSE response."""
+    sse_text = 'event: message\ndata: {"result": "ok"}\n\n'
+    result = UnitaresBridge._parse_mcp_response(sse_text, "text/event-stream")
+    assert result == {"result": "ok"}
+
+
+def test_parse_mcp_response_sse_no_data():
+    """Test parsing SSE response with no valid data lines."""
+    result = UnitaresBridge._parse_mcp_response(
+        "event: message\n\n", "text/event-stream"
+    )
+    assert result is None
+
+
+def test_parse_mcp_response_sse_bad_json():
+    """Test parsing SSE response with invalid JSON falls through."""
+    sse_text = 'data: not-json\ndata: {"ok": true}\n'
+    result = UnitaresBridge._parse_mcp_response(sse_text, "text/event-stream")
+    assert result == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_resolve_caller_identity_no_url():
+    """Test resolve_caller_identity returns None when no URL configured."""
+    bridge = UnitaresBridge(unitares_url=None)
+    result = await bridge.resolve_caller_identity()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_caller_identity_no_session():
+    """Test resolve_caller_identity returns None with no session ID."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    bridge._available = True
+    result = await bridge.resolve_caller_identity()
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_caller_identity_unavailable():
+    """Test resolve_caller_identity returns None when UNITARES is known unavailable."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    bridge._available = False
+    bridge.set_session_id("test-session")
+    result = await bridge.resolve_caller_identity()
+    assert result is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 

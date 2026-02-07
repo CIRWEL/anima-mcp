@@ -2208,6 +2208,15 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     limit = arguments.get("limit", 5)
     agent_name = arguments.get("agent_name", "agent")
 
+    # Resolve verified identity from UNITARES when available
+    if _unitares_bridge:
+        try:
+            resolved = await _unitares_bridge.resolve_caller_identity()
+            if resolved:
+                agent_name = resolved
+        except Exception:
+            pass  # Fallback to provided agent_name
+
     # Convert limit to int if string
     if isinstance(limit, str):
         try:
@@ -4050,6 +4059,15 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         else:
             result["mood"] = {"error": "Unable to determine mood"}
 
+    # Include EISV metrics when anima is available
+    if ("eisv" in include or "anima" in include) and anima and readings:
+        try:
+            from .eisv_mapper import anima_to_eisv
+            eisv = anima_to_eisv(anima, readings)
+            result["eisv"] = eisv.to_dict()
+        except Exception:
+            pass  # EISV is optional enrichment
+
     # Record state for history if we have it
     if store and anima and readings:
         store.record_state(
@@ -4070,6 +4088,15 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     source = arguments.get("source", "agent")
     agent_name = arguments.get("agent_name", "agent")
     responds_to = arguments.get("responds_to")
+
+    # Resolve verified identity from UNITARES when available
+    if _unitares_bridge:
+        try:
+            resolved = await _unitares_bridge.resolve_caller_identity()
+            if resolved:
+                agent_name = resolved
+        except Exception:
+            pass  # Fallback to provided agent_name
 
     if not message:
         return [TextContent(type="text", text=json.dumps({
