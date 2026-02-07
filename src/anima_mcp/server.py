@@ -2209,9 +2209,9 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     agent_name = arguments.get("agent_name", "agent")
     client_session_id = arguments.get("client_session_id")
 
-    # Resolve verified identity from UNITARES when available
-    # Uses caller's session_id if provided (for cross-server identity resolution)
-    if _unitares_bridge:
+    # Resolve verified identity from UNITARES when caller provides their session_id
+    # Only attempts resolution if client_session_id is explicitly provided
+    if _unitares_bridge and client_session_id:
         try:
             resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
             if resolved:
@@ -4097,9 +4097,9 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     responds_to = arguments.get("responds_to")
     client_session_id = arguments.get("client_session_id")
 
-    # Resolve verified identity from UNITARES when available
-    # Uses caller's session_id if provided (for cross-server identity resolution)
-    if _unitares_bridge:
+    # Resolve verified identity from UNITARES when caller provides their session_id
+    # Only attempts resolution if client_session_id is explicitly provided
+    if _unitares_bridge and client_session_id:
         try:
             resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
             if resolved:
