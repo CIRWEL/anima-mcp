@@ -286,8 +286,14 @@ def extract_self_schema(
 
         pressure = getattr(readings, "pressure_hpa", None)
         if pressure is not None:
-            # Normalize around standard pressure (1013.25 hPa), range ~950-1050
-            sensor_values["pressure"] = min(1.0, max(0.0, (pressure - 950) / 100))
+            # Normalize relative to config's pressure_ideal (accounts for altitude)
+            # ±50 hPa range around ideal → 0-1
+            try:
+                from .config import get_calibration
+                p_ideal = get_calibration().pressure_ideal
+            except Exception:
+                p_ideal = 1013.25
+            sensor_values["pressure"] = min(1.0, max(0.0, 1.0 - abs(pressure - p_ideal) / 50.0))
 
         # System resources (0-100% -> 0-1)
         cpu = getattr(readings, "cpu_percent", None)
