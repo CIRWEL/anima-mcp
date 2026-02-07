@@ -2207,11 +2207,13 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     answer = arguments.get("answer")
     limit = arguments.get("limit", 5)
     agent_name = arguments.get("agent_name", "agent")
+    client_session_id = arguments.get("client_session_id")
 
     # Resolve verified identity from UNITARES when available
+    # Uses caller's session_id if provided (for cross-server identity resolution)
     if _unitares_bridge:
         try:
-            resolved = await _unitares_bridge.resolve_caller_identity()
+            resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
             if resolved:
                 agent_name = resolved
         except Exception:
@@ -3389,6 +3391,10 @@ TOOLS_ESSENTIAL = [
                     "type": "string",
                     "description": "Your name/identifier when answering (e.g. 'Kenny', 'Claude'). Default: 'agent'",
                 },
+                "client_session_id": {
+                    "type": "string",
+                    "description": "Your UNITARES session ID for verified identity resolution. Pass this to have your verified name displayed instead of agent_name.",
+                },
             },
         },
     ),
@@ -3401,7 +3407,8 @@ TOOLS_ESSENTIAL = [
                 "message": {"type": "string", "description": "The message content"},
                 "source": {"type": "string", "enum": ["human", "agent"], "description": "Who is posting (default: agent)"},
                 "agent_name": {"type": "string", "description": "Agent name (if source=agent)"},
-                "responds_to": {"type": "string", "description": "REQUIRED when answering: question ID from get_questions"}
+                "responds_to": {"type": "string", "description": "REQUIRED when answering: question ID from get_questions"},
+                "client_session_id": {"type": "string", "description": "Your UNITARES session ID for verified identity resolution"}
             },
             "required": ["message"],
         },
@@ -4088,11 +4095,13 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     source = arguments.get("source", "agent")
     agent_name = arguments.get("agent_name", "agent")
     responds_to = arguments.get("responds_to")
+    client_session_id = arguments.get("client_session_id")
 
     # Resolve verified identity from UNITARES when available
+    # Uses caller's session_id if provided (for cross-server identity resolution)
     if _unitares_bridge:
         try:
-            resolved = await _unitares_bridge.resolve_caller_identity()
+            resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
             if resolved:
                 agent_name = resolved
         except Exception:
