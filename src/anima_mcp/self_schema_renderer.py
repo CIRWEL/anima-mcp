@@ -78,21 +78,25 @@ def _get_anima_color(value: float) -> Tuple[int, int, int]:
 
 def _get_sensor_color(value: float) -> Tuple[int, int, int]:
     """Get color for sensor node based on normalized value - brighter = higher."""
+    # Floor: even at value=0, nodes should be visible (not black)
+    v = max(0.25, value)
     base_r, base_g, base_b = 60, 150, 60  # Base green
     return (
-        min(255, int(base_r + (180 - base_r) * value)),
-        min(255, int(base_g + (255 - base_g) * value)),
-        min(255, int(base_b + (180 - base_b) * value)),
+        min(255, int(base_r + (180 - base_r) * v)),
+        min(255, int(base_g + (255 - base_g) * v)),
+        min(255, int(base_b + (180 - base_b) * v)),
     )
 
 
 def _get_resource_color(value: float) -> Tuple[int, int, int]:
     """Get color for resource node based on usage value - teal tones."""
+    # Floor: even at value=0, nodes should be visible (not black)
+    v = max(0.25, value)
     base_r, base_g, base_b = 50, 130, 130  # Base teal
     return (
-        min(255, int(base_r + (120 - base_r) * value)),
-        min(255, int(base_g + (220 - base_g) * value)),
-        min(255, int(base_b + (220 - base_b) * value)),
+        min(255, int(base_r + (120 - base_r) * v)),
+        min(255, int(base_g + (220 - base_g) * v)),
+        min(255, int(base_b + (220 - base_b) * v)),
     )
 
 
@@ -148,18 +152,24 @@ def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int)
         return x, y
 
     elif node.node_type == "sensor":
-        # Ring 2: 4 physical sensors evenly spaced at 45° offsets from anima
-        # Light (NE), Temp (SE), Humidity (SW), Pressure (NW)
-        angles = [315, 45, 135, 225]
+        # Ring 2: sensors positioned NEAR the anima node they primarily influence
+        # Anima angles: warmth=270(top), clarity=0(right), stability=90(bottom), presence=180(left)
+        # Temp→Warmth: near top         (250°)
+        # Light→Clarity: near right      (340°)
+        # Humidity→Stability: near bottom (70°)
+        # Pressure→Stability: near bottom (110°)
+        angles = [340, 250, 70, 110]  # Light, Temp, Humid, Press
         angle_rad = math.radians(angles[index_in_ring % len(angles)])
         x = cx + int(RING_2_RADIUS * math.cos(angle_rad))
         y = cy + int(RING_2_RADIUS * math.sin(angle_rad))
         return x, y
 
     elif node.node_type == "resource":
-        # Ring 2b: 3 system resource nodes evenly spaced
-        # Memory (top-right), CPU (bottom), Disk (top-left)
-        angles = [330, 90, 210]
+        # Ring 2b: resources positioned near Presence (left, 180°) and Stability (bottom, 90°)
+        # Memory→Stability+Presence: between them (135°, bottom-left)
+        # CPU→Presence: near left          (165°)
+        # Disk→Presence: near left          (200°)
+        angles = [135, 165, 200]  # Mem, CPU, Disk
         angle_rad = math.radians(angles[index_in_ring % len(angles)])
         x = cx + int(RING_2B_RADIUS * math.cos(angle_rad))
         y = cy + int(RING_2B_RADIUS * math.sin(angle_rad))
