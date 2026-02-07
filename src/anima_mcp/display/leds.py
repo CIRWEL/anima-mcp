@@ -105,6 +105,10 @@ class LEDDisplay:
             self._pattern_start_time = None
             self._last_state_values = None
             self._expression_mode = expression_mode
+            # Enforce sane minimums regardless of config (config may be stale)
+            self._base_brightness = max(0.08, self._base_brightness)
+            self._auto_brightness_min = max(0.03, self._auto_brightness_min)
+            self._auto_brightness_max = max(0.10, self._auto_brightness_max)
         except ImportError:
             # Fallback if config not available
             # NOTE: These should match anima_config.yaml defaults
@@ -123,7 +127,7 @@ class LEDDisplay:
         self._brightness = self._base_brightness
         # Hardware floor: absolute minimum brightness (separate from auto-brightness range).
         # Activity state (RESTING=0.15x) can push below auto_brightness_min but not below this.
-        self._hardware_brightness_floor = 0.01
+        self._hardware_brightness_floor = 0.02
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_colors = [None, None, None]  # For color transitions
@@ -682,14 +686,18 @@ class LEDDisplay:
 
         # 4. Apply activity state brightness (circadian rhythm / dusk-dawn dimming)
         # - ACTIVE (day): 1.0x brightness
-        # - DROWSY (dusk/dawn): 0.5x brightness
-        # - RESTING (night): 0.15x brightness
+        # - DROWSY (dusk/dawn): 0.6x brightness
+        # - RESTING (night): 0.35x brightness
         if activity_brightness < 1.0:
             state.brightness *= activity_brightness
 
         # 4b. Apply manual dimmer (user joystick control, stacks with activity)
         if self._manual_brightness_factor < 1.0:
             state.brightness *= self._manual_brightness_factor
+
+        # 4c. Enforce visible minimum — if Lumen is on, LEDs should be on.
+        # The hardware floor in set_all() is a safety net; this is the intent.
+        state.brightness = max(self._hardware_brightness_floor, state.brightness)
 
         # Cache the pipeline brightness for the early-return path
         self._cached_pipeline_brightness = state.brightness
