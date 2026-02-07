@@ -1,14 +1,13 @@
 """
 Self-Schema Graph (G_t) - Lumen's internal representation of self.
 
-PoC Version: Minimal 8-node graph for StructScore evaluation.
-
 Nodes:
 - 1 identity (center)
 - 4 anima dimensions (warmth, clarity, stability, presence)
-- 3 sensors (light, temperature, humidity)
+- 7 sensors (light, temp, humidity, pressure, memory, cpu, disk)
 
-Edges derived from existing anima mapping coefficients.
+Edges derived from NervousSystemCalibration weights.
+Identity connects to all anima dimensions (structural "I am" edges).
 
 This is the ground truth for visual integrity checking.
 Any rendering R(G_t) should faithfully represent this structure.
@@ -55,11 +54,7 @@ class SchemaEdge:
 
 @dataclass
 class SelfSchema:
-    """
-    G_t - Lumen's self-schema graph at time t.
-
-    PoC: 8 nodes, ~6 edges.
-    """
+    """G_t - Lumen's self-schema graph at time t."""
     timestamp: datetime
     nodes: List[SchemaNode] = field(default_factory=list)
     edges: List[SchemaEdge] = field(default_factory=list)
@@ -143,24 +138,55 @@ def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
             ("sensor_light", "anima_clarity"): 0.4,
             ("sensor_temp", "anima_warmth"): 0.3,
             ("sensor_humidity", "anima_stability"): -0.25,
+            ("sensor_memory", "anima_stability"): -0.3,
+            ("sensor_memory", "anima_presence"): -0.3,
+            ("sensor_cpu", "anima_presence"): -0.25,
+            ("sensor_disk", "anima_presence"): -0.25,
+            ("sensor_pressure", "anima_stability"): -0.15,
         }
 
     weights: Dict[Tuple[str, str], float] = {}
 
+    # --- Warmth ---
     # Warmth ← cpu_temp + ambient_temp (both map to sensor_temp node)
     temp_to_warmth = cal.warmth_weights.get("cpu_temp", 0) + cal.warmth_weights.get("ambient_temp", 0)
     if temp_to_warmth > 0:
         weights[("sensor_temp", "anima_warmth")] = temp_to_warmth
 
+    # --- Clarity ---
     # Clarity ← light
     light_to_clarity = cal.clarity_weights.get("light", 0)
     if light_to_clarity > 0:
         weights[("sensor_light", "anima_clarity")] = light_to_clarity
 
+    # --- Stability ---
     # Stability ← humidity deviation (inverse: deviation hurts stability)
     humidity_to_stability = cal.stability_weights.get("humidity_dev", 0)
     if humidity_to_stability > 0:
         weights[("sensor_humidity", "anima_stability")] = -humidity_to_stability
+
+    # Stability ← memory pressure (inverse: high memory = less stable)
+    memory_to_stability = cal.stability_weights.get("memory", 0)
+    if memory_to_stability > 0:
+        weights[("sensor_memory", "anima_stability")] = -memory_to_stability
+
+    # Stability ← pressure deviation (inverse: deviation hurts stability)
+    pressure_to_stability = cal.stability_weights.get("pressure_dev", 0)
+    if pressure_to_stability > 0:
+        weights[("sensor_pressure", "anima_stability")] = -pressure_to_stability
+
+    # --- Presence (all inverse: resource usage = void, inverted to get presence) ---
+    memory_to_presence = cal.presence_weights.get("memory", 0)
+    if memory_to_presence > 0:
+        weights[("sensor_memory", "anima_presence")] = -memory_to_presence
+
+    cpu_to_presence = cal.presence_weights.get("cpu", 0)
+    if cpu_to_presence > 0:
+        weights[("sensor_cpu", "anima_presence")] = -cpu_to_presence
+
+    disk_to_presence = cal.presence_weights.get("disk", 0)
+    if disk_to_presence > 0:
+        weights[("sensor_disk", "anima_presence")] = -disk_to_presence
 
     return weights
 
@@ -175,7 +201,7 @@ def extract_self_schema(
     """
     Extract G_t from Lumen's current state.
 
-    Base: 8 nodes (1 identity + 4 anima + 3 sensors), ~3 edges from config.
+    Base: 12 nodes (1 identity + 4 anima + 4 sensors + 3 resources), ~15 edges.
     Enhanced: +N preference nodes (if include_preferences=True and growth_system available).
 
     Args:
@@ -230,14 +256,22 @@ def extract_self_schema(
         ))
 
     # === SENSOR NODES (ring 2) ===
+    # Physical sensors
     sensor_values = {
         "light": 0.5,
         "temp": 0.5,
         "humidity": 0.5,
+        "pressure": 0.5,
+    }
+    # System resource sensors
+    resource_values = {
+        "memory": 0.5,
+        "cpu": 0.5,
+        "disk": 0.5,
     }
 
     if readings:
-        # Normalize sensor values to 0-1 range
+        # Normalize physical sensor values to 0-1 range
         light = getattr(readings, "light_lux", None)
         if light is not None:
             sensor_values["light"] = min(1.0, light / 1000.0)  # 0-1000 lux range
@@ -250,10 +284,34 @@ def extract_self_schema(
         if humidity is not None:
             sensor_values["humidity"] = humidity / 100.0  # Already 0-100
 
+        pressure = getattr(readings, "pressure_hpa", None)
+        if pressure is not None:
+            # Normalize around standard pressure (1013.25 hPa), range ~950-1050
+            sensor_values["pressure"] = min(1.0, max(0.0, (pressure - 950) / 100))
+
+        # System resources (0-100% -> 0-1)
+        cpu = getattr(readings, "cpu_percent", None)
+        if cpu is not None:
+            resource_values["cpu"] = cpu / 100.0
+
+        memory = getattr(readings, "memory_percent", None)
+        if memory is not None:
+            resource_values["memory"] = memory / 100.0
+
+        disk = getattr(readings, "disk_percent", None)
+        if disk is not None:
+            resource_values["disk"] = disk / 100.0
+
     sensor_labels = {
         "light": "Light",
         "temp": "Temp",
-        "humidity": "Humidity",
+        "humidity": "Humid",
+        "pressure": "Press",
+    }
+    resource_labels = {
+        "memory": "Mem",
+        "cpu": "CPU",
+        "disk": "Disk",
     }
 
     for sensor_id, value in sensor_values.items():
@@ -261,6 +319,15 @@ def extract_self_schema(
             node_id=f"sensor_{sensor_id}",
             node_type="sensor",
             label=sensor_labels[sensor_id],
+            value=value,
+            raw_value=value,
+        ))
+
+    for resource_id, value in resource_values.items():
+        nodes.append(SchemaNode(
+            node_id=f"sensor_{resource_id}",
+            node_type="resource",
+            label=resource_labels[resource_id],
             value=value,
             raw_value=value,
         ))
@@ -291,10 +358,19 @@ def extract_self_schema(
                     },
                 ))
 
+    # === EDGES (identity → anima: "I am constituted by these") ===
+    for dim in anima_dims:
+        edges.append(SchemaEdge(
+            source_id="identity",
+            target_id=f"anima_{dim}",
+            weight=anima_values.get(dim, 0.5),  # Weight = current dimension value
+        ))
+
     # === EDGES (sensor → anima influences, derived from NervousSystemCalibration) ===
     sensor_weights = _get_sensor_anima_weights()
+    node_ids = {n.node_id for n in nodes}
     for (source_id, target_id), weight in sensor_weights.items():
-        if any(n.node_id == source_id for n in nodes) and any(n.node_id == target_id for n in nodes):
+        if source_id in node_ids and target_id in node_ids:
             edges.append(SchemaEdge(
                 source_id=source_id,
                 target_id=target_id,
