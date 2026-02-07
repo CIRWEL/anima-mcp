@@ -100,9 +100,9 @@ class PilRenderer(DisplayRenderer):
         # Manual brightness control (user-adjustable via joystick)
         self._brightness_presets = [
             {"name": "Full",   "display": 1.0,  "leds": 1.0},
-            {"name": "Medium", "display": 0.5,  "leds": 0.6},
-            {"name": "Dim",    "display": 0.2,  "leds": 0.3},
-            {"name": "Night",  "display": 0.05, "leds": 0.1},
+            {"name": "Medium", "display": 0.5,  "leds": 0.4},
+            {"name": "Dim",    "display": 0.2,  "leds": 0.15},
+            {"name": "Night",  "display": 0.05, "leds": 0.0},  # LEDs off at night
         ]
         self._brightness_index: int = 0  # Index into presets
         self._manual_brightness: float = 1.0  # Display multiplier
