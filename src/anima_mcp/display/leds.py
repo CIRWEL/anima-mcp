@@ -139,6 +139,7 @@ class LEDDisplay:
         self._cached_anima_state = None  # (warmth, clarity, stability, presence)
         self._cached_light_level = None
         self._cached_activity_brightness = None  # Track activity transitions
+        self._cached_manual_brightness = None  # Track manual dimmer changes
         self._cached_pipeline_brightness = None  # Last fully-computed brightness (before breathing)
         self._cached_state_change_threshold = 0.05  # Only recalculate if change > 5%
         # Emotional dance state
@@ -146,6 +147,7 @@ class LEDDisplay:
         self._dance_cooldown_until: float = 0.0  # Prevent dance spam
         self._last_dance_trigger: Optional[str] = None
         self._spontaneous_dance_chance: float = 0.003  # ~0.3% per update chance of spontaneous dance
+        self._manual_brightness_factor: float = 1.0  # User dimmer multiplier (set from server.py)
         self._init_leds()
     
     def _init_leds(self):
@@ -183,14 +185,19 @@ class LEDDisplay:
         return self._dots is not None
     
     def _get_breathing_brightness(self) -> float:
-        """Calculate breathing brightness (subtle sine wave around base_brightness)."""
+        """Calculate breathing brightness (subtle sine wave around base_brightness).
+
+        When manual dimmer is active, slow the breathing cycle for a calmer feel.
+        """
         if not self._enable_breathing:
             return self._base_brightness
 
-        # Slow breathing: 8 second cycle, ±10% of base brightness
+        # Breathing cycle slows when dimmed: 8s at full → 12s at dim → 16s at night
+        # speed_factor: 1.0 at full brightness, lower when dimmed
+        speed_factor = 0.5 + 0.5 * self._manual_brightness_factor  # 0.5-1.0
         t = time.time()
         variation = self._base_brightness * 0.1  # ±10% of base
-        breath = math.sin(t * math.pi / 4) * variation
+        breath = math.sin(t * math.pi / 4 * speed_factor) * variation
         return max(0.0, min(0.5, self._base_brightness + breath))
     
     def _detect_state_change(self, warmth: float, clarity: float, stability: float, presence: float) -> Optional[str]:
@@ -444,17 +451,19 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Apply brightness (state.brightness already includes auto-adjust, pulsing, activity)
+            # Apply brightness (state.brightness already includes auto-adjust, pulsing, activity, manual)
             # Then apply breathing modulation on top
+            # When manual dimmer is 0 (Night mode), allow LEDs to be fully off
+            floor = 0.0 if self._manual_brightness_factor <= 0.01 else self._hardware_brightness_floor
             if self._enable_breathing:
                 breathing_brightness = self._get_breathing_brightness()
                 if self._base_brightness > 0:
                     final_brightness = state.brightness * (breathing_brightness / self._base_brightness)
                 else:
                     final_brightness = state.brightness
-                self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, final_brightness))
+                self._dots.brightness = max(floor, min(0.5, final_brightness))
             else:
-                self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, max(0.0, state.brightness)))
+                self._dots.brightness = max(floor, min(0.5, max(0.0, state.brightness)))
 
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
@@ -563,8 +572,10 @@ class LEDDisplay:
                             abs(light_level - self._cached_light_level) > 50)  # 50 lux threshold
             activity_changed = (self._cached_activity_brightness is not None and
                                abs(activity_brightness - self._cached_activity_brightness) > 0.01)
+            manual_changed = (self._cached_manual_brightness is not None and
+                             abs(self._manual_brightness_factor - self._cached_manual_brightness) > 0.01)
 
-            if max_delta < self._cached_state_change_threshold and not light_changed and not activity_changed:
+            if max_delta < self._cached_state_change_threshold and not light_changed and not activity_changed and not manual_changed:
                 # State essentially unchanged - skip color calculations, just animate brightness
                 state_changed = False
                 if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
@@ -578,7 +589,8 @@ class LEDDisplay:
                         final = self._cached_pipeline_brightness * breath_mod
                     else:
                         final = self._cached_pipeline_brightness
-                    self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, final))
+                    floor = 0.0 if self._manual_brightness_factor <= 0.01 else self._hardware_brightness_floor
+                    self._dots.brightness = max(floor, min(0.5, final))
                     self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
@@ -587,6 +599,7 @@ class LEDDisplay:
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
         self._cached_activity_brightness = activity_brightness
+        self._cached_manual_brightness = self._manual_brightness_factor
         
         # Detect state changes for pattern triggers
         pattern_trigger = None
@@ -673,6 +686,10 @@ class LEDDisplay:
         # - RESTING (night): 0.15x brightness
         if activity_brightness < 1.0:
             state.brightness *= activity_brightness
+
+        # 4b. Apply manual dimmer (user joystick control, stacks with activity)
+        if self._manual_brightness_factor < 1.0:
+            state.brightness *= self._manual_brightness_factor
 
         # Cache the pipeline brightness for the early-return path
         self._cached_pipeline_brightness = state.brightness

@@ -1087,9 +1087,9 @@ async def _update_display_loop():
                 except Exception:
                     pass  # Default to 1.0 if activity manager unavailable
 
-                # Apply manual brightness from user dimmer (stacks with activity)
+                # Sync manual brightness dimmer to LED controller
                 if _screen_renderer and hasattr(_screen_renderer._display, '_manual_led_brightness'):
-                    activity_brightness *= _screen_renderer._display._manual_led_brightness
+                    _leds._manual_brightness_factor = _screen_renderer._display._manual_led_brightness
 
                 def update_leds():
                     # LEDs derive their own state directly from anima - no face influence
