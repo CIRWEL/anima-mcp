@@ -1,18 +1,19 @@
 """
 Self-Schema Renderer R(G_t) - Renders self-schema to pixels.
 
-PoC Version: Simple concentric layout for 8 nodes.
-
 Layout:
 - Center: Identity node
 - Ring 1 (radius ~50): 4 anima nodes at cardinal positions
-- Ring 2 (radius ~90): 3 sensor nodes
+- Ring 2 (radius ~80): 4 physical sensor nodes (light, temp, humidity, pressure)
+- Ring 2b (radius ~100): 3 resource nodes (memory, cpu, disk)
+- Ring 3 (radius ~110): Preference nodes (if present)
 
 Colors:
-- Identity: Gold (255, 200, 100)
+- Identity: Gold
 - Anima: Blue tones (varies by value)
-- Sensors: Green (100, 200, 100)
-- Edges: Gray lines
+- Sensors: Green tones (varies by value)
+- Resources: Teal tones (varies by value)
+- Edges: Green (positive) / Red (negative)
 
 Can render to:
 1. Dictionary of pixels (for canvas integration)
@@ -36,15 +37,17 @@ HEIGHT = 240
 CENTER = (WIDTH // 2, HEIGHT // 2)
 
 # Ring radii
-RING_1_RADIUS = 50  # Anima nodes
-RING_2_RADIUS = 90  # Sensor nodes
-RING_3_RADIUS = 110  # Preference nodes (outer ring)
+RING_1_RADIUS = 50   # Anima nodes
+RING_2_RADIUS = 82   # Physical sensor nodes (tighter to fit more)
+RING_2B_RADIUS = 102  # System resource nodes
+RING_3_RADIUS = 112  # Preference nodes (outer ring)
 
 # Node sizes (radius)
-IDENTITY_RADIUS = 15
-ANIMA_RADIUS = 12
-SENSOR_RADIUS = 10
-PREFERENCE_RADIUS = 8  # Smaller for outer ring
+IDENTITY_RADIUS = 14
+ANIMA_RADIUS = 11
+SENSOR_RADIUS = 9
+RESOURCE_RADIUS = 8
+PREFERENCE_RADIUS = 7
 
 # Colors (RGB)
 COLORS = {
@@ -53,6 +56,7 @@ COLORS = {
     "anima_mid": (80, 120, 200),      # Medium blue (0.4-0.6)
     "anima_low": (60, 90, 150),       # Dark blue (value < 0.4)
     "sensor": (100, 200, 100),        # Green
+    "resource": (80, 180, 180),       # Teal for system resources
     "preference": (255, 150, 0),      # Orange for preferences
     "edge_positive": (100, 150, 100), # Green-gray for positive edges
     "edge_negative": (150, 100, 100), # Red-gray for negative edges
@@ -79,6 +83,16 @@ def _get_sensor_color(value: float) -> Tuple[int, int, int]:
         min(255, int(base_r + (180 - base_r) * value)),
         min(255, int(base_g + (255 - base_g) * value)),
         min(255, int(base_b + (180 - base_b) * value)),
+    )
+
+
+def _get_resource_color(value: float) -> Tuple[int, int, int]:
+    """Get color for resource node based on usage value - teal tones."""
+    base_r, base_g, base_b = 50, 130, 130  # Base teal
+    return (
+        min(255, int(base_r + (120 - base_r) * value)),
+        min(255, int(base_g + (220 - base_g) * value)),
+        min(255, int(base_b + (220 - base_b) * value)),
     )
 
 
@@ -134,11 +148,21 @@ def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int)
         return x, y
 
     elif node.node_type == "sensor":
-        # Ring 2: sensors at 45, 135, 225 degrees (between anima nodes)
-        angles = [315, 45, 135]  # Light at top-right, temp at bottom-right, humidity at bottom-left
-        angle_rad = math.radians(angles[index_in_ring % 3])
+        # Ring 2: 4 physical sensors evenly spaced at 45° offsets from anima
+        # Light (NE), Temp (SE), Humidity (SW), Pressure (NW)
+        angles = [315, 45, 135, 225]
+        angle_rad = math.radians(angles[index_in_ring % len(angles)])
         x = cx + int(RING_2_RADIUS * math.cos(angle_rad))
         y = cy + int(RING_2_RADIUS * math.sin(angle_rad))
+        return x, y
+
+    elif node.node_type == "resource":
+        # Ring 2b: 3 system resource nodes evenly spaced
+        # Memory (top-right), CPU (bottom), Disk (top-left)
+        angles = [330, 90, 210]
+        angle_rad = math.radians(angles[index_in_ring % len(angles)])
+        x = cx + int(RING_2B_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_2B_RADIUS * math.sin(angle_rad))
         return x, y
 
     elif node.node_type == "preference":
@@ -243,23 +267,17 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
     node_positions: Dict[str, Tuple[int, int]] = {}
 
     # Count nodes by type for positioning
-    anima_index = 0
-    sensor_index = 0
-    preference_index = 0
+    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0}
     preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
 
     for node in schema.nodes:
         if node.node_type == "identity":
             pos = _get_node_position(node, 0, 1)
-        elif node.node_type == "anima":
-            pos = _get_node_position(node, anima_index, 4)
-            anima_index += 1
-        elif node.node_type == "sensor":
-            pos = _get_node_position(node, sensor_index, 3)
-            sensor_index += 1
-        elif node.node_type == "preference":
-            pos = _get_node_position(node, preference_index, preference_count)
-            preference_index += 1
+        elif node.node_type in type_indices:
+            idx = type_indices[node.node_type]
+            total = preference_count if node.node_type == "preference" else 0
+            pos = _get_node_position(node, idx, total)
+            type_indices[node.node_type] += 1
         else:
             pos = CENTER
 
@@ -312,6 +330,9 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
         elif node.node_type == "sensor":
             color = _get_sensor_color(node.value)
             _draw_glow(pixels, x, y, SENSOR_RADIUS, color, node.value)
+        elif node.node_type == "resource":
+            color = _get_resource_color(node.value)
+            _draw_glow(pixels, x, y, RESOURCE_RADIUS, color, node.value)
 
     # Draw nodes
     for node in schema.nodes:
@@ -328,6 +349,9 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
         elif node.node_type == "sensor":
             color = _get_sensor_color(node.value)
             _draw_filled_circle(pixels, x, y, SENSOR_RADIUS, color)
+        elif node.node_type == "resource":
+            color = _get_resource_color(node.value)
+            _draw_filled_circle(pixels, x, y, RESOURCE_RADIUS, color)
         elif node.node_type == "preference":
             _draw_filled_circle(pixels, x, y, PREFERENCE_RADIUS, COLORS["preference"])
 
@@ -451,6 +475,10 @@ def compute_visual_integrity_stub(
             expected_pixels += int(math.pi * ANIMA_RADIUS ** 2)
         elif node.node_type == "sensor":
             expected_pixels += int(math.pi * SENSOR_RADIUS ** 2)
+        elif node.node_type == "resource":
+            expected_pixels += int(math.pi * RESOURCE_RADIUS ** 2)
+        elif node.node_type == "preference":
+            expected_pixels += int(math.pi * PREFERENCE_RADIUS ** 2)
 
     # Add ~10% for edges
     expected_pixels = int(expected_pixels * 1.1)
