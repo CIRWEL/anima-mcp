@@ -1348,7 +1348,8 @@ def derive_led_state(warmth: float, clarity: float,
             led0 = (50, 50, 50)
             led1 = (50, 50, 50)
             led2 = (50, 50, 50)
-    
+        return LEDState(led0=led0, led1=led1, led2=led2, brightness=0.12)
+
     elif pattern_mode == "expressive":
         # Expressive mode: More vibrant colors, wider range
         # LED 0: Warmth with more colors
@@ -1382,7 +1383,8 @@ def derive_led_state(warmth: float, clarity: float,
             led2 = (255, 200, 0)  # Yellow
         else:
             led2 = (255, 0, 0)  # Red
-    
+        return LEDState(led0=led0, led1=led1, led2=led2, brightness=0.12)
+
     elif pattern_mode == "alert":
         # Alert mode: Emphasize problems
         # LED 0: Warmth (only show extremes)
@@ -1408,7 +1410,8 @@ def derive_led_state(warmth: float, clarity: float,
             led2 = (255, 150, 0)  # Orange warning
         else:
             led2 = (0, 255, 50)  # Green good
-    
+        return LEDState(led0=led0, led1=led1, led2=led2, brightness=0.12)
+
     else:  # "standard" mode (default)
         # Use rich gradient palette
         led0, led1, led2 = _create_gradient_palette(warmth, clarity, stability, presence)
