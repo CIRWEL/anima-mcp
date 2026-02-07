@@ -509,6 +509,23 @@ async def _update_display_loop():
                                 mode_change_event.set()  # Trigger immediate re-render
                                 print(f"[Input] {old_mode.value} -> notepad (joystick button)", file=sys.stderr, flush=True)
                         
+                        # Joystick UP/DOWN on FACE screen = brightness control
+                        if current_mode == ScreenMode.FACE:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    _screen_renderer.trigger_input_feedback("up")
+                                    preset_name = _screen_renderer._display.brightness_up()
+                                    preset = _screen_renderer._display.get_brightness_preset()
+                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["display"])
+                                    mode_change_event.set()
+                                elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    _screen_renderer.trigger_input_feedback("down")
+                                    preset_name = _screen_renderer._display.brightness_down()
+                                    preset = _screen_renderer._display.get_brightness_preset()
+                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["display"])
+                                    mode_change_event.set()
+
                         # Joystick navigation in message board (UP/DOWN scrolls messages)
                         if current_mode == ScreenMode.MESSAGES:
                             if prev_state:
@@ -1069,6 +1086,10 @@ async def _update_display_loop():
                     activity_brightness = activity_state.brightness_multiplier
                 except Exception:
                     pass  # Default to 1.0 if activity manager unavailable
+
+                # Apply manual brightness from user dimmer (stacks with activity)
+                if _screen_renderer and hasattr(_screen_renderer._display, '_manual_led_brightness'):
+                    activity_brightness *= _screen_renderer._display._manual_led_brightness
 
                 def update_leds():
                     # LEDs derive their own state directly from anima - no face influence

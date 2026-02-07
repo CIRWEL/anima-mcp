@@ -81,6 +81,11 @@ class ScreenState:
     input_feedback_until: float = 0.0  # Show feedback until this time
     input_feedback_direction: str = ""  # "left", "right", "up", "down", "press"
 
+    # Brightness overlay state
+    brightness_changed_at: float = 0.0  # When brightness last changed
+    brightness_overlay_name: str = ""  # Preset name to display
+    brightness_overlay_level: float = 1.0  # Display brightness level for bar
+
 
 def _get_canvas_path() -> Path:
     """Get persistent path for canvas state."""
@@ -781,6 +786,63 @@ class ScreenRenderer:
             draw.rectangle([0, height - corner_size, corner_size, height], fill=feedback_color)
             draw.rectangle([width - corner_size, height - corner_size, width, height], fill=feedback_color)
 
+    def trigger_brightness_overlay(self, preset_name: str, display_level: float):
+        """Show brightness overlay for 1.5 seconds."""
+        self._state.brightness_changed_at = time.time()
+        self._state.brightness_overlay_name = preset_name
+        self._state.brightness_overlay_level = display_level
+
+    def _draw_brightness_overlay(self, draw, image):
+        """Draw brightness mode overlay (centered box with name + bar)."""
+        elapsed = time.time() - self._state.brightness_changed_at
+        if elapsed >= 1.5:
+            return
+
+        name = self._state.brightness_overlay_name
+        level = self._state.brightness_overlay_level
+        w, h = 240, 240
+
+        # Semi-transparent dark box (centered)
+        box_w, box_h = 100, 40
+        bx = (w - box_w) // 2
+        by = (h - box_h) // 2
+
+        # Fade out in last 0.3s
+        alpha = 1.0 if elapsed < 1.2 else (1.5 - elapsed) / 0.3
+
+        # Draw dark background
+        bg_color = tuple(int(20 * alpha) for _ in range(3))
+        draw.rectangle([bx - 2, by - 2, bx + box_w + 2, by + box_h + 2], fill=bg_color)
+
+        # Mode name
+        try:
+            from PIL import ImageFont
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
+        except (OSError, IOError):
+            from PIL import ImageFont
+            font = ImageFont.load_default()
+
+        text_color = tuple(int(220 * alpha) for _ in range(3))
+        bbox = draw.textbbox((0, 0), name, font=font)
+        tw = bbox[2] - bbox[0]
+        draw.text(((w - tw) // 2, by + 4), name, fill=text_color, font=font)
+
+        # Brightness bar
+        bar_y = by + 26
+        bar_w = box_w - 16
+        bar_x = bx + 8
+        bar_h = 6
+
+        # Background bar
+        bar_bg = tuple(int(50 * alpha) for _ in range(3))
+        draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], fill=bar_bg)
+
+        # Filled portion
+        fill_w = int(bar_w * level)
+        bar_fill = tuple(int(c * alpha) for c in (100, 180, 220))
+        if fill_w > 0:
+            draw.rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + bar_h], fill=bar_fill)
+
     def render(
         self,
         face_state: Optional[FaceState] = None,
@@ -878,6 +940,10 @@ class ScreenRenderer:
                     # Draw input feedback (joystick/button visual acknowledgment)
                     if time.time() < self._state.input_feedback_until:
                         self._draw_input_feedback(draw, image)
+
+                    # Draw brightness overlay (when user changes brightness)
+                    if time.time() - self._state.brightness_changed_at < 1.5:
+                        self._draw_brightness_overlay(draw, image)
 
                     # Apply loading indicator overlay
                     if self._state.is_loading:
