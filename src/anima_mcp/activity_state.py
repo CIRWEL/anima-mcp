@@ -76,12 +76,12 @@ class ActivityManager:
                 "led_mode": "normal",
             },
             ActivityLevel.DROWSY: {
-                "brightness_mult": 0.5,
+                "brightness_mult": 0.6,
                 "update_mult": 1.5,
                 "led_mode": "slow_breathing",
             },
             ActivityLevel.RESTING: {
-                "brightness_mult": 0.15,
+                "brightness_mult": 0.35,
                 "update_mult": 3.0,
                 "led_mode": "dim_breathing",
             },
