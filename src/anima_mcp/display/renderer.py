@@ -9,12 +9,14 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import io
+import json
 import math
 import sys
 import traceback
+from pathlib import Path
 
 try:
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw, ImageFont, ImageEnhance
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False
@@ -95,7 +97,74 @@ class PilRenderer(DisplayRenderer):
         self._deferred: bool = False  # When True, _show() skips SPI push (caller must call flush())
         # Font cache (avoid loading from disk on every render)
         self._name_font: Optional[ImageFont.FreeTypeFont] = None
+        # Manual brightness control (user-adjustable via joystick)
+        self._brightness_presets = [
+            {"name": "Full",   "display": 1.0,  "leds": 1.0},
+            {"name": "Medium", "display": 0.5,  "leds": 0.6},
+            {"name": "Dim",    "display": 0.2,  "leds": 0.3},
+            {"name": "Night",  "display": 0.05, "leds": 0.1},
+        ]
+        self._brightness_index: int = 0  # Index into presets
+        self._manual_brightness: float = 1.0  # Display multiplier
+        self._manual_led_brightness: float = 1.0  # LED multiplier
+        self._brightness_config_path = Path.home() / ".anima" / "display_brightness.json"
+        self._load_brightness()
         self._init_display()
+
+    def _load_brightness(self):
+        """Load saved brightness preset from disk."""
+        try:
+            if self._brightness_config_path.exists():
+                data = json.loads(self._brightness_config_path.read_text())
+                name = data.get("name", "Full")
+                for i, preset in enumerate(self._brightness_presets):
+                    if preset["name"] == name:
+                        self._brightness_index = i
+                        self._manual_brightness = preset["display"]
+                        self._manual_led_brightness = preset["leds"]
+                        print(f"[Display] Loaded brightness: {name}", file=sys.stderr, flush=True)
+                        return
+        except Exception as e:
+            print(f"[Display] Could not load brightness: {e}", file=sys.stderr, flush=True)
+
+    def _save_brightness(self):
+        """Save current brightness preset to disk."""
+        try:
+            self._brightness_config_path.parent.mkdir(parents=True, exist_ok=True)
+            preset = self._brightness_presets[self._brightness_index]
+            self._brightness_config_path.write_text(json.dumps({
+                "name": preset["name"],
+                "display": preset["display"],
+                "leds": preset["leds"],
+            }))
+        except Exception as e:
+            print(f"[Display] Could not save brightness: {e}", file=sys.stderr, flush=True)
+
+    def brightness_up(self) -> str:
+        """Cycle to next brighter preset. Returns preset name."""
+        if self._brightness_index > 0:
+            self._brightness_index -= 1
+        preset = self._brightness_presets[self._brightness_index]
+        self._manual_brightness = preset["display"]
+        self._manual_led_brightness = preset["leds"]
+        self._save_brightness()
+        print(f"[Display] Brightness: {preset['name']} (display={preset['display']}, leds={preset['leds']})", file=sys.stderr, flush=True)
+        return preset["name"]
+
+    def brightness_down(self) -> str:
+        """Cycle to next dimmer preset. Returns preset name."""
+        if self._brightness_index < len(self._brightness_presets) - 1:
+            self._brightness_index += 1
+        preset = self._brightness_presets[self._brightness_index]
+        self._manual_brightness = preset["display"]
+        self._manual_led_brightness = preset["leds"]
+        self._save_brightness()
+        print(f"[Display] Brightness: {preset['name']} (display={preset['display']}, leds={preset['leds']})", file=sys.stderr, flush=True)
+        return preset["name"]
+
+    def get_brightness_preset(self) -> dict:
+        """Get current brightness preset info."""
+        return self._brightness_presets[self._brightness_index]
 
     def _get_name_font(self) -> ImageFont.FreeTypeFont:
         """Get cached font for name display."""
@@ -543,10 +612,14 @@ class PilRenderer(DisplayRenderer):
         self._push_to_display()
 
     def _push_to_display(self):
-        """Actually push self._image to SPI display hardware."""
+        """Actually push self._image to SPI display hardware, applying brightness."""
         if self._display and self._image:
             try:
-                self._display.image(self._image)
+                if self._manual_brightness < 1.0:
+                    dimmed = ImageEnhance.Brightness(self._image).enhance(self._manual_brightness)
+                    self._display.image(dimmed)
+                else:
+                    self._display.image(self._image)
             except Exception as e:
                 print(f"[Display] Hardware error during show: {e}", file=sys.stderr, flush=True)
                 print("[Display] Marking display as unavailable", file=sys.stderr, flush=True)
