@@ -3339,7 +3339,11 @@ class ScreenRenderer:
         # Flat 0.001 preserves ~920 mark target. EISV coupling modulates on top:
         # intentional drawing (I > E) → dE_coupling positive → slower depletion
         # chaotic drawing (I < E) → dE_coupling negative → faster depletion
+        old_energy = self._intent.energy
         self._intent.energy = max(0.01, self._intent.energy - 0.001 + dE_coupling)
+        # Temporary diagnostic: log energy every 50 marks
+        if self._intent.mark_count % 50 == 0:
+            print(f"[Canvas/Energy] mark={self._intent.mark_count} energy={self._intent.energy:.4f} dE_coupling={dE_coupling:.6f} net_depletion={old_energy - self._intent.energy:.6f}", file=sys.stderr, flush=True)
 
         # --- Record for mood tracker ---
         try:
