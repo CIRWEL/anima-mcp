@@ -118,10 +118,17 @@ class CanvasState:
     # Save indicator (brief visual feedback)
     save_indicator_until: float = 0.0  # Show "saved" indicator until this time
 
+    # Render caching - avoid redrawing all pixels every frame
+    _dirty: bool = True  # Set by draw_pixel(), cleared after render
+    _cached_image: object = None  # Cached PIL Image of all pixels
+    _new_pixels: list = field(default_factory=list)  # Pixels added since last render
+
     def draw_pixel(self, x: int, y: int, color: Tuple[int, int, int]):
         """Draw a pixel at position."""
         if 0 <= x < self.width and 0 <= y < self.height:
             self.pixels[(x, y)] = color
+            self._new_pixels.append((x, y, color))  # Track for incremental render
+            self._dirty = True
             # Remember recent locations (keep last 20)
             self.recent_locations.append((x, y))
             if len(self.recent_locations) > 20:
@@ -138,6 +145,9 @@ class CanvasState:
         self.last_clear_time = time.time()
         self.is_satisfied = False
         self.satisfaction_time = 0.0
+        self._dirty = True
+        self._cached_image = None
+        self._new_pixels.clear()
         # Pause drawing for 5 seconds after manual clear so user sees empty canvas
         self.drawing_paused_until = time.time() + 5.0
 
@@ -309,6 +319,11 @@ class CanvasState:
                 self.drawings_saved = saved_count
         except Exception:
             pass
+
+        # Invalidate render cache after loading
+        self._dirty = True
+        self._cached_image = None
+        self._new_pixels.clear()
 
         if skipped_pixels > 0:
             print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}", file=sys.stderr, flush=True)
@@ -963,8 +978,13 @@ class ScreenRenderer:
                 self._unitares_agent_id = governance.get("unitares_agent_id")
 
             # Check Lumen's canvas autonomy (can save/clear regardless of screen)
+            # Throttle to every 10th frame — save/energy checks don't need 3Hz
             try:
-                self.canvas_check_autonomy(anima)
+                if not hasattr(self._state, '_frame_count'):
+                    self._state._frame_count = 0
+                self._state._frame_count += 1
+                if self._state._frame_count % 10 == 0:
+                    self.canvas_check_autonomy(anima)
             except Exception as e:
                 # Don't let autonomy errors break rendering
                 pass
@@ -3109,63 +3129,84 @@ class ScreenRenderer:
 
     def _render_notepad(self, anima: Optional[Anima] = None):
         """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave."""
-        print(f"[Notepad] Rendering notepad, pixels={len(self._canvas.pixels)}, anima={anima is not None}", file=sys.stderr, flush=True)
         try:
-            if hasattr(self._display, '_create_canvas'):
-                image, draw = self._display._create_canvas((0, 0, 0))  # Black background
-            else:
+            if not hasattr(self._display, '_create_canvas'):
                 self._display.render_text("NOTEPAD\n\nLumen's\ncreative\nspace", (10, 10))
                 return
-            
+
             # BUG FIX: Check if drawing is paused (after manual clear)
             now = time.time()
             if now < self._canvas.drawing_paused_until:
                 # Show "Cleared" confirmation - don't draw new pixels yet
+                image, draw = self._display._create_canvas((0, 0, 0))
                 remaining = int(self._canvas.drawing_paused_until - now) + 1
                 fonts = self._get_fonts()
                 font = fonts['giant']
 
                 text = f"Canvas Cleared\n\nResuming in {remaining}s..."
                 draw.text((40, 90), text, fill=(100, 200, 100), font=font)
-                
+
                 # Update display and return (don't draw new pixels)
                 if hasattr(self._display, '_image'):
                     self._display._image = image
                 if hasattr(self._display, '_show'):
                     self._display._show()
                 return
-            
-            # Draw all pixels Lumen has created (Lumen's work persists)
-            # Render all pixels - Lumen's expression deserves to be seen
-            pixels_before = len(self._canvas.pixels)
-            
-            # Always draw existing pixels first
-            for (x, y), color in self._canvas.pixels.items():
-                try:
-                    draw.point((x, y), fill=color)
-                except Exception as e:
-                    print(f"[Notepad] Error drawing pixel at ({x}, {y}): {e}", file=sys.stderr, flush=True)
-            
-            # Lumen continues drawing autonomously when on notepad screen
-            # Lumen's creative process continues even when you're not watching
-            if anima and len(self._canvas.pixels) < 15000:  # Increased limit for more expression
-                try:
-                    self._lumen_draw(anima, draw)
-                except Exception as e:
-                    print(f"[Notepad] Error in _lumen_draw: {e}", file=sys.stderr, flush=True)
-                    import traceback
-                    traceback.print_exc(file=sys.stderr)
-                
-                # Draw any NEW pixels that were just added (fix for blank drawings)
-                # Redraw all pixels if count increased (simpler than tracking which are new)
-                pixels_after = len(self._canvas.pixels)
-                if pixels_after > pixels_before:
-                    # New pixels were added - redraw everything to ensure they appear
-                    for (x, y), color in self._canvas.pixels.items():
+
+            # === Cached rendering: avoid redrawing all pixels every frame ===
+            if not self._canvas._dirty and self._canvas._cached_image is not None:
+                # Cache hit: copy cached image (~1ms vs ~3.5s full redraw)
+                from PIL import ImageDraw
+                image = self._canvas._cached_image.copy()
+                draw = ImageDraw.Draw(image)
+
+                # Let Lumen continue drawing (may add new pixels via draw_pixel)
+                if anima and len(self._canvas.pixels) < 15000:
+                    try:
+                        self._lumen_draw(anima, draw)
+                    except Exception as e:
+                        print(f"[Notepad] Error in _lumen_draw: {e}", file=sys.stderr, flush=True)
+
+                # If _lumen_draw added new pixels, draw them onto this image
+                if self._canvas._dirty and self._canvas._new_pixels:
+                    for x, y, color in self._canvas._new_pixels:
                         try:
                             draw.point((x, y), fill=color)
                         except Exception:
-                            pass  # Skip invalid pixels
+                            pass
+                    self._canvas._new_pixels.clear()
+                    self._canvas._cached_image = image.copy()
+                    self._canvas._dirty = False
+            else:
+                # Cache miss: full redraw (first frame, after load, after clear)
+                image, draw = self._display._create_canvas((0, 0, 0))
+
+                # Draw all existing pixels
+                for (x, y), color in self._canvas.pixels.items():
+                    try:
+                        draw.point((x, y), fill=color)
+                    except Exception:
+                        pass
+
+                # Let Lumen continue drawing
+                if anima and len(self._canvas.pixels) < 15000:
+                    try:
+                        self._lumen_draw(anima, draw)
+                    except Exception as e:
+                        print(f"[Notepad] Error in _lumen_draw: {e}", file=sys.stderr, flush=True)
+
+                    # Draw any new pixels added by _lumen_draw onto same image
+                    if self._canvas._new_pixels:
+                        for x, y, color in self._canvas._new_pixels:
+                            try:
+                                draw.point((x, y), fill=color)
+                            except Exception:
+                                pass
+                        self._canvas._new_pixels.clear()
+
+                # Cache the fully-rendered image
+                self._canvas._cached_image = image.copy()
+                self._canvas._dirty = False
             
             # Ensure something is visible - if canvas is completely empty, show a visible indicator
             if len(self._canvas.pixels) == 0:
