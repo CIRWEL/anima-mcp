@@ -185,7 +185,7 @@ class LLMGateway:
                     {"role": "system", "content": system},
                     {"role": "user", "content": prompt}
                 ],
-                "max_tokens": 60,
+                "max_tokens": 150,
                 "temperature": 0.8,
             }
         )
@@ -219,7 +219,7 @@ class LLMGateway:
             json={
                 "inputs": full_prompt,
                 "parameters": {
-                    "max_new_tokens": 60,
+                    "max_new_tokens": 150,
                     "temperature": 0.8,
                     "return_full_text": False,
                 }
