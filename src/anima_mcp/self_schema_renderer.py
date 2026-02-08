@@ -421,11 +421,42 @@ def save_render_to_file(
 
     # Try to save PNG (requires PIL)
     try:
-        from PIL import Image
+        from PIL import Image, ImageDraw, ImageFont
 
         img = Image.new("RGB", (WIDTH, HEIGHT), COLORS["background"])
         for (x, y), color in pixels.items():
             img.putpixel((x, y), color)
+
+        # Add node labels for VQA readability
+        draw = ImageDraw.Draw(img)
+        try:
+            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
+        except (OSError, IOError):
+            font = ImageFont.load_default()
+
+        # Rebuild node positions to place labels
+        type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0}
+        preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
+        for node in schema.nodes:
+            if node.node_type == "identity":
+                pos = _get_node_position(node, 0, 1)
+            elif node.node_type in type_indices:
+                idx = type_indices[node.node_type]
+                total = preference_count if node.node_type == "preference" else 0
+                pos = _get_node_position(node, idx, total)
+                type_indices[node.node_type] += 1
+            else:
+                pos = CENTER
+            x, y = pos
+            # Place label below node, centered
+            label = node.label
+            bbox = draw.textbbox((0, 0), label, font=font)
+            tw = bbox[2] - bbox[0]
+            lx = max(1, min(WIDTH - tw - 1, x - tw // 2))
+            ly = y + 10  # below node
+            if ly > HEIGHT - 12:
+                ly = y - 14  # above if at bottom
+            draw.text((lx, ly), label, fill=(200, 200, 200), font=font)
 
         img.save(png_path)
     except ImportError:
