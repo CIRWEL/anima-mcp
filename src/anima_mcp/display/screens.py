@@ -3624,12 +3624,13 @@ class ScreenRenderer:
             self._canvas.save_to_disk()
         print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
 
-    def canvas_save(self, announce: bool = False) -> Optional[str]:
+    def canvas_save(self, announce: bool = False, manual: bool = False) -> Optional[str]:
         """
         Save the canvas to a PNG file in ~/.anima/drawings/.
 
         Args:
             announce: If True, post to message board about the save.
+            manual: If True, this is a user-triggered snapshot (no clear, no reset).
 
         Returns:
             Path to saved file, or None if save failed or canvas empty.
@@ -3656,7 +3657,8 @@ class ScreenRenderer:
 
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"lumen_drawing_{timestamp}.png"
+            suffix = "_manual" if manual else ""
+            filename = f"lumen_drawing_{timestamp}{suffix}.png"
             filepath = drawings_dir / filename
 
             # Save the image
