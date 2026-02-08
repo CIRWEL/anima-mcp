@@ -3234,7 +3234,7 @@ class ScreenRenderer:
         self._intent.mark_count += 1
 
         # --- Drift focus ---
-        self._drift_focus(stability, presence)
+        self._drift_focus(stability, presence, self._canvas.drawing_phase)
 
         # --- Deplete energy ---
         # Reduced from 0.002 to 0.001: allows ~920 marks before depletion
@@ -3370,8 +3370,63 @@ class ScreenRenderer:
                 if 0 <= px < 240 and 0 <= py < 240:
                     self._canvas.draw_pixel(px, py, color)
 
-    def _drift_focus(self, stability, presence):
-        """Drift the focus point — wander influenced by stability, occasional jumps by presence."""
+    def _sense_local_density(self, radius: int = 15) -> float:
+        """Sense how many marks exist near the current focus point.
+
+        Returns density as a fraction (0.0 = empty, 1.0 = saturated).
+        Lumen's eyes — awareness of its own drawing.
+
+        Uses direct key lookups instead of iterating all pixels (O(area) not O(n)).
+        On a Pi Zero, this matters.
+        """
+        fx, fy = int(self._intent.focus_x), int(self._intent.focus_y)
+        pixels = self._canvas.pixels
+        if not pixels:
+            return 0.0
+
+        # Sample a sparse grid within the radius (not every pixel — 5px spacing)
+        count = 0
+        samples = 0
+        for sx in range(fx - radius, fx + radius + 1, 5):
+            for sy in range(fy - radius, fy + radius + 1, 5):
+                samples += 1
+                if (sx, sy) in pixels:
+                    count += 1
+
+        if samples == 0:
+            return 0.0
+        return min(1.0, count / (samples * 0.3))  # 30% occupied = "full"
+
+    def _drift_focus(self, stability, presence, phase="exploring"):
+        """Drift the focus point — wander influenced by stability, presence, and canvas density.
+
+        Density sensing: Lumen sees its own marks.
+        - Exploring: repelled by density (seek empty space)
+        - Building: attracted to moderate density (develop existing areas)
+        - Reflecting/resting: neutral (accept what's there)
+        """
+
+        # --- Canvas density sensing (every mark) ---
+        density = self._sense_local_density()
+
+        # Density influence on direction — push or pull based on phase
+        if density > 0.05 and not self._intent.orbit_active:
+            if phase == "exploring":
+                # Repulsion: steer away from dense areas (explore empty space)
+                # Find rough direction AWAY from density center
+                if density > 0.15:
+                    # Bias direction away — add a nudge opposite to current direction
+                    # (since we walked INTO this density, reverse is roughly away)
+                    self._intent.direction += random.gauss(math.pi * 0.3, 0.2)
+            elif phase == "building":
+                # Attraction: if density is low-moderate, stay and build
+                # If density is high, gently move to adjacent area
+                if density > 0.5:
+                    # Dense enough, drift to nearby less-dense area
+                    self._intent.direction += random.gauss(math.pi * 0.2, 0.3)
+                elif density > 0.1:
+                    # Sweet spot — reduce step size to linger (handled below)
+                    pass
 
         # --- Direction memory: sometimes direction locks for sustained lines ---
         if self._intent.direction_lock_remaining > 0:
@@ -3412,9 +3467,12 @@ class ScreenRenderer:
                 self._intent.orbit_active = False
         else:
             # Step in current direction
-            step = 3 + random.random() * 5
-            self._intent.focus_x += math.cos(self._intent.direction) * step
-            self._intent.focus_y += math.sin(self._intent.direction) * step
+            # Building phase + moderate density = shorter steps (linger and develop)
+            base_step = 3 + random.random() * 5
+            if phase == "building" and 0.1 < density < 0.5:
+                base_step *= 0.5  # half steps — stay and build
+            self._intent.focus_x += math.cos(self._intent.direction) * base_step
+            self._intent.focus_y += math.sin(self._intent.direction) * base_step
 
         # Soft bounce off edges
         margin = 20
