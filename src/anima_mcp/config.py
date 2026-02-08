@@ -46,10 +46,9 @@ class NervousSystemCalibration:
     
     # Component weights for anima dimensions
     warmth_weights: Dict[str, float] = field(default_factory=lambda: {
-        "cpu_temp": 0.3,
-        "cpu_usage": 0.25,
-        "ambient_temp": 0.25,
-        "neural": 0.2,
+        "cpu_temp": 0.4,
+        "ambient_temp": 0.33,
+        "neural": 0.27,
     })
     
     clarity_weights: Dict[str, float] = field(default_factory=lambda: {

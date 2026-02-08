@@ -3575,12 +3575,14 @@ class ScreenRenderer:
                 old_phase = self._canvas.drawing_phase
                 self._canvas.drawing_phase = new_phase
                 self._canvas.phase_start_time = now
-                print(f"[Canvas] Phase: {old_phase} → {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s)", file=sys.stderr, flush=True)
                 try:
                     from ..computational_neural import get_computational_neural_sensor
-                    get_computational_neural_sensor().drawing_phase = new_phase
+                    sensor = get_computational_neural_sensor()
+                    sensor.drawing_phase = new_phase
+                    n = sensor.get_neural_state()
+                    print(f"[Canvas] Phase: {old_phase} → {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s) neural: d={n.delta:.2f} t={n.theta:.2f} a={n.alpha:.2f} b={n.beta:.2f} g={n.gamma:.2f}", file=sys.stderr, flush=True)
                 except Exception:
-                    pass
+                    print(f"[Canvas] Phase: {old_phase} → {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s)", file=sys.stderr, flush=True)
 
         # Fresh canvas = exploring regardless of energy
         if pixel_count < 10:
