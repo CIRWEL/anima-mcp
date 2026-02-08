@@ -5350,6 +5350,24 @@ def run_http_server(host: str, port: int):
 
                     files = list(drawings_dir.glob("lumen_drawing*.png"))
 
+                    # Eras — chronological periods in Lumen's drawing history
+                    # Each entry: (cutoff_timestamp, era_name)
+                    # Drawings BEFORE the cutoff belong to that era
+                    _ERAS = [
+                        ("20260207_190000", "geometric"),
+                    ]
+                    _CURRENT_ERA = "gestural"
+
+                    def get_era(filename):
+                        """Determine which era a drawing belongs to."""
+                        m = re.search(r"(\d{8}_\d{6})", filename)
+                        if m:
+                            ts_str = m.group(1)
+                            for cutoff, name in _ERAS:
+                                if ts_str < cutoff:
+                                    return name
+                        return _CURRENT_ERA
+
                     def parse_ts(f):
                         m = re.search(r"(\d{8})_(\d{6})", f.name)
                         if m:
@@ -5375,6 +5393,7 @@ def run_http_server(host: str, port: int):
                             "timestamp": parse_ts(f),
                             "size": f.stat().st_size,
                             "manual": "_manual" in f.name,
+                            "era": get_era(f.name),
                         })
 
                     return JSONResponse({
