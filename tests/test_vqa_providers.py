@@ -85,7 +85,7 @@ class TestProviderSelection:
         """When no API keys are set, should return error with stub_fallback flag."""
         with patch.dict(os.environ, {}, clear=True):
             # Remove all provider keys
-            for key in ["HF_TOKEN", "TOGETHER_API_KEY", "ANTHROPIC_API_KEY"]:
+            for key in ["GROQ_API_KEY", "HF_TOKEN", "TOGETHER_API_KEY", "ANTHROPIC_API_KEY"]:
                 os.environ.pop(key, None)
 
             result = await evaluate_vqa(temp_png_file, sample_ground_truth)
@@ -93,7 +93,7 @@ class TestProviderSelection:
             assert result["v_f"] is None
             assert "error" in result
             assert result["stub_fallback"] is True
-            assert "together.ai" in result["error"]
+            assert "groq.com" in result["error"]
 
     @pytest.mark.asyncio
     async def test_huggingface_is_first_priority(self, temp_png_file, sample_ground_truth):

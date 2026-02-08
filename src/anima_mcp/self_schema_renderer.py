@@ -580,22 +580,26 @@ Questions:
     # Try providers in order (free first)
     providers = []
 
-    # 1. Hugging Face Inference API (FREE) - Llama 3.2 Vision or LLaVA
+    # 1. Groq (FREE) - Llama 3.2 Vision
+    if os.environ.get("GROQ_API_KEY"):
+        providers.append(("groq", os.environ["GROQ_API_KEY"]))
+
+    # 2. Hugging Face Inference API (FREE) - Llama 3.2 Vision or LLaVA
     if os.environ.get("HF_TOKEN"):
         providers.append(("huggingface", os.environ["HF_TOKEN"]))
 
-    # 2. Together AI (FREE tier) - Llama Vision Free
+    # 3. Together AI (FREE tier) - Qwen3-VL-8B
     if os.environ.get("TOGETHER_API_KEY"):
         providers.append(("together", os.environ["TOGETHER_API_KEY"]))
 
-    # 3. Anthropic (PAID fallback)
+    # 4. Anthropic (PAID fallback)
     if os.environ.get("ANTHROPIC_API_KEY"):
         providers.append(("anthropic", os.environ["ANTHROPIC_API_KEY"]))
 
     if not providers:
         return {
             "v_f": None,
-            "error": "No vision API key set (TOGETHER_API_KEY or ANTHROPIC_API_KEY). Get free key at together.ai",
+            "error": "No vision API key set (GROQ_API_KEY, TOGETHER_API_KEY, or HF_TOKEN). Get free key at groq.com",
             "stub_fallback": True,
         }
 
@@ -628,7 +632,39 @@ async def _call_vision_provider(
     import httpx
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        if provider == "huggingface":
+        if provider == "groq":
+            # Groq - Llama 3.2 Vision (FREE, OpenAI-compatible)
+            response = await client.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": "llama-3.2-11b-vision-preview",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/png;base64,{image_data}",
+                                    },
+                                },
+                                {"type": "text", "text": prompt},
+                            ],
+                        }
+                    ],
+                    "max_tokens": 256,
+                },
+            )
+            if response.status_code == 200:
+                return response.json()["choices"][0]["message"]["content"]
+            else:
+                raise Exception(f"Groq API error {response.status_code}: {response.text[:200]}")
+
+        elif provider == "huggingface":
             # Hugging Face Inference API - Llama 3.2 Vision
             # Uses the new router endpoint for serverless inference
             model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
