@@ -2,6 +2,7 @@
 Mock sensors for development on Mac.
 
 Simulates sensor readings with slight variation to feel alive.
+Uses computational neural for EEG bands (same as Pi).
 """
 
 import random
@@ -46,6 +47,25 @@ class MockSensors(SensorBackend):
         except Exception:
             pass
 
+        # Computational neural - same as Pi, derives EEG bands from system state
+        eeg_bands = {}
+        try:
+            from ..computational_neural import get_computational_neural_state
+            neural = get_computational_neural_state(
+                cpu_percent=cpu_percent,
+                memory_percent=memory.percent,
+                cpu_temp=cpu_temp
+            )
+            eeg_bands = {
+                "delta": neural.delta,
+                "theta": neural.theta,
+                "alpha": neural.alpha,
+                "beta": neural.beta,
+                "gamma": neural.gamma,
+            }
+        except Exception as e:
+            print(f"[MockSensors] Computational neural error: {e}")
+
         return SensorReadings(
             timestamp=now,
             cpu_temp_c=cpu_temp,
@@ -56,6 +76,12 @@ class MockSensors(SensorBackend):
             memory_percent=memory.percent,
             disk_percent=disk.percent,
             power_watts=None,  # Can't measure on Mac
+            # Frequency bands from computational neural (same as Pi)
+            eeg_delta_power=eeg_bands.get("delta"),
+            eeg_theta_power=eeg_bands.get("theta"),
+            eeg_alpha_power=eeg_bands.get("alpha"),
+            eeg_beta_power=eeg_bands.get("beta"),
+            eeg_gamma_power=eeg_bands.get("gamma"),
         )
 
     def available_sensors(self) -> list[str]:

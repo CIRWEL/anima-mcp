@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
 from .config import get_calibration, NervousSystemCalibration
-from .neural_sim import get_neural_state
+from .computational_neural import get_computational_neural_state
 
 if TYPE_CHECKING:
     from .memory import Anticipation
@@ -239,15 +239,17 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
             components.append(ambient_warmth)
             weights.append(cal.warmth_weights.get("ambient_temp", 0.45))
 
-    # Neural component: Real EEG beta+gamma power, or simulated if unavailable
-    # This represents alertness/engagement, not raw CPU cycles
+    # Neural component: EEG beta+gamma power from computational proprioception
+    # This represents alertness/engagement derived from system state
     if r.eeg_beta_power is not None and r.eeg_gamma_power is not None:
-        # Use real EEG data
         neural_warmth = (r.eeg_beta_power + r.eeg_gamma_power) / 2
     else:
-        # Fall back to simulated neural activity (maintains warmth contribution)
-        neural = get_neural_state(light_level=r.light_lux)
-        neural_warmth = (neural.beta + neural.gamma) / 2  # Active engagement
+        # Fallback: derive from system metrics directly
+        neural = get_computational_neural_state(
+            cpu_percent=r.cpu_percent or 0,
+            memory_percent=r.memory_percent or 50
+        )
+        neural_warmth = (neural.beta + neural.gamma) / 2
     components.append(neural_warmth)
     weights.append(cal.warmth_weights.get("neural", 0.20))
 
@@ -298,8 +300,12 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         # Use real EEG data
         neural_clarity = r.eeg_alpha_power  # Relaxed, clear awareness
     else:
-        # Fall back to simulated neural activity
-        neural = get_neural_state(light_level=r.light_lux)
+        # Fall back to computational neural (derives bands from system state)
+        neural = get_computational_neural_state(
+            cpu_percent=r.cpu_percent or 0,
+            memory_percent=r.memory_percent or 50,
+            cpu_temp=r.cpu_temp_c
+        )
         neural_clarity = neural.alpha  # Relaxed, clear awareness
     components.append(neural_clarity)
     weights.append(cal.clarity_weights.get("neural", 0.4))
@@ -370,8 +376,12 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         # Use real EEG data - low theta+delta = instability
         neural_groundedness = (r.eeg_theta_power + r.eeg_delta_power) / 2
     else:
-        # Fall back to simulated neural activity
-        neural = get_neural_state(light_level=r.light_lux, temp_delta=temp_delta)
+        # Fall back to computational neural (derives bands from system state)
+        neural = get_computational_neural_state(
+            cpu_percent=r.cpu_percent or 0,
+            memory_percent=r.memory_percent or 50,
+            cpu_temp=r.cpu_temp_c
+        )
         neural_groundedness = (neural.theta + neural.delta) / 2
 
     # Invert: low groundedness = high instability
@@ -422,8 +432,12 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         # Use real EEG data
         neural_gamma = r.eeg_gamma_power
     else:
-        # Fall back to simulated neural activity
-        neural = get_neural_state(light_level=r.light_lux)
+        # Fall back to computational neural (derives bands from system state)
+        neural = get_computational_neural_state(
+            cpu_percent=r.cpu_percent or 0,
+            memory_percent=r.memory_percent or 50,
+            cpu_temp=r.cpu_temp_c
+        )
         neural_gamma = neural.gamma
 
     # Invert: low gamma = high void (absence)
