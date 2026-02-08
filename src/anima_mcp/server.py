@@ -1482,7 +1482,7 @@ async def _update_display_loop():
                         recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
 
                         # Calculate time alive
-                        time_alive = (time.time() - identity.created_at) / 3600.0  # hours
+                        time_alive = identity.total_alive_seconds / 3600.0  # hours
 
                         # Choose reflection mode based on state
                         wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
@@ -1586,7 +1586,7 @@ async def _update_display_loop():
                         print(f"[Lumen/SelfAnswer] Attempting to answer: {question.text[:60]}", file=sys.stderr, flush=True)
 
                         # Calculate time alive
-                        time_alive = (now - identity.created_at) / 3600.0
+                        time_alive = identity.total_alive_seconds / 3600.0
 
                         # Build reflection context with the question as trigger
                         context = ReflectionContext(
