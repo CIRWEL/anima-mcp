@@ -122,6 +122,9 @@ class CanvasState:
     energy: float = 1.0  # Persisted to disk, restored on load
     mark_count: int = 0  # Persisted to disk, restored on load
 
+    # Art era (persisted so drawings continue in the same era after restart)
+    _era_name: str = "gestural"
+
     # Render caching - avoid redrawing all pixels every frame
     _dirty: bool = True  # Set by draw_pixel(), cleared after render
     _cached_image: object = None  # Cached PIL Image of all pixels
@@ -181,6 +184,7 @@ class CanvasState:
                 "drawings_saved": self.drawings_saved,
                 "energy": self.energy,
                 "mark_count": self.mark_count,
+                "era": self._era_name,
             }
             _get_canvas_path().write_text(json.dumps(data))
         except Exception as e:
@@ -343,15 +347,23 @@ class CanvasState:
         except Exception:
             pass
 
+        # Restore art era (defaults to "gestural" for backward compatibility)
+        try:
+            era = data.get("era", "gestural")
+            if isinstance(era, str) and era:
+                self._era_name = era
+        except Exception:
+            pass
+
         # Invalidate render cache after loading
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
 
         if skipped_pixels > 0:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}, energy={self.energy:.3f}", file=sys.stderr, flush=True)
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}, energy={self.energy:.3f}, era={self._era_name}", file=sys.stderr, flush=True)
         else:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}, energy={self.energy:.3f}", file=sys.stderr, flush=True)
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}, energy={self.energy:.3f}, era={self._era_name}", file=sys.stderr, flush=True)
 
 
 # EISV parameters for drawing (scaled from governance_core/parameters.py for ~920 mark timescale)
@@ -402,47 +414,35 @@ class DrawingEISV:
 
 @dataclass
 class DrawingIntent:
-    """Lumen's drawing intent — where attention is, what gesture is active, how much energy remains.
+    """Lumen's drawing intent — where attention is, how much energy remains.
 
     Energy depletes per mark and replenishes on save+clear. When energy runs out,
     Lumen naturally stops drawing and the piece is saved. No timers, no templates.
+
+    Era-specific state (gestures, direction locks, orbits) lives in era_state,
+    which is created by the active ArtEra module.
     """
     focus_x: float = 120.0
     focus_y: float = 120.0
-    gesture: str = "dot"
-    gesture_remaining: int = 0
     direction: float = 0.0
     energy: float = 1.0
     mark_count: int = 0
 
-    # Direction memory — when locked, direction resists wobble (sustained lines)
-    direction_locked: bool = False
-    direction_lock_remaining: int = 0
-
-    # Orbit — when set, focus curves around an anchor point (circular forms emerge)
-    orbit_active: bool = False
-    orbit_anchor_x: float = 120.0
-    orbit_anchor_y: float = 120.0
-    orbit_radius: float = 30.0
-    orbit_remaining: int = 0
-
-    # EISV thermodynamic state
+    # EISV thermodynamic state (universal across all eras)
     eisv: DrawingEISV = field(default_factory=DrawingEISV)
 
+    # Era-specific state (opaque to the engine)
+    era_state: object = None  # EraState subclass, created by active era
+
     def reset(self):
-        """Reset intent for a new canvas."""
+        """Reset intent for a new canvas. Era state is recreated by the active era."""
         self.focus_x = 120.0
         self.focus_y = 120.0
-        self.gesture = "dot"
-        self.gesture_remaining = 0
         self.direction = random.uniform(0, 2 * math.pi)
         self.energy = 1.0
         self.mark_count = 0
-        self.direction_locked = False
-        self.direction_lock_remaining = 0
-        self.orbit_active = False
-        self.orbit_remaining = 0
         self.eisv.reset()
+        self.era_state = None
 
 
 class ScreenRenderer:
@@ -464,11 +464,15 @@ class ScreenRenderer:
         self._state = ScreenState()
         self._canvas = CanvasState()
         self._intent = DrawingIntent()
-        # Load any persisted canvas from disk (includes energy/mark_count)
+        # Load any persisted canvas from disk (includes energy/mark_count/era)
         self._canvas.load_from_disk()
         # Restore drawing energy from persisted canvas state
         self._intent.energy = self._canvas.energy
         self._intent.mark_count = self._canvas.mark_count
+        # Load active art era
+        from .eras import get_era
+        self._active_era = get_era(self._canvas._era_name)
+        self._intent.era_state = self._active_era.create_state()
         self._db_path = db_path or "anima.db"  # Default database path
         self._identity_store = identity_store
         # Initialize expression mood tracker
@@ -3309,7 +3313,7 @@ class ScreenRenderer:
                     pass  # If even this fails, at least we logged everything
     
     def _lumen_draw(self, anima: Anima, draw):
-        """Lumen draws through granular mark-making — small deliberate acts that accumulate into forms."""
+        """Lumen draws through the active era's mark-making vocabulary."""
         warmth = anima.warmth
         clarity = anima.clarity
         stability = anima.stability
@@ -3317,7 +3321,12 @@ class ScreenRenderer:
 
         # Update drawing phase based on energy
         self._update_drawing_phase(anima)
-        
+
+        # Ensure era state exists
+        if self._intent.era_state is None:
+            self._intent.era_state = self._active_era.create_state()
+        era_state = self._intent.era_state
+
         # Draw frequency: higher base than before, but each mark is tiny (1-15 pixels)
         base_chance = 0.04  # 4% base — marks happen often, they're just small
         expression_intensity = (presence + clarity) / 2.0
@@ -3338,33 +3347,37 @@ class ScreenRenderer:
         if len(self._canvas.pixels) > 15000:
             return
 
-        # --- Color generation (free palette, state-influenced not restricted) ---
-        color, hue_category = self._generate_mark_color(warmth, clarity, stability, presence)
+        # --- Delegate to active era ---
+        color, hue_category = self._active_era.generate_color(
+            era_state, warmth, clarity, stability, presence)
 
-        # --- Gesture selection ---
-        if self._intent.gesture_remaining <= 0:
-            self._choose_gesture(clarity, stability, presence)
+        C = self._intent.eisv.coherence()
+        if era_state.gesture_remaining <= 0:
+            self._active_era.choose_gesture(era_state, clarity, stability, presence, C)
 
-        # --- Place mark ---
-        self._place_mark(color)
-        self._intent.gesture_remaining -= 1
+        self._active_era.place_mark(
+            era_state, self._canvas,
+            self._intent.focus_x, self._intent.focus_y,
+            self._intent.direction, self._intent.energy, color)
+        era_state.gesture_remaining -= 1
         self._intent.mark_count += 1
 
-        # --- Drift focus ---
-        self._drift_focus(stability, presence)
+        new_fx, new_fy, new_dir = self._active_era.drift_focus(
+            era_state, self._intent.focus_x, self._intent.focus_y,
+            self._intent.direction, stability, presence, C)
+        self._intent.focus_x = new_fx
+        self._intent.focus_y = new_fy
+        self._intent.direction = new_dir
 
         # --- EISV thermodynamic step ---
         dE_coupling, C = self._eisv_step()
 
         # Track gesture for behavioral entropy
-        self._intent.eisv.gesture_history.append(self._intent.gesture)
+        self._intent.eisv.gesture_history.append(era_state.gesture)
         if len(self._intent.eisv.gesture_history) > 20:
             self._intent.eisv.gesture_history.pop(0)
 
         # --- Deplete energy (flat + EISV coupling) ---
-        # Flat 0.001 preserves ~920 mark target. EISV coupling modulates on top:
-        # intentional drawing (I > E) → dE_coupling positive → slower depletion
-        # chaotic drawing (I < E) → dE_coupling negative → faster depletion
         self._intent.energy = max(0.01, self._intent.energy - 0.001 + dE_coupling)
 
         # Sync energy/marks to canvas for persistence across restarts
@@ -3373,44 +3386,9 @@ class ScreenRenderer:
 
         # --- Record for mood tracker ---
         try:
-            self._mood_tracker.record_drawing(self._intent.gesture, hue_category)
+            self._mood_tracker.record_drawing(era_state.gesture, hue_category)
         except Exception:
             pass
-
-    def _generate_mark_color(self, warmth, clarity, stability, presence):
-        """Generate a color for the current mark. Full palette, state-influenced not restricted."""
-        VIBRANT_COLORS = [
-            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
-            (255, 0, 255), (0, 255, 255), (255, 128, 0), (255, 64, 64),
-            (255, 192, 203), (255, 215, 0), (0, 191, 255), (138, 43, 226),
-            (75, 0, 130), (0, 128, 128), (139, 69, 19), (34, 139, 34),
-            (210, 180, 140), (255, 182, 193), (173, 216, 230), (144, 238, 144),
-            (255, 255, 224), (221, 160, 221), (128, 0, 0), (0, 100, 0),
-            (25, 25, 112), (128, 0, 128),
-        ]
-
-        use_vibrant = random.random() < (0.15 + presence * 0.15)
-        if use_vibrant:
-            color = random.choice(VIBRANT_COLORS)
-            if stability < 0.5 and random.random() < 0.3:
-                color = tuple(int(c * (0.6 + stability * 0.4)) for c in color)
-            return color, "vibrant"
-
-        import colorsys
-        hue_base = warmth * 360.0
-        hue = (hue_base + random.random() * 180.0) % 360.0
-        saturation = max(0.1, min(1.0, 0.3 + clarity * 0.7 + (random.random() - 0.5) * 0.4))
-        brightness = max(0.2, min(1.0, 0.4 + stability * 0.6 + (random.random() - 0.5) * 0.3))
-        rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
-        color = tuple(int(c * 255) for c in rgb)
-
-        if hue < 60 or hue > 300:
-            hue_category = "warm"
-        elif hue < 180:
-            hue_category = "cool"
-        else:
-            hue_category = "neutral"
-        return color, hue_category
 
     def _eisv_step(self) -> Tuple[float, float]:
         """Step EISV thermodynamics — same equations as governance, proprioceptive signals.
@@ -3421,17 +3399,14 @@ class ScreenRenderer:
         eisv = self._intent.eisv
         p = _EISV_PARAMS
 
-        # --- I signal: proprioceptive intentionality ---
-        I_signal = 0.1
-        if self._intent.direction_locked:
-            I_signal += 0.3
-        if self._intent.orbit_active:
-            I_signal += 0.3
-        if self._intent.gesture_remaining > 0:
-            I_signal += min(0.3, self._intent.gesture_remaining / 20.0 * 0.3)
-        I_signal = min(1.0, I_signal)
+        # --- I signal: from era state's proprioceptive intentionality ---
+        era_state = self._intent.era_state
+        I_signal = era_state.intentionality() if era_state else 0.1
 
         # --- S signal: behavioral entropy (Shannon over last 20 gestures) ---
+        # Normalize by log2(N) where N = gesture vocabulary size for this era
+        gesture_count = len(era_state.gestures()) if era_state else 5
+        max_entropy = math.log2(max(gesture_count, 2))
         if len(eisv.gesture_history) >= 5:
             counts: Dict[str, int] = {}
             for g in eisv.gesture_history:
@@ -3442,7 +3417,7 @@ class ScreenRenderer:
                 prob = count / total
                 if prob > 0:
                     S_signal -= prob * math.log2(prob)
-            S_signal = min(1.0, S_signal / 2.32)  # normalize by log2(5)
+            S_signal = min(1.0, S_signal / max_entropy)
         else:
             S_signal = 0.5
 
@@ -3471,159 +3446,6 @@ class ScreenRenderer:
         eisv.V = max(-2.0, min(2.0, eisv.V + dV * dt))
 
         return dE * dt, C
-
-    def _choose_gesture(self, clarity, stability, presence):
-        """Choose a new gesture type. Near-random choice, long committed runs."""
-        gestures = ["dot", "stroke", "curve", "cluster", "drag"]
-        self._intent.gesture = random.choice(gestures)
-        # EISV coherence extends runs: low C → 15-30, high C → 15-45
-        C = self._intent.eisv.coherence()
-        self._intent.gesture_remaining = random.randint(15, 30 + int(15 * C))
-
-    def _place_mark(self, color: Tuple[int, int, int]):
-        """Place a mark at the current focus point using the active gesture.
-
-        Scale breath: mark sizes grow with energy. High energy = bold, confident marks.
-        Low energy = delicate, precise marks. Creates natural visual weight progression.
-        """
-        x = int(self._intent.focus_x)
-        y = int(self._intent.focus_y)
-        gesture = self._intent.gesture
-
-        # Scale breath — energy modulates mark size
-        # energy 1.0 → scale 1.5 (bold), energy 0.1 → scale 0.6 (delicate)
-        scale = 0.5 + self._intent.energy
-
-        if gesture == "dot":
-            if 0 <= x < 240 and 0 <= y < 240:
-                self._canvas.draw_pixel(x, y, color)
-                # High energy: dots become 2-3px clusters
-                if scale > 1.2 and random.random() < 0.5:
-                    for dx, dy in [(1, 0), (0, 1), (-1, 0), (0, -1)]:
-                        if random.random() < scale - 1.0:
-                            px, py = x + dx, y + dy
-                            if 0 <= px < 240 and 0 <= py < 240:
-                                self._canvas.draw_pixel(px, py, color)
-
-        elif gesture == "stroke":
-            length = int(random.randint(2, 6) * scale)
-            for i in range(length):
-                px = int(x + math.cos(self._intent.direction) * i)
-                py = int(y + math.sin(self._intent.direction) * i)
-                if 0 <= px < 240 and 0 <= py < 240:
-                    self._canvas.draw_pixel(px, py, color)
-
-        elif gesture == "curve":
-            length = int(random.randint(3, 8) * scale)
-            angle = self._intent.direction
-            cx, cy = float(x), float(y)
-            step_size = 1.0 + scale * 0.5  # bigger steps when bold
-            for i in range(length):
-                angle += random.gauss(0, 0.3)
-                cx += math.cos(angle) * step_size
-                cy += math.sin(angle) * step_size
-                px, py = int(cx), int(cy)
-                if 0 <= px < 240 and 0 <= py < 240:
-                    self._canvas.draw_pixel(px, py, color)
-
-        elif gesture == "cluster":
-            count = int(random.randint(2, 5) * scale)
-            spread = int(2 * scale)
-            for _ in range(count):
-                px = x + random.randint(-spread, spread)
-                py = y + random.randint(-spread, spread)
-                if 0 <= px < 240 and 0 <= py < 240:
-                    self._canvas.draw_pixel(px, py, color)
-
-        elif gesture == "drag":
-            length = int(random.randint(8, 15) * scale)
-            angle = self._intent.direction + random.gauss(0, 0.1)
-            for i in range(length):
-                px = int(x + math.cos(angle) * i)
-                py = int(y + math.sin(angle) * i)
-                if 0 <= px < 240 and 0 <= py < 240:
-                    self._canvas.draw_pixel(px, py, color)
-
-    def _drift_focus(self, stability, presence):
-        """Drift the focus point — wander influenced by stability, coherence, occasional jumps."""
-        C = self._intent.eisv.coherence()
-
-        # --- Direction memory: sometimes direction locks for sustained lines ---
-        if self._intent.direction_lock_remaining > 0:
-            # Locked: minimal wobble (tight lines)
-            self._intent.direction += random.gauss(0, 0.03)
-            self._intent.direction_lock_remaining -= 1
-            if self._intent.direction_lock_remaining <= 0:
-                self._intent.direction_locked = False
-        elif not self._intent.orbit_active:
-            # Normal wobble — constant moderate wander
-            self._intent.direction += random.gauss(0, 0.2)
-
-            # Lock probability: coherence only
-            lock_prob = 0.03 * (0.5 + C)
-            if random.random() < lock_prob:
-                self._intent.direction_locked = True
-                self._intent.direction_lock_remaining = random.randint(15, 40)
-
-        # --- Orbit: focus curves around anchor point ---
-        if self._intent.orbit_active:
-            # Calculate angle from anchor to current focus
-            dx = self._intent.focus_x - self._intent.orbit_anchor_x
-            dy = self._intent.focus_y - self._intent.orbit_anchor_y
-            current_angle = math.atan2(dy, dx)
-
-            # Advance angle (orbit speed varies with radius)
-            angle_step = random.gauss(0.15, 0.03)
-            new_angle = current_angle + angle_step
-
-            # Wobble the radius slightly for organic circles
-            r = self._intent.orbit_radius + random.gauss(0, 2.0)
-            self._intent.focus_x = self._intent.orbit_anchor_x + math.cos(new_angle) * r
-            self._intent.focus_y = self._intent.orbit_anchor_y + math.sin(new_angle) * r
-            self._intent.direction = new_angle + math.pi / 2  # tangent
-
-            self._intent.orbit_remaining -= 1
-            if self._intent.orbit_remaining <= 0:
-                self._intent.orbit_active = False
-        else:
-            # Step in current direction
-            step = 3 + random.random() * 5
-            self._intent.focus_x += math.cos(self._intent.direction) * step
-            self._intent.focus_y += math.sin(self._intent.direction) * step
-
-        # Soft bounce off edges
-        margin = 20
-        if self._intent.focus_x < margin:
-            self._intent.direction = random.uniform(-math.pi / 4, math.pi / 4)
-            self._intent.focus_x = float(margin)
-        elif self._intent.focus_x > 240 - margin:
-            self._intent.direction = random.uniform(math.pi * 3 / 4, math.pi * 5 / 4)
-            self._intent.focus_x = float(240 - margin)
-        if self._intent.focus_y < margin:
-            self._intent.direction = random.uniform(math.pi / 4, math.pi * 3 / 4)
-            self._intent.focus_y = float(margin)
-        elif self._intent.focus_y > 240 - margin:
-            self._intent.direction = random.uniform(-math.pi * 3 / 4, -math.pi / 4)
-            self._intent.focus_y = float(240 - margin)
-
-        # Focus jump — coherence reduces jumps
-        jump_prob = 0.03 * (1.0 - 0.4 * C)
-        if not self._intent.orbit_active and random.random() < jump_prob:
-            self._intent.focus_x = random.uniform(40, 200)
-            self._intent.focus_y = random.uniform(40, 200)
-            self._intent.direction = random.uniform(0, 2 * math.pi)
-            self._intent.direction_locked = False
-            self._intent.direction_lock_remaining = 0
-
-        # Orbit start — increased by coherence (high C = more circular forms)
-        orbit_prob = 0.02 * (0.5 + C)
-        if (not self._intent.orbit_active and not self._intent.direction_locked
-                and random.random() < orbit_prob):
-            self._intent.orbit_active = True
-            self._intent.orbit_anchor_x = self._intent.focus_x + random.gauss(0, 20)
-            self._intent.orbit_anchor_y = self._intent.focus_y + random.gauss(0, 20)
-            self._intent.orbit_radius = random.uniform(10, 50)
-            self._intent.orbit_remaining = random.randint(20, 60)
 
     def _update_drawing_phase(self, anima: Anima):
         """Update Lumen's drawing phase based on energy level.
@@ -3693,6 +3515,13 @@ class ScreenRenderer:
 
         self._canvas.clear()
         self._intent.reset()
+        # Rotate art era for next drawing
+        from .eras import choose_next_era, get_era
+        new_era_name = choose_next_era(self._active_era.name, self._canvas.drawings_saved)
+        self._active_era = get_era(new_era_name)
+        self._canvas._era_name = new_era_name
+        self._intent.era_state = self._active_era.create_state()
+        print(f"[Canvas] New era: {new_era_name}", file=sys.stderr, flush=True)
         if persist:
             self._canvas.save_to_disk()
         print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
