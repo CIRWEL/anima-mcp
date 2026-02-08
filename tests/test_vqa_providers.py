@@ -13,9 +13,18 @@ from anima_mcp.self_schema_renderer import (
     evaluate_vqa,
     _call_vision_provider,
     _parse_vqa_response,
+    _VQA_PROVIDERS,
     compute_visual_integrity_stub,
 )
 from anima_mcp.self_schema import SelfSchema, SchemaNode, SchemaEdge
+
+
+def _make_provider_config(name: str, api_key: str = "test_key") -> dict:
+    """Build a provider config dict for testing."""
+    for cfg in _VQA_PROVIDERS:
+        if cfg["name"] == name:
+            return {**cfg, "api_key": api_key}
+    raise ValueError(f"Unknown provider: {name}")
 
 
 # === Test Fixtures ===
@@ -96,23 +105,23 @@ class TestProviderSelection:
             assert "groq.com" in result["error"]
 
     @pytest.mark.asyncio
-    async def test_huggingface_is_first_priority(self, temp_png_file, sample_ground_truth):
-        """HuggingFace should be tried first when HF_TOKEN is set."""
-        with patch.dict(os.environ, {"HF_TOKEN": "test_token"}):
+    async def test_groq_is_first_priority(self, temp_png_file, sample_ground_truth):
+        """Groq should be tried first when GROQ_API_KEY is set."""
+        with patch.dict(os.environ, {"GROQ_API_KEY": "test_key"}):
             with patch("anima_mcp.self_schema_renderer._call_vision_provider") as mock_call:
                 mock_call.return_value = "1. 8\n2. yes\n3. yes\n4. 3\n5. gold"
 
                 result = await evaluate_vqa(temp_png_file, sample_ground_truth)
 
-                # First call should be to huggingface
                 mock_call.assert_called()
-                first_call_provider = mock_call.call_args_list[0][0][0]
-                assert first_call_provider == "huggingface"
+                first_config = mock_call.call_args_list[0][0][0]
+                assert first_config["name"] == "groq"
 
     @pytest.mark.asyncio
-    async def test_together_used_when_hf_unavailable(self, temp_png_file, sample_ground_truth):
-        """Together should be used when HF is not configured."""
+    async def test_together_used_when_groq_unavailable(self, temp_png_file, sample_ground_truth):
+        """Together should be used when Groq/HF are not configured."""
         with patch.dict(os.environ, {"TOGETHER_API_KEY": "test_key"}, clear=True):
+            os.environ.pop("GROQ_API_KEY", None)
             os.environ.pop("HF_TOKEN", None)
 
             with patch("anima_mcp.self_schema_renderer._call_vision_provider") as mock_call:
@@ -120,8 +129,8 @@ class TestProviderSelection:
 
                 result = await evaluate_vqa(temp_png_file, sample_ground_truth)
 
-                first_call_provider = mock_call.call_args_list[0][0][0]
-                assert first_call_provider == "together"
+                first_config = mock_call.call_args_list[0][0][0]
+                assert first_config["name"] == "together"
 
 
 # === Test Response Parsing ===
@@ -215,8 +224,6 @@ class TestAPICallMocking:
     @pytest.mark.asyncio
     async def test_together_success_response(self):
         """Test successful Together AI API response."""
-        import httpx
-
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {
@@ -226,17 +233,14 @@ class TestAPICallMocking:
         with patch("httpx.AsyncClient") as mock_client:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(return_value=mock_response)
 
-            result = await _call_vision_provider(
-                "together", "test_key", "base64data", "test prompt"
-            )
+            config = _make_provider_config("together")
+            result = await _call_vision_provider(config, "base64data", "test prompt")
 
             assert result == "1. 8\n2. yes"
 
     @pytest.mark.asyncio
     async def test_together_error_raises(self):
         """Test Together AI API error handling."""
-        import httpx
-
         mock_response = MagicMock()
         mock_response.status_code = 400
         mock_response.text = "Bad Request: Invalid model"
@@ -245,26 +249,23 @@ class TestAPICallMocking:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(return_value=mock_response)
 
             with pytest.raises(Exception) as exc_info:
-                await _call_vision_provider(
-                    "together", "test_key", "base64data", "test prompt"
-                )
+                config = _make_provider_config("together")
+                await _call_vision_provider(config, "base64data", "test prompt")
 
-            assert "Together API error 400" in str(exc_info.value)
+            assert "together API error 400" in str(exc_info.value)
 
     @pytest.mark.asyncio
-    async def test_huggingface_503_raises_for_fallback(self):
-        """Test HuggingFace 503 (model loading) triggers fallback."""
-        import httpx
-
+    async def test_provider_error_raises_for_fallback(self):
+        """Test that provider errors raise exceptions to trigger fallback."""
         mock_response = MagicMock()
         mock_response.status_code = 503
+        mock_response.text = "Service Unavailable"
 
         with patch("httpx.AsyncClient") as mock_client:
             mock_client.return_value.__aenter__.return_value.post = AsyncMock(return_value=mock_response)
 
             with pytest.raises(Exception) as exc_info:
-                await _call_vision_provider(
-                    "huggingface", "test_token", "base64data", "test prompt"
-                )
+                config = _make_provider_config("huggingface")
+                await _call_vision_provider(config, "base64data", "test prompt")
 
-            assert "loading" in str(exc_info.value).lower()
+            assert "503" in str(exc_info.value)
