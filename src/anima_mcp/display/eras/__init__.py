@@ -44,5 +44,9 @@ def choose_next_era(current: str, drawings_saved: int) -> str:
 
 # --- Register eras at import time ---
 from .gestural import GesturalEra  # noqa: E402
+from .pointillist import PointillistEra  # noqa: E402
+from .field import FieldEra  # noqa: E402
 
 register_era(GesturalEra())
+register_era(PointillistEra())
+register_era(FieldEra())
