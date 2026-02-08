@@ -118,6 +118,10 @@ class CanvasState:
     # Save indicator (brief visual feedback)
     save_indicator_until: float = 0.0  # Show "saved" indicator until this time
 
+    # Drawing energy persistence (survives restarts so drawings can finish)
+    energy: float = 1.0  # Persisted to disk, restored on load
+    mark_count: int = 0  # Persisted to disk, restored on load
+
     # Render caching - avoid redrawing all pixels every frame
     _dirty: bool = True  # Set by draw_pixel(), cleared after render
     _cached_image: object = None  # Cached PIL Image of all pixels
@@ -145,6 +149,8 @@ class CanvasState:
         self.last_clear_time = time.time()
         self.is_satisfied = False
         self.satisfaction_time = 0.0
+        self.energy = 1.0
+        self.mark_count = 0
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
@@ -173,6 +179,8 @@ class CanvasState:
                 "is_satisfied": self.is_satisfied,
                 "satisfaction_time": self.satisfaction_time,
                 "drawings_saved": self.drawings_saved,
+                "energy": self.energy,
+                "mark_count": self.mark_count,
             }
             _get_canvas_path().write_text(json.dumps(data))
         except Exception as e:
@@ -320,15 +328,30 @@ class CanvasState:
         except Exception:
             pass
 
+        # Restore drawing energy (survives restarts)
+        try:
+            energy = data.get("energy")
+            if isinstance(energy, (int, float)) and 0.0 <= energy <= 1.0:
+                self.energy = float(energy)
+        except Exception:
+            pass
+
+        try:
+            marks = data.get("mark_count")
+            if isinstance(marks, int) and marks >= 0:
+                self.mark_count = marks
+        except Exception:
+            pass
+
         # Invalidate render cache after loading
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
 
         if skipped_pixels > 0:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}", file=sys.stderr, flush=True)
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}, energy={self.energy:.3f}", file=sys.stderr, flush=True)
         else:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}", file=sys.stderr, flush=True)
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}, energy={self.energy:.3f}", file=sys.stderr, flush=True)
 
 
 # EISV parameters for drawing (scaled from governance_core/parameters.py for ~920 mark timescale)
@@ -441,8 +464,11 @@ class ScreenRenderer:
         self._state = ScreenState()
         self._canvas = CanvasState()
         self._intent = DrawingIntent()
-        # Load any persisted canvas from disk
+        # Load any persisted canvas from disk (includes energy/mark_count)
         self._canvas.load_from_disk()
+        # Restore drawing energy from persisted canvas state
+        self._intent.energy = self._canvas.energy
+        self._intent.mark_count = self._canvas.mark_count
         self._db_path = db_path or "anima.db"  # Default database path
         self._identity_store = identity_store
         # Initialize expression mood tracker
@@ -3340,6 +3366,10 @@ class ScreenRenderer:
         # intentional drawing (I > E) → dE_coupling positive → slower depletion
         # chaotic drawing (I < E) → dE_coupling negative → faster depletion
         self._intent.energy = max(0.01, self._intent.energy - 0.001 + dE_coupling)
+
+        # Sync energy/marks to canvas for persistence across restarts
+        self._canvas.energy = self._intent.energy
+        self._canvas.mark_count = self._intent.mark_count
 
         # --- Record for mood tracker ---
         try:
