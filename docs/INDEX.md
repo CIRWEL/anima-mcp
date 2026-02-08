@@ -45,7 +45,9 @@
 | `src/anima_mcp/anima.py` | Anima calculation (warmth, clarity, stability, presence) |
 | `src/anima_mcp/computational_neural.py` | Neural bands from Pi hardware (delta/theta/alpha/beta/gamma) + drawing phase modulation |
 | `src/anima_mcp/eisv_mapper.py` | EISV mapping for UNITARES governance |
-| `src/anima_mcp/display/screens.py` | All display screens including autonomous drawing |
+| `src/anima_mcp/display/screens.py` | Display screens, drawing engine (CanvasState, DrawingEISV, DrawingIntent) |
+| `src/anima_mcp/display/art_era.py` | Art era protocol — EraState base class + ArtEra interface |
+| `src/anima_mcp/display/eras/` | Pluggable art era modules (gestural, pointillist, field) |
 
 **Archived concepts** (in `archive/2026-02/`): ADAPTIVE_LEARNING.md, ERROR_RECOVERY.md, GAP_HANDLING.md
 

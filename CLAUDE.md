@@ -66,6 +66,52 @@ The `ActivityManager` (in broker) controls Lumen's wakefulness:
 | DROWSY | 60% | 30+ min inactivity, moderate score |
 | RESTING | 35% | 60+ min inactivity, night time, darkness |
 
+### Drawing System & Art Eras
+
+Lumen draws autonomously on the 240x240 notepad screen. The system has two layers:
+
+**Engine** (in `screens.py` — universal, stays fixed):
+- `CanvasState` — pixel buffer, persistence, phase tracking
+- `DrawingEISV` — thermodynamic coherence (E/I/S/V → coherence C)
+- `DrawingIntent` — focus position, direction, energy, era state
+- `_lumen_draw()` — orchestration loop, delegates to active era
+- Energy depletion (0.001/mark + EISV coupling), auto-save at threshold
+
+**Art Eras** (pluggable modules in `display/eras/`):
+| Era | Gestures | Character | Active Pool |
+|-----|----------|-----------|-------------|
+| `gestural` | dot, stroke, curve, cluster, drag | Direction locks, orbital curves, full palette | ✅ |
+| `pointillist` | single, pair, trio | Density zones, optical color mixing, complementary hues | ✅ |
+| `field` | flow_dot, flow_dash, flow_strand | Vector-field flow lines, near-monochromatic | ✅ |
+| `geometric` | 16 shape templates (circle, spiral, starburst, etc.) | Complete forms, stamps whole shapes per mark | ❌ (manual) |
+
+**Active pool vs registered eras:** Eras represent distinct artistic periods with historical weight. Only eras in `ACTIVE_ERAS` auto-rotate between drawings. Archived eras (like geometric) are registered but require manual switching via `manage_display(action="set_era", screen="geometric")`.
+
+**Key files:**
+| File | Purpose |
+|------|---------|
+| `display/art_era.py` | `EraState` base class + `ArtEra` protocol |
+| `display/eras/__init__.py` | Era registry, `ACTIVE_ERAS` pool, rotation logic |
+| `display/eras/gestural.py` | Gestural era (5 micro-primitives) |
+| `display/eras/pointillist.py` | Pointillist era (dot accumulation) |
+| `display/eras/field.py` | Field era (vector-field flow) |
+| `display/eras/geometric.py` | Geometric era (16 shape templates, adapted from capsule) |
+| `art_movements/geometric.py` | Original geometric capsule (preserved snapshot, not imported) |
+
+**Era rotation:** On canvas clear (energy depleted), `choose_next_era()` picks from `ACTIVE_ERAS` only via weighted random (0.3x weight for repeating same era). Era name persists in `canvas.json`.
+
+**Manual era switching (via MCP):**
+- `manage_display(action="list_eras")` — all eras with active pool marking
+- `manage_display(action="get_era")` — current era name + description
+- `manage_display(action="set_era", screen="geometric")` — switch immediately
+
+**Adding a new era:**
+1. Create `display/eras/myera.py` with `MyEraState(EraState)` + `MyEra` class
+2. Implement: `create_state()`, `choose_gesture()`, `place_mark()`, `drift_focus()`, `generate_color()`
+3. Register in `display/eras/__init__.py`: `from .myera import MyEra; register_era(MyEra())`
+4. Add to `ACTIVE_ERAS` list if it should auto-rotate (or leave out for manual-only)
+5. The `EraState.intentionality()` method bridges to EISV — report commitment level [0,1]
+
 ## Systemd Services
 
 ```bash

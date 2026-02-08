@@ -9,6 +9,7 @@ Lumen is a digital creature whose internal state comes from physical sensors - t
 **Key features:**
 - **Grounded state** - Feelings derived from actual sensor measurements
 - **Persistent identity** - Birth date, awakenings, alive time accumulate
+- **Autonomous drawing** - Creates art on a 240x240 notepad with pluggable art eras
 - **Learning systems** - Develops preferences, self-beliefs, action values over time
 - **Activity cycles** - Active/drowsy/resting states based on time and interaction
 - **UNITARES integration** - Governance oversight via MCP
@@ -92,6 +93,18 @@ Run in the hardware broker, persist across restarts:
 | **Self-model** | Beliefs like "I recover stability quickly" |
 | **Agency** | Action values via TD-learning |
 | **Adaptive prediction** | Temporal patterns |
+
+### Autonomous Drawing
+
+Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics. Energy depletes with each mark; when exhausted, the drawing saves and a new one begins in a different art era.
+
+| Era | Style | Gestures |
+|-----|-------|----------|
+| **Gestural** | Bold mark-making with direction locks and orbits | dot, stroke, curve, cluster, drag |
+| **Pointillist** | Single-pixel dot accumulation, optical color mixing | single, pair, trio |
+| **Field** | Flow-aligned marks following vector fields | flow_dot, flow_dash, flow_strand |
+
+Eras rotate automatically between drawings. The drawing engine (`DrawingEISV`) uses coherence to modulate behavior — early marks are exploratory, later marks become more committed.
 
 ### Activity States
 

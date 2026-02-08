@@ -3504,12 +3504,12 @@ TOOLS_STANDARD = [
     ),
     Tool(
         name="manage_display",
-        description="Control Lumen's display: switch screens, show face, navigate",
+        description="Control Lumen's display: switch screens, show face, navigate. Also manage art eras: list_eras, get_era, set_era.",
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["switch", "face", "next", "previous"], "description": "Action to perform"},
-                "screen": {"type": "string", "enum": ["face", "sensors", "identity", "diagnostics", "notepad", "learning", "messages", "qa", "self_graph"], "description": "Screen to switch to (for action=switch)"}
+                "action": {"type": "string", "enum": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era"], "description": "Action to perform"},
+                "screen": {"type": "string", "description": "Screen name (for action=switch) or era name (for action=set_era)"}
             },
             "required": ["action"],
         },
@@ -4542,10 +4542,40 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "screen": _screen_renderer.get_mode().value
         }))]
 
+    elif action == "list_eras":
+        info = _screen_renderer.get_current_era()
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "action": "list_eras",
+            **info,
+        }))]
+
+    elif action == "get_era":
+        info = _screen_renderer.get_current_era()
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "action": "get_era",
+            "current_era": info["current_era"],
+            "current_description": info["current_description"],
+            "active_pool": info["active_pool"],
+        }))]
+
+    elif action == "set_era":
+        era_name = arguments.get("screen", "").lower()
+        if not era_name:
+            return [TextContent(type="text", text=json.dumps({
+                "error": "screen parameter required — set it to the era name (e.g. 'geometric', 'gestural')"
+            }))]
+        result = _screen_renderer.set_era(era_name)
+        return [TextContent(type="text", text=json.dumps({
+            "action": "set_era",
+            **result,
+        }))]
+
     else:
         return [TextContent(type="text", text=json.dumps({
             "error": f"Unknown action: {action}",
-            "valid_actions": ["switch", "face", "next", "previous"]
+            "valid_actions": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era"]
         }))]
 
 

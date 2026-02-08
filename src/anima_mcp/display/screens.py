@@ -3492,6 +3492,39 @@ class ScreenRenderer:
         else:
             transition_to("resting")
     
+    def get_current_era(self) -> dict:
+        """Return current era info and all available eras."""
+        from .eras import list_all_era_info, ACTIVE_ERAS
+        return {
+            "current_era": self._active_era.name,
+            "current_description": self._active_era.description,
+            "active_pool": list(ACTIVE_ERAS),
+            "all_eras": list_all_era_info(),
+        }
+
+    def set_era(self, era_name: str) -> dict:
+        """Switch to a different art era immediately.
+
+        Can switch to any registered era, including archived ones
+        not in the active rotation pool.
+        """
+        from .eras import get_era
+        era = get_era(era_name)
+        if era is None or era.name != era_name:
+            # get_era falls back to gestural — check if we got what we asked for
+            return {"success": False, "error": f"Unknown era: {era_name}"}
+
+        self._active_era = era
+        self._canvas._era_name = era_name
+        self._intent.era_state = era.create_state()
+        self._canvas.save_to_disk()
+        print(f"[Canvas] Era switched to: {era_name}", file=sys.stderr, flush=True)
+        return {
+            "success": True,
+            "era": era_name,
+            "description": era.description,
+        }
+
     def canvas_clear(self, persist: bool = True, already_saved: bool = False):
         """Clear the canvas - saves first if there's a real drawing (50+ pixels).
 
