@@ -624,12 +624,12 @@ async def _update_display_loop():
                                         _screen_renderer.qa_toggle_expand()
                                         print(f"[Questions] Toggled Q&A expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.NOTEPAD:
-                                        # In notepad: go to face (Lumen manages canvas autonomously)
-                                        # Lumen saves and clears on its own - no manual intervention needed
-                                        _screen_renderer.set_mode(ScreenMode.FACE)
-                                        _screen_renderer._state.last_user_action_time = time.time()
-                                        mode_change_event.set()  # Trigger immediate re-render
-                                        print(f"[Notepad] -> face (Lumen manages canvas autonomously)", file=sys.stderr, flush=True)
+                                        # In notepad: manual snapshot save (Lumen keeps drawing)
+                                        saved = _screen_renderer.canvas_save(manual=True)
+                                        if saved:
+                                            print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
+                                        else:
+                                            print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
                                     else:
                                         # Normal mode: separate button goes to face
                                         _screen_renderer.set_mode(ScreenMode.FACE)
