@@ -328,7 +328,7 @@ Express one genuine desire or need (be specific about what would help)."""
 Recent messages to me:
 {recent_msgs}
 
-How do I feel about these messages? Give a short, genuine response."""
+How do I feel about these messages? Give a genuine response (2-4 sentences)."""
 
         elif mode == "self_answer":
             # Lumen answering its own question through reflection
@@ -349,7 +349,7 @@ How do I feel about these messages? Give a short, genuine response."""
 A question I asked earlier: "{question_text}"{relevant_knowledge}
 
 Based on what I've experienced and learned, how would I answer my own question?
-Give a short, thoughtful answer from my own perspective."""
+Give a thoughtful answer from my own perspective (2-4 sentences)."""
 
         else:  # "observe"
             return f"""{state_desc}
