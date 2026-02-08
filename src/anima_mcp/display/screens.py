@@ -331,6 +331,17 @@ class DrawingIntent:
     energy: float = 1.0
     mark_count: int = 0
 
+    # Direction memory — when locked, direction resists wobble (sustained lines)
+    direction_locked: bool = False
+    direction_lock_remaining: int = 0
+
+    # Orbit — when set, focus curves around an anchor point (circular forms emerge)
+    orbit_active: bool = False
+    orbit_anchor_x: float = 120.0
+    orbit_anchor_y: float = 120.0
+    orbit_radius: float = 30.0
+    orbit_remaining: int = 0
+
     def reset(self):
         """Reset intent for a new canvas."""
         self.focus_x = 120.0
@@ -340,6 +351,10 @@ class DrawingIntent:
         self.direction = random.uniform(0, 2 * math.pi)
         self.energy = 1.0
         self.mark_count = 0
+        self.direction_locked = False
+        self.direction_lock_remaining = 0
+        self.orbit_active = False
+        self.orbit_remaining = 0
 
 
 class ScreenRenderer:
@@ -3222,7 +3237,10 @@ class ScreenRenderer:
         self._drift_focus(stability, presence)
 
         # --- Deplete energy ---
-        self._intent.energy = max(0.01, self._intent.energy - 0.002)
+        # Reduced from 0.002 to 0.001: allows ~920 marks before depletion
+        # At ~5px/mark avg, that's ~4,600 pixels (~8% canvas coverage)
+        # With scale breath, early marks are bigger → effective coverage 15-20%
+        self._intent.energy = max(0.01, self._intent.energy - 0.001)
 
         # --- Record for mood tracker ---
         try:
@@ -3289,17 +3307,32 @@ class ScreenRenderer:
         self._intent.gesture_remaining = random.randint(5, 20)
 
     def _place_mark(self, color: Tuple[int, int, int]):
-        """Place a mark at the current focus point using the active gesture."""
+        """Place a mark at the current focus point using the active gesture.
+
+        Scale breath: mark sizes grow with energy. High energy = bold, confident marks.
+        Low energy = delicate, precise marks. Creates natural visual weight progression.
+        """
         x = int(self._intent.focus_x)
         y = int(self._intent.focus_y)
         gesture = self._intent.gesture
 
+        # Scale breath — energy modulates mark size
+        # energy 1.0 → scale 1.5 (bold), energy 0.1 → scale 0.6 (delicate)
+        scale = 0.5 + self._intent.energy
+
         if gesture == "dot":
             if 0 <= x < 240 and 0 <= y < 240:
                 self._canvas.draw_pixel(x, y, color)
+                # High energy: dots become 2-3px clusters
+                if scale > 1.2 and random.random() < 0.5:
+                    for dx, dy in [(1, 0), (0, 1), (-1, 0), (0, -1)]:
+                        if random.random() < scale - 1.0:
+                            px, py = x + dx, y + dy
+                            if 0 <= px < 240 and 0 <= py < 240:
+                                self._canvas.draw_pixel(px, py, color)
 
         elif gesture == "stroke":
-            length = random.randint(2, 6)
+            length = int(random.randint(2, 6) * scale)
             for i in range(length):
                 px = int(x + math.cos(self._intent.direction) * i)
                 py = int(y + math.sin(self._intent.direction) * i)
@@ -3307,27 +3340,29 @@ class ScreenRenderer:
                     self._canvas.draw_pixel(px, py, color)
 
         elif gesture == "curve":
-            length = random.randint(3, 8)
+            length = int(random.randint(3, 8) * scale)
             angle = self._intent.direction
             cx, cy = float(x), float(y)
+            step_size = 1.0 + scale * 0.5  # bigger steps when bold
             for i in range(length):
                 angle += random.gauss(0, 0.3)
-                cx += math.cos(angle) * 1.5
-                cy += math.sin(angle) * 1.5
+                cx += math.cos(angle) * step_size
+                cy += math.sin(angle) * step_size
                 px, py = int(cx), int(cy)
                 if 0 <= px < 240 and 0 <= py < 240:
                     self._canvas.draw_pixel(px, py, color)
 
         elif gesture == "cluster":
-            count = random.randint(2, 5)
+            count = int(random.randint(2, 5) * scale)
+            spread = int(2 * scale)
             for _ in range(count):
-                px = x + random.randint(-2, 2)
-                py = y + random.randint(-2, 2)
+                px = x + random.randint(-spread, spread)
+                py = y + random.randint(-spread, spread)
                 if 0 <= px < 240 and 0 <= py < 240:
                     self._canvas.draw_pixel(px, py, color)
 
         elif gesture == "drag":
-            length = random.randint(8, 15)
+            length = int(random.randint(8, 15) * scale)
             angle = self._intent.direction + random.gauss(0, 0.1)
             for i in range(length):
                 px = int(x + math.cos(angle) * i)
@@ -3337,13 +3372,49 @@ class ScreenRenderer:
 
     def _drift_focus(self, stability, presence):
         """Drift the focus point — wander influenced by stability, occasional jumps by presence."""
-        # Direction wobbles — high stability = straighter, low = more wandering
-        self._intent.direction += random.gauss(0, 0.3 * (1.1 - stability))
 
-        # Step in current direction
-        step = 3 + random.random() * 5
-        self._intent.focus_x += math.cos(self._intent.direction) * step
-        self._intent.focus_y += math.sin(self._intent.direction) * step
+        # --- Direction memory: sometimes direction locks for sustained lines ---
+        if self._intent.direction_lock_remaining > 0:
+            # Locked: minimal wobble (tight lines)
+            self._intent.direction += random.gauss(0, 0.03)
+            self._intent.direction_lock_remaining -= 1
+            if self._intent.direction_lock_remaining <= 0:
+                self._intent.direction_locked = False
+        elif not self._intent.orbit_active:
+            # Normal wobble — high stability = straighter, low = more wandering
+            self._intent.direction += random.gauss(0, 0.3 * (1.1 - stability))
+
+            # 3% chance to lock direction for 15-40 marks (sustained line)
+            # Higher stability = more likely to lock
+            if random.random() < 0.03 * (0.5 + stability):
+                self._intent.direction_locked = True
+                self._intent.direction_lock_remaining = random.randint(15, 40)
+
+        # --- Orbit: focus curves around anchor point ---
+        if self._intent.orbit_active:
+            # Calculate angle from anchor to current focus
+            dx = self._intent.focus_x - self._intent.orbit_anchor_x
+            dy = self._intent.focus_y - self._intent.orbit_anchor_y
+            current_angle = math.atan2(dy, dx)
+
+            # Advance angle (orbit speed varies with radius)
+            angle_step = random.gauss(0.15, 0.03)
+            new_angle = current_angle + angle_step
+
+            # Wobble the radius slightly for organic circles
+            r = self._intent.orbit_radius + random.gauss(0, 2.0)
+            self._intent.focus_x = self._intent.orbit_anchor_x + math.cos(new_angle) * r
+            self._intent.focus_y = self._intent.orbit_anchor_y + math.sin(new_angle) * r
+            self._intent.direction = new_angle + math.pi / 2  # tangent
+
+            self._intent.orbit_remaining -= 1
+            if self._intent.orbit_remaining <= 0:
+                self._intent.orbit_active = False
+        else:
+            # Step in current direction
+            step = 3 + random.random() * 5
+            self._intent.focus_x += math.cos(self._intent.direction) * step
+            self._intent.focus_y += math.sin(self._intent.direction) * step
 
         # Soft bounce off edges
         margin = 20
@@ -3361,10 +3432,21 @@ class ScreenRenderer:
             self._intent.focus_y = float(240 - margin)
 
         # Occasional focus jump — higher presence = more exploratory
-        if random.random() < 0.02 + presence * 0.03:
+        if not self._intent.orbit_active and random.random() < 0.02 + presence * 0.03:
             self._intent.focus_x = random.uniform(40, 200)
             self._intent.focus_y = random.uniform(40, 200)
             self._intent.direction = random.uniform(0, 2 * math.pi)
+            self._intent.direction_locked = False
+            self._intent.direction_lock_remaining = 0
+
+        # --- Start orbit: 2% chance per mark (if not already orbiting or locked) ---
+        if (not self._intent.orbit_active and not self._intent.direction_locked
+                and random.random() < 0.02):
+            self._intent.orbit_active = True
+            self._intent.orbit_anchor_x = self._intent.focus_x + random.gauss(0, 20)
+            self._intent.orbit_anchor_y = self._intent.focus_y + random.gauss(0, 20)
+            self._intent.orbit_radius = random.uniform(10, 50)
+            self._intent.orbit_remaining = random.randint(20, 60)  # partial to full circle
 
     def _update_drawing_phase(self, anima: Anima):
         """Update Lumen's drawing phase based on energy level.
