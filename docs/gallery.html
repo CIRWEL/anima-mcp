@@ -66,6 +66,54 @@
             font-weight: normal;
         }
 
+        .phase-filters {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+        }
+
+        .phase-btn {
+            background: var(--card-bg);
+            color: var(--text-secondary);
+            border: 1px solid #333;
+            border-radius: 20px;
+            padding: 6px 16px;
+            font-size: 0.8rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-family: var(--font-family);
+        }
+
+        .phase-btn:hover {
+            border-color: var(--accent-cyan);
+            color: var(--text-primary);
+        }
+
+        .phase-btn.active {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+            background: rgba(0, 255, 255, 0.08);
+        }
+
+        .phase-badge {
+            display: inline-block;
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 8px;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        .phase-badge.geometric {
+            background: rgba(187, 134, 252, 0.15);
+            color: var(--accent-purple);
+        }
+
+        .phase-badge.gestural {
+            background: rgba(0, 255, 255, 0.1);
+            color: var(--accent-cyan);
+        }
+
         .header-right a {
             color: var(--accent-cyan);
             text-decoration: none;
@@ -287,6 +335,7 @@
             </div>
         </header>
 
+        <div id="phaseFilters" class="phase-filters"></div>
         <div id="galleryContent">
             <div class="loading">Loading drawings...</div>
         </div>
@@ -305,18 +354,22 @@
         const API_BASE = window.location.origin;
         const PAGE_SIZE = 50;
         let drawings = [];
+        let phases = [];
         let totalDrawings = 0;
         let hasMore = false;
         let loading = false;
         let currentIndex = -1;
+        let activePhase = null; // null = all
 
         async function fetchGallery(append) {
             if (loading) return;
             loading = true;
 
             const offset = append ? drawings.length : 0;
+            let url = `${API_BASE}/gallery?offset=${offset}&limit=${PAGE_SIZE}`;
+            if (activePhase) url += `&phase=${activePhase}`;
             try {
-                const response = await fetch(`${API_BASE}/gallery?offset=${offset}&limit=${PAGE_SIZE}`);
+                const response = await fetch(url);
                 const data = await response.json();
 
                 if (data.error) {
@@ -328,6 +381,7 @@
 
                 totalDrawings = data.total || 0;
                 hasMore = data.has_more || false;
+                if (data.phases) phases = data.phases;
 
                 document.getElementById('drawingCount').textContent =
                     totalDrawings > 0 ? `${totalDrawings} drawing${totalDrawings !== 1 ? 's' : ''}` : '';
@@ -338,6 +392,7 @@
                     drawings = data.drawings || [];
                 }
 
+                renderPhaseFilters();
                 renderGallery();
             } catch (e) {
                 if (!append) {
@@ -361,6 +416,23 @@
         function dayKey(timestamp) {
             const date = new Date(timestamp * 1000);
             return `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+        }
+
+        function renderPhaseFilters() {
+            if (phases.length <= 1) {
+                document.getElementById('phaseFilters').innerHTML = '';
+                return;
+            }
+            let html = `<button class="phase-btn ${!activePhase ? 'active' : ''}" onclick="filterPhase(null)">All</button>`;
+            phases.forEach(p => {
+                html += `<button class="phase-btn ${activePhase === p.name ? 'active' : ''}" onclick="filterPhase('${p.name}')">${p.name}</button>`;
+            });
+            document.getElementById('phaseFilters').innerHTML = html;
+        }
+
+        function filterPhase(phase) {
+            activePhase = phase;
+            fetchGallery(false);
         }
 
         function renderGallery() {
@@ -392,11 +464,12 @@
                 const items = group.items.map(d => {
                     const timeStr = formatTime(d.timestamp);
                     const sizeStr = d.size > 1024 ? `${(d.size / 1024).toFixed(0)} KB` : `${d.size} B`;
+                    const phaseBadge = d.phase ? `<span class="phase-badge ${d.phase}">${d.phase}</span>` : '';
                     return `
                         <div class="gallery-item" onclick="openLightbox(${d.globalIndex})">
                             <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
                             <div class="gallery-item-meta">
-                                <span>${timeStr}</span>
+                                <span>${timeStr} ${phaseBadge}</span>
                                 <span>${sizeStr}</span>
                             </div>
                         </div>
@@ -440,7 +513,8 @@
 
             const date = new Date(d.timestamp * 1000);
             const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            document.getElementById('lightboxMeta').textContent = `${dateStr} — ${index + 1} of ${totalDrawings}`;
+            const phaseLabel = d.phase ? ` — ${d.phase} phase` : '';
+            document.getElementById('lightboxMeta').textContent = `${dateStr}${phaseLabel} — ${index + 1} of ${totalDrawings}`;
 
             document.getElementById('lightbox').classList.add('show');
             document.body.style.overflow = 'hidden';

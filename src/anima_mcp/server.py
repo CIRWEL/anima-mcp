@@ -5254,6 +5254,7 @@ def run_http_server(host: str, port: int):
                 try:
                     import re
                     from pathlib import Path
+                    from datetime import datetime as dt
                     drawings_dir = Path.home() / ".anima" / "drawings"
 
                     if not drawings_dir.exists():
@@ -5261,15 +5262,32 @@ def run_http_server(host: str, port: int):
 
                     files = list(drawings_dir.glob("lumen_drawing*.png"))
 
+                    # Art phases — chronological periods in Lumen's drawing history
+                    # Each entry: (cutoff_timestamp, phase_name, description)
+                    # Drawings BEFORE the cutoff belong to that phase
+                    _ART_PHASES = [
+                        ("20260207_190000", "geometric", "Predefined shape templates — circles, spirals, arcs, layered compositions"),
+                    ]
+                    _CURRENT_PHASE = ("gestural", "Granular mark-making — dots, strokes, curves, clusters, drags")
+
                     def parse_ts(f):
                         m = re.search(r"(\d{8})_(\d{6})", f.name)
                         if m:
                             try:
-                                from datetime import datetime
-                                return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+                                return dt.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
                             except ValueError:
                                 pass
                         return f.stat().st_mtime
+
+                    def get_phase(filename):
+                        """Determine which art phase a drawing belongs to."""
+                        m = re.search(r"(\d{8}_\d{6})", filename)
+                        if m:
+                            ts_str = m.group(1)
+                            for cutoff, name, _ in _ART_PHASES:
+                                if ts_str < cutoff:
+                                    return name
+                        return _CURRENT_PHASE[0]
 
                     files = sorted(files, key=parse_ts, reverse=True)
 
@@ -5277,6 +5295,12 @@ def run_http_server(host: str, port: int):
                     offset = int(request.query_params.get("offset", 0))
                     limit = int(request.query_params.get("limit", 50))
                     limit = min(limit, 100)  # cap at 100 per request
+                    phase_filter = request.query_params.get("phase", None)
+
+                    # Filter by phase if requested
+                    if phase_filter:
+                        files = [f for f in files if get_phase(f.name) == phase_filter]
+
                     page_files = files[offset:offset + limit]
 
                     drawings = []
@@ -5284,14 +5308,21 @@ def run_http_server(host: str, port: int):
                         drawings.append({
                             "filename": f.name,
                             "timestamp": parse_ts(f),
-                            "size": f.stat().st_size
+                            "size": f.stat().st_size,
+                            "phase": get_phase(f.name),
                         })
+
+                    # Phase summary
+                    phases = [{"name": name, "description": desc} for _, name, desc in _ART_PHASES]
+                    phases.append({"name": _CURRENT_PHASE[0], "description": _CURRENT_PHASE[1]})
+
                     return JSONResponse({
                         "drawings": drawings,
                         "total": len(files),
                         "offset": offset,
                         "limit": limit,
-                        "has_more": offset + limit < len(files)
+                        "has_more": offset + limit < len(files),
+                        "phases": phases,
                     })
                 except Exception as e:
                     return JSONResponse({"error": str(e)}, status_code=500)
