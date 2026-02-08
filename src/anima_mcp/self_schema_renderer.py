@@ -63,6 +63,38 @@ COLORS = {
     "background": (20, 20, 30),       # Dark background
 }
 
+# VQA provider configurations (tried in order, free first)
+_VQA_PROVIDERS = [
+    {
+        "name": "groq",
+        "env_key": "GROQ_API_KEY",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+        "format": "openai",
+    },
+    {
+        "name": "huggingface",
+        "env_key": "HF_TOKEN",
+        "url": "https://router.huggingface.co/hf-inference/models/meta-llama/Llama-3.2-11B-Vision-Instruct/v1/chat/completions",
+        "model": "meta-llama/Llama-3.2-11B-Vision-Instruct",
+        "format": "openai",
+    },
+    {
+        "name": "together",
+        "env_key": "TOGETHER_API_KEY",
+        "url": "https://api.together.xyz/v1/chat/completions",
+        "model": "Qwen/Qwen3-VL-8B-Instruct",
+        "format": "openai",
+    },
+    {
+        "name": "anthropic",
+        "env_key": "ANTHROPIC_API_KEY",
+        "url": "https://api.anthropic.com/v1/messages",
+        "model": "claude-sonnet-4-20250514",
+        "format": "anthropic",
+    },
+]
+
 
 def _get_anima_color(value: float) -> Tuple[int, int, int]:
     """Get color for anima node based on value - brighter = higher value."""
@@ -187,6 +219,27 @@ def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int)
     return cx, cy
 
 
+def _build_node_positions(schema: SelfSchema) -> Dict[str, Tuple[int, int]]:
+    """Build position lookup for all nodes in the schema."""
+    node_positions: Dict[str, Tuple[int, int]] = {}
+    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0}
+    preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
+
+    for node in schema.nodes:
+        if node.node_type == "identity":
+            pos = _get_node_position(node, 0, 1)
+        elif node.node_type in type_indices:
+            idx = type_indices[node.node_type]
+            total = preference_count if node.node_type == "preference" else 0
+            pos = _get_node_position(node, idx, total)
+            type_indices[node.node_type] += 1
+        else:
+            pos = CENTER
+        node_positions[node.node_id] = pos
+
+    return node_positions
+
+
 def _draw_filled_circle(
     pixels: Dict[Tuple[int, int], Tuple[int, int, int]],
     cx: int, cy: int, radius: int,
@@ -273,25 +326,7 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
     if not schema.nodes:
         return pixels
 
-    # Build node positions
-    node_positions: Dict[str, Tuple[int, int]] = {}
-
-    # Count nodes by type for positioning
-    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0}
-    preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
-
-    for node in schema.nodes:
-        if node.node_type == "identity":
-            pos = _get_node_position(node, 0, 1)
-        elif node.node_type in type_indices:
-            idx = type_indices[node.node_type]
-            total = preference_count if node.node_type == "preference" else 0
-            pos = _get_node_position(node, idx, total)
-            type_indices[node.node_type] += 1
-        else:
-            pos = CENTER
-
-        node_positions[node.node_id] = pos
+    node_positions = _build_node_positions(schema)
 
     # Draw edges first (underneath nodes) - thicker and more visible
     for edge in schema.edges:
@@ -322,9 +357,6 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             thickness = max(2, min(4, int(weight_magnitude * 4) + 2))
 
             _draw_line(pixels, x0, y0, x1, y1, color, thickness=thickness)
-
-    # Build node value lookup for glow
-    node_values = {n.node_id: n.value for n in schema.nodes}
 
     # Draw glows first (underneath nodes)
     for node in schema.nodes:
@@ -434,28 +466,17 @@ def save_render_to_file(
         except (OSError, IOError):
             font = ImageFont.load_default()
 
-        # Rebuild node positions to place labels
-        type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0}
-        preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
+        node_positions = _build_node_positions(schema)
         for node in schema.nodes:
-            if node.node_type == "identity":
-                pos = _get_node_position(node, 0, 1)
-            elif node.node_type in type_indices:
-                idx = type_indices[node.node_type]
-                total = preference_count if node.node_type == "preference" else 0
-                pos = _get_node_position(node, idx, total)
-                type_indices[node.node_type] += 1
-            else:
-                pos = CENTER
-            x, y = pos
-            # Place label below node, centered
+            x, y = node_positions[node.node_id]
             label = node.label
             bbox = draw.textbbox((0, 0), label, font=font)
             tw = bbox[2] - bbox[0]
+            th = bbox[3] - bbox[1]
             lx = max(1, min(WIDTH - tw - 1, x - tw // 2))
             ly = y + 10  # below node
-            if ly > HEIGHT - 12:
-                ly = y - 14  # above if at bottom
+            if ly + th > HEIGHT - 2:
+                ly = y - th - 4  # above if at bottom
             draw.text((lx, ly), label, fill=(200, 200, 200), font=font)
 
         img.save(png_path)
@@ -608,24 +629,12 @@ Questions:
         prompt += f"{i}. {q['question']}\n"
     prompt += "\nProvide answers in this format:\n1. [answer]\n2. [answer]\n..."
 
-    # Try providers in order (free first)
+    # Build provider list from config (free first)
     providers = []
-
-    # 1. Groq (FREE) - Llama 4 Scout Vision
-    if os.environ.get("GROQ_API_KEY"):
-        providers.append(("groq", os.environ["GROQ_API_KEY"]))
-
-    # 2. Hugging Face Inference API (FREE) - Llama 3.2 Vision or LLaVA
-    if os.environ.get("HF_TOKEN"):
-        providers.append(("huggingface", os.environ["HF_TOKEN"]))
-
-    # 3. Together AI (FREE tier) - Qwen3-VL-8B
-    if os.environ.get("TOGETHER_API_KEY"):
-        providers.append(("together", os.environ["TOGETHER_API_KEY"]))
-
-    # 4. Anthropic (PAID fallback)
-    if os.environ.get("ANTHROPIC_API_KEY"):
-        providers.append(("anthropic", os.environ["ANTHROPIC_API_KEY"]))
+    for cfg in _VQA_PROVIDERS:
+        key = os.environ.get(cfg["env_key"])
+        if key:
+            providers.append({**cfg, "api_key": key})
 
     if not providers:
         return {
@@ -635,17 +644,12 @@ Questions:
         }
 
     # Try each provider
-    import httpx
     last_error = None
-
-    for provider_name, api_key in providers:
+    for config in providers:
         try:
-            answer_text = await _call_vision_provider(
-                provider_name, api_key, image_data, prompt
-            )
+            answer_text = await _call_vision_provider(config, image_data, prompt)
             if answer_text:
-                # Parse and score
-                return _parse_vqa_response(answer_text, questions, provider_name)
+                return _parse_vqa_response(answer_text, questions, config["name"])
         except Exception as e:
             last_error = str(e)
             continue
@@ -654,25 +658,23 @@ Questions:
 
 
 async def _call_vision_provider(
-    provider: str,
-    api_key: str,
+    config: Dict[str, str],
     image_data: str,
     prompt: str,
 ) -> Optional[str]:
-    """Call a vision-capable LLM provider."""
+    """Call a vision-capable LLM provider using config from _VQA_PROVIDERS."""
     import httpx
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        if provider == "groq":
-            # Groq - Llama 4 Scout Vision (FREE, OpenAI-compatible)
+        if config["format"] == "openai":
             response = await client.post(
-                "https://api.groq.com/openai/v1/chat/completions",
+                config["url"],
                 headers={
-                    "Authorization": f"Bearer {api_key}",
+                    "Authorization": f"Bearer {config['api_key']}",
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
+                    "model": config["model"],
                     "messages": [
                         {
                             "role": "user",
@@ -692,89 +694,18 @@ async def _call_vision_provider(
             )
             if response.status_code == 200:
                 return response.json()["choices"][0]["message"]["content"]
-            else:
-                raise Exception(f"Groq API error {response.status_code}: {response.text[:200]}")
+            raise Exception(f"{config['name']} API error {response.status_code}: {response.text[:200]}")
 
-        elif provider == "huggingface":
-            # Hugging Face Inference API - Llama 3.2 Vision
-            # Uses the new router endpoint for serverless inference
-            model = "meta-llama/Llama-3.2-11B-Vision-Instruct"
+        elif config["format"] == "anthropic":
             response = await client.post(
-                f"https://router.huggingface.co/hf-inference/models/{model}/v1/chat/completions",
+                config["url"],
                 headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/png;base64,{image_data}",
-                                    },
-                                },
-                                {"type": "text", "text": prompt},
-                            ],
-                        }
-                    ],
-                    "max_tokens": 256,
-                },
-            )
-            if response.status_code == 200:
-                return response.json()["choices"][0]["message"]["content"]
-            elif response.status_code == 503:
-                # Model loading - try fallback
-                raise Exception("HF model loading, trying fallback...")
-            else:
-                raise Exception(f"HF API error {response.status_code}: {response.text[:200]}")
-
-        elif provider == "together":
-            # Together AI with Qwen3-VL-8B (serverless, pay-per-use)
-            response = await client.post(
-                "https://api.together.xyz/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": "Qwen/Qwen3-VL-8B-Instruct",
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": [
-                                {
-                                    "type": "image_url",
-                                    "image_url": {
-                                        "url": f"data:image/png;base64,{image_data}",
-                                    },
-                                },
-                                {"type": "text", "text": prompt},
-                            ],
-                        }
-                    ],
-                    "max_tokens": 256,
-                },
-            )
-            if response.status_code == 200:
-                return response.json()["choices"][0]["message"]["content"]
-            else:
-                raise Exception(f"Together API error {response.status_code}: {response.text[:200]}")
-
-        elif provider == "anthropic":
-            # Anthropic Claude (PAID)
-            response = await client.post(
-                "https://api.anthropic.com/v1/messages",
-                headers={
-                    "x-api-key": api_key,
+                    "x-api-key": config["api_key"],
                     "anthropic-version": "2023-06-01",
                     "content-type": "application/json",
                 },
                 json={
-                    "model": "claude-sonnet-4-20250514",
+                    "model": config["model"],
                     "max_tokens": 256,
                     "messages": [
                         {
@@ -796,8 +727,7 @@ async def _call_vision_provider(
             )
             if response.status_code == 200:
                 return response.json()["content"][0]["text"]
-            else:
-                raise Exception(f"Anthropic API error {response.status_code}: {response.text[:200]}")
+            raise Exception(f"Anthropic API error {response.status_code}: {response.text[:200]}")
 
     return None
 
