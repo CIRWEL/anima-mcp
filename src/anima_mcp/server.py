@@ -4744,6 +4744,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             # Initialize growth system for learning, relationships, and goals
             try:
                 _growth = get_growth_system(db_path=db_path)
+                _growth.born_at = identity.born_at
                 print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
             except Exception as ge:
                 print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)

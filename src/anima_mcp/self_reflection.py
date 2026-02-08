@@ -228,6 +228,10 @@ class SelfReflectionSystem:
         time_patterns = self._analyze_temporal_patterns(rows)
         patterns.extend(time_patterns)
 
+        # Analyze causal patterns (when X changes, Y follows)
+        causal_patterns = self._analyze_causal_patterns(rows)
+        patterns.extend(causal_patterns)
+
         return patterns
 
     def _analyze_sensor_correlation(
@@ -382,6 +386,80 @@ class SelfReflectionSystem:
 
         return patterns
 
+    def _analyze_causal_patterns(self, rows: List[sqlite3.Row]) -> List[StatePattern]:
+        """Find causal patterns: when one dimension changes, what follows?
+
+        Looks at consecutive readings. When a dimension shifts significantly
+        (delta > 0.08), tracks what the other dimensions do over the next
+        few readings. Aggregates across all such events to find reliable
+        "when X rises/falls, Y tends to rise/fall" patterns.
+        """
+        if len(rows) < 20:
+            return []
+
+        dims = ["warmth", "clarity", "stability", "presence"]
+        trigger_threshold = 0.08  # Minimum change to count as a trigger
+        lookahead = 5  # How many readings ahead to check for effect
+
+        # Collect: for each trigger dimension & direction, what happens to other dims?
+        # Key: (trigger_dim, direction) -> {effect_dim: [deltas]}
+        effects: Dict[Tuple[str, str], Dict[str, list]] = {}
+
+        for trigger in dims:
+            for direction in ["rise", "fall"]:
+                effects[(trigger, direction)] = {d: [] for d in dims if d != trigger}
+
+        # Walk through consecutive pairs
+        for i in range(len(rows) - lookahead - 1):
+            for trigger in dims:
+                delta = rows[i + 1][trigger] - rows[i][trigger]
+
+                if abs(delta) < trigger_threshold:
+                    continue
+
+                direction = "rise" if delta > 0 else "fall"
+
+                # What do other dimensions do over the next `lookahead` readings?
+                for other in dims:
+                    if other == trigger:
+                        continue
+                    # Effect = change from current to average of next few
+                    future_vals = [rows[i + j][other] for j in range(2, min(2 + lookahead, len(rows) - i))]
+                    if future_vals:
+                        effect = (sum(future_vals) / len(future_vals)) - rows[i][other]
+                        effects[(trigger, direction)][other].append(effect)
+
+        patterns = []
+
+        for (trigger, direction), dim_effects in effects.items():
+            for effect_dim, deltas in dim_effects.items():
+                if len(deltas) < 10:
+                    continue  # Need enough observations
+
+                avg_effect = sum(deltas) / len(deltas)
+
+                # Only report if the average effect is meaningful
+                if abs(avg_effect) < 0.05:
+                    continue
+
+                effect_direction = "rises" if avg_effect > 0 else "falls"
+                condition = f"{trigger} {direction}s"
+                outcome = f"{effect_dim} {effect_direction}"
+
+                # Compute average state during these events for the pattern
+                patterns.append(StatePattern(
+                    condition=condition,
+                    outcome=outcome,
+                    correlation=avg_effect,
+                    sample_count=len(deltas),
+                    avg_warmth=0.0,
+                    avg_clarity=0.0,
+                    avg_stability=0.0,
+                    avg_presence=0.0,
+                ))
+
+        return patterns
+
     def generate_insights(self, patterns: List[StatePattern]) -> List[Insight]:
         """Convert detected patterns into insights."""
         new_insights = []
@@ -408,6 +486,8 @@ class SelfReflectionSystem:
                 category = InsightCategory.ENVIRONMENT
             elif "morning" in pattern.condition or "afternoon" in pattern.condition or "evening" in pattern.condition or "night" in pattern.condition:
                 category = InsightCategory.TEMPORAL
+            elif "rises" in pattern.outcome or "falls" in pattern.outcome:
+                category = InsightCategory.WELLNESS
             else:
                 category = InsightCategory.BEHAVIORAL
 
@@ -465,6 +545,10 @@ class SelfReflectionSystem:
             return f"My {pattern.outcome.replace('highest ', '')} tends to be best in the evening"
         if "night" in pattern.condition:
             return f"My {pattern.outcome.replace('highest ', '')} tends to be best at night"
+
+        # Causal patterns (when X rises/falls, Y rises/falls)
+        if "rises" in pattern.condition or "falls" in pattern.condition:
+            return f"When my {pattern.condition}, my {pattern.outcome} shortly after"
 
         # Fallback
         return f"I notice {pattern.outcome} during {pattern.condition}"

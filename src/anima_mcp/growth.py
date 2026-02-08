@@ -169,6 +169,7 @@ class GrowthSystem:
         self._goals: Dict[str, Goal] = {}
         self._memories: List[MemorableEvent] = []
         self._curiosities: List[str] = []  # Things Lumen wants to explore
+        self.born_at: Optional[datetime] = None  # Set from identity after wake()
         self._drawings_observed: int = 0
         self._initialize_db()
         self._load_all()
@@ -835,7 +836,10 @@ class GrowthSystem:
         lines = []
 
         # Birth
-        if self._memories:
+        if self.born_at:
+            days_alive = (datetime.now() - self.born_at).days
+            lines.append(f"I came into being {days_alive} days ago.")
+        elif self._memories:
             oldest = min(self._memories, key=lambda m: m.timestamp)
             days_alive = (datetime.now() - oldest.timestamp).days
             lines.append(f"I came into being {days_alive} days ago.")
