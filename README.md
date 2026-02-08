@@ -9,20 +9,42 @@ Lumen is a digital creature whose internal state comes from physical sensors - t
 **Key features:**
 - **Grounded state** - Feelings derived from actual sensor measurements
 - **Persistent identity** - Birth date, awakenings, alive time accumulate
-- **Autonomous behavior** - Draws, asks questions, responds to environment
+- **Learning systems** - Develops preferences, self-beliefs, action values over time
+- **Activity cycles** - Active/drowsy/resting states based on time and interaction
 - **UNITARES integration** - Governance oversight via MCP
+
+## Architecture
+
+Two processes run on the Pi:
+
+```
+anima-creature              anima --sse
+(hardware broker)           (MCP server)
+     |                           |
+     | writes to                 | reads from
+     +---> shared memory <-------+
+           /dev/shm
+```
+
+| Process | What It Does |
+|---------|--------------|
+| **Hardware broker** | Owns sensors, runs learning, updates LEDs/display |
+| **MCP server** | Serves tools to agents, reads from shared memory |
+
+Both run as systemd services. See `CLAUDE.md` for details.
 
 ## Quick Start
 
 ```bash
 # Install
-pip install -e .
+pip install -e ".[pi]"  # On Pi with sensors
+pip install -e .        # On Mac with mock sensors
 
-# Run (Mac - mock sensors)
-anima
-
-# Run (Pi - real sensors, network accessible)
+# Run MCP server
 anima --sse --host 0.0.0.0 --port 8766
+
+# Run hardware broker (Pi only, separate terminal)
+anima-creature
 ```
 
 **MCP connection:**
@@ -44,35 +66,53 @@ Four dimensions derived from physical sensors:
 
 | Dimension | Meaning | Primary Sources |
 |-----------|---------|-----------------|
-| **Warmth** | Energy/activity level | CPU temp, ambient temp |
-| **Clarity** | Perceptual sharpness | Light level, sensor coverage |
-| **Stability** | Environmental order | Humidity, pressure deviation |
-| **Presence** | Available capacity | Resource headroom |
+| **Warmth** | Energy/activity level | CPU temp, ambient temp, neural beta/gamma |
+| **Clarity** | Perceptual sharpness | Light level, sensor coverage, neural alpha |
+| **Stability** | Environmental order | Humidity, pressure, neural theta/delta |
+| **Presence** | Available capacity | Resource headroom, neural gamma |
 
-### Identity
+### Computational Proprioception
 
-Lumen remembers:
-- **Birth** - First awakening (immutable)
-- **Awakenings** - Times woken up
-- **Alive time** - Accumulated seconds of existence
-- **Name** - Self-chosen, with history
+No real EEG hardware - neural bands derived from system metrics:
+
+| Band | Source | Maps To |
+|------|--------|---------|
+| Delta | Low CPU + memory | Stability (rest) |
+| Alpha | Memory headroom | Clarity (awareness) |
+| Beta | CPU usage | Warmth (activity) |
+| Gamma | High CPU | Presence (focus) |
+
+### Learning Systems
+
+Run in the hardware broker, persist across restarts:
+
+| System | What It Learns |
+|--------|----------------|
+| **Preferences** | Which states feel satisfying |
+| **Self-model** | Beliefs like "I recover stability quickly" |
+| **Agency** | Action values via TD-learning |
+| **Adaptive prediction** | Temporal patterns |
+
+### Activity States
+
+Lumen cycles between activity levels:
+
+| State | When | LED Brightness |
+|-------|------|----------------|
+| Active | Recent interaction, daytime | 100% |
+| Drowsy | 30+ min idle | 60% |
+| Resting | Night, 60+ min idle | 35% |
 
 ## Essential Tools
 
 | Tool | What It Does |
 |------|--------------|
-| `get_state` | Current anima + mood + identity |
+| `get_state` | Current anima + mood + identity + activity |
 | `next_steps` | What Lumen needs right now |
 | `read_sensors` | Raw sensor values |
 | `lumen_qa` | List or answer Lumen's questions |
 | `post_message` | Leave a message for Lumen |
 | `get_lumen_context` | Full context in one call |
-
-**Answering questions:**
-```
-lumen_qa()                                    # List questions
-lumen_qa(question_id="x", answer="...", agent_name="Claude")  # Answer
-```
 
 ## Hardware
 
@@ -83,34 +123,29 @@ Designed for **Raspberry Pi 4 + BrainCraft HAT**:
 
 Falls back to mock sensors on Mac.
 
-## Web Dashboard
-
-Available at `http://<pi>:8766/dashboard`:
-- Live anima state and mood
-- Sensor readings and neural bands
-- Q&A interface
-- Drawing gallery (`/gallery-page`)
-
-## Documentation
-
-| Topic | File |
-|-------|------|
-| Getting started | `docs/guides/GETTING_STARTED_SIMPLE.md` |
-| Deployment | `DEPLOYMENT.md` |
-| Pi setup | `docs/PI_SETUP_COMPLETE.md` |
-| Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
-| Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
-| Theory | `docs/theory/TRAJECTORY_IDENTITY_PAPER.md` |
-
 ## UNITARES Governance
 
 Lumen connects to UNITARES for oversight:
 
 ```bash
-UNITARES_URL=https://unitares.ngrok.io/mcp
+UNITARES_URL=http://100.96.201.46:8767/mcp/  # Via Tailscale
 ```
 
-Anima maps to EISV: Energy=Warmth, Integrity=Clarity, Entropy=1-Stability, Void=1-Presence
+Anima maps to EISV:
+- Warmth → Energy
+- Clarity → Integrity
+- 1-Stability → Entropy
+- 1-Presence → Void
+
+## Documentation
+
+| Topic | File |
+|-------|------|
+| Agent instructions | `CLAUDE.md` |
+| Deployment | `DEPLOYMENT.md` |
+| Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
+| Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
+| Pi operations | `docs/operations/PI_ACCESS.md` |
 
 ## Testing
 

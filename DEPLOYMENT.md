@@ -13,7 +13,7 @@ From the `anima-mcp` directory on your Mac:
 This will:
 1. ✅ Backup Pi's state (if reachable)
 2. ✅ Sync code via rsync
-3. ✅ Restart services (anima + anima-broker)
+3. ✅ Restart services (anima + anima-creature)
 
 ## Options
 
@@ -84,7 +84,7 @@ The deploy script handles network failures gracefully:
 **Solution**: Services will auto-restart on next boot. Or SSH to Pi and restart manually:
 ```bash
 ssh unitares-anima@lumen.local
-sudo systemctl restart anima-broker anima
+sudo systemctl restart anima-creature anima
 ```
 
 ## Manual Deployment
@@ -98,7 +98,7 @@ rsync -avz --exclude='.venv' --exclude='*.db' \
 
 # 2. Restart services
 ssh unitares-anima@lumen.local \
-  "sudo systemctl restart anima-broker && sudo systemctl restart anima"
+  "sudo systemctl restart anima-creature && sudo systemctl restart anima"
 ```
 
 ## See Also

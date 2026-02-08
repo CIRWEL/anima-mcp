@@ -268,3 +268,42 @@ class AnimaMCPServer:
 ---
 
 **Status:** ✅ **Phase 1, 2 & 3 COMPLETE & VERIFIED**. Both scripts can now run simultaneously safely. The MCP server reads from shared memory (broker), eliminating I2C conflicts. Redis integration active. "Holy Grail" achieved.
+
+---
+
+## Systemd Services (Production)
+
+Both processes run as systemd services on the Pi:
+
+| Service | Command | File |
+|---------|---------|------|
+| `anima.service` | `anima --sse` | `/etc/systemd/system/anima.service` |
+| `anima-creature.service` | `anima-creature` | `/etc/systemd/system/anima-creature.service` |
+
+Service file location in repo: `config/anima-creature.service`
+
+```bash
+# Check status
+sudo systemctl status anima anima-creature
+
+# Restart both
+sudo systemctl restart anima-creature anima
+
+# View logs
+sudo journalctl -u anima-creature -f
+```
+
+### Learning Systems in Broker
+
+The hardware broker runs these learning systems (not the MCP server):
+
+| Module | Purpose | State Location |
+|--------|---------|----------------|
+| `ActivityManager` | Active/drowsy/resting cycles | Shared memory |
+| `AdaptiveLearner` | Calibration from observations | `anima_config.yaml` |
+| `preferences.py` | Preference evolution | Shared memory |
+| `self_model.py` | Self-knowledge beliefs | Shared memory |
+| `agency.py` | TD-learning action values | Shared memory |
+| `adaptive_prediction.py` | Temporal patterns | Shared memory |
+
+Learning state is written to `/dev/shm/anima_state.json` and persisted to disk every 5 minutes.
