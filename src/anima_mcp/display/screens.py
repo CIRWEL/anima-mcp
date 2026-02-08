@@ -316,6 +316,52 @@ class CanvasState:
             print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}", file=sys.stderr, flush=True)
 
 
+# EISV parameters for drawing (scaled from governance_core/parameters.py for ~920 mark timescale)
+_EISV_PARAMS = {
+    "alpha": 0.01,       # I→E coupling
+    "beta_E": 0.005,     # S damping on E
+    "gamma_E": 0.002,    # drift feedback to E
+    "beta_I": 0.015,     # coherence boost to I
+    "k": 0.005,          # S→I coupling (negative)
+    "gamma_I": 0.012,    # I self-regulation (linear)
+    "mu": 0.04,          # S natural decay
+    "lambda1": 0.02,     # drift → S coupling
+    "lambda2": 0.008,    # coherence → S reduction
+    "kappa": 0.015,      # (I-E) → V coupling (FLIPPED from governance)
+    "delta": 0.02,       # V decay (slow = long memory)
+    "C1": 1.0,           # coherence sigmoid steepness
+    "Cmax": 1.0,         # max coherence
+    "dt": 0.1,           # Euler step size
+}
+
+
+@dataclass
+class DrawingEISV:
+    """EISV thermodynamic state for drawing — same equations as governance, different domain.
+
+    Validates EISV math in a creative context. V is flipped to κ(I-E) so coherence
+    rises as Lumen commits (I > E = focused finishing).
+    """
+    E: float = 0.7    # Drawing energy
+    I: float = 0.2    # Intentionality (proprioceptive: locks, orbits, gesture runs)
+    S: float = 0.5    # Behavioral entropy (gesture variety)
+    V: float = 0.0    # Accumulated I-E imbalance
+    gesture_history: List[str] = field(default_factory=list)
+
+    def reset(self):
+        """Reset EISV state for new drawing."""
+        self.E = 0.7
+        self.I = 0.2
+        self.S = 0.5
+        self.V = 0.0
+        self.gesture_history = []
+
+    def coherence(self) -> float:
+        """C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))"""
+        p = _EISV_PARAMS
+        return p["Cmax"] * 0.5 * (1.0 + math.tanh(p["C1"] * self.V))
+
+
 @dataclass
 class DrawingIntent:
     """Lumen's drawing intent — where attention is, what gesture is active, how much energy remains.
@@ -342,6 +388,9 @@ class DrawingIntent:
     orbit_radius: float = 30.0
     orbit_remaining: int = 0
 
+    # EISV thermodynamic state
+    eisv: DrawingEISV = field(default_factory=DrawingEISV)
+
     def reset(self):
         """Reset intent for a new canvas."""
         self.focus_x = 120.0
@@ -355,6 +404,7 @@ class DrawingIntent:
         self.direction_lock_remaining = 0
         self.orbit_active = False
         self.orbit_remaining = 0
+        self.eisv.reset()
 
 
 class ScreenRenderer:
@@ -3236,11 +3286,19 @@ class ScreenRenderer:
         # --- Drift focus ---
         self._drift_focus(stability, presence)
 
-        # --- Deplete energy ---
-        # Reduced from 0.002 to 0.001: allows ~920 marks before depletion
-        # At ~5px/mark avg, that's ~4,600 pixels (~8% canvas coverage)
-        # With scale breath, early marks are bigger → effective coverage 15-20%
-        self._intent.energy = max(0.01, self._intent.energy - 0.001)
+        # --- EISV thermodynamic step ---
+        dE_coupling, C = self._eisv_step()
+
+        # Track gesture for behavioral entropy
+        self._intent.eisv.gesture_history.append(self._intent.gesture)
+        if len(self._intent.eisv.gesture_history) > 20:
+            self._intent.eisv.gesture_history.pop(0)
+
+        # --- Deplete energy (flat + EISV coupling) ---
+        # Flat 0.001 preserves ~920 mark target. EISV coupling modulates on top:
+        # intentional drawing (I > E) → dE_coupling positive → slower depletion
+        # chaotic drawing (I < E) → dE_coupling negative → faster depletion
+        self._intent.energy = max(0.01, self._intent.energy - 0.001 + dE_coupling)
 
         # --- Record for mood tracker ---
         try:
@@ -3283,6 +3341,66 @@ class ScreenRenderer:
             hue_category = "neutral"
         return color, hue_category
 
+    def _eisv_step(self) -> Tuple[float, float]:
+        """Step EISV thermodynamics — same equations as governance, proprioceptive signals.
+
+        Returns (dE_coupling, C) where dE_coupling modulates energy depletion
+        and C is the coherence signal for drift/gesture modulation.
+        """
+        eisv = self._intent.eisv
+        p = _EISV_PARAMS
+
+        # --- I signal: proprioceptive intentionality ---
+        I_signal = 0.1
+        if self._intent.direction_locked:
+            I_signal += 0.3
+        if self._intent.orbit_active:
+            I_signal += 0.3
+        if self._intent.gesture_remaining > 0:
+            I_signal += min(0.3, self._intent.gesture_remaining / 20.0 * 0.3)
+        I_signal = min(1.0, I_signal)
+
+        # --- S signal: behavioral entropy (Shannon over last 20 gestures) ---
+        if len(eisv.gesture_history) >= 5:
+            counts: Dict[str, int] = {}
+            for g in eisv.gesture_history:
+                counts[g] = counts.get(g, 0) + 1
+            total = len(eisv.gesture_history)
+            S_signal = 0.0
+            for count in counts.values():
+                prob = count / total
+                if prob > 0:
+                    S_signal -= prob * math.log2(prob)
+            S_signal = min(1.0, S_signal / 2.32)  # normalize by log2(5)
+        else:
+            S_signal = 0.5
+
+        # --- Drift (delta-eta): gesture deviation from mood preference ---
+        try:
+            mood = self._mood_tracker.get_mood()
+            gesture_pref = mood.style_preferences.get(self._intent.gesture, 0.2)
+            gesture_drift = max(0.0, 0.2 - gesture_pref)
+        except Exception:
+            gesture_drift = 0.0
+        drift_sq = gesture_drift * gesture_drift
+
+        # --- Coherence C(V) ---
+        C = eisv.coherence()
+
+        # --- Differential equations (Euler integration) ---
+        dE = p["alpha"] * (I_signal - eisv.E) - p["beta_E"] * eisv.E * S_signal + p["gamma_E"] * drift_sq
+        dI = p["beta_I"] * C - p["k"] * S_signal - p["gamma_I"] * eisv.I
+        dS = -p["mu"] * eisv.S + p["lambda1"] * drift_sq - p["lambda2"] * C
+        dV = p["kappa"] * (I_signal - eisv.E) - p["delta"] * eisv.V  # I-E, not E-I
+
+        dt = p["dt"]
+        eisv.E = max(0.0, min(1.0, eisv.E + dE * dt))
+        eisv.I = max(0.0, min(1.0, eisv.I + dI * dt))
+        eisv.S = max(0.001, min(2.0, eisv.S + dS * dt))
+        eisv.V = max(-2.0, min(2.0, eisv.V + dV * dt))
+
+        return dE * dt, C
+
     def _choose_gesture(self, clarity, stability, presence):
         """Choose a new gesture type based on mood preferences and state."""
         try:
@@ -3304,7 +3422,9 @@ class ScreenRenderer:
             weights.append(max(0.05, base + mood_w + state_w))
 
         self._intent.gesture = random.choices(gestures, weights=weights)[0]
-        self._intent.gesture_remaining = random.randint(5, 20)
+        # Coherence extends gesture runs — committed drawing sustains gestures longer
+        C = self._intent.eisv.coherence()
+        self._intent.gesture_remaining = random.randint(5, 20 + int(10 * C))
 
     def _place_mark(self, color: Tuple[int, int, int]):
         """Place a mark at the current focus point using the active gesture.
@@ -3371,7 +3491,8 @@ class ScreenRenderer:
                     self._canvas.draw_pixel(px, py, color)
 
     def _drift_focus(self, stability, presence):
-        """Drift the focus point — wander influenced by stability, occasional jumps by presence."""
+        """Drift the focus point — wander influenced by stability, coherence, occasional jumps."""
+        C = self._intent.eisv.coherence()
 
         # --- Direction memory: sometimes direction locks for sustained lines ---
         if self._intent.direction_lock_remaining > 0:
@@ -3384,9 +3505,9 @@ class ScreenRenderer:
             # Normal wobble — high stability = straighter, low = more wandering
             self._intent.direction += random.gauss(0, 0.3 * (1.1 - stability))
 
-            # 3% chance to lock direction for 15-40 marks (sustained line)
-            # Higher stability = more likely to lock
-            if random.random() < 0.03 * (0.5 + stability):
+            # Lock probability: stability + coherence (EISV modulation)
+            lock_prob = 0.03 * (0.5 + stability) * (0.5 + C)
+            if random.random() < lock_prob:
                 self._intent.direction_locked = True
                 self._intent.direction_lock_remaining = random.randint(15, 40)
 
@@ -3431,22 +3552,24 @@ class ScreenRenderer:
             self._intent.direction = random.uniform(-math.pi * 3 / 4, -math.pi / 4)
             self._intent.focus_y = float(240 - margin)
 
-        # Occasional focus jump — higher presence = more exploratory
-        if not self._intent.orbit_active and random.random() < 0.02 + presence * 0.03:
+        # Focus jump — reduced by coherence (high C = fewer jumps, stay focused)
+        jump_prob = (0.02 + presence * 0.03) * (1.0 - 0.3 * C)
+        if not self._intent.orbit_active and random.random() < jump_prob:
             self._intent.focus_x = random.uniform(40, 200)
             self._intent.focus_y = random.uniform(40, 200)
             self._intent.direction = random.uniform(0, 2 * math.pi)
             self._intent.direction_locked = False
             self._intent.direction_lock_remaining = 0
 
-        # --- Start orbit: 2% chance per mark (if not already orbiting or locked) ---
+        # Orbit start — increased by coherence (high C = more circular forms)
+        orbit_prob = 0.02 * (0.5 + C)
         if (not self._intent.orbit_active and not self._intent.direction_locked
-                and random.random() < 0.02):
+                and random.random() < orbit_prob):
             self._intent.orbit_active = True
             self._intent.orbit_anchor_x = self._intent.focus_x + random.gauss(0, 20)
             self._intent.orbit_anchor_y = self._intent.focus_y + random.gauss(0, 20)
             self._intent.orbit_radius = random.uniform(10, 50)
-            self._intent.orbit_remaining = random.randint(20, 60)  # partial to full circle
+            self._intent.orbit_remaining = random.randint(20, 60)
 
     def _update_drawing_phase(self, anima: Anima):
         """Update Lumen's drawing phase based on energy level.
@@ -3565,6 +3688,32 @@ class ScreenRenderer:
             self._canvas.save_indicator_until = time.time() + 2.0
 
             print(f"[Notepad] Saved drawing to {filepath} ({len(self._canvas.pixels)} pixels)", file=sys.stderr, flush=True)
+
+            # EISV calibration logging — track state + structure for validation
+            eisv = self._intent.eisv
+            C = eisv.coherence()
+            pixel_count = len(self._canvas.pixels)
+            # Spatial variance (how spread out marks are)
+            if pixel_count > 10:
+                xs = [x for x, _ in self._canvas.pixels.keys()]
+                ys = [y for _, y in self._canvas.pixels.keys()]
+                mean_x = sum(xs) / len(xs)
+                mean_y = sum(ys) / len(ys)
+                spatial_var = math.sqrt(
+                    sum((x - mean_x) ** 2 for x in xs) / len(xs)
+                    + sum((y - mean_y) ** 2 for y in ys) / len(ys)
+                )
+            else:
+                spatial_var = 0.0
+            # Gesture variety
+            gh = eisv.gesture_history
+            gesture_variety = len(set(gh)) / max(1, len(gh))
+            print(
+                f"[EISV] E={eisv.E:.3f} I={eisv.I:.3f} S={eisv.S:.3f} V={eisv.V:.3f} C={C:.3f} | "
+                f"{self._intent.mark_count} marks, spatial_var={spatial_var:.1f}, "
+                f"gesture_variety={gesture_variety:.2f}",
+                file=sys.stderr, flush=True
+            )
 
             # Announce on message board if requested
             if announce:
