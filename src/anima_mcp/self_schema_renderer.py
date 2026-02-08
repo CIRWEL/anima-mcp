@@ -563,7 +563,7 @@ async def evaluate_vqa(
     Real VQA evaluation using vision-capable LLM.
 
     Provider priority (free first):
-    1. Groq (GROQ_API_KEY) - llama-3.2-11b-vision-preview (FREE)
+    1. Groq (GROQ_API_KEY) - llama-4-scout-17b (FREE)
     2. Together AI (TOGETHER_API_KEY) - Llama-Vision-Free (FREE)
     3. Anthropic (ANTHROPIC_API_KEY) - claude-sonnet (PAID, fallback)
 
@@ -611,7 +611,7 @@ Questions:
     # Try providers in order (free first)
     providers = []
 
-    # 1. Groq (FREE) - Llama 3.2 Vision
+    # 1. Groq (FREE) - Llama 4 Scout Vision
     if os.environ.get("GROQ_API_KEY"):
         providers.append(("groq", os.environ["GROQ_API_KEY"]))
 
@@ -664,7 +664,7 @@ async def _call_vision_provider(
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         if provider == "groq":
-            # Groq - Llama 3.2 Vision (FREE, OpenAI-compatible)
+            # Groq - Llama 4 Scout Vision (FREE, OpenAI-compatible)
             response = await client.post(
                 "https://api.groq.com/openai/v1/chat/completions",
                 headers={
@@ -672,7 +672,7 @@ async def _call_vision_provider(
                     "Content-Type": "application/json",
                 },
                 json={
-                    "model": "llama-3.2-11b-vision-preview",
+                    "model": "meta-llama/llama-4-scout-17b-16e-instruct",
                     "messages": [
                         {
                             "role": "user",
