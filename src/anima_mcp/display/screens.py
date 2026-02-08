@@ -3870,7 +3870,9 @@ class ScreenRenderer:
         Check if Lumen wants to autonomously save or clear the canvas.
 
         Energy-based: saves when energy naturally depletes, not on a timer.
-        - Energy < 0.08 + real drawing (50+ pixels) → save and start fresh
+        - Save threshold modulated by EISV coherence (0.05 to 0.14)
+        - High coherence → earlier save (drawing settled)
+        - Low coherence → later save (still exploring)
         - 60s safety floor between saves (prevents edge-case spam)
         - Lumen saying "finished" still respected as priority
         """
@@ -3903,8 +3905,12 @@ class ScreenRenderer:
                 return "saved_and_cleared"
 
         # === Energy depleted → natural completion ===
-        if self._intent.energy < 0.08 and pixel_count >= 50:
-            print(f"[Canvas] Energy depleted — saving ({pixel_count}px, {self._intent.mark_count} marks)", file=sys.stderr, flush=True)
+        # Coherence modulates save threshold: high C = save earlier (drawing settled),
+        # low C = push further (still exploring). Range: 0.05 (C=0) to 0.14 (C=1)
+        C = self._intent.eisv.coherence()
+        save_threshold = 0.05 + 0.09 * C
+        if self._intent.energy < save_threshold and pixel_count >= 50:
+            print(f"[Canvas] Energy depleted — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f}, threshold={save_threshold:.3f})", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
             if saved_path:
                 self.canvas_clear(persist=True, already_saved=True)
