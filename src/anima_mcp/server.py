@@ -4699,57 +4699,76 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
     """
     Wake up. Call before starting server. Safe, never crashes.
 
+    Retries on SQLite lock errors (e.g. old process still shutting down).
+
     Args:
         db_path: Path to SQLite database
         anima_id: UUID from environment or database (DO NOT override - use existing identity)
     """
+    import time as _time
     global _store, _anima_id, _growth
 
-    try:
-        _store = IdentityStore(db_path)
-        
-        # CRITICAL: Use provided anima_id OR check database for existing identity
-        # DO NOT generate new UUID if identity already exists - preserves Lumen's identity
-        if anima_id:
-            _anima_id = anima_id
-        else:
-            # Check if identity exists in database
-            conn = _store._connect()
-            existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
-            if existing:
-                _anima_id = existing[0]
-                print(f"[Wake] Using existing identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
-            else:
-                # Only generate new UUID if no identity exists (first time)
-                _anima_id = str(uuid.uuid4())
-                print(f"[Wake] Creating new identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
-        
-        if _anima_id is None:
-            raise ValueError("anima_id must be set before calling wake()")
-        identity = _store.wake(_anima_id)
-
-        # Identity (name + birthdate) is fundamental to Lumen's existence
-        print(f"Awake: {identity.name or '(unnamed)'}")
-        print(f"  ID: {identity.creature_id[:8]}...")
-        print(f"  Awakening #{identity.total_awakenings}")
-        print(f"  Born: {identity.born_at.isoformat()}")
-        print(f"  Total alive: {identity.total_alive_seconds:.0f}s")
-        print(f"[Wake] ✓ Identity established - message board will be active", file=sys.stderr, flush=True)
-
-        # Initialize growth system for learning, relationships, and goals
+    max_attempts = 5
+    for attempt in range(1, max_attempts + 1):
         try:
-            _growth = get_growth_system(db_path=db_path)
-            print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
-        except Exception as ge:
-            print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
-            _growth = None
-    except Exception as e:
-        print(f"[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
-        print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
-        print(f"[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
-        print(f"[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
-        # Continue anyway - store might be None but server can still run (display can show face without identity)
-        _store = None
+            _store = IdentityStore(db_path)
+
+            # CRITICAL: Use provided anima_id OR check database for existing identity
+            # DO NOT generate new UUID if identity already exists - preserves Lumen's identity
+            if anima_id:
+                _anima_id = anima_id
+            else:
+                # Check if identity exists in database
+                conn = _store._connect()
+                existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
+                if existing:
+                    _anima_id = existing[0]
+                    print(f"[Wake] Using existing identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
+                else:
+                    # Only generate new UUID if no identity exists (first time)
+                    _anima_id = str(uuid.uuid4())
+                    print(f"[Wake] Creating new identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
+
+            if _anima_id is None:
+                raise ValueError("anima_id must be set before calling wake()")
+            identity = _store.wake(_anima_id)
+
+            # Identity (name + birthdate) is fundamental to Lumen's existence
+            print(f"Awake: {identity.name or '(unnamed)'}")
+            print(f"  ID: {identity.creature_id[:8]}...")
+            print(f"  Awakening #{identity.total_awakenings}")
+            print(f"  Born: {identity.born_at.isoformat()}")
+            print(f"  Total alive: {identity.total_alive_seconds:.0f}s")
+            print(f"[Wake] ✓ Identity established - message board will be active", file=sys.stderr, flush=True)
+
+            # Initialize growth system for learning, relationships, and goals
+            try:
+                _growth = get_growth_system(db_path=db_path)
+                print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
+            except Exception as ge:
+                print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
+                _growth = None
+            return  # Success
+        except Exception as e:
+            is_lock_error = "database is locked" in str(e) or "database is locked" in repr(e)
+            if is_lock_error and attempt < max_attempts:
+                wait = attempt * 2  # 2s, 4s, 6s, 8s
+                print(f"[Wake] Database locked (attempt {attempt}/{max_attempts}), retrying in {wait}s...", file=sys.stderr, flush=True)
+                # Close the failed connection before retrying
+                if _store and _store._conn:
+                    try:
+                        _store._conn.close()
+                    except Exception:
+                        pass
+                _store = None
+                _time.sleep(wait)
+            else:
+                print(f"[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
+                print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
+                print(f"[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
+                print(f"[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
+                _store = None
+                return
 
 
 def sleep():
