@@ -277,7 +277,7 @@ Both processes run as systemd services on the Pi:
 
 | Service | Command | File |
 |---------|---------|------|
-| `anima.service` | `anima --sse` | `/etc/systemd/system/anima.service` |
+| `anima.service` | `anima --http` | `/etc/systemd/system/anima.service` |
 | `anima-creature.service` | `anima-creature` | `/etc/systemd/system/anima-creature.service` |
 
 Service file location in repo: `config/anima-creature.service`

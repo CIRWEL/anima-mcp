@@ -15,7 +15,7 @@ anima-creature.service      anima.service
 | Service | Command | Role |
 |---------|---------|------|
 | `anima-creature.service` | `anima-creature` | Hardware broker - owns I2C, runs learning |
-| `anima.service` | `anima --sse` | MCP server - serves tools, reads shared memory |
+| `anima.service` | `anima --http` | MCP server - serves tools, reads shared memory |
 
 **Both must run for full functionality.** The broker writes sensor data and learning state to shared memory; the server reads it.
 
