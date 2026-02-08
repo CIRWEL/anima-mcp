@@ -17,6 +17,8 @@ import time
 import sys
 import os
 import json
+import math
+import random
 
 from .face import FaceState
 from .design import COLORS, SPACING
@@ -314,6 +316,32 @@ class CanvasState:
             print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}", file=sys.stderr, flush=True)
 
 
+@dataclass
+class DrawingIntent:
+    """Lumen's drawing intent — where attention is, what gesture is active, how much energy remains.
+
+    Energy depletes per mark and replenishes on save+clear. When energy runs out,
+    Lumen naturally stops drawing and the piece is saved. No timers, no templates.
+    """
+    focus_x: float = 120.0
+    focus_y: float = 120.0
+    gesture: str = "dot"
+    gesture_remaining: int = 0
+    direction: float = 0.0
+    energy: float = 1.0
+    mark_count: int = 0
+
+    def reset(self):
+        """Reset intent for a new canvas."""
+        self.focus_x = 120.0
+        self.focus_y = 120.0
+        self.gesture = "dot"
+        self.gesture_remaining = 0
+        self.direction = random.uniform(0, 2 * math.pi)
+        self.energy = 1.0
+        self.mark_count = 0
+
+
 class ScreenRenderer:
     """Renders different screens to display."""
 
@@ -332,6 +360,7 @@ class ScreenRenderer:
         self._display = display_renderer
         self._state = ScreenState()
         self._canvas = CanvasState()
+        self._intent = DrawingIntent()
         # Load any persisted canvas from disk
         self._canvas.load_from_disk()
         self._db_path = db_path or "anima.db"  # Default database path
@@ -3148,413 +3177,207 @@ class ScreenRenderer:
                     pass  # If even this fails, at least we logged everything
     
     def _lumen_draw(self, anima: Anima, draw):
-        """Lumen draws autonomously - expression flows from Lumen's state with continuity and phases."""
-        import random
-        import math
-        
+        """Lumen draws through granular mark-making — small deliberate acts that accumulate into forms."""
         warmth = anima.warmth
         clarity = anima.clarity
         stability = anima.stability
         presence = anima.presence
-        
-        # Get mood preferences to influence style choices (with fallback)
-        try:
-            mood = self._mood_tracker.get_mood()
-            style_weights = mood.get_style_weights()
-        except Exception:
-            # Fallback to default weights if mood tracker fails
-            style_weights = {
-                "circle": 0.2, "line": 0.2, "curve": 0.2, "spiral": 0.2,
-                "pattern": 0.2, "organic": 0.2, "gradient_circle": 0.2, "layered": 0.2,
-            }
-        
-        # Update drawing phase based on canvas state and time
+
+        # Update drawing phase based on energy
         self._update_drawing_phase(anima)
         
-        # Drawing frequency scales with presence and clarity
-        # More present/clear = more frequent expression (up to 5% chance per render)
-        base_chance = 0.01  # 1% base
+        # Draw frequency: higher base than before, but each mark is tiny (1-15 pixels)
+        base_chance = 0.04  # 4% base — marks happen often, they're just small
         expression_intensity = (presence + clarity) / 2.0
-        draw_chance = base_chance * (1.0 + expression_intensity * 4.0)  # Up to 5% when very present
-        
-        # Phase affects frequency too - building phase is more active
-        if self._canvas.drawing_phase == "building":
-            draw_chance *= 1.5
-        elif self._canvas.drawing_phase == "resting":
-            draw_chance *= 0.5
-        
-        # If canvas is empty, increase chance based on Lumen's state (authentic, not forced)
-        # More present/clear Lumen = more likely to express on blank canvas
-        # But still respects Lumen's state - low presence = might not draw yet
+        draw_chance = base_chance * (0.5 + expression_intensity)  # 2-4% range
+
+        # Energy affects chance — tired Lumen draws less
+        draw_chance *= self._intent.energy
+
+        # Empty canvas boost — Lumen is more likely to start on a blank canvas
         if len(self._canvas.pixels) == 0:
-            # Boost chance when empty, but scale with expression_intensity
-            # This means: if Lumen is present/clear, they'll likely draw
-            # If Lumen is low presence/unclear, they might wait (authentic)
-            empty_boost = 0.3 + (expression_intensity * 0.7)  # 30-100% based on state
+            empty_boost = 0.3 + (expression_intensity * 0.7)
             draw_chance = max(draw_chance, empty_boost)
-        
+
         if random.random() > draw_chance:
             return
-        
-        # Limit canvas size to prevent memory issues (but much higher limit)
-        if len(self._canvas.pixels) > 15000:
-            return  # Canvas full - Lumen has expressed enough
-        
-        # Free color generation - Lumen can use any color, influenced by state but not restricted
-        # Full palette available: HSV-generated OR direct vibrant colors
 
-        # VIBRANT PALETTE - sometimes Lumen picks directly from these
+        # Canvas size limit
+        if len(self._canvas.pixels) > 15000:
+            return
+
+        # --- Color generation (free palette, state-influenced not restricted) ---
+        color, hue_category = self._generate_mark_color(warmth, clarity, stability, presence)
+
+        # --- Gesture selection ---
+        if self._intent.gesture_remaining <= 0:
+            self._choose_gesture(clarity, stability, presence)
+
+        # --- Place mark ---
+        self._place_mark(color)
+        self._intent.gesture_remaining -= 1
+        self._intent.mark_count += 1
+
+        # --- Drift focus ---
+        self._drift_focus(stability, presence)
+
+        # --- Deplete energy ---
+        self._intent.energy = max(0.01, self._intent.energy - 0.002)
+
+        # --- Record for mood tracker ---
+        try:
+            self._mood_tracker.record_drawing(self._intent.gesture, hue_category)
+        except Exception:
+            pass
+
+    def _generate_mark_color(self, warmth, clarity, stability, presence):
+        """Generate a color for the current mark. Full palette, state-influenced not restricted."""
         VIBRANT_COLORS = [
-            # Primary vibrants
-            (255, 0, 0),      # Pure red
-            (0, 255, 0),      # Pure green
-            (0, 0, 255),      # Pure blue
-            (255, 255, 0),    # Yellow
-            (255, 0, 255),    # Magenta
-            (0, 255, 255),    # Cyan
-            # Warm spectrum
-            (255, 128, 0),    # Orange
-            (255, 64, 64),    # Coral
-            (255, 192, 203),  # Pink
-            (255, 215, 0),    # Gold
-            # Cool spectrum
-            (0, 191, 255),    # Deep sky blue
-            (138, 43, 226),   # Blue violet
-            (75, 0, 130),     # Indigo
-            (0, 128, 128),    # Teal
-            # Earth tones
-            (139, 69, 19),    # Saddle brown
-            (34, 139, 34),    # Forest green
-            (210, 180, 140),  # Tan
-            # Pastels
-            (255, 182, 193),  # Light pink
-            (173, 216, 230),  # Light blue
-            (144, 238, 144),  # Light green
-            (255, 255, 224),  # Light yellow
-            (221, 160, 221),  # Plum
-            # Deep/rich
-            (128, 0, 0),      # Maroon
-            (0, 100, 0),      # Dark green
-            (25, 25, 112),    # Midnight blue
-            (128, 0, 128),    # Purple
+            (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
+            (255, 0, 255), (0, 255, 255), (255, 128, 0), (255, 64, 64),
+            (255, 192, 203), (255, 215, 0), (0, 191, 255), (138, 43, 226),
+            (75, 0, 130), (0, 128, 128), (139, 69, 19), (34, 139, 34),
+            (210, 180, 140), (255, 182, 193), (173, 216, 230), (144, 238, 144),
+            (255, 255, 224), (221, 160, 221), (128, 0, 0), (0, 100, 0),
+            (25, 25, 112), (128, 0, 128),
         ]
 
-        # 20% chance to pick from vibrant palette directly
-        # Higher presence = more likely to use vibrant colors
         use_vibrant = random.random() < (0.15 + presence * 0.15)
-
         if use_vibrant:
             color = random.choice(VIBRANT_COLORS)
-            # Optionally adjust brightness based on stability
             if stability < 0.5 and random.random() < 0.3:
-                # Dim slightly for unstable states
                 color = tuple(int(c * (0.6 + stability * 0.4)) for c in color)
-            hue_category = "vibrant"
+            return color, "vibrant"
+
+        import colorsys
+        hue_base = warmth * 360.0
+        hue = (hue_base + random.random() * 180.0) % 360.0
+        saturation = max(0.1, min(1.0, 0.3 + clarity * 0.7 + (random.random() - 0.5) * 0.4))
+        brightness = max(0.2, min(1.0, 0.4 + stability * 0.6 + (random.random() - 0.5) * 0.3))
+        rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
+        color = tuple(int(c * 255) for c in rgb)
+
+        if hue < 60 or hue > 300:
+            hue_category = "warm"
+        elif hue < 180:
+            hue_category = "cool"
         else:
-            # HSV-based generation (original logic)
-            # Base hue influenced by warmth (but can be anything)
-            hue_base = warmth * 360.0  # 0-360 degrees
+            hue_category = "neutral"
+        return color, hue_category
 
-            # Add randomness - Lumen can explore any color
-            hue_variation = random.random() * 360.0
-            hue = (hue_base + hue_variation * 0.5) % 360.0
+    def _choose_gesture(self, clarity, stability, presence):
+        """Choose a new gesture type based on mood preferences and state."""
+        try:
+            mood = self._mood_tracker.get_mood()
+            style_weights = mood.style_preferences
+        except Exception:
+            style_weights = {"dot": 0.2, "stroke": 0.2, "curve": 0.2, "cluster": 0.2, "drag": 0.2}
 
-            # Saturation influenced by clarity (but can be vibrant even when unclear)
-            saturation_base = 0.3 + clarity * 0.7  # 0.3-1.0
-            saturation = saturation_base + (random.random() - 0.5) * 0.4  # ±0.2 variation
-            saturation = max(0.1, min(1.0, saturation))
+        gestures = ["dot", "stroke", "curve", "cluster", "drag"]
+        weights = []
+        for g in gestures:
+            base = 0.1
+            mood_w = style_weights.get(g, 0.2) * 0.3
+            state_w = 0.1
+            if g in ("stroke", "curve", "drag"):
+                state_w = (clarity + stability) / 2.0 * 0.15
+            elif g in ("dot", "cluster"):
+                state_w = (1.0 - (clarity + stability) / 2.0) * 0.15
+            weights.append(max(0.05, base + mood_w + state_w))
 
-            # Brightness influenced by stability (but can be bright even when unstable)
-            brightness_base = 0.4 + stability * 0.6  # 0.4-1.0
-            brightness = brightness_base + (random.random() - 0.5) * 0.3  # ±0.15 variation
-            brightness = max(0.2, min(1.0, brightness))
+        self._intent.gesture = random.choices(gestures, weights=weights)[0]
+        self._intent.gesture_remaining = random.randint(5, 20)
 
-            # Convert HSV to RGB (free color generation)
-            import colorsys
-            rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
-            color = tuple(int(c * 255) for c in rgb)
+    def _place_mark(self, color: Tuple[int, int, int]):
+        """Place a mark at the current focus point using the active gesture."""
+        x = int(self._intent.focus_x)
+        y = int(self._intent.focus_y)
+        gesture = self._intent.gesture
 
-            # Determine hue category for mood tracking (informational, not restrictive)
-            if hue < 60 or hue > 300:
-                hue_category = "warm"
-            elif hue < 180:
-                hue_category = "cool"
-            else:
-                hue_category = "neutral"
-        
-        center_x, center_y = 120, 120
-        
-        # Choose drawing location - sometimes build on recent work (continuity)
-        use_continuity = len(self._canvas.recent_locations) > 3 and random.random() < 0.4
-        if use_continuity:
-            # Build near recent drawing - creates connected compositions
-            base_x, base_y = random.choice(self._canvas.recent_locations)
-            offset_range = int(30 + stability * 20)
-            center_x = base_x + random.randint(-offset_range, offset_range)
-            center_y = base_y + random.randint(-offset_range, offset_range)
-            center_x = max(40, min(200, center_x))
-            center_y = max(40, min(200, center_y))
-        
-        # Free style selection - Lumen can draw anything, state influences but doesn't restrict
-        # All styles available regardless of clarity/stability
-        # Mood preferences influence probability but don't exclude options
-        phase = self._canvas.drawing_phase
-        
-        # All styles always available - free expression (expanded palette)
-        style_options = [
-            ("freeform", center_x, center_y),  # Completely free drawing
-            ("layered", center_x, center_y),
-            ("gradient_circle", center_x + random.randint(-80, 80), center_y + random.randint(-80, 80)),
-            ("circle", center_x + random.randint(-80, 80), center_y + random.randint(-80, 80)),
-            ("spiral", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-            ("curve", random.randint(20, 220), random.randint(20, 220), random.randint(20, 220), random.randint(20, 220)),
-            ("organic", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-            ("pattern", random.randint(40, 200), random.randint(40, 200)),
-            ("line", random.randint(20, 220), random.randint(20, 220), random.randint(20, 220), random.randint(20, 220)),
-            ("dots", random.randint(20, 220), random.randint(20, 220)),
-            # NEW SHAPES - expanded creative palette
-            ("rectangle", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-            ("triangle", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-            ("wave", random.randint(20, 220), random.randint(60, 180)),
-            ("rings", center_x + random.randint(-40, 40), center_y + random.randint(-40, 40)),
-            ("arc", center_x + random.randint(-60, 60), center_y + random.randint(-60, 60)),
-            ("starburst", center_x + random.randint(-50, 50), center_y + random.randint(-50, 50)),
-            ("drip", random.randint(40, 200), random.randint(20, 60)),  # Random walk/drip from top
-            ("scatter", center_x, center_y),  # Scattered cluster
-        ]
-        
-        # Build weights - mood preferences influence but don't restrict
-        style_names = [s[0] for s in style_options]
-        style_weights_list = []
-        for style_name in style_names:
-            base_weight = 0.1  # Base probability for all styles
-            mood_weight = style_weights.get(style_name, 0.1)  # Mood preference
-            state_weight = 0.1  # State can influence but doesn't exclude
-            
-            # State influences probability (higher clarity/stability = slightly more complex styles)
-            if style_name in ["layered", "gradient_circle", "organic"]:
-                state_weight = (clarity + stability) / 2.0 * 0.2
-            elif style_name in ["dots", "line"]:
-                state_weight = (1.0 - (clarity + stability) / 2.0) * 0.2
-            
-            total_weight = base_weight + mood_weight * 0.3 + state_weight
-            style_weights_list.append(max(0.05, total_weight))  # Minimum 5% chance for any style
-        
-        # Select style - all options available, weighted by preferences
-        total_weight = sum(style_weights_list)
-        if total_weight > 0:
-            normalized_weights = [w / total_weight for w in style_weights_list]
-            selected_idx = random.choices(range(len(style_options)), weights=normalized_weights)[0]
-            selected = style_options[selected_idx]
-            style_name = selected[0]
-            
-            # Execute drawing - free expression
-            try:
-                if style_name == "freeform":
-                    # Completely free drawing - random pixels, organic flow
-                    num_pixels = random.randint(1, int(5 + clarity * 10))
-                    for _ in range(num_pixels):
-                        x = center_x + random.randint(-50, 50)
-                        y = center_y + random.randint(-50, 50)
-                        x = max(0, min(239, x))
-                        y = max(0, min(239, y))
-                        # Sometimes vary color slightly for organic feel
-                        if random.random() < 0.3:
-                            color_variation = tuple(max(0, min(255, c + random.randint(-30, 30))) for c in color)
-                            self._canvas.draw_pixel(x, y, color_variation)
-                        else:
-                            self._canvas.draw_pixel(x, y, color)
-                    self._mood_tracker.record_drawing("freeform", hue_category)
-                elif style_name == "layered":
-                    self._draw_layered_composition(selected[1], selected[2], color, clarity, stability)
-                    self._mood_tracker.record_drawing("layered", hue_category)
-                elif style_name == "gradient_circle":
-                    size = int(5 + random.random() * 30)  # Free size range
-                    self._draw_circle_gradient(selected[1], selected[2], size, color, clarity)
-                    self._mood_tracker.record_drawing("gradient_circle", hue_category)
-                elif style_name == "circle":
-                    size = int(3 + random.random() * 30)  # Free size range
-                    self._draw_circle(selected[1], selected[2], size, color)
-                    self._mood_tracker.record_drawing("circle", hue_category)
-                elif style_name == "spiral":
-                    max_radius = int(5 + random.random() * 20)  # Free radius
-                    self._draw_spiral(selected[1], selected[2], max_radius, color, stability)
-                    self._mood_tracker.record_drawing("spiral", hue_category)
-                elif style_name == "curve":
-                    width = int(1 + random.random() * 5)  # Free width
-                    self._draw_curve(selected[1], selected[2], selected[3], selected[4], color, width)
-                    self._mood_tracker.record_drawing("curve", hue_category)
-                elif style_name == "organic":
-                    self._draw_organic_shape(selected[1], selected[2], color, clarity, stability)
-                    self._mood_tracker.record_drawing("organic", hue_category)
-                elif style_name == "pattern":
-                    size = int(2 + random.random() * 8)  # Free size
-                    self._draw_pattern(selected[1], selected[2], size, color)
-                    self._mood_tracker.record_drawing("pattern", hue_category)
-                elif style_name == "line":
-                    self._draw_line(selected[1], selected[2], selected[3], selected[4], color)
-                    self._mood_tracker.record_drawing("line", hue_category)
-                elif style_name == "dots":
-                    # Free dots - scattered expression
-                    num_dots = random.randint(1, int(3 + clarity * 5))
-                    for _ in range(num_dots):
-                        x = selected[1] + random.randint(-30, 30)
-                        y = selected[2] + random.randint(-30, 30)
-                        x = max(0, min(239, x))
-                        y = max(0, min(239, y))
-                        self._canvas.draw_pixel(x, y, color)
-                    self._mood_tracker.record_drawing("dots", hue_category)
-                # NEW SHAPES
-                elif style_name == "rectangle":
-                    w = random.randint(5, int(15 + stability * 20))
-                    h = random.randint(5, int(15 + stability * 20))
-                    filled = random.random() < 0.6
-                    self._draw_rectangle(selected[1], selected[2], w, h, color, filled)
-                    self._mood_tracker.record_drawing("rectangle", hue_category)
-                elif style_name == "triangle":
-                    size = random.randint(8, int(15 + clarity * 15))
-                    self._draw_triangle(selected[1], selected[2], size, color)
-                    self._mood_tracker.record_drawing("triangle", hue_category)
-                elif style_name == "wave":
-                    amplitude = int(5 + warmth * 15)
-                    wavelength = int(10 + clarity * 20)
-                    self._draw_wave(selected[1], selected[2], amplitude, wavelength, color)
-                    self._mood_tracker.record_drawing("wave", hue_category)
-                elif style_name == "rings":
-                    num_rings = random.randint(2, int(3 + stability * 3))
-                    max_radius = int(10 + clarity * 20)
-                    self._draw_rings(selected[1], selected[2], num_rings, max_radius, color)
-                    self._mood_tracker.record_drawing("rings", hue_category)
-                elif style_name == "arc":
-                    radius = int(10 + random.random() * 25)
-                    start_angle = random.random() * 2 * math.pi
-                    arc_length = random.random() * math.pi + 0.5
-                    self._draw_arc(selected[1], selected[2], radius, start_angle, arc_length, color)
-                    self._mood_tracker.record_drawing("arc", hue_category)
-                elif style_name == "starburst":
-                    num_rays = random.randint(4, int(6 + clarity * 6))
-                    ray_length = int(8 + stability * 15)
-                    self._draw_starburst(selected[1], selected[2], num_rays, ray_length, color)
-                    self._mood_tracker.record_drawing("starburst", hue_category)
-                elif style_name == "drip":
-                    length = int(20 + warmth * 60)
-                    self._draw_drip(selected[1], selected[2], length, color, stability)
-                    self._mood_tracker.record_drawing("drip", hue_category)
-                elif style_name == "scatter":
-                    num_particles = int(5 + clarity * 15)
-                    spread = int(20 + stability * 40)
-                    self._draw_scatter(selected[1], selected[2], num_particles, spread, color)
-                    self._mood_tracker.record_drawing("scatter", hue_category)
-            except Exception:
-                pass  # Non-fatal - continue even if one style fails
-    
-    def _draw_circle(self, cx: int, cy: int, radius: int, color: Tuple[int, int, int]):
-        """Draw a filled circle."""
-        for dx in range(-radius, radius + 1):
-            for dy in range(-radius, radius + 1):
-                if dx*dx + dy*dy <= radius*radius:
-                    px, py = cx + dx, cy + dy
-                    if 0 <= px < 240 and 0 <= py < 240:
-                        self._canvas.draw_pixel(px, py, color)
-    
-    def _draw_line(self, x1: int, y1: int, x2: int, y2: int, color: Tuple[int, int, int]):
-        """Draw a line using Bresenham's algorithm."""
-        dx = abs(x2 - x1)
-        dy = abs(y2 - y1)
-        sx = 1 if x1 < x2 else -1
-        sy = 1 if y1 < y2 else -1
-        err = dx - dy
-        
-        x, y = x1, y1
-        while True:
+        if gesture == "dot":
             if 0 <= x < 240 and 0 <= y < 240:
                 self._canvas.draw_pixel(x, y, color)
-            if x == x2 and y == y2:
-                break
-            e2 = 2 * err
-            if e2 > -dy:
-                err -= dy
-                x += sx
-            if e2 < dx:
-                err += dx
-                y += sy
-    
-    def _draw_curve(self, x1: int, y1: int, x2: int, y2: int, color: Tuple[int, int, int], width: int):
-        """Draw a curved line (bezier-like)."""
-        import random
-        # Control point for curve
-        mid_x = (x1 + x2) // 2 + random.randint(-30, 30)
-        mid_y = (y1 + y2) // 2 + random.randint(-30, 30)
-        
-        # Draw curve as series of line segments
-        steps = 20
-        for i in range(steps + 1):
-            t = i / steps
-            # Quadratic bezier
-            x = int((1-t)*(1-t)*x1 + 2*(1-t)*t*mid_x + t*t*x2)
-            y = int((1-t)*(1-t)*y1 + 2*(1-t)*t*mid_y + t*t*y2)
-            if 0 <= x < 240 and 0 <= y < 240:
-                # Draw with width
-                for wx in range(-width//2, width//2 + 1):
-                    for wy in range(-width//2, width//2 + 1):
-                        px, py = x + wx, y + wy
-                        if 0 <= px < 240 and 0 <= py < 240:
-                            self._canvas.draw_pixel(px, py, color)
-    
-    def _draw_spiral(self, cx: int, cy: int, max_radius: int, color: Tuple[int, int, int], tightness: float):
-        """Draw a spiral."""
-        import math
-        turns = 2 + int(tightness * 3)
-        steps = turns * 20
-        for i in range(steps):
-            angle = i * 2 * math.pi / 20
-            radius = (i / steps) * max_radius
-            x = int(cx + radius * math.cos(angle))
-            y = int(cy + radius * math.sin(angle))
-            if 0 <= x < 240 and 0 <= y < 240:
-                self._canvas.draw_pixel(x, y, color)
-    
-    def _draw_pattern(self, cx: int, cy: int, size: int, color: Tuple[int, int, int]):
-        """Draw a simple pattern (cross, star, etc.)."""
-        import random
-        import math
-        pattern_type = random.choice(['cross', 'star', 'grid'])
-        
-        if pattern_type == 'cross':
-            # Cross pattern
-            for i in range(-size, size + 1):
-                if 0 <= cx + i < 240 and 0 <= cy < 240:
-                    self._canvas.draw_pixel(cx + i, cy, color)
-                if 0 <= cx < 240 and 0 <= cy + i < 240:
-                    self._canvas.draw_pixel(cx, cy + i, color)
-        elif pattern_type == 'star':
-            # Star pattern (4 directions)
-            for angle in [0, math.pi/2, math.pi, 3*math.pi/2]:
-                for r in range(1, size + 1):
-                    x = int(cx + r * math.cos(angle))
-                    y = int(cy + r * math.sin(angle))
-                    if 0 <= x < 240 and 0 <= y < 240:
-                        self._canvas.draw_pixel(x, y, color)
-        else:  # grid
-            # Small grid
-            for i in range(-size, size + 1, 2):
-                for j in range(-size, size + 1, 2):
-                    x, y = cx + i, cy + j
-                    if 0 <= x < 240 and 0 <= y < 240:
-                        self._canvas.draw_pixel(x, y, color)
-    
+
+        elif gesture == "stroke":
+            length = random.randint(2, 6)
+            for i in range(length):
+                px = int(x + math.cos(self._intent.direction) * i)
+                py = int(y + math.sin(self._intent.direction) * i)
+                if 0 <= px < 240 and 0 <= py < 240:
+                    self._canvas.draw_pixel(px, py, color)
+
+        elif gesture == "curve":
+            length = random.randint(3, 8)
+            angle = self._intent.direction
+            cx, cy = float(x), float(y)
+            for i in range(length):
+                angle += random.gauss(0, 0.3)
+                cx += math.cos(angle) * 1.5
+                cy += math.sin(angle) * 1.5
+                px, py = int(cx), int(cy)
+                if 0 <= px < 240 and 0 <= py < 240:
+                    self._canvas.draw_pixel(px, py, color)
+
+        elif gesture == "cluster":
+            count = random.randint(2, 5)
+            for _ in range(count):
+                px = x + random.randint(-2, 2)
+                py = y + random.randint(-2, 2)
+                if 0 <= px < 240 and 0 <= py < 240:
+                    self._canvas.draw_pixel(px, py, color)
+
+        elif gesture == "drag":
+            length = random.randint(8, 15)
+            angle = self._intent.direction + random.gauss(0, 0.1)
+            for i in range(length):
+                px = int(x + math.cos(angle) * i)
+                py = int(y + math.sin(angle) * i)
+                if 0 <= px < 240 and 0 <= py < 240:
+                    self._canvas.draw_pixel(px, py, color)
+
+    def _drift_focus(self, stability, presence):
+        """Drift the focus point — wander influenced by stability, occasional jumps by presence."""
+        # Direction wobbles — high stability = straighter, low = more wandering
+        self._intent.direction += random.gauss(0, 0.3 * (1.1 - stability))
+
+        # Step in current direction
+        step = 3 + random.random() * 5
+        self._intent.focus_x += math.cos(self._intent.direction) * step
+        self._intent.focus_y += math.sin(self._intent.direction) * step
+
+        # Soft bounce off edges
+        margin = 20
+        if self._intent.focus_x < margin:
+            self._intent.direction = random.uniform(-math.pi / 4, math.pi / 4)
+            self._intent.focus_x = float(margin)
+        elif self._intent.focus_x > 240 - margin:
+            self._intent.direction = random.uniform(math.pi * 3 / 4, math.pi * 5 / 4)
+            self._intent.focus_x = float(240 - margin)
+        if self._intent.focus_y < margin:
+            self._intent.direction = random.uniform(math.pi / 4, math.pi * 3 / 4)
+            self._intent.focus_y = float(margin)
+        elif self._intent.focus_y > 240 - margin:
+            self._intent.direction = random.uniform(-math.pi * 3 / 4, -math.pi / 4)
+            self._intent.focus_y = float(240 - margin)
+
+        # Occasional focus jump — higher presence = more exploratory
+        if random.random() < 0.02 + presence * 0.03:
+            self._intent.focus_x = random.uniform(40, 200)
+            self._intent.focus_y = random.uniform(40, 200)
+            self._intent.direction = random.uniform(0, 2 * math.pi)
+
     def _update_drawing_phase(self, anima: Anima):
-        """Update Lumen's drawing phase based on canvas state and anima.
+        """Update Lumen's drawing phase based on energy level.
 
-        Phases progress SEQUENTIALLY based on BOTH pixel count AND time:
-        - exploring → building → reflecting → resting
-
-        Each phase requires: (1) enough pixels AND (2) minimum time in current phase.
-        Phases never skip - must progress through each one.
+        Phases driven by energy (organic depletion), not pixel count thresholds:
+        - exploring (energy > 0.7): free wandering, frequent focus jumps
+        - building (0.3-0.7): settling into patterns
+        - reflecting (0.1-0.3): slowing down
+        - resting (< 0.1): nearly done
         """
-        import time
         now = time.time()
         phase_duration = now - self._canvas.phase_start_time
+        energy = self._intent.energy
         pixel_count = len(self._canvas.pixels)
         current_phase = self._canvas.drawing_phase
 
@@ -3564,247 +3387,28 @@ class ScreenRenderer:
                 old_phase = self._canvas.drawing_phase
                 self._canvas.drawing_phase = new_phase
                 self._canvas.phase_start_time = now
-                print(f"[Canvas] Phase: {old_phase} → {new_phase} ({pixel_count} pixels, {phase_duration:.0f}s in {old_phase})", file=sys.stderr, flush=True)
-                # Feed drawing phase into neural sensor
+                print(f"[Canvas] Phase: {old_phase} → {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s)", file=sys.stderr, flush=True)
                 try:
                     from ..computational_neural import get_computational_neural_sensor
                     get_computational_neural_sensor().drawing_phase = new_phase
                 except Exception:
                     pass
 
-        # Reset to exploring if canvas is nearly empty (after clear)
-        if pixel_count < 500:
+        # Fresh canvas = exploring regardless of energy
+        if pixel_count < 10:
             transition_to("exploring")
             return
 
-        # Phase progression is SEQUENTIAL - check in order
-        if current_phase == "exploring":
-            # Progress to building: 1000+ pixels AND 30s exploring
-            if pixel_count >= 1000 and phase_duration > 30:
-                transition_to("building")
-
-        elif current_phase == "building":
-            # Progress to reflecting: 3000+ pixels AND 60s building
-            if pixel_count >= 3000 and phase_duration > 60:
-                transition_to("reflecting")
-
-        elif current_phase == "reflecting":
-            # Progress to resting: 5000+ pixels AND 90s reflecting
-            if pixel_count >= 5000 and phase_duration > 90:
-                transition_to("resting")
-
-        elif current_phase == "resting":
-            # Stay in resting - this is the final phase before save/clear
-            pass
-
-        else:
-            # Unknown phase - reset to exploring
+        # Energy-driven phase progression
+        if energy > 0.7:
             transition_to("exploring")
-    
-    def _draw_circle_gradient(self, cx: int, cy: int, radius: int, base_color: Tuple[int, int, int], clarity: float):
-        """Draw a circle with gradient fill - more vibrant at center."""
-        for dx in range(-radius, radius + 1):
-            for dy in range(-radius, radius + 1):
-                dist_sq = dx*dx + dy*dy
-                if dist_sq <= radius*radius:
-                    # Gradient: brighter at center, dimmer at edges
-                    dist = math.sqrt(dist_sq)
-                    if radius > 0:
-                        gradient = 1.0 - (dist / radius) * 0.4  # 60-100% brightness
-                    else:
-                        gradient = 1.0
-                    # Apply clarity to gradient intensity
-                    gradient = gradient * (0.7 + clarity * 0.3)
-                    color = tuple(int(c * gradient) for c in base_color)
-                    px, py = cx + dx, cy + dy
-                    if 0 <= px < 240 and 0 <= py < 240:
-                        self._canvas.draw_pixel(px, py, color)
-    
-    def _draw_organic_shape(self, cx: int, cy: int, color: Tuple[int, int, int], clarity: float, stability: float):
-        """Draw organic, flowing shapes - like clouds or blobs."""
-        import random
-        import math
-        
-        # Create irregular blob shape
-        num_points = int(6 + clarity * 4)
-        points = []
-        base_radius = int(8 + stability * 15)
-        
-        for i in range(num_points):
-            angle = (i / num_points) * 2 * math.pi
-            radius_variation = random.uniform(0.7, 1.3)
-            radius = base_radius * radius_variation
-            x = int(cx + radius * math.cos(angle))
-            y = int(cy + radius * math.sin(angle))
-            points.append((x, y))
-        
-        # Fill the shape
-        for dx in range(-base_radius * 2, base_radius * 2 + 1):
-            for dy in range(-base_radius * 2, base_radius * 2 + 1):
-                px, py = cx + dx, cy + dy
-                if 0 <= px < 240 and 0 <= py < 240:
-                    # Check if point is inside the blob (simple distance check)
-                    dist = math.sqrt(dx*dx + dy*dy)
-                    if dist < base_radius * 1.2:
-                        # Add some randomness for organic feel
-                        if random.random() < 0.85:
-                            self._canvas.draw_pixel(px, py, color)
-    
-    def _draw_layered_composition(self, cx: int, cy: int, base_color: Tuple[int, int, int], clarity: float, stability: float):
-        """Draw layered composition - multiple elements working together."""
-        import random
-        
-        # Create 2-3 related elements
-        num_elements = random.randint(2, 3)
-        for i in range(num_elements):
-            # Vary color slightly for each layer
-            color_variation = random.uniform(0.8, 1.0)
-            layer_color = tuple(int(c * color_variation) for c in base_color)
-            
-            # Offset position
-            offset_x = random.randint(-30, 30)
-            offset_y = random.randint(-30, 30)
-            x = cx + offset_x
-            y = cy + offset_y
-            
-            # Different shapes for each layer
-            if i == 0:
-                # Base layer - larger circle
-                size = int(6 + stability * 12)
-                self._draw_circle(x, y, size, layer_color)
-            elif i == 1:
-                # Middle layer - smaller circle or pattern
-                if random.random() < 0.5:
-                    size = int(3 + stability * 6)
-                    self._draw_circle(x, y, size, layer_color)
-                else:
-                    self._draw_pattern(x, y, int(2 + clarity * 3), layer_color)
-            else:
-                # Top layer - accent dots or small shapes
-                for _ in range(random.randint(2, 4)):
-                    dot_x = x + random.randint(-10, 10)
-                    dot_y = y + random.randint(-10, 10)
-                    if 0 <= dot_x < 240 and 0 <= dot_y < 240:
-                        self._canvas.draw_pixel(dot_x, dot_y, layer_color)
-    
-    # === NEW SHAPE DRAWING METHODS ===
-
-    def _draw_rectangle(self, cx: int, cy: int, width: int, height: int,
-                        color: Tuple[int, int, int], filled: bool = True):
-        """Draw a rectangle (filled or outline)."""
-        x1, y1 = cx - width // 2, cy - height // 2
-        x2, y2 = cx + width // 2, cy + height // 2
-
-        if filled:
-            for x in range(max(0, x1), min(240, x2 + 1)):
-                for y in range(max(0, y1), min(240, y2 + 1)):
-                    self._canvas.draw_pixel(x, y, color)
+        elif energy > 0.3:
+            transition_to("building")
+        elif energy > 0.1:
+            transition_to("reflecting")
         else:
-            # Draw outline only
-            for x in range(max(0, x1), min(240, x2 + 1)):
-                if 0 <= y1 < 240:
-                    self._canvas.draw_pixel(x, y1, color)
-                if 0 <= y2 < 240:
-                    self._canvas.draw_pixel(x, y2, color)
-            for y in range(max(0, y1), min(240, y2 + 1)):
-                if 0 <= x1 < 240:
-                    self._canvas.draw_pixel(x1, y, color)
-                if 0 <= x2 < 240:
-                    self._canvas.draw_pixel(x2, y, color)
-
-    def _draw_triangle(self, cx: int, cy: int, size: int, color: Tuple[int, int, int]):
-        """Draw a filled triangle pointing up."""
-        import math
-        # Three vertices of equilateral triangle
-        for y_offset in range(size):
-            # Width at this height
-            width_at_y = int((y_offset / size) * size)
-            y = cy + y_offset - size // 2
-            for x_offset in range(-width_at_y // 2, width_at_y // 2 + 1):
-                x = cx + x_offset
-                if 0 <= x < 240 and 0 <= y < 240:
-                    self._canvas.draw_pixel(x, y, color)
-
-    def _draw_wave(self, start_x: int, y_center: int, amplitude: int,
-                   wavelength: int, color: Tuple[int, int, int]):
-        """Draw a horizontal sine wave."""
-        import math
-        for x in range(max(0, start_x), min(240, start_x + 100)):
-            y = int(y_center + amplitude * math.sin((x - start_x) * 2 * math.pi / wavelength))
-            if 0 <= y < 240:
-                self._canvas.draw_pixel(x, y, color)
-                # Make wave thicker
-                if 0 <= y + 1 < 240:
-                    self._canvas.draw_pixel(x, y + 1, color)
-
-    def _draw_rings(self, cx: int, cy: int, num_rings: int, max_radius: int,
-                    color: Tuple[int, int, int]):
-        """Draw concentric rings."""
-        import math
-        for ring in range(1, num_rings + 1):
-            radius = int(ring * max_radius / num_rings)
-            # Draw circle outline
-            for angle in range(0, 360, 3):  # Every 3 degrees
-                rad = math.radians(angle)
-                x = int(cx + radius * math.cos(rad))
-                y = int(cy + radius * math.sin(rad))
-                if 0 <= x < 240 and 0 <= y < 240:
-                    self._canvas.draw_pixel(x, y, color)
-
-    def _draw_arc(self, cx: int, cy: int, radius: int, start_angle: float,
-                  arc_length: float, color: Tuple[int, int, int]):
-        """Draw an arc (partial circle)."""
-        import math
-        steps = int(arc_length * radius / 2)  # More steps for larger arcs
-        for i in range(max(1, steps)):
-            angle = start_angle + (i / max(1, steps)) * arc_length
-            x = int(cx + radius * math.cos(angle))
-            y = int(cy + radius * math.sin(angle))
-            if 0 <= x < 240 and 0 <= y < 240:
-                self._canvas.draw_pixel(x, y, color)
-
-    def _draw_starburst(self, cx: int, cy: int, num_rays: int, ray_length: int,
-                        color: Tuple[int, int, int]):
-        """Draw a starburst pattern - rays emanating from center."""
-        import math
-        for i in range(num_rays):
-            angle = (i / num_rays) * 2 * math.pi
-            for r in range(1, ray_length + 1):
-                x = int(cx + r * math.cos(angle))
-                y = int(cy + r * math.sin(angle))
-                if 0 <= x < 240 and 0 <= y < 240:
-                    self._canvas.draw_pixel(x, y, color)
-        # Center dot
-        if 0 <= cx < 240 and 0 <= cy < 240:
-            self._canvas.draw_pixel(cx, cy, color)
-
-    def _draw_drip(self, x: int, start_y: int, length: int,
-                   color: Tuple[int, int, int], stability: float):
-        """Draw a drip/random walk flowing downward."""
-        import random
-        current_x = x
-        wobble = int(3 + (1.0 - stability) * 8)  # Less stable = more wobble
-
-        for y in range(start_y, min(240, start_y + length)):
-            if 0 <= current_x < 240:
-                self._canvas.draw_pixel(current_x, y, color)
-            # Random walk sideways
-            current_x += random.randint(-wobble, wobble)
-            current_x = max(0, min(239, current_x))
-
-    def _draw_scatter(self, cx: int, cy: int, num_particles: int,
-                      spread: int, color: Tuple[int, int, int]):
-        """Draw scattered particles in a cluster."""
-        import random
-        for _ in range(num_particles):
-            # Gaussian-ish distribution - more dense at center
-            dx = int(random.gauss(0, spread / 3))
-            dy = int(random.gauss(0, spread / 3))
-            x = cx + dx
-            y = cy + dy
-            if 0 <= x < 240 and 0 <= y < 240:
-                self._canvas.draw_pixel(x, y, color)
-
+            transition_to("resting")
+    
     def canvas_clear(self, persist: bool = True, already_saved: bool = False):
         """Clear the canvas - saves first if there's a real drawing (50+ pixels).
 
@@ -3827,6 +3431,7 @@ class ScreenRenderer:
                 print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
 
         self._canvas.clear()
+        self._intent.reset()
         if persist:
             self._canvas.save_to_disk()
         print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
@@ -4050,120 +3655,51 @@ class ScreenRenderer:
         """
         Check if Lumen wants to autonomously save or clear the canvas.
 
-        Called during render loop on ALL screens. Returns action taken if any.
-
-        Lumen's autonomy:
-        - Auto-save: When Lumen says "finished" OR satisfied + resting + time passed
-        - Auto-clear: After save + high clarity (new inspiration) + enough time
-
-        IMPORTANT: Designed to NOT overdo it. Saves should be rare and meaningful.
-        - Minimum 3 minutes between saves
-        - Need substantial work (2000+ pixels)
-        - OR Lumen explicitly says finished
+        Energy-based: saves when energy naturally depletes, not on a timer.
+        - Energy < 0.08 + real drawing (50+ pixels) → save and start fresh
+        - 60s safety floor between saves (prevents edge-case spam)
+        - Lumen saying "finished" still respected as priority
         """
         if anima is None:
             return None
 
-        # CRITICAL: Update drawing phase even when not on notepad screen
-        # This allows canvas to progress through phases and eventually save
+        # Update drawing phase (energy-driven)
         self._update_drawing_phase(anima)
 
         now = time.time()
         pixel_count = len(self._canvas.pixels)
-        wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-
-        # Minimum time between saves: 3 minutes (prevents save spam)
-        MIN_SAVE_INTERVAL = 180.0  # 3 minutes (was 10)
         time_since_save = now - self._canvas.last_save_time if self._canvas.last_save_time > 0 else float('inf')
 
-        # Check if too soon to save again
-        if time_since_save < MIN_SAVE_INTERVAL:
-            return None  # Too soon since last save
+        # Safety floor: at least 60s between saves
+        if time_since_save < 60.0:
+            return None
 
-        # === PRIORITY: Check if Lumen said "finished" ===
-        # This takes precedence over metrics - if Lumen says done, respect that intent
-        if (now >= self._canvas.drawing_paused_until and  # Not paused
-            pixel_count > 500 and  # At least some work
-            self._check_lumen_said_finished()):
-            print(f"[Canvas] Lumen said finished - saving now ({pixel_count} pixels)", file=sys.stderr, flush=True)
-            saved_path = self.canvas_save(announce=False)  # Don't double-announce
+        # Don't act during pause period
+        if now < self._canvas.drawing_paused_until:
+            return None
+
+        # === PRIORITY: Lumen said "finished" ===
+        if (pixel_count > 50 and self._check_lumen_said_finished()):
+            print(f"[Canvas] Lumen said finished - saving ({pixel_count}px, energy={self._intent.energy:.2f})", file=sys.stderr, flush=True)
+            saved_path = self.canvas_save(announce=False)
             if saved_path:
-                self._canvas.is_satisfied = False
-                self._canvas.satisfaction_time = 0.0
-                # Clear canvas so Lumen can start fresh
-                print(f"[Canvas] Clearing canvas for new drawing", file=sys.stderr, flush=True)
                 self.canvas_clear(persist=True, already_saved=True)
+                self._intent.reset()
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
-        # === Check for satisfaction ===
-        # Lumen feels satisfied when: resting phase for 30s + real drawing + good state
-        phase_duration = now - self._canvas.phase_start_time
-        if (self._canvas.drawing_phase == "resting" and
-            phase_duration > 30.0 and  # In resting phase for 30s
-            pixel_count >= 50 and  # Real drawing, not noise
-            anima.presence > 0.45 and
-            anima.stability > 0.40 and
-            not self._canvas.is_satisfied):
-            self._canvas.mark_satisfied()
-
-        # === Auto-save: satisfied + time to reflect ===
-        # After 20s of satisfaction, save and start fresh
-        # CRITICAL: Don't save if we're in pause period (after clear)
-        if (now >= self._canvas.drawing_paused_until and  # Not paused
-            self._canvas.is_satisfied and
-            self._canvas.satisfaction_time > 0 and
-            now - self._canvas.satisfaction_time > 20.0 and
-            pixel_count >= 50):  # Real drawing, not noise
-
-            print(f"[Canvas] Lumen autonomously saving (satisfied for 20s, {pixel_count} pixels)", file=sys.stderr, flush=True)
+        # === Energy depleted → natural completion ===
+        if self._intent.energy < 0.08 and pixel_count >= 50:
+            print(f"[Canvas] Energy depleted — saving ({pixel_count}px, {self._intent.mark_count} marks)", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
             if saved_path:
-                # Reset satisfaction to prevent repeated saves
-                self._canvas.is_satisfied = False
-                self._canvas.satisfaction_time = 0.0
-                # Clear canvas so Lumen can start fresh
-                print(f"[Canvas] Clearing canvas for new drawing", file=sys.stderr, flush=True)
                 self.canvas_clear(persist=True, already_saved=True)
+                self._intent.reset()
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
-        # === Auto-clear: after save + new inspiration ===
-        # If Lumen saved recently + clarity spike = wants to start fresh
-        time_since_clear = now - self._canvas.last_clear_time
-
-        # CRITICAL: Don't clear if we're in pause period (prevents clearing loop)
-        if now < self._canvas.drawing_paused_until:
-            return None  # Still paused from previous clear, don't clear again
-
-        # CRITICAL: Add cooldown after clearing to prevent immediate re-clearing
-        # Must wait at least 60 seconds after clearing (was 10s)
-        if time_since_clear < 60.0:
-            return None  # Too soon after last clear
-
-        # Auto-clear only after 20-60 minutes since save (was 10-30 min)
-        # Made much more conservative to avoid aggressive clearing
-        if (self._canvas.last_save_time > 0 and  # Has saved at least once
-            time_since_save > 1200.0 and  # At least 20 min since save (was 10 min)
-            time_since_save < 3600.0 and  # Within 60 min of save (was 30 min)
-            anima.clarity > 0.80 and  # Higher clarity threshold (was 0.70)
-            anima.presence > 0.75 and  # Higher presence threshold (was 0.60)
-            wellness > 0.70 and  # Higher wellness threshold (was 0.60)
-            pixel_count > 0):  # Has something to clear
-
-            print(f"[Canvas] Lumen autonomously clearing (new inspiration after {time_since_save/60:.1f}min)", file=sys.stderr, flush=True)
-            self.canvas_clear(persist=True)
-            # Reset last_save_time to prevent repeated clears (only ONE auto-clear per saved drawing)
-            self._canvas.last_save_time = 0.0
-            self._canvas.save_to_disk()
-            try:
-                from ..messages import add_observation
-                add_observation("starting fresh")
-            except Exception:
-                pass
-            return "cleared"
-
         # Periodically persist canvas state (every 60s of drawing)
+        time_since_clear = now - self._canvas.last_clear_time
         if pixel_count > 0 and time_since_clear > 60.0:
             # Only save if we have new pixels since last persist
             self._canvas.save_to_disk()
