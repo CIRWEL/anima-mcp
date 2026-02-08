@@ -3375,12 +3375,12 @@ class ScreenRenderer:
         else:
             S_signal = 0.5
 
-        # --- Drift (delta-eta): gesture deviation from mood preference ---
-        try:
-            mood = self._mood_tracker.get_mood()
-            gesture_pref = mood.style_preferences.get(self._intent.gesture, 0.2)
-            gesture_drift = max(0.0, 0.2 - gesture_pref)
-        except Exception:
+        # --- Drift: gesture switching rate (proprioceptive, no mood tracker) ---
+        history = eisv.gesture_history
+        if len(history) >= 2:
+            switches = sum(1 for i in range(1, len(history)) if history[i] != history[i-1])
+            gesture_drift = switches / (len(history) - 1)  # 0 = steady, 1 = every mark switches
+        else:
             gesture_drift = 0.0
         drift_sq = gesture_drift * gesture_drift
 
@@ -3402,29 +3402,12 @@ class ScreenRenderer:
         return dE * dt, C
 
     def _choose_gesture(self, clarity, stability, presence):
-        """Choose a new gesture type based on mood preferences and state."""
-        try:
-            mood = self._mood_tracker.get_mood()
-            style_weights = mood.style_preferences
-        except Exception:
-            style_weights = {"dot": 0.2, "stroke": 0.2, "curve": 0.2, "cluster": 0.2, "drag": 0.2}
-
+        """Choose a new gesture type. Near-random choice, long committed runs."""
         gestures = ["dot", "stroke", "curve", "cluster", "drag"]
-        weights = []
-        for g in gestures:
-            base = 0.1
-            mood_w = style_weights.get(g, 0.2) * 0.3
-            state_w = 0.1
-            if g in ("stroke", "curve", "drag"):
-                state_w = (clarity + stability) / 2.0 * 0.15
-            elif g in ("dot", "cluster"):
-                state_w = (1.0 - (clarity + stability) / 2.0) * 0.15
-            weights.append(max(0.05, base + mood_w + state_w))
-
-        self._intent.gesture = random.choices(gestures, weights=weights)[0]
-        # Coherence extends gesture runs — committed drawing sustains gestures longer
+        self._intent.gesture = random.choice(gestures)
+        # EISV coherence extends runs: low C → 15-30, high C → 15-45
         C = self._intent.eisv.coherence()
-        self._intent.gesture_remaining = random.randint(5, 20 + int(10 * C))
+        self._intent.gesture_remaining = random.randint(15, 30 + int(15 * C))
 
     def _place_mark(self, color: Tuple[int, int, int]):
         """Place a mark at the current focus point using the active gesture.
@@ -3502,11 +3485,11 @@ class ScreenRenderer:
             if self._intent.direction_lock_remaining <= 0:
                 self._intent.direction_locked = False
         elif not self._intent.orbit_active:
-            # Normal wobble — high stability = straighter, low = more wandering
-            self._intent.direction += random.gauss(0, 0.3 * (1.1 - stability))
+            # Normal wobble — constant moderate wander
+            self._intent.direction += random.gauss(0, 0.2)
 
-            # Lock probability: stability + coherence (EISV modulation)
-            lock_prob = 0.03 * (0.5 + stability) * (0.5 + C)
+            # Lock probability: coherence only
+            lock_prob = 0.03 * (0.5 + C)
             if random.random() < lock_prob:
                 self._intent.direction_locked = True
                 self._intent.direction_lock_remaining = random.randint(15, 40)
@@ -3552,8 +3535,8 @@ class ScreenRenderer:
             self._intent.direction = random.uniform(-math.pi * 3 / 4, -math.pi / 4)
             self._intent.focus_y = float(240 - margin)
 
-        # Focus jump — reduced by coherence (high C = fewer jumps, stay focused)
-        jump_prob = (0.02 + presence * 0.03) * (1.0 - 0.3 * C)
+        # Focus jump — coherence reduces jumps
+        jump_prob = 0.03 * (1.0 - 0.4 * C)
         if not self._intent.orbit_active and random.random() < jump_prob:
             self._intent.focus_x = random.uniform(40, 200)
             self._intent.focus_y = random.uniform(40, 200)
