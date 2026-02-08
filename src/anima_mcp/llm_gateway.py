@@ -330,6 +330,27 @@ Recent messages to me:
 
 How do I feel about these messages? Give a short, genuine response."""
 
+        elif mode == "self_answer":
+            # Lumen answering its own question through reflection
+            question_text = context.trigger_details or "something I wondered about"
+
+            # Pull relevant knowledge for grounded self-answers
+            relevant_knowledge = ""
+            try:
+                from .knowledge import get_relevant_insights
+                insights = get_relevant_insights(question_text, limit=3)
+                if insights:
+                    relevant_knowledge = "\n\nThings I've learned that might help:\n" + "\n".join(f"- {i.text}" for i in insights)
+            except Exception:
+                pass
+
+            return f"""{state_desc}
+
+A question I asked earlier: "{question_text}"{relevant_knowledge}
+
+Based on what I've experienced and learned, how would I answer my own question?
+Give a short, thoughtful answer from my own perspective."""
+
         else:  # "observe"
             return f"""{state_desc}
 

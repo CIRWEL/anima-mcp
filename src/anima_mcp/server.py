@@ -1558,6 +1558,74 @@ async def _update_display_loop():
                         # Non-fatal - LLM reflection is optional enhancement
                         pass
 
+            # Lumen self-answers: Every 600 iterations (~2 minutes), answer own old questions via LLM
+            # Questions must be at least 10 minutes old (external answers get priority)
+            if loop_count % 600 == 0 and readings and anima and identity:
+                from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
+                from .messages import get_unanswered_questions, add_agent_message
+
+                gateway = get_gateway()
+                if gateway.enabled:
+                    async def lumen_self_answer():
+                        """Let Lumen answer its own old questions via LLM reflection."""
+                        unanswered = get_unanswered_questions(limit=5)
+                        if not unanswered:
+                            return
+
+                        # Filter to questions older than 10 minutes
+                        min_age = 600  # seconds
+                        now = time.time()
+                        old_enough = [q for q in unanswered if (now - q.timestamp) >= min_age]
+                        if not old_enough:
+                            return
+
+                        # Pick the oldest unanswered question
+                        question = old_enough[0]
+
+                        # Calculate time alive
+                        time_alive = (now - identity.created_at) / 3600.0
+
+                        # Build reflection context with the question as trigger
+                        context = ReflectionContext(
+                            warmth=anima.warmth,
+                            clarity=anima.clarity,
+                            stability=anima.stability,
+                            presence=anima.presence,
+                            recent_messages=[],
+                            unanswered_questions=[q.text for q in unanswered],
+                            time_alive_hours=time_alive,
+                            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
+                            trigger="self-answering",
+                            trigger_details=question.text
+                        )
+
+                        # Show loading indicator during LLM call
+                        if _screen_renderer:
+                            _screen_renderer.set_loading("contemplating...")
+
+                        try:
+                            answer = await generate_reflection(context, mode="self_answer")
+                        finally:
+                            if _screen_renderer:
+                                _screen_renderer.clear_loading()
+
+                        if answer:
+                            # Post as Lumen's own answer, linked to the question
+                            result = add_agent_message(
+                                text=answer,
+                                agent_name="lumen",
+                                responds_to=question.message_id
+                            )
+                            if result:
+                                print(f"[Lumen/SelfAnswer] Q: {question.text[:60]}", file=sys.stderr, flush=True)
+                                print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
+
+                    try:
+                        await safe_call_async(lumen_self_answer, default=None, log_error=False)
+                    except Exception:
+                        # Non-fatal - self-answering is optional enhancement
+                        pass
+
             # Lumen's responses: Every 90 iterations (~3 minutes), respond to messages from others
             # Track last seen timestamp to avoid responding to same messages twice
             if not hasattr(_update_display_loop, '_last_seen_msg_time'):
