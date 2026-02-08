@@ -1570,6 +1570,7 @@ async def _update_display_loop():
                         """Let Lumen answer its own old questions via LLM reflection."""
                         unanswered = get_unanswered_questions(limit=5)
                         if not unanswered:
+                            print(f"[Lumen/SelfAnswer] No unanswered questions", file=sys.stderr, flush=True)
                             return
 
                         # Filter to questions older than 10 minutes
@@ -1577,10 +1578,12 @@ async def _update_display_loop():
                         now = time.time()
                         old_enough = [q for q in unanswered if (now - q.timestamp) >= min_age]
                         if not old_enough:
+                            print(f"[Lumen/SelfAnswer] {len(unanswered)} questions but none old enough (min_age={min_age}s)", file=sys.stderr, flush=True)
                             return
 
                         # Pick the oldest unanswered question
                         question = old_enough[0]
+                        print(f"[Lumen/SelfAnswer] Attempting to answer: {question.text[:60]}", file=sys.stderr, flush=True)
 
                         # Calculate time alive
                         time_alive = (now - identity.created_at) / 3600.0
@@ -1621,10 +1624,10 @@ async def _update_display_loop():
                                 print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
 
                     try:
-                        await safe_call_async(lumen_self_answer, default=None, log_error=False)
-                    except Exception:
+                        await safe_call_async(lumen_self_answer, default=None, log_error=True)
+                    except Exception as e:
                         # Non-fatal - self-answering is optional enhancement
-                        pass
+                        print(f"[Lumen/SelfAnswer] Outer error: {e}", file=sys.stderr, flush=True)
 
             # Lumen's responses: Every 90 iterations (~3 minutes), respond to messages from others
             # Track last seen timestamp to avoid responding to same messages twice
