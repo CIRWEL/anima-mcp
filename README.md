@@ -41,7 +41,7 @@ pip install -e ".[pi]"  # On Pi with sensors
 pip install -e .        # On Mac with mock sensors
 
 # Run MCP server
-anima --sse --host 0.0.0.0 --port 8766
+anima --http --host 0.0.0.0 --port 8766
 
 # Run hardware broker (Pi only, separate terminal)
 anima-creature
