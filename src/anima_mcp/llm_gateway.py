@@ -2,10 +2,10 @@
 LLM Gateway - Generative inner voice for Lumen.
 
 Multi-provider support with automatic failover:
-1. ngrok AI Gateway (routes to configured providers)
+1. Direct Groq API (Llama models, free tier, fastest)
 2. Together.ai (Llama, Mixtral, fast inference)
 3. Hugging Face Inference API (Phi-3, Phi-4)
-4. Direct Groq API (Llama models, free tier)
+4. ngrok AI Gateway (last resort — consumes ngrok bandwidth credit)
 
 Lumen can now genuinely reflect, wonder, and express desires through LLM generation.
 """
@@ -75,12 +75,12 @@ class LLMGateway:
         self.hf_token = os.environ.get("HF_TOKEN", "")
         self.groq_key = os.environ.get("GROQ_API_KEY", "")
 
-        # Build provider priority list
+        # Build provider priority list (direct APIs first, ngrok gateway last)
         self._providers = []
 
-        if self.ngrok_key:
-            self._providers.append(("ngrok", self.ngrok_url, self.ngrok_key))
-            print("[LLMGateway] ngrok AI Gateway configured (multi-provider routing)", file=sys.stderr, flush=True)
+        if self.groq_key:
+            self._providers.append(("groq", self.GROQ_API_URL, self.groq_key))
+            print("[LLMGateway] Groq API configured (Llama models, primary)", file=sys.stderr, flush=True)
 
         if self.together_key:
             self._providers.append(("together", self.TOGETHER_API_URL, self.together_key))
@@ -90,9 +90,9 @@ class LLMGateway:
             self._providers.append(("huggingface", self.HF_INFERENCE_URL, self.hf_token))
             print("[LLMGateway] Hugging Face Inference API configured (Phi models)", file=sys.stderr, flush=True)
 
-        if self.groq_key:
-            self._providers.append(("groq", self.GROQ_API_URL, self.groq_key))
-            print("[LLMGateway] Groq API configured (Llama models)", file=sys.stderr, flush=True)
+        if self.ngrok_key:
+            self._providers.append(("ngrok", self.ngrok_url, self.ngrok_key))
+            print("[LLMGateway] ngrok AI Gateway configured (fallback)", file=sys.stderr, flush=True)
 
         if not self._providers:
             print("[LLMGateway] No API keys found - generative reflection disabled", file=sys.stderr, flush=True)
