@@ -5286,6 +5286,7 @@ def run_http_server(host: str, port: int):
                             "filename": f.name,
                             "timestamp": parse_ts(f),
                             "size": f.stat().st_size,
+                            "manual": "_manual" in f.name,
                         })
 
                     return JSONResponse({
