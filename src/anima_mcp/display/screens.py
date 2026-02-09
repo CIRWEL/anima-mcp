@@ -2444,18 +2444,33 @@ class ScreenRenderer:
                     is_active = info["active"]
                     is_current = (name == current_name)
 
+                    # Highlight bar behind current era
+                    if is_current:
+                        draw.rectangle([4, y - 2, 236, y + 30], fill=(25, 35, 45))
+
                     # Era name with indicator
                     if is_current:
-                        prefix = "\u25b8 "  # ▸ current
+                        label = f"\u25b6 {name}"  # ▶ current (larger arrow)
                         name_color = YELLOW
                     elif is_active:
-                        prefix = "\u25cf "  # ● active pool
+                        label = f"  {name}"
                         name_color = SECONDARY
                     else:
-                        prefix = "\u25cb "  # ○ archived
+                        label = f"  {name}"
                         name_color = DIM
 
-                    draw.text((10, y), f"{prefix}{name}", fill=name_color, font=fonts['medium'])
+                    draw.text((10, y), label, fill=name_color, font=fonts['medium'])
+
+                    # Tag for non-active eras
+                    if not is_active:
+                        # Measure name width to place tag after it
+                        try:
+                            bbox = fonts['medium'].getbbox(label)
+                            tag_x = 10 + bbox[2] + 6
+                        except Exception:
+                            tag_x = 10 + len(label) * 8
+                        draw.text((tag_x, y + 2), "manual", fill=(80, 80, 100), font=fonts['tiny'])
+
                     y += 16
 
                     # Description (truncated to fit 240px)
