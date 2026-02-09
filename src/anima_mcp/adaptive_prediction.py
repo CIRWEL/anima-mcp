@@ -308,7 +308,8 @@ class AdaptivePredictionModel:
         # Get recent values for feature extraction
         recent_values = {}
         for variable in observations:
-            values = [h.get(variable) for h in self._history[-5:] if variable in h]
+            recent = list(self._history)[-5:]  # deque doesn't support slicing
+            values = [h.get(variable) for h in recent if variable in h]
             values = [v for v in values if v is not None]
             if values:
                 recent_values[variable] = values
