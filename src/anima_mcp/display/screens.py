@@ -936,7 +936,7 @@ class ScreenRenderer:
         self._state.brightness_overlay_level = display_level
 
     def _draw_brightness_overlay(self, draw, image):
-        """Draw brightness mode overlay (centered box with name + bar)."""
+        """Draw LED brightness overlay (centered box with name + bar)."""
         elapsed = time.time() - self._state.brightness_changed_at
         if elapsed >= 1.5:
             return
@@ -946,7 +946,7 @@ class ScreenRenderer:
         w, h = 240, 240
 
         # Semi-transparent dark box (centered)
-        box_w, box_h = 100, 40
+        box_w, box_h = 100, 50
         bx = (w - box_w) // 2
         by = (h - box_h) // 2
 
@@ -957,21 +957,20 @@ class ScreenRenderer:
         bg_color = tuple(int(20 * alpha) for _ in range(3))
         draw.rectangle([bx - 2, by - 2, bx + box_w + 2, by + box_h + 2], fill=bg_color)
 
-        # Mode name
-        try:
-            from PIL import ImageFont
-            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
-        except (OSError, IOError):
-            from PIL import ImageFont
-            font = ImageFont.load_default()
+        fonts = self._get_fonts()
 
+        # "LEDs" label (small, top)
+        label_color = tuple(int(120 * alpha) for _ in range(3))
+        draw.text((bx + 33, by + 2), "LEDs", fill=label_color, font=fonts['micro'])
+
+        # Preset name (larger, below label)
         text_color = tuple(int(220 * alpha) for _ in range(3))
-        bbox = draw.textbbox((0, 0), name, font=font)
+        bbox = draw.textbbox((0, 0), name, font=fonts['medium'])
         tw = bbox[2] - bbox[0]
-        draw.text(((w - tw) // 2, by + 4), name, fill=text_color, font=font)
+        draw.text(((w - tw) // 2, by + 14), name, fill=text_color, font=fonts['medium'])
 
-        # Brightness bar
-        bar_y = by + 26
+        # LED brightness bar
+        bar_y = by + 34
         bar_w = box_w - 16
         bar_x = bx + 8
         bar_h = 6
@@ -980,7 +979,7 @@ class ScreenRenderer:
         bar_bg = tuple(int(50 * alpha) for _ in range(3))
         draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], fill=bar_bg)
 
-        # Filled portion
+        # Filled portion (Night = 0.0 shows empty bar)
         fill_w = int(bar_w * level)
         bar_fill = tuple(int(c * alpha) for c in (100, 180, 220))
         if fill_w > 0:
