@@ -146,7 +146,7 @@ class LEDDisplay:
         self._cached_light_level = None
         self._cached_activity_brightness = None  # Track activity transitions
         self._cached_manual_brightness = None  # Track manual dimmer changes
-        self._cached_pipeline_brightness = None  # Last fully-computed brightness (before breathing)
+        self._cached_pipeline_brightness = None  # Last fully-computed brightness (before purring)
         self._cached_state_change_threshold = 0.05  # Only recalculate if change > 5%
         # Emotional dance state
         self._current_dance: Optional[Dance] = None
@@ -1205,8 +1205,10 @@ class LEDDisplay:
             "has_dotstar": HAS_DOTSTAR,
             "update_count": self._update_count,
             "base_brightness": self._base_brightness,
-            "current_brightness": self._get_breathing_brightness() if self._enable_breathing else self._base_brightness,
+            "current_brightness": self._base_brightness * self._get_purr_modulation() if self._enable_breathing else self._base_brightness,
             "breathing_enabled": self._enable_breathing,
+            "purr_cycle_seconds": self._purr_cycle_seconds,
+            "purr_intensity": self._purr_intensity,
             "pulsing_enabled": self._pulsing_enabled,
             "color_transitions_enabled": self._color_transitions_enabled,
             "pattern_mode": self._pattern_mode,
