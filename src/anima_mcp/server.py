@@ -488,13 +488,8 @@ async def _update_display_loop():
                                     mode_change_event.set()  # Trigger immediate re-render
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
                         
-                        # Button controls
-                        # Joystick button behavior depends on screen:
-                        #   Art Eras: select highlighted era
-                        #   Notepad: exit to face
-                        #   Other: enter notepad
                         # Joystick button — context-dependent action per screen.
-                        # Only acts on screens that have an interactive use for it.
+                        # Only acts on screens that have a specific interactive use for it.
                         if joy_btn_pressed:
                             _screen_renderer.trigger_input_feedback("press")
                             if _leds and _leds.is_available():
@@ -641,12 +636,7 @@ async def _update_display_loop():
                                             print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
                                         else:
                                             print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
-                                    else:
-                                        # Normal mode: separate button goes to face
-                                        _screen_renderer.set_mode(ScreenMode.FACE)
-                                        _screen_renderer._state.last_user_action_time = time.time()
-                                        mode_change_event.set()  # Trigger immediate re-render
-                                        print(f"[Input] -> face (separate)", file=sys.stderr, flush=True)
+                                    # No catch-all: button only acts on screens with specific use
             except Exception as e:
                 # Log errors but don't spam - only log occasionally
                 import time
@@ -986,8 +976,8 @@ async def _update_display_loop():
             
             # Check BrainCraft HAT input for screen switching
             # Joystick left/right = switch screens
-            # Joystick button = cycle screens
-            # Separate button = return to face screen
+            # Joystick button = screen-specific action (art eras: select era)
+            # Separate button = screen-specific action (messages: expand, notepad: save, long-press: shutdown)
 
             # Read governance from cached shared memory (already read by _get_readings_and_anima)
             governance_decision_for_display = _last_governance_decision
