@@ -36,8 +36,8 @@ RestartSec=10
 # After 3 failures in 5 minutes, wait 5 minutes before allowing restart
 StartLimitInterval=300
 StartLimitBurst=3
-# Add delay after hitting burst limit
-StartLimitAction=none
+# If 3 failures in 5 min, reboot Pi as last resort recovery
+StartLimitAction=reboot
 
 # Resource limits
 LimitNOFILE=65536
