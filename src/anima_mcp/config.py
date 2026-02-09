@@ -52,9 +52,10 @@ class NervousSystemCalibration:
     })
     
     clarity_weights: Dict[str, float] = field(default_factory=lambda: {
-        "light": 0.4,
-        "sensor_coverage": 0.3,
-        "neural": 0.3,
+        "prediction_accuracy": 0.5,  # How well I predict my own state = internal seeing
+        "neural": 0.3,               # Alpha power = relaxed awareness
+        "sensor_coverage": 0.2,      # Data richness
+        # "light" removed: LEDs affect sensor creating feedback loop
     })
     
     stability_weights: Dict[str, float] = field(default_factory=lambda: {
