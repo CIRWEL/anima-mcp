@@ -454,7 +454,7 @@ def run_creature():
                         current_temp=readings.ambient_temp_c
                     )
                 except Exception as e:
-                    pass  # Adaptive learning errors are non-fatal
+                    print(f"[Learning] Adaptive prediction error: {e}", file=sys.stderr, flush=True)
 
             # 2b-ii. Update Self-Model with observations
             if self_model:
@@ -483,7 +483,7 @@ def run_creature():
                     hour = datetime.now().hour
                     self_model.observe_time_pattern(hour, anima.warmth, anima.clarity)
                 except Exception as e:
-                    pass  # Self-model errors are non-fatal
+                    print(f"[Learning] Self-model error: {e}", file=sys.stderr, flush=True)
 
             # 2b-iii. Update Preferences from experience
             if preferences:
@@ -504,7 +504,7 @@ def run_creature():
                         # Low surprise + high stability is positive
                         preferences.record_event("calm", 0.3, current_state)
                 except Exception as e:
-                    pass  # Preference errors are non-fatal
+                    print(f"[Learning] Preference error: {e}", file=sys.stderr, flush=True)
 
             # 2b-iv. Memory Retrieval: Let past inform present
             relevant_memories = []
@@ -529,7 +529,7 @@ def run_creature():
                 except asyncio.TimeoutError:
                     pass
                 except Exception as e:
-                    pass  # Memory retrieval errors are non-fatal
+                    print(f"[Learning] Memory retrieval error: {e}", file=sys.stderr, flush=True)
 
             # 2b-v. Action Selection: Choose what to do based on state and preferences
             selected_action = None
@@ -572,7 +572,7 @@ def run_creature():
                     last_action = selected_action
 
                 except Exception as e:
-                    pass  # Action selection errors are non-fatal
+                    print(f"[Agency] Action selection error: {e}", file=sys.stderr, flush=True)
 
             # 2b-vi. Record action outcomes (from previous iteration)
             if action_selector and last_action and last_state_for_action and preferences:
@@ -594,7 +594,7 @@ def run_creature():
                         pred_error.surprise,
                     )
                 except Exception as e:
-                    pass  # Outcome recording errors are non-fatal
+                    print(f"[Agency] Outcome recording error: {e}", file=sys.stderr, flush=True)
 
             # 2b-vii. Exploration check
             if exploration_mgr:
@@ -607,7 +607,7 @@ def run_creature():
                         exploration_mgr.record_novelty(pred_error.surprise, explore_reason)
                         print(f"[Agency] Exploration triggered: {explore_reason}", file=sys.stderr, flush=True)
                 except Exception as e:
-                    pass  # Exploration errors are non-fatal
+                    print(f"[Agency] Exploration error: {e}", file=sys.stderr, flush=True)
 
             # ==================== END ENHANCED LEARNING ====================
 

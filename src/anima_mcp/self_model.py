@@ -314,11 +314,17 @@ class SelfModel:
         mean_y = sum(y) / n
 
         numerator = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n))
-        denom_x = math.sqrt(sum((xi - mean_x) ** 2 for xi in x))
-        denom_y = math.sqrt(sum((yi - mean_y) ** 2 for yi in y))
 
-        if denom_x == 0 or denom_y == 0:
-            return
+        # Use epsilon to prevent division by near-zero values
+        EPSILON = 1e-10
+        sum_sq_x = sum((xi - mean_x) ** 2 for xi in x)
+        sum_sq_y = sum((yi - mean_y) ** 2 for yi in y)
+
+        if sum_sq_x < EPSILON or sum_sq_y < EPSILON:
+            return  # Values are constant or near-constant, no meaningful correlation
+
+        denom_x = math.sqrt(sum_sq_x)
+        denom_y = math.sqrt(sum_sq_y)
 
         correlation = numerator / (denom_x * denom_y)
 
