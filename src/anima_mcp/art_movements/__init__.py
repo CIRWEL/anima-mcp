@@ -9,8 +9,7 @@ Capsules:
                    (637 drawings in this period)
 
 Active system:
-  display/eras/  — Pluggable art era modules.
-  Geometric is wired as a pluggable era (display/eras/geometric.py) but
-  excluded from auto-rotation. Switch manually via manage_display(action="set_era").
-  Active pool (auto-rotate): gestural, pointillist, field.
+  display/eras/  — Pluggable art era modules (gestural, pointillist, field, geometric).
+  All eras are equal peers. Select manually via art eras screen or
+  manage_display(action="set_era"). Auto-rotate toggle available (off by default).
 """

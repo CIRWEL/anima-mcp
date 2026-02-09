@@ -83,34 +83,32 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 | `gestural` | dot, stroke, curve, cluster, drag | Direction locks, orbital curves, full palette | ✅ |
 | `pointillist` | single, pair, trio | Density zones, optical color mixing, complementary hues | ✅ |
 | `field` | flow_dot, flow_dash, flow_strand | Vector-field flow lines, near-monochromatic | ✅ |
-| `geometric` | 16 shape templates (circle, spiral, starburst, etc.) | Complete forms, stamps whole shapes per mark | ❌ (manual) |
+| `geometric` | 16 shape templates (circle, spiral, starburst, etc.) | Complete forms, stamps whole shapes per mark | ✅ |
 
-**Active pool vs registered eras:** Eras represent distinct artistic periods with historical weight. Only eras in `ACTIVE_ERAS` auto-rotate between drawings. Archived eras (like geometric) are registered but require manual switching via `manage_display(action="set_era", screen="geometric")`.
+**All eras are equal peers.** Select via the art eras screen (joystick up/down + button) or MCP. Auto-rotate is a separate toggle (off by default) — when on, `choose_next_era()` rotates through all registered eras on canvas clear. Era name persists in `canvas.json`.
 
 **Key files:**
 | File | Purpose |
 |------|---------|
 | `display/art_era.py` | `EraState` base class + `ArtEra` protocol |
-| `display/eras/__init__.py` | Era registry, `ACTIVE_ERAS` pool, rotation logic |
+| `display/eras/__init__.py` | Era registry, `auto_rotate` toggle, rotation logic |
 | `display/eras/gestural.py` | Gestural era (5 micro-primitives) |
 | `display/eras/pointillist.py` | Pointillist era (dot accumulation) |
 | `display/eras/field.py` | Field era (vector-field flow) |
 | `display/eras/geometric.py` | Geometric era (16 shape templates, adapted from capsule) |
 | `art_movements/geometric.py` | Original geometric capsule (preserved snapshot, not imported) |
 
-**Era rotation:** On canvas clear (energy depleted), `choose_next_era()` picks from `ACTIVE_ERAS` only via weighted random (0.3x weight for repeating same era). Era name persists in `canvas.json`.
-
-**Manual era switching (via MCP):**
-- `manage_display(action="list_eras")` — all eras with active pool marking
-- `manage_display(action="get_era")` — current era name + description
+**Era switching:**
+- **Art eras screen**: Joystick up/down to browse, button to select. Auto-rotate toggle at bottom.
+- `manage_display(action="list_eras")` — all registered eras
+- `manage_display(action="get_era")` — current era name + auto_rotate status
 - `manage_display(action="set_era", screen="geometric")` — switch immediately
 
 **Adding a new era:**
 1. Create `display/eras/myera.py` with `MyEraState(EraState)` + `MyEra` class
 2. Implement: `create_state()`, `choose_gesture()`, `place_mark()`, `drift_focus()`, `generate_color()`
 3. Register in `display/eras/__init__.py`: `from .myera import MyEra; register_era(MyEra())`
-4. Add to `ACTIVE_ERAS` list if it should auto-rotate (or leave out for manual-only)
-5. The `EraState.intentionality()` method bridges to EISV — report commitment level [0,1]
+4. The `EraState.intentionality()` method bridges to EISV — report commitment level [0,1]
 
 ## Systemd Services
 
