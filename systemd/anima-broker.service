@@ -54,7 +54,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=no
-ReadWritePaths=/home/unitares-anima/anima-mcp /dev/shm
+ReadWritePaths=/home/unitares-anima/anima-mcp /home/unitares-anima/.anima /dev/shm
 
 [Install]
 WantedBy=multi-user.target
