@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, List, Dict, Any, Tuple
 from collections import deque
+from pathlib import Path
+import json
 import math
 import sys
 
@@ -150,31 +152,88 @@ class MetacognitiveMonitor:
         history_size: int = 100,
         surprise_threshold: float = 0.25,
         reflection_cooldown_seconds: float = 60.0,
+        data_dir: Optional[str] = None,
     ):
         self.history_size = history_size
         self.surprise_threshold = surprise_threshold
         self.reflection_cooldown = timedelta(seconds=reflection_cooldown_seconds)
-        
+
+        # Persistence path for learned baselines
+        if data_dir:
+            self._data_path = Path(data_dir) / "metacognition_baselines.json"
+        else:
+            self._data_path = Path.home() / ".anima" / "metacognition_baselines.json"
+        self._save_counter: int = 0  # Track observations for periodic saving
+
         # History for prediction
         self._sensor_history: deque = deque(maxlen=history_size)
         self._anima_history: deque = deque(maxlen=history_size)
         self._error_history: deque = deque(maxlen=history_size)
         self._reflection_history: deque = deque(maxlen=50)
-        
+
         # State
         self._last_prediction: Optional[Prediction] = None
         self._last_reflection_time: Optional[datetime] = None
         self._cumulative_surprise: float = 0.0
-        
+
         # Learning: running averages for baseline predictions
         self._baseline_ambient_temp: Optional[float] = None
         self._baseline_humidity: Optional[float] = None
         self._baseline_light: Optional[float] = None
         self._baseline_pressure: Optional[float] = None
-        
+
         # Diurnal patterns (hour -> average value)
         self._diurnal_temp: Dict[int, List[float]] = {h: [] for h in range(24)}
         self._diurnal_light: Dict[int, List[float]] = {h: [] for h in range(24)}
+
+        # Load persisted baselines from disk
+        self._load_baselines()
+
+    def _load_baselines(self):
+        """Load learned baselines and diurnal patterns from disk."""
+        try:
+            if self._data_path.exists():
+                data = json.loads(self._data_path.read_text())
+                self._baseline_ambient_temp = data.get("baseline_ambient_temp")
+                self._baseline_humidity = data.get("baseline_humidity")
+                self._baseline_light = data.get("baseline_light")
+                self._baseline_pressure = data.get("baseline_pressure")
+
+                # Restore diurnal patterns (JSON keys are strings, convert to int)
+                for hour_str, values in data.get("diurnal_temp", {}).items():
+                    hour = int(hour_str)
+                    if 0 <= hour < 24 and isinstance(values, list):
+                        self._diurnal_temp[hour] = values[-10:]  # Keep max 10
+                for hour_str, values in data.get("diurnal_light", {}).items():
+                    hour = int(hour_str)
+                    if 0 <= hour < 24 and isinstance(values, list):
+                        self._diurnal_light[hour] = values[-10:]
+
+                print(f"[Metacog] Loaded baselines from disk (temp={self._baseline_ambient_temp:.1f}°C, "
+                      f"humidity={self._baseline_humidity:.1f}%, "
+                      f"diurnal hours with data: temp={sum(1 for v in self._diurnal_temp.values() if v)}, "
+                      f"light={sum(1 for v in self._diurnal_light.values() if v)})",
+                      file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[Metacog] Could not load baselines: {e}", file=sys.stderr, flush=True)
+
+    def save(self):
+        """Save learned baselines and diurnal patterns to disk."""
+        try:
+            self._data_path.parent.mkdir(parents=True, exist_ok=True)
+            data = {
+                "baseline_ambient_temp": self._baseline_ambient_temp,
+                "baseline_humidity": self._baseline_humidity,
+                "baseline_light": self._baseline_light,
+                "baseline_pressure": self._baseline_pressure,
+                "diurnal_temp": {str(h): vals for h, vals in self._diurnal_temp.items() if vals},
+                "diurnal_light": {str(h): vals for h, vals in self._diurnal_light.items() if vals},
+                "saved_at": datetime.now().isoformat(),
+                "observation_count": self._save_counter,
+            }
+            self._data_path.write_text(json.dumps(data, indent=2))
+        except Exception as e:
+            print(f"[Metacog] Could not save baselines: {e}", file=sys.stderr, flush=True)
 
     def predict(self, current_time: Optional[datetime] = None) -> Prediction:
         """Generate prediction for next sensor reading."""
@@ -282,7 +341,12 @@ class MetacognitiveMonitor:
             self._diurnal_light[hour].append(readings.light_lux)
             if len(self._diurnal_light[hour]) > 10:
                 self._diurnal_light[hour].pop(0)
-        
+
+        # Periodic save: persist baselines every 100 observations (~5 min)
+        self._save_counter += 1
+        if self._save_counter % 100 == 0:
+            self.save()
+
         # Compute prediction error
         prediction = self._last_prediction or Prediction(timestamp=now)
         error = PredictionError(timestamp=now, prediction=prediction)
