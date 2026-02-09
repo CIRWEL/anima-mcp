@@ -497,6 +497,8 @@ class ScreenRenderer:
         # Message screen image cache (text rendering is slow - ~500ms)
         self._messages_cache_image: Optional[Any] = None
         self._messages_cache_hash: str = ""  # Hash of messages + scroll state
+        # Generic screen image cache: {screen_name: (hash_str, PIL.Image)}
+        self._screen_cache: Dict[str, tuple] = {}
         # UNITARES agent_id (for display on identity screen)
         self._unitares_agent_id: Optional[str] = None
 
@@ -505,6 +507,24 @@ class ScreenRenderer:
         # Include message IDs/timestamps, scroll position, and expanded state
         msg_ids = "|".join(f"{m.message_id}:{m.timestamp}" for m in messages[:10]) if messages else ""
         return f"{msg_ids}|{scroll_idx}|{expanded_id or ''}"
+
+    def _check_screen_cache(self, screen_name: str, cache_key: str) -> bool:
+        """Check if cached image matches current state. If hit, apply it.
+
+        Returns True if cache hit (caller should return immediately).
+        """
+        entry = self._screen_cache.get(screen_name)
+        if entry and entry[0] == cache_key:
+            if hasattr(self._display, '_image'):
+                self._display._image = entry[1]
+            if hasattr(self._display, '_show'):
+                self._display._show()
+            return True
+        return False
+
+    def _store_screen_cache(self, screen_name: str, cache_key: str, image):
+        """Store rendered image in screen cache."""
+        self._screen_cache[screen_name] = (cache_key, image.copy())
 
     def _get_measure_draw(self):
         """Get cached draw context for text measurement."""
@@ -1130,6 +1150,15 @@ class ScreenRenderer:
             self._display.render_text("feeling\nblind", (10, 10), color=COLORS.TEXT_DIM)
             return
 
+        # Cache: sensor values rounded to display precision (avoids redraw for noise)
+        cache_key = (
+            f"{readings.ambient_temp_c:.1f}|{readings.humidity_pct:.0f}|"
+            f"{readings.light_lux:.0f}|{readings.cpu_temp_c:.1f}|"
+            f"{readings.cpu_percent:.0f}|{readings.disk_percent:.0f}"
+        )
+        if self._check_screen_cache("sensors", cache_key):
+            return
+
         # Use design system colors (warm, elegant)
         CYAN = COLORS.SOFT_CYAN
         BLUE = COLORS.SOFT_BLUE
@@ -1263,7 +1292,8 @@ class ScreenRenderer:
                 # Nav dots
                 self._draw_screen_indicator(draw, ScreenMode.SENSORS)
 
-                # Update display
+                # Update display + cache
+                self._store_screen_cache("sensors", cache_key, image)
                 if hasattr(self._display, '_image'):
                     self._display._image = image
                 if hasattr(self._display, '_show'):
@@ -1421,6 +1451,15 @@ class ScreenRenderer:
         """Render diagnostics screen with visual gauges for anima values."""
         if not anima:
             self._display.render_text("DIAGNOSTICS\n\nNo data", (10, 10))
+            return
+
+        # Cache: anima values + governance state rounded to display precision
+        gov_state = governance.get("unitares_agent_id", "")[:8] if governance else ""
+        diag_key = (
+            f"{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|"
+            f"{anima.presence:.2f}|{gov_state}"
+        )
+        if self._check_screen_cache("diagnostics", diag_key):
             return
 
         try:
@@ -1600,7 +1639,8 @@ class ScreenRenderer:
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.DIAGNOSTICS)
 
-            # Update display
+            # Update display + cache
+            self._store_screen_cache("diagnostics", diag_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
@@ -1639,6 +1679,18 @@ class ScreenRenderer:
         """Render neural activity screen - EEG frequency band visualization."""
         if not readings:
             self._display.render_text("NEURAL\n\nNo data", (10, 10))
+            return
+
+        # Cache: neural bands + anima state rounded to display precision
+        raw = readings.to_dict()
+        neural_key = (
+            f"{raw.get('eeg_delta_power', 0):.2f}|{raw.get('eeg_theta_power', 0):.2f}|"
+            f"{raw.get('eeg_alpha_power', 0):.2f}|{raw.get('eeg_beta_power', 0):.2f}|"
+            f"{raw.get('eeg_gamma_power', 0):.2f}"
+        )
+        if anima:
+            neural_key += f"|{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|{anima.presence:.2f}"
+        if self._check_screen_cache("neural", neural_key):
             return
 
         try:
@@ -1746,7 +1798,8 @@ class ScreenRenderer:
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.NEURAL)
 
-            # Push to display
+            # Push to display + cache
+            self._store_screen_cache("neural", neural_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
@@ -2538,6 +2591,17 @@ class ScreenRenderer:
         try:
             from ..messages import get_board, MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT, MESSAGE_TYPE_QUESTION
 
+            # Cache: check message state + scroll before expensive rendering
+            board = get_board()
+            board._load()
+            all_messages = board._messages
+            scroll_idx = getattr(self._state, 'message_scroll_index', 0)
+            expanded_id = getattr(self._state, 'message_expanded_id', None)
+            msg_ids = "|".join(f"{m.message_id}" for m in all_messages[-15:]) if all_messages else ""
+            cache_key = f"{title}|{msg_ids}|{scroll_idx}|{expanded_id or ''}"
+            if self._check_screen_cache(title, cache_key):
+                return
+
             if hasattr(self._display, '_create_canvas'):
                 image, draw = self._display._create_canvas((0, 0, 0))
             else:
@@ -2555,11 +2619,6 @@ class ScreenRenderer:
             font = fonts['medium']
             font_small = fonts['small']
             font_title = fonts['default']
-
-            # Get filtered messages
-            board = get_board()
-            board._load()
-            all_messages = board._messages
 
             # Filter by type - map string types to message type constants
             type_map = {
@@ -2722,6 +2781,7 @@ class ScreenRenderer:
             self._draw_screen_indicator(draw, mode)
 
             # Always update display - ensure image is set and shown
+            self._store_screen_cache(title, cache_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
@@ -2749,10 +2809,21 @@ class ScreenRenderer:
         try:
             from ..messages import get_board, MESSAGE_TYPE_QUESTION, MESSAGE_TYPE_AGENT
 
+            # Cache: check question state + scroll before expensive text wrapping
+            board = get_board()
+            board._load()
+            all_messages = board._messages
+            scroll_idx = getattr(self._state, 'message_scroll_index', 0)
+            expanded_id = getattr(self._state, 'message_expanded_id', None)
+            msg_ids = "|".join(f"{m.message_id}" for m in all_messages[-15:]) if all_messages else ""
+            qa_cache_key = f"qa|{msg_ids}|{scroll_idx}|{expanded_id or ''}"
+            if self._check_screen_cache("qa", qa_cache_key):
+                return
+
             if not hasattr(self._display, '_create_canvas'):
                 self._display.render_text("Q&A\n\nNo display", (10, 10))
                 return
-            
+
             image, draw = self._display._create_canvas((0, 0, 0))
             if image is None or draw is None:
                 print("[QA Screen] Failed to create canvas", file=sys.stderr, flush=True)
@@ -2774,11 +2845,6 @@ class ScreenRenderer:
             font = fonts['medium']
             font_small = fonts['small']
             font_title = fonts['default']
-
-            # Get all questions with their answers
-            board = get_board()
-            board._load()
-            all_messages = board._messages
 
             # Build Q&A pairs
             questions = [m for m in all_messages if m.msg_type == MESSAGE_TYPE_QUESTION]
@@ -3042,11 +3108,12 @@ class ScreenRenderer:
             self._draw_screen_indicator(draw, ScreenMode.QUESTIONS)
 
             # Always update display - ensure image is set and shown
+            self._store_screen_cache("qa", qa_cache_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             else:
                 print("[QA Screen] Display has no _image attribute", file=sys.stderr, flush=True)
-            
+
             if hasattr(self._display, '_show'):
                 self._display._show()
             elif hasattr(self._display, 'render_image'):
