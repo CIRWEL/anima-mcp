@@ -16,6 +16,12 @@ import asyncio
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
+from .error_recovery import RetryConfig, retry_with_backoff_async
+
+
+# Status codes that should trigger retry
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
 
 @dataclass
 class ReflectionContext:
@@ -173,30 +179,49 @@ class LLMGateway:
 
         endpoint = f"{url}/v1/chat/completions" if provider == "ngrok" else url
 
-        response = await client.post(
-            endpoint,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": 150,
-                "temperature": 0.8,
-            }
-        )
+        async def make_request():
+            response = await client.post(
+                endpoint,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt}
+                    ],
+                    "max_tokens": 150,
+                    "temperature": 0.8,
+                }
+            )
 
-        if response.status_code == 200:
-            data = response.json()
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-            return self._clean_response(text)
-        else:
-            error = response.text[:200] if response.text else "unknown"
-            print(f"[LLMGateway] {provider} error {response.status_code}: {error}", file=sys.stderr, flush=True)
+            if response.status_code == 200:
+                data = response.json()
+                # Validate response structure
+                choices = data.get("choices", [])
+                if not choices or not isinstance(choices, list):
+                    print(f"[LLMGateway] {provider} malformed response: no choices", file=sys.stderr, flush=True)
+                    return None
+                text = choices[0].get("message", {}).get("content", "")
+                return self._clean_response(text)
+            elif response.status_code in RETRYABLE_STATUS_CODES:
+                error = response.text[:200] if response.text else "unknown"
+                print(f"[LLMGateway] {provider} retryable {response.status_code}: {error}", file=sys.stderr, flush=True)
+                raise Exception(f"Retryable HTTP {response.status_code}")
+            else:
+                error = response.text[:200] if response.text else "unknown"
+                print(f"[LLMGateway] {provider} error {response.status_code}: {error}", file=sys.stderr, flush=True)
+                return None
+
+        # Retry with backoff for transient errors
+        try:
+            return await retry_with_backoff_async(
+                make_request,
+                config=RetryConfig(max_attempts=2, initial_delay=0.5, max_delay=2.0),
+            )
+        except Exception:
             return None
 
     async def _call_huggingface(
@@ -210,36 +235,49 @@ class LLMGateway:
         # Format for chat models
         full_prompt = f"<|system|>\n{system}<|end|>\n<|user|>\n{prompt}<|end|>\n<|assistant|>\n"
 
-        response = await client.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "inputs": full_prompt,
-                "parameters": {
-                    "max_new_tokens": 150,
-                    "temperature": 0.8,
-                    "return_full_text": False,
+        async def make_request():
+            response = await client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "inputs": full_prompt,
+                    "parameters": {
+                        "max_new_tokens": 150,
+                        "temperature": 0.8,
+                        "return_full_text": False,
+                    }
                 }
-            }
-        )
+            )
 
-        if response.status_code == 200:
-            data = response.json()
-            if isinstance(data, list) and len(data) > 0:
-                text = data[0].get("generated_text", "")
+            if response.status_code == 200:
+                data = response.json()
+                if isinstance(data, list) and len(data) > 0:
+                    text = data[0].get("generated_text", "")
+                elif isinstance(data, dict):
+                    text = data.get("generated_text", "")
+                else:
+                    print("[LLMGateway] HF malformed response", file=sys.stderr, flush=True)
+                    return None
+                return self._clean_response(text)
+            elif response.status_code in RETRYABLE_STATUS_CODES:
+                # 503 = model loading, other 5xx = server issues
+                print(f"[LLMGateway] HF retryable {response.status_code}", file=sys.stderr, flush=True)
+                raise Exception(f"Retryable HTTP {response.status_code}")
             else:
-                text = data.get("generated_text", "")
-            return self._clean_response(text)
-        elif response.status_code == 503:
-            # Model loading - HF will return this while cold starting
-            print("[LLMGateway] HF model loading, trying fallback...", file=sys.stderr, flush=True)
-            return None
-        else:
-            error = response.text[:200] if response.text else "unknown"
-            print(f"[LLMGateway] HF error {response.status_code}: {error}", file=sys.stderr, flush=True)
+                error = response.text[:200] if response.text else "unknown"
+                print(f"[LLMGateway] HF error {response.status_code}: {error}", file=sys.stderr, flush=True)
+                return None
+
+        # Retry with backoff for transient errors (especially 503 model loading)
+        try:
+            return await retry_with_backoff_async(
+                make_request,
+                config=RetryConfig(max_attempts=3, initial_delay=1.0, max_delay=5.0),
+            )
+        except Exception:
             return None
 
     def _system_prompt(self) -> str:

@@ -114,12 +114,39 @@ class ActionSelector:
         self._load_state()
 
     def _get_conn(self) -> sqlite3.Connection:
+        """Get database connection with automatic reconnection on failure."""
         if self._conn is None:
-            self._conn = sqlite3.connect(self._db_path, timeout=5.0)
-            self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA journal_mode=WAL")
-            self._conn.execute("PRAGMA busy_timeout=5000")
+            self._conn = self._create_connection()
+        else:
+            # Test if connection is still valid
+            try:
+                self._conn.execute("SELECT 1")
+            except (sqlite3.Error, sqlite3.OperationalError):
+                # Connection lost, recreate
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = self._create_connection()
         return self._conn
+
+    def _create_connection(self) -> sqlite3.Connection:
+        """Create a new database connection with retry logic."""
+        max_retries = 3
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                conn = sqlite3.connect(self._db_path, timeout=10.0)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA busy_timeout=10000")
+                return conn
+            except sqlite3.Error as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    import time
+                    time.sleep(0.1 * (attempt + 1))  # Exponential backoff
+        raise last_error or sqlite3.Error("Failed to connect to database")
 
     def _init_db(self):
         try:

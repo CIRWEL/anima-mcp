@@ -11,7 +11,7 @@ Key insight: Learning happens when predictions fail, not when they succeed.
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
-from collections import defaultdict
+from collections import defaultdict, deque
 import math
 import json
 from pathlib import Path
@@ -78,14 +78,22 @@ class LearnedPattern:
         self.last_seen = now
 
         # Incremental mean and variance (Welford's algorithm)
+        # Guard against numerical instability with epsilon
+        EPSILON = 1e-10
         delta = value - self.mean
-        self.mean += delta / self.sample_count
+        self.mean += delta / max(self.sample_count, 1)
         delta2 = value - self.mean
-        self.variance = ((self.sample_count - 1) * self.variance + delta * delta2) / self.sample_count if self.sample_count > 1 else 0
+
+        if self.sample_count > 1:
+            # Welford's online variance: ensure non-negative
+            new_variance = ((self.sample_count - 1) * self.variance + delta * delta2) / self.sample_count
+            self.variance = max(0.0, new_variance)  # Clamp to prevent negative from float errors
+        else:
+            self.variance = 0.0
 
         # Confidence increases with samples, decreases with variance
         base_confidence = min(1.0, self.sample_count / 10)
-        variance_penalty = min(0.5, self.variance / 2)
+        variance_penalty = min(0.5, max(0.0, self.variance) / 2)
         self.confidence = base_confidence * (1 - variance_penalty)
 
 
@@ -106,13 +114,11 @@ class AdaptivePredictionModel:
         # Learned patterns: variable -> pattern_key -> LearnedPattern
         self._patterns: Dict[str, Dict[str, LearnedPattern]] = defaultdict(dict)
 
-        # Recent history for feature extraction
-        self._history: List[Dict[str, Any]] = []
-        self._max_history = 50
+        # Recent history for feature extraction (deque for O(1) append/pop)
+        self._history: deque = deque(maxlen=50)
 
-        # Prediction accuracy tracking
-        self._recent_errors: List[Tuple[str, float]] = []  # (variable, error)
-        self._max_errors = 100
+        # Prediction accuracy tracking (deque for O(1) append/pop)
+        self._recent_errors: deque = deque(maxlen=100)  # (variable, error)
 
         # Load persisted patterns
         self._load_patterns()
@@ -329,11 +335,9 @@ class AdaptivePredictionModel:
 
             self._patterns[variable][pattern_key].update(value)
 
-        # Store in history
+        # Store in history (deque auto-manages size)
         history_entry = {**observations, "timestamp": current_time.isoformat()}
         self._history.append(history_entry)
-        if len(self._history) > self._max_history:
-            self._history.pop(0)
 
         # Periodically save patterns
         if len(self._history) % 10 == 0:
@@ -342,9 +346,7 @@ class AdaptivePredictionModel:
     def record_prediction_error(self, variable: str, predicted: float, actual: float):
         """Record prediction error for tracking accuracy improvement."""
         error = abs(predicted - actual)
-        self._recent_errors.append((variable, error))
-        if len(self._recent_errors) > self._max_errors:
-            self._recent_errors.pop(0)
+        self._recent_errors.append((variable, error))  # deque auto-manages size
 
     def get_accuracy_stats(self) -> Dict[str, Any]:
         """Get statistics on prediction accuracy."""
