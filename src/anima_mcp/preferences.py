@@ -30,7 +30,7 @@ class Experience:
     timestamp: datetime
     state_before: Dict[str, float]  # warmth, clarity, stability, presence
     state_after: Dict[str, float]
-    event_type: str  # "interaction", "recovery", "disruption", "calm", "question_answered"
+    event_type: str  # "disruption", "calm" (fired from stable_creature.py)
     valence: float  # -1 to 1, how "good" this experience was
 
 
@@ -184,14 +184,9 @@ class PreferenceSystem:
         """
         Record an event that might shape preferences.
 
-        Event types:
-        - "interaction": Someone interacted with Lumen
-        - "question_answered": Lumen's question was answered
-        - "recovery": Lumen recovered from instability
-        - "disruption": Something disrupted Lumen's state
-        - "calm": Extended period of stability
-        - "voice_success": Lumen spoke successfully
-        - "voice_failure": Lumen tried to speak but failed
+        Active event types (fired from stable_creature.py):
+        - "disruption": Something disrupted Lumen's state (valence ~ -0.2)
+        - "calm": Extended period of stability (valence ~ 0.3)
 
         Valence: -1 (very negative) to 1 (very positive)
         """

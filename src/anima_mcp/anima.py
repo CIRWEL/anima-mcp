@@ -100,6 +100,12 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
     stability = _sense_stability(readings, calibration)
     presence = _sense_presence(readings, calibration)
 
+    # Clamp to valid range — defensive against edge cases in weighted averages
+    warmth = max(0.0, min(1.0, warmth))
+    clarity = max(0.0, min(1.0, clarity))
+    stability = max(0.0, min(1.0, stability))
+    presence = max(0.0, min(1.0, presence))
+
     # Sanity check: flag suspiciously extreme values (likely bugs)
     for name, value in [("warmth", warmth), ("clarity", clarity),
                         ("stability", stability), ("presence", presence)]:

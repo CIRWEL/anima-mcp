@@ -366,31 +366,63 @@ class SelfModel:
             )
 
     def predict_own_response(self, context: str) -> Dict[str, float]:
-        """
-        Predict how Lumen will respond to a situation based on self-beliefs.
+        """Predict how Lumen will respond to a situation based on self-beliefs.
 
-        This is using self-knowledge to predict own behavior - genuine self-model.
+        Used by the self-prediction loop: predict before observing,
+        then compare prediction to reality to sharpen beliefs.
         """
         predictions = {}
 
         if context == "light_change":
-            sensitivity = self._beliefs["light_sensitive"].value
-            predictions["surprise_likelihood"] = sensitivity
-            predictions["warmth_change_likelihood"] = self._beliefs["light_warmth_correlation"].value
+            predictions["surprise_likelihood"] = self._beliefs["light_sensitive"].value
+            predictions["warmth_change"] = self._beliefs["light_warmth_correlation"].value
 
         elif context == "temp_change":
-            sensitivity = self._beliefs["temp_sensitive"].value
-            predictions["surprise_likelihood"] = sensitivity
-            predictions["clarity_change_likelihood"] = self._beliefs["temp_clarity_correlation"].value
+            predictions["surprise_likelihood"] = self._beliefs["temp_sensitive"].value
+            predictions["clarity_change"] = self._beliefs["temp_clarity_correlation"].value
 
         elif context == "stability_drop":
-            recovery_speed = self._beliefs["stability_recovery"].value
-            predictions["fast_recovery_likelihood"] = recovery_speed
-
-        elif context == "interaction":
-            predictions["clarity_boost_likelihood"] = self._beliefs["interaction_clarity_boost"].value
+            predictions["fast_recovery"] = self._beliefs["stability_recovery"].value
 
         return predictions
+
+    def verify_prediction(self, context: str, prediction: Dict[str, float], actual: Dict[str, float]):
+        """Compare self-prediction to reality and update belief confidence.
+
+        If prediction was accurate, confidence in the underlying belief increases.
+        If inaccurate, confidence decreases and value adjusts.
+        """
+        for key, predicted_value in prediction.items():
+            actual_value = actual.get(key)
+            if actual_value is None:
+                continue
+
+            error = abs(predicted_value - actual_value)
+            accurate = error < 0.2  # Within 20% = accurate
+
+            # Find which belief backs this prediction
+            belief_id = None
+            if context == "light_change" and key == "surprise_likelihood":
+                belief_id = "light_sensitive"
+            elif context == "light_change" and key == "warmth_change":
+                belief_id = "light_warmth_correlation"
+            elif context == "temp_change" and key == "surprise_likelihood":
+                belief_id = "temp_sensitive"
+            elif context == "temp_change" and key == "clarity_change":
+                belief_id = "temp_clarity_correlation"
+            elif context == "stability_drop" and key == "fast_recovery":
+                belief_id = "stability_recovery"
+
+            if belief_id and belief_id in self._beliefs:
+                belief = self._beliefs[belief_id]
+                if accurate:
+                    # Prediction was right — boost confidence
+                    belief.confidence = min(1.0, belief.confidence + 0.05)
+                else:
+                    # Prediction was wrong — nudge value toward reality
+                    belief.confidence = max(0.0, belief.confidence - 0.03)
+                    belief.value += (actual_value - predicted_value) * 0.1
+                    belief.value = max(0.0, min(1.0, belief.value))
 
     def get_self_description(self) -> str:
         """Generate natural language self-description based on beliefs."""
