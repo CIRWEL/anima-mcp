@@ -159,28 +159,43 @@ class TestPredictions:
         """Test prediction for light change context."""
         predictions = model.predict_own_response("light_change")
         assert "surprise_likelihood" in predictions
-        assert "warmth_change_likelihood" in predictions
+        assert "warmth_change" in predictions
 
     def test_predict_temp_change(self, model):
         """Test prediction for temp change context."""
         predictions = model.predict_own_response("temp_change")
         assert "surprise_likelihood" in predictions
-        assert "clarity_change_likelihood" in predictions
+        assert "clarity_change" in predictions
 
     def test_predict_stability_drop(self, model):
         """Test prediction for stability drop context."""
         predictions = model.predict_own_response("stability_drop")
-        assert "fast_recovery_likelihood" in predictions
-
-    def test_predict_interaction(self, model):
-        """Test prediction for interaction context."""
-        predictions = model.predict_own_response("interaction")
-        assert "clarity_boost_likelihood" in predictions
+        assert "fast_recovery" in predictions
 
     def test_predict_unknown_context(self, model):
-        """Test prediction for unknown context returns empty."""
-        predictions = model.predict_own_response("unknown")
+        """Unknown context returns empty predictions."""
+        predictions = model.predict_own_response("unknown_thing")
         assert predictions == {}
+
+    def test_verify_prediction_accurate(self, model):
+        """Accurate prediction boosts belief confidence."""
+        initial_conf = model._beliefs["light_sensitive"].confidence
+        prediction = model.predict_own_response("light_change")
+        # Actual matches prediction closely
+        actual = {k: v for k, v in prediction.items()}
+        model.verify_prediction("light_change", prediction, actual)
+        assert model._beliefs["light_sensitive"].confidence >= initial_conf
+
+    def test_verify_prediction_inaccurate(self, model):
+        """Inaccurate prediction reduces belief confidence and nudges value."""
+        # Set belief to a non-default value so prediction differs from actual
+        model._beliefs["light_sensitive"].value = 0.8
+        initial_conf = model._beliefs["light_sensitive"].confidence
+        prediction = model.predict_own_response("light_change")
+        # Actual surprise is much lower than predicted
+        actual = {"surprise_likelihood": 0.2, "warmth_change": 0.1}
+        model.verify_prediction("light_change", prediction, actual)
+        assert model._beliefs["light_sensitive"].confidence <= initial_conf
 
 
 class TestRecoveryProfile:

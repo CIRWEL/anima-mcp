@@ -88,6 +88,7 @@ _last_state_before: Dict[str, float] | None = None
 _last_primitive_utterance: Utterance | None = None
 # Self-model state - cross-iteration tracking
 _sm_prev_stability: float | None = None
+_sm_pending_prediction: dict | None = None  # {context, prediction, warmth_before, clarity_before}
 _sm_clarity_before_interaction: float | None = None
 
 # Server readiness flag - prevents "request before initialization" errors
@@ -877,11 +878,47 @@ async def _update_display_loop():
                     from .self_model import get_self_model
                     sm = get_self_model()
 
+                    # 0. Verify any pending self-prediction from previous iteration
+                    global _sm_pending_prediction
+                    if _sm_pending_prediction is not None:
+                        actual = {}
+                        ctx = _sm_pending_prediction["context"]
+                        if ctx == "light_change":
+                            actual["surprise_likelihood"] = prediction_error.surprise if prediction_error else 0.0
+                            actual["warmth_change"] = anima.warmth - _sm_pending_prediction["warmth_before"]
+                        elif ctx == "temp_change":
+                            actual["surprise_likelihood"] = prediction_error.surprise if prediction_error else 0.0
+                            actual["clarity_change"] = anima.clarity - _sm_pending_prediction["clarity_before"]
+                        elif ctx == "stability_drop":
+                            # Fast recovery = stability improved back within one cycle
+                            recovery = anima.stability - _sm_pending_prediction.get("stability_before", 0.5)
+                            actual["fast_recovery"] = min(1.0, max(0.0, recovery + 0.5))  # Center around 0.5
+                        if actual:
+                            sm.verify_prediction(ctx, _sm_pending_prediction["prediction"], actual)
+                        _sm_pending_prediction = None
+
                     # 1. Observe surprise events
                     surprise_level = prediction_error.surprise if prediction_error else 0.0
                     surprise_sources = prediction_error.surprise_sources if prediction_error and hasattr(prediction_error, 'surprise_sources') else []
                     if surprise_level > 0.1 and surprise_sources:
                         sm.observe_surprise(surprise_level, surprise_sources)
+
+                        # 1b. Make self-prediction for next verification cycle
+                        # Determine context from surprise sources
+                        pred_context = None
+                        if "light" in surprise_sources:
+                            pred_context = "light_change"
+                        elif "ambient_temp" in surprise_sources:
+                            pred_context = "temp_change"
+                        if pred_context:
+                            pred = sm.predict_own_response(pred_context)
+                            if pred:
+                                _sm_pending_prediction = {
+                                    "context": pred_context,
+                                    "prediction": pred,
+                                    "warmth_before": anima.warmth,
+                                    "clarity_before": anima.clarity,
+                                }
 
                     # 2. Observe stability changes (track across iterations)
                     global _sm_prev_stability
@@ -892,6 +929,17 @@ async def _update_display_loop():
                                 _sm_prev_stability, anima.stability,
                                 duration_seconds=base_delay * 5
                             )
+                            # Predict recovery if stability dropped significantly
+                            if anima.stability < _sm_prev_stability - 0.1 and _sm_pending_prediction is None:
+                                pred = sm.predict_own_response("stability_drop")
+                                if pred:
+                                    _sm_pending_prediction = {
+                                        "context": "stability_drop",
+                                        "prediction": pred,
+                                        "stability_before": anima.stability,
+                                        "warmth_before": anima.warmth,
+                                        "clarity_before": anima.clarity,
+                                    }
                     _sm_prev_stability = anima.stability
 
                     # 3. Observe time-of-day patterns (every ~5 min)
