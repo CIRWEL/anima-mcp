@@ -68,7 +68,7 @@ class ScreenState:
     # Screen transition state (fade effect)
     transition_progress: float = 1.0  # 0.0 = start, 1.0 = complete
     transition_start_time: float = 0.0
-    transition_duration: float = 0.15  # 150ms fade
+    transition_duration: float = 0.10  # 100ms fade
     previous_image: Optional[Any] = None  # PIL Image of previous screen
 
     # Loading state (spinner during LLM calls)
