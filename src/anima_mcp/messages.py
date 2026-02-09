@@ -308,26 +308,27 @@ class MessageBoard:
                     except Exception as e:
                         pass  # Agency not available, that's fine
 
-            # Extract insight from Q&A (async, non-blocking)
+            # Extract insight from Q&A — learn from the answer
             if question_text:
                 try:
-                    import asyncio
-                    from .knowledge import extract_insight_from_answer
+                    from .knowledge import add_insight, _extract_simple_insight, _categorize_text
 
-                    async def extract():
-                        insight = await extract_insight_from_answer(question_text, text, agent_name)
-                        if insight:
-                            print(f"[Knowledge] Learned: {insight.text}", file=sys.stderr, flush=True)
-
-                    # Schedule extraction without blocking
-                    try:
-                        loop = asyncio.get_running_loop()
-                        loop.create_task(extract())
-                    except RuntimeError:
-                        # No running loop, run synchronously
-                        asyncio.run(extract())
+                    # Synchronous rule-based extraction (always works, no LLM needed)
+                    insight_text = _extract_simple_insight(question_text, text)
+                    if insight_text:
+                        category = _categorize_text(insight_text + " " + text)
+                        insight = add_insight(
+                            text=insight_text,
+                            source_question=question_text,
+                            source_answer=text,
+                            source_author=agent_name,
+                            category=category,
+                        )
+                        print(f"[Knowledge] Learned from Q&A: {insight.text}", file=sys.stderr, flush=True)
+                    else:
+                        print(f"[Knowledge] No extractable insight from answer (too short or acknowledgment)", file=sys.stderr, flush=True)
                 except Exception as e:
-                    print(f"[Knowledge] Extraction scheduling failed: {e}", file=sys.stderr, flush=True)
+                    print(f"[Knowledge] Insight extraction failed: {e}", file=sys.stderr, flush=True)
 
         return msg
 
