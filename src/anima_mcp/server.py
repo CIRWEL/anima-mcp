@@ -489,24 +489,33 @@ async def _update_display_loop():
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
                         
                         # Button controls
-                        # Joystick button = notepad toggle (enter notepad from any screen, exit to face when on notepad)
+                        # Joystick button behavior depends on screen:
+                        #   Art Eras: select highlighted era
+                        #   Notepad: exit to face
+                        #   Other: enter notepad
                         if joy_btn_pressed:
-                            # Visual + LED feedback for button press
                             _screen_renderer.trigger_input_feedback("press")
                             if _leds and _leds.is_available():
-                                _leds.quick_flash((100, 80, 60), 80)  # Warm flash for button
-                            if current_mode == ScreenMode.NOTEPAD:
+                                _leds.quick_flash((100, 80, 60), 80)
+                            if current_mode == ScreenMode.ART_ERAS:
+                                # Select the highlighted era
+                                result = _screen_renderer.era_select_current()
+                                _screen_renderer._state.last_user_action_time = time.time()
+                                mode_change_event.set()
+                                era = result.get("era", "?")
+                                print(f"[ArtEras] Selected era: {era} (joystick button)", file=sys.stderr, flush=True)
+                            elif current_mode == ScreenMode.NOTEPAD:
                                 # Exit notepad to face (preserves Lumen's work)
                                 _screen_renderer.set_mode(ScreenMode.FACE)
                                 _screen_renderer._state.last_user_action_time = time.time()
-                                mode_change_event.set()  # Trigger immediate re-render
+                                mode_change_event.set()
                                 print(f"[Notepad] -> face (joystick button)", file=sys.stderr, flush=True)
                             else:
                                 # Enter notepad from any screen
                                 old_mode = current_mode
                                 _screen_renderer.set_mode(ScreenMode.NOTEPAD)
                                 _screen_renderer._state.last_user_action_time = time.time()
-                                mode_change_event.set()  # Trigger immediate re-render
+                                mode_change_event.set()
                                 print(f"[Input] {old_mode.value} -> notepad (joystick button)", file=sys.stderr, flush=True)
                         
                         # Joystick UP/DOWN on FACE screen = brightness control
@@ -537,6 +546,19 @@ async def _update_display_loop():
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.message_scroll_down()
+
+                        # Joystick navigation in Art Eras screen (UP/DOWN moves cursor)
+                        if current_mode == ScreenMode.ART_ERAS:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    _screen_renderer.trigger_input_feedback("up")
+                                    _screen_renderer.era_cursor_up()
+                                    mode_change_event.set()
+                                elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    _screen_renderer.trigger_input_feedback("down")
+                                    _screen_renderer.era_cursor_down()
+                                    mode_change_event.set()
 
                         # Joystick navigation in Visitors screen (same as messages)
                         if current_mode == ScreenMode.VISITORS:

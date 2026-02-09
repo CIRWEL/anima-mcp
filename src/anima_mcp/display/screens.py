@@ -84,6 +84,9 @@ class ScreenState:
     input_feedback_until: float = 0.0  # Show feedback until this time
     input_feedback_direction: str = ""  # "left", "right", "up", "down", "press"
 
+    # Art eras screen interaction state
+    era_cursor: int = 0  # Which era is highlighted (index into list_all_era_info)
+
     # Brightness overlay state
     brightness_changed_at: float = 0.0  # When brightness last changed
     brightness_overlay_name: str = ""  # Preset name to display
@@ -2437,38 +2440,41 @@ class ScreenRenderer:
                 # Era list
                 current_name = self._active_era.name if self._active_era else "gestural"
                 all_eras = list_all_era_info()
+                cursor = self._state.era_cursor % len(all_eras) if all_eras else 0
 
-                for info in all_eras:
+                for i, info in enumerate(all_eras):
                     name = info["name"]
                     desc = info["description"]
                     is_active = info["active"]
                     is_current = (name == current_name)
+                    is_cursor = (i == cursor)
 
-                    # Highlight bar behind current era
-                    if is_current:
-                        draw.rectangle([4, y - 2, 236, y + 30], fill=(25, 35, 45))
+                    # Highlight bar behind cursor position
+                    if is_cursor:
+                        draw.rectangle([4, y - 2, 236, y + 30], fill=(25, 35, 50))
 
-                    # Era name with indicator
+                    # Build label: cursor arrow + name + status
+                    arrow = "\u25b6 " if is_cursor else "  "  # ▶ cursor
+
                     if is_current:
-                        label = f"\u25b6 {name}"  # ▶ current (larger arrow)
                         name_color = YELLOW
                     elif is_active:
-                        label = f"  {name}"
                         name_color = SECONDARY
                     else:
-                        label = f"  {name}"
                         name_color = DIM
 
-                    draw.text((10, y), label, fill=name_color, font=fonts['medium'])
+                    draw.text((10, y), f"{arrow}{name}", fill=name_color, font=fonts['medium'])
 
-                    # Tag for non-active eras
-                    if not is_active:
-                        # Measure name width to place tag after it
-                        try:
-                            bbox = fonts['medium'].getbbox(label)
-                            tag_x = 10 + bbox[2] + 6
-                        except Exception:
-                            tag_x = 10 + len(label) * 8
+                    # Status tag after name
+                    try:
+                        bbox = fonts['medium'].getbbox(f"{arrow}{name}")
+                        tag_x = 10 + bbox[2] + 6
+                    except Exception:
+                        tag_x = 10 + (len(name) + 2) * 8
+
+                    if is_current:
+                        draw.text((tag_x, y + 2), "now", fill=(120, 120, 60), font=fonts['tiny'])
+                    elif not is_active:
                         draw.text((tag_x, y + 2), "manual", fill=(80, 80, 100), font=fonts['tiny'])
 
                     y += 16
@@ -3655,6 +3661,29 @@ class ScreenRenderer:
             "era": era_name,
             "description": era.description,
         }
+
+    def era_cursor_up(self):
+        """Move era cursor up on art eras screen."""
+        from .eras import list_all_era_info
+        total = len(list_all_era_info())
+        if total > 0:
+            self._state.era_cursor = (self._state.era_cursor - 1) % total
+
+    def era_cursor_down(self):
+        """Move era cursor down on art eras screen."""
+        from .eras import list_all_era_info
+        total = len(list_all_era_info())
+        if total > 0:
+            self._state.era_cursor = (self._state.era_cursor + 1) % total
+
+    def era_select_current(self) -> dict:
+        """Select the era at the current cursor position."""
+        from .eras import list_all_era_info
+        all_eras = list_all_era_info()
+        if 0 <= self._state.era_cursor < len(all_eras):
+            era_name = all_eras[self._state.era_cursor]["name"]
+            return self.set_era(era_name)
+        return {"success": False, "error": "Invalid cursor position"}
 
     def canvas_clear(self, persist: bool = True, already_saved: bool = False):
         """Clear the canvas - saves first if there's a real drawing (50+ pixels).
