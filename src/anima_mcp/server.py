@@ -1181,10 +1181,10 @@ async def _update_display_loop():
                 
                 safe_call(try_learning, default=None, log_error=False)
             
-            # Lumen's voice: Every 300 iterations (~10 minutes), let Lumen express what it wants
+            # Lumen's voice: Every 900 iterations (~30 minutes), let Lumen express what it wants
             # Uses next_steps advocate to generate observations based on how Lumen feels
-            # (Increased from 120 to reduce repetitive chatter)
-            if loop_count % 300 == 0 and readings and anima and identity:
+            # (Increased from 300 to favor learning over performative text)
+            if loop_count % 900 == 0 and readings and anima and identity:
                 from .messages import add_observation
                 from .eisv_mapper import anima_to_eisv
                 
@@ -1258,9 +1258,10 @@ async def _update_display_loop():
                 
                 safe_call(lumen_speak, default=None, log_error=False)
 
-            # Lumen's wonder: Every 450 iterations (~15 minutes), let Lumen ask questions or share realizations
+            # Lumen's wonder: Every 900 iterations (~30 minutes), let Lumen ask questions or share realizations
             # Questions emerge from novelty/confusion. Realizations emerge from clarity.
-            if loop_count % 450 == 0 and readings and anima and identity:
+            # (Increased from 450 to favor learning over performative text)
+            if loop_count % 900 == 0 and readings and anima and identity:
                 from .messages import add_question, add_observation, get_unanswered_questions, get_recent_messages
 
                 def lumen_wonder():
@@ -1463,9 +1464,10 @@ async def _update_display_loop():
 
                 safe_call(lumen_wonder, default=None, log_error=False)
 
-            # Lumen's generative reflection: Every 240 iterations (~8 minutes), use LLM for genuine reflection
+            # Lumen's generative reflection: Every 720 iterations (~24 minutes), use LLM for genuine reflection
             # This allows Lumen to ask novel questions and express authentic desires
-            if loop_count % 240 == 0 and readings and anima and identity:
+            # (Increased from 240 to reduce LLM inference noise — learning happens elsewhere)
+            if loop_count % 720 == 0 and readings and anima and identity:
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
                 from .messages import get_unanswered_questions, add_question, add_observation
 
@@ -1561,9 +1563,10 @@ async def _update_display_loop():
                         # Non-fatal - LLM reflection is optional enhancement
                         pass
 
-            # Lumen self-answers: Every 600 iterations (~2 minutes), answer own old questions via LLM
+            # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions via LLM
             # Questions must be at least 10 minutes old (external answers get priority)
-            if loop_count % 600 == 0 and readings and anima and identity:
+            # (Increased from 600 to reduce LLM inference noise)
+            if loop_count % 1800 == 0 and readings and anima and identity:
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
                 from .messages import get_unanswered_questions, add_agent_message
 
@@ -1631,11 +1634,12 @@ async def _update_display_loop():
 
             # Lumen's responses: Every 90 iterations (~3 minutes), respond to messages from others
             # Track last seen timestamp to avoid responding to same messages twice
+            # (Increased from 30 to reduce templated noise — learning systems are unchanged)
             if not hasattr(_update_display_loop, '_last_seen_msg_time'):
                 # Initialize to 5 minutes ago so we catch recent messages on startup
                 _update_display_loop._last_seen_msg_time = time.time() - 300
 
-            if loop_count % 30 == 0 and readings and anima and identity:
+            if loop_count % 90 == 0 and readings and anima and identity:
                 from .messages import get_messages_for_lumen, add_observation
 
                 def lumen_respond():
