@@ -237,7 +237,7 @@ def extract_self_schema(
     # === IDENTITY NODE (center) ===
     identity_name = "Lumen"
     identity_value = 1.0  # Always present
-    if identity:
+    if identity and hasattr(identity, 'name'):
         identity_name = identity.name or "Lumen"
 
     nodes.append(SchemaNode(

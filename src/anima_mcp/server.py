@@ -2533,7 +2533,8 @@ async def handle_set_name(arguments: dict) -> list[TextContent]:
             "error": "name parameter required"
         }))]
 
-    old_name = store.get_identity().name
+    identity = store.get_identity()
+    old_name = identity.name if identity else None
     store.set_name(name)
 
     return [TextContent(type="text", text=json.dumps({
