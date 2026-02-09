@@ -2411,8 +2411,8 @@ class ScreenRenderer:
         self._render_filtered_messages("visitors", ["agent", "user"], include_answers=False)
 
     def _render_art_eras(self, anima: Optional[Anima] = None):
-        """Render Art Eras screen — current era, all eras, drawing stats."""
-        from .eras import list_all_era_info, ACTIVE_ERAS
+        """Render Art Eras screen — era selector with auto-rotate toggle."""
+        from .eras import list_all_era_info, auto_rotate as _auto_rotate
 
         try:
             if hasattr(self._display, '_create_canvas'):
@@ -2421,7 +2421,6 @@ class ScreenRenderer:
 
                 CYAN = COLORS.SOFT_CYAN
                 YELLOW = COLORS.SOFT_YELLOW
-                WHITE = COLORS.TEXT_PRIMARY
                 DIM = COLORS.TEXT_DIM
                 SECONDARY = COLORS.TEXT_SECONDARY
                 GREEN = COLORS.SOFT_GREEN
@@ -2437,90 +2436,84 @@ class ScreenRenderer:
                 draw.line([(10, y), (230, y)], fill=(40, 40, 50), width=1)
                 y += 8
 
-                # Era list
+                # Era list + toggle row at the end
                 current_name = self._active_era.name if self._active_era else "gestural"
                 all_eras = list_all_era_info()
-                cursor = self._state.era_cursor % len(all_eras) if all_eras else 0
+                # Total items = eras + 1 (auto-rotate toggle)
+                total_items = len(all_eras) + 1
+                cursor = self._state.era_cursor % total_items if total_items else 0
 
                 for i, info in enumerate(all_eras):
                     name = info["name"]
                     desc = info["description"]
-                    is_active = info["active"]
                     is_current = (name == current_name)
                     is_cursor = (i == cursor)
 
-                    # Highlight bar behind cursor position
+                    # Highlight bar behind cursor
                     if is_cursor:
                         draw.rectangle([4, y - 2, 236, y + 30], fill=(25, 35, 50))
 
-                    # Build label: cursor arrow + name + status
-                    arrow = "\u25b6 " if is_cursor else "  "  # ▶ cursor
+                    arrow = "\u25b6 " if is_cursor else "  "
 
                     if is_current:
                         name_color = YELLOW
-                    elif is_active:
-                        name_color = SECONDARY
                     else:
-                        name_color = DIM
+                        name_color = SECONDARY
 
                     draw.text((10, y), f"{arrow}{name}", fill=name_color, font=fonts['medium'])
 
-                    # Status tag after name
-                    try:
-                        bbox = fonts['medium'].getbbox(f"{arrow}{name}")
-                        tag_x = 10 + bbox[2] + 6
-                    except Exception:
-                        tag_x = 10 + (len(name) + 2) * 8
-
+                    # "now" tag for current era
                     if is_current:
-                        draw.text((tag_x, y + 2), "now", fill=(120, 120, 60), font=fonts['tiny'])
-                    elif not is_active:
-                        draw.text((tag_x, y + 2), "manual", fill=(80, 80, 100), font=fonts['tiny'])
+                        try:
+                            bbox = fonts['medium'].getbbox(f"{arrow}{name}")
+                            tag_x = 10 + bbox[2] + 6
+                        except Exception:
+                            tag_x = 10 + (len(name) + 2) * 8
+                        draw.text((tag_x, y + 2), "\u2190 now", fill=(120, 120, 60), font=fonts['tiny'])
 
                     y += 16
 
-                    # Description (truncated to fit 240px)
+                    # Description
                     short_desc = desc[:38] + "..." if len(desc) > 38 else desc
                     draw.text((24, y), short_desc, fill=DIM, font=fonts['tiny'])
                     y += 18
 
-                # Separator before stats
+                # --- Auto-rotate toggle (last cursor item) ---
+                toggle_idx = len(all_eras)
+                is_toggle_cursor = (cursor == toggle_idx)
+
                 y = max(y + 4, 175)
                 draw.line([(10, y), (230, y)], fill=(40, 40, 50), width=1)
                 y += 8
 
-                # Drawing stats
+                if is_toggle_cursor:
+                    draw.rectangle([4, y - 2, 236, y + 14], fill=(25, 35, 50))
+
+                arrow = "\u25b6 " if is_toggle_cursor else "  "
+                toggle_state = "on" if _auto_rotate else "off"
+                toggle_color = GREEN if _auto_rotate else DIM
+                draw.text((10, y), f"{arrow}auto-rotate: {toggle_state}", fill=toggle_color, font=fonts['medium'])
+                y += 20
+
+                # --- Drawing stats ---
                 energy = self._canvas.energy if self._canvas else 0.0
                 drawings = self._canvas.drawings_saved if self._canvas else 0
                 phase = self._canvas.drawing_phase if self._canvas else "?"
-                marks = self._canvas.mark_count if self._canvas else 0
 
                 # Energy bar
                 bar_x, bar_w, bar_h = 150, 60, 8
-                draw.text((10, y), f"drawing #{drawings}", fill=SECONDARY, font=fonts['small'])
-                # Bar background
+                draw.text((10, y), f"drawing #{drawings}", fill=DIM, font=fonts['small'])
                 draw.rectangle([bar_x, y + 2, bar_x + bar_w, y + 2 + bar_h],
                               fill=(30, 30, 40), outline=(50, 50, 60))
-                # Bar fill
                 fill_w = int(bar_w * energy)
                 if fill_w > 0:
                     bar_color = GREEN if energy > 0.3 else ORANGE
                     draw.rectangle([bar_x, y + 2, bar_x + fill_w, y + 2 + bar_h],
                                   fill=bar_color)
-                # Energy percentage
                 draw.text((bar_x + bar_w + 4, y), f"{int(energy * 100)}%", fill=DIM, font=fonts['tiny'])
-                y += 17
+                y += 15
 
-                # Phase and marks
                 draw.text((10, y), f"phase: {phase}", fill=DIM, font=fonts['small'])
-                draw.text((130, y), f"{marks} marks", fill=DIM, font=fonts['small'])
-                y += 17
-
-                # Pool summary
-                active_count = len([e for e in all_eras if e["active"]])
-                manual_count = len(all_eras) - active_count
-                draw.text((10, y), f"pool: {active_count} active \u00b7 {manual_count} manual",
-                          fill=DIM, font=fonts['small'])
 
                 # Navigation dots
                 self._draw_screen_indicator(draw, ScreenMode.ART_ERAS)
@@ -3631,20 +3624,16 @@ class ScreenRenderer:
     
     def get_current_era(self) -> dict:
         """Return current era info and all available eras."""
-        from .eras import list_all_era_info, ACTIVE_ERAS
+        from .eras import list_all_era_info, auto_rotate
         return {
             "current_era": self._active_era.name,
             "current_description": self._active_era.description,
-            "active_pool": list(ACTIVE_ERAS),
+            "auto_rotate": auto_rotate,
             "all_eras": list_all_era_info(),
         }
 
     def set_era(self, era_name: str) -> dict:
-        """Switch to a different art era immediately.
-
-        Can switch to any registered era, including archived ones
-        not in the active rotation pool.
-        """
+        """Switch to a different art era immediately."""
         from .eras import get_era
         era = get_era(era_name)
         if era is None or era.name != era_name:
@@ -3665,21 +3654,30 @@ class ScreenRenderer:
     def era_cursor_up(self):
         """Move era cursor up on art eras screen."""
         from .eras import list_all_era_info
-        total = len(list_all_era_info())
+        total = len(list_all_era_info()) + 1  # +1 for auto-rotate toggle
         if total > 0:
             self._state.era_cursor = (self._state.era_cursor - 1) % total
 
     def era_cursor_down(self):
         """Move era cursor down on art eras screen."""
         from .eras import list_all_era_info
-        total = len(list_all_era_info())
+        total = len(list_all_era_info()) + 1  # +1 for auto-rotate toggle
         if total > 0:
             self._state.era_cursor = (self._state.era_cursor + 1) % total
 
     def era_select_current(self) -> dict:
-        """Select the era at the current cursor position."""
+        """Select the era at cursor, or toggle auto-rotate if on the toggle row."""
         from .eras import list_all_era_info
+        import anima_mcp.display.eras as eras_module
         all_eras = list_all_era_info()
+
+        if self._state.era_cursor == len(all_eras):
+            # Toggle auto-rotate
+            eras_module.auto_rotate = not eras_module.auto_rotate
+            state = "on" if eras_module.auto_rotate else "off"
+            print(f"[ArtEras] Auto-rotate: {state}", file=sys.stderr, flush=True)
+            return {"success": True, "auto_rotate": eras_module.auto_rotate}
+
         if 0 <= self._state.era_cursor < len(all_eras):
             era_name = all_eras[self._state.era_cursor]["name"]
             return self.set_era(era_name)
