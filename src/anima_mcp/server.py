@@ -493,30 +493,19 @@ async def _update_display_loop():
                         #   Art Eras: select highlighted era
                         #   Notepad: exit to face
                         #   Other: enter notepad
+                        # Joystick button — context-dependent action per screen.
+                        # Only acts on screens that have an interactive use for it.
                         if joy_btn_pressed:
                             _screen_renderer.trigger_input_feedback("press")
                             if _leds and _leds.is_available():
                                 _leds.quick_flash((100, 80, 60), 80)
                             if current_mode == ScreenMode.ART_ERAS:
-                                # Select the highlighted era
+                                # Select highlighted era or toggle auto-rotate
                                 result = _screen_renderer.era_select_current()
                                 _screen_renderer._state.last_user_action_time = time.time()
                                 mode_change_event.set()
-                                era = result.get("era", "?")
-                                print(f"[ArtEras] Selected era: {era} (joystick button)", file=sys.stderr, flush=True)
-                            elif current_mode == ScreenMode.NOTEPAD:
-                                # Exit notepad to face (preserves Lumen's work)
-                                _screen_renderer.set_mode(ScreenMode.FACE)
-                                _screen_renderer._state.last_user_action_time = time.time()
-                                mode_change_event.set()
-                                print(f"[Notepad] -> face (joystick button)", file=sys.stderr, flush=True)
-                            else:
-                                # Enter notepad from any screen
-                                old_mode = current_mode
-                                _screen_renderer.set_mode(ScreenMode.NOTEPAD)
-                                _screen_renderer._state.last_user_action_time = time.time()
-                                mode_change_event.set()
-                                print(f"[Input] {old_mode.value} -> notepad (joystick button)", file=sys.stderr, flush=True)
+                                era = result.get("era", result.get("auto_rotate", "?"))
+                                print(f"[ArtEras] Button press: {result}", file=sys.stderr, flush=True)
                         
                         # Joystick UP/DOWN on FACE screen = brightness control
                         if current_mode == ScreenMode.FACE:
@@ -4580,7 +4569,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "action": "get_era",
             "current_era": info["current_era"],
             "current_description": info["current_description"],
-            "active_pool": info["active_pool"],
+            "auto_rotate": info["auto_rotate"],
         }))]
 
     elif action == "set_era":
