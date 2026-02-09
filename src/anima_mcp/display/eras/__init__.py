@@ -1,12 +1,12 @@
 """
-Art Era Registry — manages available drawing eras and era rotation.
+Art Era Registry — manages available drawing eras and rotation.
 
 Eras are pluggable modules that define Lumen's visual character per drawing session.
-Each drawing belongs to one era. Eras rotate on canvas clear among the ACTIVE_ERAS pool.
+Each drawing belongs to one era. Era selection is manual by default — pick an era
+on the art eras screen and Lumen stays in it until you change it.
 
-All eras are registered (loadable via get_era), but only ACTIVE_ERAS participate
-in automatic rotation. Archived eras (like geometric) can be activated manually
-via manage_display(action="set_era", screen="geometric").
+Auto-rotate can be toggled on from the art eras screen. When on, Lumen picks a
+different era after each drawing completes (weighted random across all registered eras).
 """
 
 import random
@@ -16,9 +16,9 @@ from typing import Dict, List
 # Registry of all available eras
 _ERAS: Dict[str, object] = {}
 
-# Active pool — only these rotate between drawings.
-# Edit this list to change which eras Lumen cycles through.
-ACTIVE_ERAS: List[str] = ["gestural", "pointillist", "field"]
+# Auto-rotate toggle — when True, era changes after each drawing.
+# When False (default), Lumen stays in the selected era until manually changed.
+auto_rotate: bool = False
 
 
 def register_era(era) -> None:
@@ -32,14 +32,13 @@ def get_era(name: str):
 
 
 def get_era_info(name: str) -> dict:
-    """Get era metadata: name, description, whether it's in the active pool."""
+    """Get era metadata."""
     era = _ERAS.get(name)
     if not era:
         return {}
     return {
         "name": era.name,
         "description": era.description,
-        "active": era.name in ACTIVE_ERAS,
     }
 
 
@@ -54,12 +53,15 @@ def list_all_era_info() -> List[dict]:
 
 
 def choose_next_era(current: str, drawings_saved: int) -> str:
-    """Choose era for next drawing from the ACTIVE_ERAS pool.
+    """Choose era for next drawing.
 
-    The current era gets lower weight to encourage rotation.
-    Only eras in ACTIVE_ERAS are candidates.
+    If auto_rotate is False, returns the current era (no change).
+    If auto_rotate is True, picks a random era (lower weight for repeating).
     """
-    candidates = [name for name in ACTIVE_ERAS if name in _ERAS]
+    if not auto_rotate:
+        return current
+
+    candidates = list(_ERAS.keys())
     if len(candidates) <= 1:
         return candidates[0] if candidates else "gestural"
 
