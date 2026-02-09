@@ -21,6 +21,30 @@ if TYPE_CHECKING:
     from .memory import Anticipation
 
 
+def _get_prediction_accuracy() -> Optional[float]:
+    """
+    Get prediction accuracy from adaptive model (0-1 scale).
+
+    Returns 1 - normalized_mean_error, where lower error = higher clarity.
+    Returns None if not enough data yet.
+    """
+    try:
+        from .adaptive_prediction import get_adaptive_prediction_model
+        model = get_adaptive_prediction_model()
+        stats = model.get_accuracy_stats()
+
+        if stats.get("insufficient_data"):
+            return None
+
+        mean_error = stats.get("overall_mean_error", 0.5)
+        # Normalize: anima values are 0-1, so max realistic error is ~1.0
+        # Clamp to reasonable range and invert (low error = high accuracy)
+        normalized_error = min(1.0, mean_error)
+        return 1.0 - normalized_error
+    except Exception:
+        return None
+
+
 @dataclass
 class Anima:
     """The creature's felt sense of self."""
@@ -72,7 +96,7 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
         calibration = get_calibration()
 
     warmth = _sense_warmth(readings, calibration)
-    clarity = _sense_clarity(readings, calibration)
+    clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy())
     stability = _sense_stability(readings, calibration)
     presence = _sense_presence(readings, calibration)
 
@@ -131,7 +155,7 @@ def sense_self_with_memory(
 
     # Base sensed state (raw, before memory influence)
     raw_warmth = _sense_warmth(readings, calibration)
-    raw_clarity = _sense_clarity(readings, calibration)
+    raw_clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy())
     raw_stability = _sense_stability(readings, calibration)
     raw_presence = _sense_presence(readings, calibration)
 
@@ -263,37 +287,47 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     return round(sum(c * w for c, w in zip(components, weights)) / total_weight, 3)
 
 
-def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
+def _sense_clarity(
+    r: SensorReadings,
+    cal: NervousSystemCalibration,
+    prediction_accuracy: Optional[float] = None
+) -> float:
     """
-    How clearly can the creature sense its environment?
+    How clearly can the creature perceive its own internal state?
+
+    This is "internal seeing" - not external light, but self-perception accuracy.
 
     Sources:
-    - Light level (visual clarity)
-    - Sensor availability (data richness)
-    - Alpha EEG power (relaxed awareness, eyes-closed clarity)
+    - Prediction accuracy: How well I predict my own state changes (1 - mean_error)
+    - Alpha EEG power: Relaxed awareness, clear processing
+    - Sensor coverage: Data richness (how complete is my self-perception)
+
+    Note: Light was removed because LEDs affect the light sensor, creating
+    a feedback loop. Clarity now measures genuine self-awareness.
     """
     components = []
     weights = []
 
-    # Light: log scale for perception (calibrated range)
-    if r.light_lux is not None:
-        import math
-        light_range = cal.light_max_lux - cal.light_min_lux
-        if light_range > 0 and cal.light_max_lux > 1.0:
-            # Log scale mapping (requires light_max_lux > 1 to avoid log10 div-by-zero)
-            light_clarity = math.log10(max(cal.light_min_lux, r.light_lux)) / math.log10(cal.light_max_lux)
-            light_clarity = max(0, min(1, light_clarity))
-            components.append(light_clarity)
-            weights.append(cal.clarity_weights.get("light", 0.4))
+    # Prediction accuracy: How well I understand my own state changes
+    # This is the core of "internal seeing" - accurate self-prediction = clarity
+    if prediction_accuracy is not None:
+        # prediction_accuracy should be 0-1 (1 - normalized_mean_error)
+        components.append(max(0, min(1, prediction_accuracy)))
+        weights.append(cal.clarity_weights.get("prediction_accuracy", 0.5))
+    else:
+        # Fallback: use a neutral value when no prediction data available yet
+        # This happens during early startup before enough observations accumulate
+        components.append(0.5)
+        weights.append(cal.clarity_weights.get("prediction_accuracy", 0.5))
 
-    # Sensor coverage
+    # Sensor coverage: Data richness (meta-clarity about available information)
     sensor_count = sum(1 for v in [
         r.cpu_temp_c, r.ambient_temp_c, r.humidity_pct,
         r.light_lux, r.pressure_hpa,
     ] if v is not None)
     coverage = sensor_count / 5
     components.append(coverage)
-    weights.append(cal.clarity_weights.get("sensor_coverage", 0.4))
+    weights.append(cal.clarity_weights.get("sensor_coverage", 0.2))
 
     # Neural clarity: Real EEG alpha power, or simulated if unavailable
     if r.eeg_alpha_power is not None:
@@ -308,7 +342,7 @@ def _sense_clarity(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         )
         neural_clarity = neural.alpha  # Relaxed, clear awareness
     components.append(neural_clarity)
-    weights.append(cal.clarity_weights.get("neural", 0.4))
+    weights.append(cal.clarity_weights.get("neural", 0.3))
 
     if not components:
         return 0.5

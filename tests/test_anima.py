@@ -131,15 +131,22 @@ class TestAnimaNotExtreme:
         assert warmth_hot > warmth_cold, "Hot should feel warmer than cold"
         assert warmth_hot - warmth_cold > 0.2, "Temperature should have meaningful impact"
 
-    def test_clarity_varies_with_light(self, now, default_calibration):
-        """Clarity should respond to light changes."""
-        dark = SensorReadings(timestamp=now, light_lux=1.0)
-        bright = SensorReadings(timestamp=now, light_lux=1000.0)
+    def test_clarity_varies_with_prediction_accuracy(self, now, default_calibration):
+        """Clarity should respond to prediction accuracy (internal seeing).
 
-        clarity_dark = _sense_clarity(dark, default_calibration)
-        clarity_bright = _sense_clarity(bright, default_calibration)
+        Note: Light was removed from clarity calculation because LEDs affect
+        the light sensor, creating a feedback loop. Clarity now measures
+        self-prediction accuracy - genuine internal awareness.
+        """
+        readings = SensorReadings(timestamp=now, light_lux=100.0)
 
-        assert clarity_bright > clarity_dark, "Bright should be clearer than dark"
+        # Low prediction accuracy = low clarity (confused about own state)
+        clarity_low = _sense_clarity(readings, default_calibration, prediction_accuracy=0.2)
+        # High prediction accuracy = high clarity (understands own state)
+        clarity_high = _sense_clarity(readings, default_calibration, prediction_accuracy=0.9)
+
+        assert clarity_high > clarity_low, "Better prediction accuracy should mean clearer internal seeing"
+        assert clarity_high - clarity_low > 0.2, "Prediction accuracy should have meaningful impact"
 
 
 class TestAnimaMath:
