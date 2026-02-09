@@ -488,19 +488,8 @@ async def _update_display_loop():
                                     mode_change_event.set()  # Trigger immediate re-render
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
                         
-                        # Joystick button — context-dependent action per screen.
-                        # Only acts on screens that have a specific interactive use for it.
-                        if joy_btn_pressed:
-                            _screen_renderer.trigger_input_feedback("press")
-                            if _leds and _leds.is_available():
-                                _leds.quick_flash((100, 80, 60), 80)
-                            if current_mode == ScreenMode.ART_ERAS:
-                                # Select highlighted era or toggle auto-rotate
-                                result = _screen_renderer.era_select_current()
-                                _screen_renderer._state.last_user_action_time = time.time()
-                                mode_change_event.set()
-                                era = result.get("era", result.get("auto_rotate", "?"))
-                                print(f"[ArtEras] Button press: {result}", file=sys.stderr, flush=True)
+                        # Joystick button — currently unused (unreliable click).
+                        # Screen-specific actions moved to separate button.
                         
                         # Joystick UP/DOWN on FACE screen = brightness control
                         if current_mode == ScreenMode.FACE:
@@ -636,6 +625,12 @@ async def _update_display_loop():
                                             print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
                                         else:
                                             print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
+                                    elif current_mode == ScreenMode.ART_ERAS:
+                                        # In art eras: select highlighted era or toggle auto-rotate
+                                        result = _screen_renderer.era_select_current()
+                                        _screen_renderer._state.last_user_action_time = time.time()
+                                        mode_change_event.set()
+                                        print(f"[ArtEras] Button press: {result}", file=sys.stderr, flush=True)
                                     # No catch-all: button only acts on screens with specific use
             except Exception as e:
                 # Log errors but don't spam - only log occasionally
