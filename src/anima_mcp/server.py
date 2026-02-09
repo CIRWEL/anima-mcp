@@ -4512,6 +4512,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "messages": ScreenMode.MESSAGES,
             "questions": ScreenMode.QUESTIONS,
             "visitors": ScreenMode.VISITORS,
+            "art_eras": ScreenMode.ART_ERAS,
         }
         if screen in mode_map:
             _screen_renderer.set_mode(mode_map[screen])
