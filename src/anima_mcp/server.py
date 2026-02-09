@@ -5349,9 +5349,13 @@ def run_http_server(host: str, port: int):
                     from pathlib import Path
                     from datetime import datetime, timedelta
 
-                    # Find database (same logic as message_server.py)
+                    # Find database - prefer ANIMA_DB env var, then ~/.anima/
+                    import os
                     db_path = None
-                    for p in [Path.home() / "anima-mcp" / "anima.db", Path.home() / ".anima" / "anima.db"]:
+                    env_db = os.environ.get("ANIMA_DB")
+                    candidates = [Path(env_db)] if env_db else []
+                    candidates.extend([Path.home() / ".anima" / "anima.db", Path.home() / "anima-mcp" / "anima.db"])
+                    for p in candidates:
                         if p.exists():
                             db_path = p
                             break

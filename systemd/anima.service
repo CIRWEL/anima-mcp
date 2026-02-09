@@ -16,6 +16,7 @@ Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
 Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
 Environment="UNITARES_URL=http://100.96.201.46:8767/mcp/"
 Environment="UNITARES_AUTH=unitares:8QF6L8Ui0pZFiHGQ"
+Environment="GROQ_API_KEY=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"
 Environment="PYTHONUNBUFFERED=1"
 
 # Executable
@@ -42,7 +43,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=no
-ReadWritePaths=/home/unitares-anima/anima-mcp
+ReadWritePaths=/home/unitares-anima/anima-mcp /home/unitares-anima/.anima
 
 [Install]
 WantedBy=multi-user.target
