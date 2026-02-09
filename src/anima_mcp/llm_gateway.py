@@ -109,6 +109,9 @@ class LLMGateway:
         """Check if any provider is configured."""
         return len(self._providers) > 0
 
+    # Modes that need longer responses (answers, responses to messages)
+    _LONG_MODES = {"self_answer", "respond"}
+
     async def reflect(self, context: ReflectionContext, mode: str = "wonder") -> Optional[str]:
         """
         Generate a reflection based on Lumen's current state.
@@ -117,7 +120,7 @@ class LLMGateway:
 
         Args:
             context: Current state and recent activity
-            mode: Type of reflection - "wonder", "desire", "respond", "observe"
+            mode: Type of reflection - "wonder", "desire", "respond", "observe", "self_answer"
 
         Returns:
             Generated text or None if all providers fail
@@ -134,11 +137,15 @@ class LLMGateway:
         prompt = self._build_prompt(context, mode)
         system = self._system_prompt()
 
+        # Longer token budget for modes that need fuller responses
+        max_tokens = 250 if mode in self._LONG_MODES else 150
+
         # Try each provider until one succeeds
         for provider_name, url, api_key in self._providers:
             try:
                 result = await self._call_provider(
-                    provider_name, url, api_key, system, prompt
+                    provider_name, url, api_key, system, prompt,
+                    max_tokens=max_tokens, long_form=(mode in self._LONG_MODES),
                 )
                 if result:
                     return result
@@ -149,28 +156,29 @@ class LLMGateway:
         return None
 
     async def _call_provider(
-        self, provider: str, url: str, api_key: str, system: str, prompt: str
+        self, provider: str, url: str, api_key: str, system: str, prompt: str,
+        max_tokens: int = 150, long_form: bool = False,
     ) -> Optional[str]:
         """Call a specific provider and return the response."""
         import httpx
 
         async with httpx.AsyncClient(timeout=15.0) as client:
             if provider == "huggingface":
-                # Hugging Face Inference API uses different format
-                return await self._call_huggingface(client, api_key, system, prompt)
+                return await self._call_huggingface(
+                    client, api_key, system, prompt, max_tokens=max_tokens, long_form=long_form)
             else:
-                # ngrok gateway and Groq use OpenAI-compatible format
                 return await self._call_openai_compatible(
-                    client, url, api_key, system, prompt, provider
+                    client, url, api_key, system, prompt, provider,
+                    max_tokens=max_tokens, long_form=long_form,
                 )
 
     async def _call_openai_compatible(
-        self, client, url: str, api_key: str, system: str, prompt: str, provider: str
+        self, client, url: str, api_key: str, system: str, prompt: str, provider: str,
+        max_tokens: int = 150, long_form: bool = False,
     ) -> Optional[str]:
         """Call OpenAI-compatible API (ngrok gateway, Together.ai, Groq)."""
         # Choose model based on provider
         if provider == "ngrok":
-            # ngrok gateway routes to configured providers - try Phi first, then Llama
             model = self.MODELS.get("phi", self.MODELS["groq"])
         elif provider == "together":
             model = self.MODELS["together"]
@@ -192,20 +200,19 @@ class LLMGateway:
                         {"role": "system", "content": system},
                         {"role": "user", "content": prompt}
                     ],
-                    "max_tokens": 150,
+                    "max_tokens": max_tokens,
                     "temperature": 0.8,
                 }
             )
 
             if response.status_code == 200:
                 data = response.json()
-                # Validate response structure
                 choices = data.get("choices", [])
                 if not choices or not isinstance(choices, list):
                     print(f"[LLMGateway] {provider} malformed response: no choices", file=sys.stderr, flush=True)
                     return None
                 text = choices[0].get("message", {}).get("content", "")
-                return self._clean_response(text)
+                return self._clean_response(text, long_form=long_form)
             elif response.status_code in RETRYABLE_STATUS_CODES:
                 error = response.text[:200] if response.text else "unknown"
                 print(f"[LLMGateway] {provider} retryable {response.status_code}: {error}", file=sys.stderr, flush=True)
@@ -225,14 +232,13 @@ class LLMGateway:
             return None
 
     async def _call_huggingface(
-        self, client, api_key: str, system: str, prompt: str
+        self, client, api_key: str, system: str, prompt: str,
+        max_tokens: int = 150, long_form: bool = False,
     ) -> Optional[str]:
         """Call Hugging Face Inference API for Phi models."""
-        # Phi models on HF use chat format
         model = self.MODELS["phi"]
         url = f"{self.HF_INFERENCE_URL}/{model}"
 
-        # Format for chat models
         full_prompt = f"<|system|>\n{system}<|end|>\n<|user|>\n{prompt}<|end|>\n<|assistant|>\n"
 
         async def make_request():
@@ -245,7 +251,7 @@ class LLMGateway:
                 json={
                     "inputs": full_prompt,
                     "parameters": {
-                        "max_new_tokens": 150,
+                        "max_new_tokens": max_tokens,
                         "temperature": 0.8,
                         "return_full_text": False,
                     }
@@ -261,7 +267,7 @@ class LLMGateway:
                 else:
                     print("[LLMGateway] HF malformed response", file=sys.stderr, flush=True)
                     return None
-                return self._clean_response(text)
+                return self._clean_response(text, long_form=long_form)
             elif response.status_code in RETRYABLE_STATUS_CODES:
                 # 503 = model loading, other 5xx = server issues
                 print(f"[LLMGateway] HF retryable {response.status_code}", file=sys.stderr, flush=True)
@@ -394,8 +400,12 @@ Give a thoughtful answer from my own perspective (2-4 sentences)."""
 
 What am I noticing or feeling right now? Share one observation about my current experience."""
 
-    def _clean_response(self, text: str) -> str:
-        """Clean up the generated response."""
+    def _clean_response(self, text: str, long_form: bool = False) -> str:
+        """Clean up the generated response.
+
+        long_form: if True, allow up to 280 chars (for self-answers, responses).
+        Otherwise truncate at 120 chars (for observations, desires, questions).
+        """
         # Remove quotes if wrapped
         text = text.strip()
         if text.startswith('"') and text.endswith('"'):
@@ -410,15 +420,21 @@ What am I noticing or feeling right now? Share one observation about my current 
         # Lowercase (Lumen's voice)
         text = text.lower()
 
-        # Truncate if too long
-        if len(text) > 120:
-            # Find natural break point
+        # Truncate if too long — longer budget for answers/responses
+        max_len = 280 if long_form else 120
+        search_window = max_len - 20  # look for sentence break before hard limit
+
+        if len(text) > max_len:
+            # Find natural break point (last sentence end within window)
+            best_break = -1
             for punct in [". ", "? ", "! "]:
-                if punct in text[:100]:
-                    text = text[:text.index(punct) + 1]
-                    break
+                idx = text.rfind(punct, 0, search_window)
+                if idx > best_break:
+                    best_break = idx
+            if best_break > 0:
+                text = text[:best_break + 1]
             else:
-                text = text[:117] + "..."
+                text = text[:max_len - 3] + "..."
 
         return text.strip()
 
