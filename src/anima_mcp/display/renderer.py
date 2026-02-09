@@ -97,12 +97,13 @@ class PilRenderer(DisplayRenderer):
         self._deferred: bool = False  # When True, _show() skips SPI push (caller must call flush())
         # Font cache (avoid loading from disk on every render)
         self._name_font: Optional[ImageFont.FreeTypeFont] = None
-        # Manual brightness control (user-adjustable via joystick)
+        # Manual brightness control (user-adjustable via joystick on face screen)
+        # Screen always stays full brightness — only LEDs dim.
         self._brightness_presets = [
             {"name": "Full",   "display": 1.0,  "leds": 1.0},
-            {"name": "Medium", "display": 1.0,  "leds": 0.6},
-            {"name": "Dim",    "display": 0.7,  "leds": 0.3},
-            {"name": "Night",  "display": 0.4,  "leds": 0.15},
+            {"name": "Medium", "display": 1.0,  "leds": 0.5},
+            {"name": "Dim",    "display": 1.0,  "leds": 0.2},
+            {"name": "Night",  "display": 1.0,  "leds": 0.0},
         ]
         self._brightness_index: int = 0  # Index into presets
         self._manual_brightness: float = 1.0  # Display multiplier

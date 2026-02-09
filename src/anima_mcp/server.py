@@ -499,13 +499,13 @@ async def _update_display_loop():
                                     _screen_renderer.trigger_input_feedback("up")
                                     preset_name = _screen_renderer._display.brightness_up()
                                     preset = _screen_renderer._display.get_brightness_preset()
-                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["display"])
+                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["leds"])
                                     mode_change_event.set()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
                                     preset_name = _screen_renderer._display.brightness_down()
                                     preset = _screen_renderer._display.get_brightness_preset()
-                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["display"])
+                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["leds"])
                                     mode_change_event.set()
 
                         # Joystick navigation in message board (UP/DOWN scrolls messages)
@@ -1847,7 +1847,8 @@ async def _update_display_loop():
                         )
                         import os
 
-                        # Extract G_t (with preferences from growth_system)
+                        # Extract G_t (with preferences and self-beliefs)
+                        from .self_model import get_self_model as _get_sm
                         schema = get_current_schema(
                             identity=identity,
                             anima=anima,
@@ -1855,6 +1856,7 @@ async def _update_display_loop():
                             growth_system=_growth,
                             include_preferences=True,
                             force_refresh=True,
+                            self_model=_get_sm(),
                         )
 
                         # Render and compute stub integrity score

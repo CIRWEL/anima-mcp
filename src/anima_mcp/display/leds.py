@@ -3,13 +3,14 @@ LED Display - Maps anima state to BrainCraft HAT's 3 DotStar LEDs.
 
 3 LEDs for 4 metrics:
 Physical order on BrainCraft HAT (DotStar array indices):
-- LED 0 (right): Stability/Presence blend - unstable=red flicker, stable+present=green
-- LED 1 (center): Clarity - dim=off, clear=bright white
-- LED 2 (left): Warmth - cold=blue, warm=orange
+- LED 0 / left:   Warmth     — violet (cold) → gold (comfortable) → orange-red (hot)
+- LED 1 / center: Clarity    — dim amber (foggy) → yellow → cool white (crisp)
+- LED 2 / right:  Stability+Presence — red (warning) → emerald (stable) → teal (present)
 
 Note: DotStar array index 0 is physically rightmost, index 2 is leftmost.
+(led0 in code = warmth = physical left, led2 in code = stability = physical right)
 
-Brightness indicates intensity. Color indicates quality.
+Brightness controlled by user via joystick on face screen (LEDs only, screen stays full).
 Subtle breathing animation shows the system is alive.
 """
 
@@ -1241,68 +1242,58 @@ def _create_gradient_palette(warmth: float, clarity: float, stability: float, pr
     Returns:
         Tuple of (led0, led1, led2) colors with rich gradients
     """
-    # LED 0: Warmth gradient (creature warmth — violet when cold, amber when comfortable, orange when hot)
+    # LED 0 (left): Warmth — cool violet → rose → golden amber → deep orange
     if warmth < 0.2:
-        led0 = (80, 60, 180)  # Cool violet
-    elif warmth < 0.4:
-        ratio = (warmth - 0.2) / 0.2
-        led0 = _interpolate_color((80, 60, 180), (200, 140, 130), ratio)  # Violet to rose
-    elif warmth < 0.6:
-        ratio = (warmth - 0.4) / 0.2
-        led0 = _interpolate_color((200, 140, 130), (255, 190, 80), ratio)  # Rose to soft amber
-    elif warmth < 0.8:
-        ratio = (warmth - 0.6) / 0.2
-        led0 = _interpolate_color((255, 190, 80), (255, 120, 10), ratio)  # Soft amber to deep amber
+        led0 = (60, 40, 160)    # Deep cool violet
+    elif warmth < 0.35:
+        ratio = (warmth - 0.2) / 0.15
+        led0 = _interpolate_color((60, 40, 160), (180, 100, 120), ratio)   # Violet → dusty rose
+    elif warmth < 0.55:
+        ratio = (warmth - 0.35) / 0.2
+        led0 = _interpolate_color((180, 100, 120), (255, 180, 50), ratio)  # Rose → warm gold
+    elif warmth < 0.75:
+        ratio = (warmth - 0.55) / 0.2
+        led0 = _interpolate_color((255, 180, 50), (255, 110, 10), ratio)   # Gold → deep amber
     else:
-        ratio = (warmth - 0.8) / 0.2
-        led0 = _interpolate_color((255, 120, 10), (255, 50, 0), ratio)  # Deep amber to orange-red
-    
-    # LED 1: Clarity gradient (dim to bright, warm tones)
-    clarity_brightness = int(clarity * 255)
+        ratio = (warmth - 0.75) / 0.25
+        led0 = _interpolate_color((255, 110, 10), (255, 40, 0), ratio)     # Amber → hot orange-red
+
+    # LED 1 (center): Clarity — color shifts from foggy amber to crisp blue-white
+    # Intensity scales with clarity; hue tells you the quality
+    i = max(20, int(clarity * 255))  # intensity floor so LED is never fully off
     if clarity < 0.3:
-        # Low clarity: dim amber-orange
-        led1 = (clarity_brightness, int(clarity_brightness * 0.4), 0)
+        led1 = (i, int(i * 0.5), 0)                    # Dim foggy amber
     elif clarity < 0.5:
-        # Medium-low: amber to warm yellow
         ratio = (clarity - 0.3) / 0.2
-        led1 = _interpolate_color((clarity_brightness, int(clarity_brightness * 0.4), 0),
-                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.2)), ratio)
+        led1 = _interpolate_color((i, int(i * 0.5), 0),
+                                  (i, i, int(i * 0.3)), ratio)  # Amber → warm yellow
     elif clarity < 0.7:
-        # Medium: warm yellow to warm white
         ratio = (clarity - 0.5) / 0.2
-        led1 = _interpolate_color((clarity_brightness, clarity_brightness, int(clarity_brightness * 0.2)),
-                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.6)), ratio)
+        led1 = _interpolate_color((i, i, int(i * 0.3)),
+                                  (i, i, int(i * 0.7)), ratio)  # Yellow → soft white
     else:
-        # High clarity: warm white (slightly warm, not blue-tinted)
         ratio = (clarity - 0.7) / 0.3
-        led1 = _interpolate_color((clarity_brightness, clarity_brightness, int(clarity_brightness * 0.6)),
-                                  (clarity_brightness, clarity_brightness, int(clarity_brightness * 0.85)), ratio)
-    
-    # LED 2: Stability + Presence gradient (red to green spectrum)
-    combined = (stability + presence) / 2
-    if combined < 0.3:
-        # Low: red-orange warning
-        led2 = (255, int(combined * 255 * 0.5), 0)
-    elif combined < 0.5:
-        # Medium-low: orange-yellow
-        ratio = (combined - 0.3) / 0.2
-        led2 = _interpolate_color((255, int(0.3 * 255 * 0.5), 0),
-                                  (255, 200, 0), ratio)
-    elif combined < 0.7:
-        # Medium: yellow-green
-        ratio = (combined - 0.5) / 0.2
-        led2 = _interpolate_color((255, 200, 0),
-                                  (150, 255, 50), ratio)
+        led1 = _interpolate_color((i, i, int(i * 0.7)),
+                                  (int(i * 0.9), i, i), ratio)  # Soft white → cool crisp white
+
+    # LED 2 (right): Stability + Presence — red-orange warning → emerald → teal
+    combined = (stability * 0.6 + presence * 0.4)  # Stability-weighted
+    if combined < 0.25:
+        led2 = (255, int(combined * 300), 0)       # Red-orange warning
+    elif combined < 0.45:
+        ratio = (combined - 0.25) / 0.2
+        led2 = _interpolate_color((255, 75, 0), (220, 200, 0), ratio)      # Orange → yellow
+    elif combined < 0.65:
+        ratio = (combined - 0.45) / 0.2
+        led2 = _interpolate_color((220, 200, 0), (60, 220, 80), ratio)     # Yellow → emerald green
     else:
-        # High: green-cyan
-        ratio = (combined - 0.7) / 0.3
-        led2 = _interpolate_color((150, 255, 50),
-                                  (0, 255, 200), ratio)
-    
-    # Add presence tint to LED 2 (soft cyan, not pure blue)
-    if presence > 0.7:
-        presence_tint = (presence - 0.7) * 0.3
-        led2 = blend_colors(led2, (0, 180, 180), ratio=presence_tint)
+        ratio = (combined - 0.65) / 0.35
+        led2 = _interpolate_color((60, 220, 80), (0, 200, 180), ratio)     # Emerald → teal
+
+    # Presence tint: when very present, add a subtle cyan shimmer
+    if presence > 0.75:
+        tint = (presence - 0.75) * 0.4  # up to 0.1 blend
+        led2 = blend_colors(led2, (0, 160, 200), ratio=tint)
     
     return (led0, led1, led2)
 
