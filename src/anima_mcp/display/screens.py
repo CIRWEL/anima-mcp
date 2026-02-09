@@ -42,6 +42,7 @@ class ScreenMode(Enum):
     MESSAGES = "messages"            # Message board - Lumen's observations only
     QUESTIONS = "questions"          # Q&A - Lumen's questions and answers
     VISITORS = "visitors"            # Messages from agents and humans
+    ART_ERAS = "art_eras"            # Art era history and current era
 
 
 @dataclass
@@ -714,7 +715,7 @@ class ScreenRenderer:
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""
         # Cycle through all screens including notepad, questions, and visitors
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD]
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -726,7 +727,7 @@ class ScreenRenderer:
     def previous_mode(self):
         """Cycle to previous screen mode (including notepad)."""
         # Cycle through all screens including notepad, questions, and visitors
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD]
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -744,9 +745,9 @@ class ScreenRenderer:
 
     def _draw_screen_indicator(self, draw, current_mode: ScreenMode):
         """Draw small dots at bottom showing current screen position."""
-        # Screen order (including notepad, questions, and visitors in regular cycle)
+        # Screen order (including notepad, questions, visitors, art_eras in regular cycle)
         screens = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS,
-                   ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD]
+                   ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
 
         try:
             current_idx = screens.index(current_mode)
@@ -1057,6 +1058,8 @@ class ScreenRenderer:
                             self._display.render_text("NOTEPAD\n\nError\nrendering", (10, 10))
                         except Exception:
                             pass
+                elif mode == ScreenMode.ART_ERAS:
+                    self._render_art_eras(anima)
                 else:
                     # Unknown mode - show default to prevent blank screen
                     print(f"[Screen] Unknown mode: {mode}, showing default", file=sys.stderr, flush=True)
@@ -2403,6 +2406,119 @@ class ScreenRenderer:
         """Render Visitors screen - messages from agents and humans."""
         # Note: "user" is the actual msg_type for human messages (not "human")
         self._render_filtered_messages("visitors", ["agent", "user"], include_answers=False)
+
+    def _render_art_eras(self, anima: Optional[Anima] = None):
+        """Render Art Eras screen — current era, all eras, drawing stats."""
+        from .eras import list_all_era_info, ACTIVE_ERAS
+
+        try:
+            if hasattr(self._display, '_create_canvas'):
+                image, draw = self._display._create_canvas(COLORS.BG_DARK)
+                fonts = self._get_fonts()
+
+                CYAN = COLORS.SOFT_CYAN
+                YELLOW = COLORS.SOFT_YELLOW
+                WHITE = COLORS.TEXT_PRIMARY
+                DIM = COLORS.TEXT_DIM
+                SECONDARY = COLORS.TEXT_SECONDARY
+                GREEN = COLORS.SOFT_GREEN
+                ORANGE = COLORS.SOFT_ORANGE
+
+                y = 8
+
+                # Title
+                draw.text((10, y), "art eras", fill=CYAN, font=fonts['title'])
+                y += 24
+
+                # Separator
+                draw.line([(10, y), (230, y)], fill=(40, 40, 50), width=1)
+                y += 8
+
+                # Era list
+                current_name = self._active_era.name if self._active_era else "gestural"
+                all_eras = list_all_era_info()
+
+                for info in all_eras:
+                    name = info["name"]
+                    desc = info["description"]
+                    is_active = info["active"]
+                    is_current = (name == current_name)
+
+                    # Era name with indicator
+                    if is_current:
+                        prefix = "\u25b8 "  # ▸ current
+                        name_color = YELLOW
+                    elif is_active:
+                        prefix = "\u25cf "  # ● active pool
+                        name_color = SECONDARY
+                    else:
+                        prefix = "\u25cb "  # ○ archived
+                        name_color = DIM
+
+                    draw.text((10, y), f"{prefix}{name}", fill=name_color, font=fonts['medium'])
+                    y += 16
+
+                    # Description (truncated to fit 240px)
+                    short_desc = desc[:38] + "..." if len(desc) > 38 else desc
+                    draw.text((24, y), short_desc, fill=DIM, font=fonts['tiny'])
+                    y += 18
+
+                # Separator before stats
+                y = max(y + 4, 175)
+                draw.line([(10, y), (230, y)], fill=(40, 40, 50), width=1)
+                y += 8
+
+                # Drawing stats
+                energy = self._canvas.energy if self._canvas else 0.0
+                drawings = self._canvas.drawings_saved if self._canvas else 0
+                phase = self._canvas.drawing_phase if self._canvas else "?"
+                marks = self._canvas.mark_count if self._canvas else 0
+
+                # Energy bar
+                bar_x, bar_w, bar_h = 150, 60, 8
+                draw.text((10, y), f"drawing #{drawings}", fill=SECONDARY, font=fonts['small'])
+                # Bar background
+                draw.rectangle([bar_x, y + 2, bar_x + bar_w, y + 2 + bar_h],
+                              fill=(30, 30, 40), outline=(50, 50, 60))
+                # Bar fill
+                fill_w = int(bar_w * energy)
+                if fill_w > 0:
+                    bar_color = GREEN if energy > 0.3 else ORANGE
+                    draw.rectangle([bar_x, y + 2, bar_x + fill_w, y + 2 + bar_h],
+                                  fill=bar_color)
+                # Energy percentage
+                draw.text((bar_x + bar_w + 4, y), f"{int(energy * 100)}%", fill=DIM, font=fonts['tiny'])
+                y += 17
+
+                # Phase and marks
+                draw.text((10, y), f"phase: {phase}", fill=DIM, font=fonts['small'])
+                draw.text((130, y), f"{marks} marks", fill=DIM, font=fonts['small'])
+                y += 17
+
+                # Pool summary
+                active_count = len([e for e in all_eras if e["active"]])
+                manual_count = len(all_eras) - active_count
+                draw.text((10, y), f"pool: {active_count} active \u00b7 {manual_count} manual",
+                          fill=DIM, font=fonts['small'])
+
+                # Navigation dots
+                self._draw_screen_indicator(draw, ScreenMode.ART_ERAS)
+
+                if hasattr(self._display, '_image'):
+                    self._display._image = image
+                if hasattr(self._display, '_show'):
+                    self._display._show()
+                return
+
+        except Exception as e:
+            print(f"[Screen] Art eras render error: {e}", file=sys.stderr, flush=True)
+
+        # Text fallback
+        try:
+            current = self._active_era.name if self._active_era else "?"
+            self._display.render_text(f"art eras\n\ncurrent: {current}", (10, 10), color=COLORS.SOFT_CYAN)
+        except Exception:
+            pass
 
     def _render_filtered_messages(self, title: str, filter_types: list, include_answers: bool):
         """Render a filtered message screen."""
