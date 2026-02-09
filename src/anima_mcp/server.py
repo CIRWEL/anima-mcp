@@ -749,13 +749,18 @@ async def _update_display_loop():
                     surprise_sources = prediction_error.surprise_sources if prediction_error and hasattr(prediction_error, 'surprise_sources') else []
 
                     # LEARN from previous action
+                    # Use actual learned preferences for reward signal (not crude average)
                     if _last_action is not None and _last_state_before is not None:
+                        from .preferences import get_preference_system
+                        pref_sys = get_preference_system()
+                        sat_before = pref_sys.get_overall_satisfaction(_last_state_before)
+                        sat_after = pref_sys.get_overall_satisfaction(current_state)
                         action_selector.record_outcome(
                             action=_last_action,
                             state_before=_last_state_before,
                             state_after=current_state,
-                            preference_satisfaction_before=sum(_last_state_before.values()) / 4.0,
-                            preference_satisfaction_after=sum(current_state.values()) / 4.0,
+                            preference_satisfaction_before=sat_before,
+                            preference_satisfaction_after=sat_after,
                             surprise_after=surprise_level,
                         )
 
