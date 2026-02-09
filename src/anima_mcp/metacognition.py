@@ -186,6 +186,14 @@ class MetacognitiveMonitor:
         self._diurnal_temp: Dict[int, List[float]] = {h: [] for h in range(24)}
         self._diurnal_light: Dict[int, List[float]] = {h: [] for h in range(24)}
 
+        # Curiosity effectiveness tracking:
+        # When curiosity fires about a domain, record the prediction error.
+        # After more observations, check if error decreased (curiosity was productive).
+        # _domain_weights influences which domains get asked about more.
+        self._domain_weights: Dict[str, float] = {}  # domain -> weight (1.0 = neutral)
+        self._curiosity_log: List[dict] = []  # [{domain, error_at_time, obs_count}]
+        self._eval_horizon: int = 50  # observations before evaluating curiosity outcome
+
         # Load persisted baselines from disk
         self._load_baselines()
 
@@ -209,10 +217,15 @@ class MetacognitiveMonitor:
                     if 0 <= hour < 24 and isinstance(values, list):
                         self._diurnal_light[hour] = values[-10:]
 
-                print(f"[Metacog] Loaded baselines from disk (temp={self._baseline_ambient_temp:.1f}°C, "
-                      f"humidity={self._baseline_humidity:.1f}%, "
-                      f"diurnal hours with data: temp={sum(1 for v in self._diurnal_temp.values() if v)}, "
-                      f"light={sum(1 for v in self._diurnal_light.values() if v)})",
+                # Restore curiosity domain weights
+                self._domain_weights = data.get("domain_weights", {})
+
+                diurnal_t = sum(1 for v in self._diurnal_temp.values() if v)
+                diurnal_l = sum(1 for v in self._diurnal_light.values() if v)
+                dw_summary = ", ".join(f"{k}={v:.2f}" for k, v in sorted(self._domain_weights.items())) if self._domain_weights else "none yet"
+                print(f"[Metacog] Loaded baselines (temp={self._baseline_ambient_temp:.1f}°C, "
+                      f"diurnal: {diurnal_t}h temp/{diurnal_l}h light, "
+                      f"curiosity weights: {dw_summary})",
                       file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[Metacog] Could not load baselines: {e}", file=sys.stderr, flush=True)
@@ -228,12 +241,90 @@ class MetacognitiveMonitor:
                 "baseline_pressure": self._baseline_pressure,
                 "diurnal_temp": {str(h): vals for h, vals in self._diurnal_temp.items() if vals},
                 "diurnal_light": {str(h): vals for h, vals in self._diurnal_light.items() if vals},
+                "domain_weights": self._domain_weights,
                 "saved_at": datetime.now().isoformat(),
                 "observation_count": self._save_counter,
             }
             self._data_path.write_text(json.dumps(data, indent=2))
         except Exception as e:
             print(f"[Metacog] Could not save baselines: {e}", file=sys.stderr, flush=True)
+
+    def record_curiosity(self, domains: List[str], error: 'PredictionError'):
+        """Record that curiosity fired about these domains.
+
+        Snapshots the current per-domain prediction errors so we can later
+        check if they improved (meaning the curiosity was productive).
+        """
+        error_snapshot = {}
+        for d in domains:
+            err_val = self._get_domain_error(d, error)
+            if err_val is not None:
+                error_snapshot[d] = err_val
+
+        if error_snapshot:
+            self._curiosity_log.append({
+                "domains": list(error_snapshot.keys()),
+                "errors_at_time": error_snapshot,
+                "obs_count": self._save_counter,
+            })
+            # Keep log bounded
+            if len(self._curiosity_log) > 50:
+                self._curiosity_log.pop(0)
+
+    def _get_domain_error(self, domain: str, error: 'PredictionError') -> Optional[float]:
+        """Get the prediction error for a specific domain from a PredictionError."""
+        mapping = {
+            "light": error.error_light,
+            "ambient_temp": error.error_ambient_temp,
+            "humidity": error.error_humidity,
+            "pressure": error.error_pressure,
+            "warmth": error.error_warmth,
+            "clarity": error.error_clarity,
+            "stability": error.error_stability,
+            "presence": error.error_presence,
+        }
+        return mapping.get(domain)
+
+    def _evaluate_curiosity_outcomes(self, current_error: 'PredictionError'):
+        """Check old curiosity entries: did prediction improve in those domains?
+
+        Called periodically from observe(). Compares current domain errors
+        to error-at-curiosity-time. If improved → reward that domain weight.
+        """
+        if not self._curiosity_log:
+            return
+
+        resolved = []
+        learning_rate = 0.1
+
+        for i, entry in enumerate(self._curiosity_log):
+            # Only evaluate after enough new observations
+            if self._save_counter - entry["obs_count"] < self._eval_horizon:
+                continue
+
+            for domain, old_error in entry["errors_at_time"].items():
+                current_err = self._get_domain_error(domain, current_error)
+                if current_err is None:
+                    continue
+
+                old_weight = self._domain_weights.get(domain, 1.0)
+                improvement = old_error - current_err  # positive = got better
+
+                if improvement > 0.02:
+                    # Prediction improved in this domain — curiosity was productive
+                    new_weight = old_weight + learning_rate
+                    self._domain_weights[domain] = min(3.0, new_weight)
+                elif improvement < -0.02:
+                    # Prediction got worse — mild penalty
+                    new_weight = old_weight - learning_rate * 0.3
+                    self._domain_weights[domain] = max(0.2, new_weight)
+                # else: negligible change, leave weight alone
+
+            resolved.append(i)
+
+        # Remove resolved entries (iterate in reverse to preserve indices)
+        for i in reversed(resolved):
+            self._curiosity_log.pop(i)
 
     def predict(self, current_time: Optional[datetime] = None) -> Prediction:
         """Generate prediction for next sensor reading."""
@@ -430,7 +521,11 @@ class MetacognitiveMonitor:
         error.surprise_sources = sources
         self._cumulative_surprise = 0.9 * self._cumulative_surprise + 0.1 * error.surprise
         self._error_history.append(error)
-        
+
+        # Evaluate past curiosity: did prediction improve in domains we were curious about?
+        if self._save_counter % 10 == 0:  # Check every 10 observations
+            self._evaluate_curiosity_outcomes(error)
+
         return error
 
     def should_reflect(self, error: PredictionError) -> Tuple[bool, str]:
@@ -631,6 +726,27 @@ class MetacognitiveMonitor:
 
         if questions:
             import random
+
+            # Use domain weights to prefer questions from productive domains
+            if self._domain_weights and error.surprise_sources:
+                # Build weighted list: questions from higher-weight domains more likely
+                weighted = []
+                for q in questions:
+                    # Find which domain this question belongs to
+                    q_weight = 1.0
+                    for source in error.surprise_sources:
+                        w = self._domain_weights.get(source, 1.0)
+                        q_weight = max(q_weight, w)
+                    weighted.append((q, q_weight))
+
+                total = sum(w for _, w in weighted)
+                r = random.random() * total
+                cumulative = 0.0
+                for q, w in weighted:
+                    cumulative += w
+                    if r <= cumulative:
+                        return q
+
             return random.choice(questions)
 
         return None
@@ -654,6 +770,8 @@ class MetacognitiveMonitor:
             "mean_clarity_error": sum(e.error_clarity for e in recent) / len(recent),
             "reflection_count": len(self._reflection_history),
             "history_depth": len(self._sensor_history),
+            "domain_weights": dict(self._domain_weights) if self._domain_weights else {},
+            "pending_curiosity_evals": len(self._curiosity_log),
         }
 
 

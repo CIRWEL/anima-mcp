@@ -716,6 +716,9 @@ async def _update_display_loop():
                                 result = add_question(curiosity_question, author="lumen", context=context)
                                 if result:
                                     print(f"[Metacog] Surprised! Asked: {curiosity_question} (surprise={prediction_error.surprise:.2f})", file=sys.stderr, flush=True)
+                                    # Record curiosity for internal learning loop:
+                                    # later, check if prediction improved in these domains
+                                    metacog.record_curiosity(prediction_error.surprise_sources, prediction_error)
 
                             if reflection.observation:
                                 print(f"[Metacog] Reflection: {reflection.observation}", file=sys.stderr, flush=True)
