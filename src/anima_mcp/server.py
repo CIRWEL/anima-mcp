@@ -409,8 +409,9 @@ async def _update_display_loop():
     loop_count = 0
     consecutive_errors = 0
     max_consecutive_errors = 10
-    base_delay = 0.2  # Further reduced for responsive joystick navigation
+    base_delay = 0.2  # 200ms = 5Hz refresh for all screens
     max_delay = 30.0
+    quick_render = False  # Set when mode_change_event fires — skip heavy subsystems
 
     # Event for immediate re-render when screen mode changes
     mode_change_event = asyncio.Event()
@@ -675,10 +676,15 @@ async def _update_display_loop():
             
             consecutive_errors = 0  # Reset on success
 
-            # === METACOGNITION: Prediction-error based self-awareness ===
-            # Throttled: runs every 3rd iteration (enhancement, not critical path)
+            # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
+            # Metacognition, agency, self-model, primitive language are enhancement layers.
+            # On quick_render, skip straight to display update for snappy screen transitions.
             prediction_error = None  # Default for iterations where metacog is skipped
-            if loop_count % 3 == 0:
+            _skip_subsystems = quick_render
+            if quick_render:
+                quick_render = False  # Reset for next iteration
+
+            if not _skip_subsystems and loop_count % 3 == 0:
                 try:
                     metacog = _get_metacog_monitor()
 
@@ -723,8 +729,9 @@ async def _update_display_loop():
 
             # === AGENCY: Action selection and learning ===
             # Throttled: runs every 5th iteration (enhancement, not critical path)
+            # Skipped on quick_render for responsive screen transitions
             global _last_action, _last_state_before
-            if loop_count % 5 == 0:
+            if not _skip_subsystems and loop_count % 5 == 0:
                 try:
                     action_selector = get_action_selector(db_path=str(_store.db_path) if _store else "anima.db")
 
@@ -857,7 +864,7 @@ async def _update_display_loop():
 
             # === SELF-MODEL: Belief updates from experience ===
             # Throttled: runs every 5th iteration (aligned with agency)
-            if loop_count % 5 == 0 and anima:
+            if not _skip_subsystems and loop_count % 5 == 0 and anima:
                 try:
                     from .self_model import get_self_model
                     sm = get_self_model()
@@ -921,7 +928,7 @@ async def _update_display_loop():
             # === PRIMITIVE LANGUAGE: Emergent expression through learned tokens ===
             # Throttled: runs every 10th iteration (has internal cooldown timer too)
             global _last_primitive_utterance
-            if loop_count % 10 == 0:
+            if not _skip_subsystems and loop_count % 10 == 0:
                 try:
                     lang = get_language_system(str(_store.db_path) if _store else "anima.db")
 
@@ -1919,30 +1926,21 @@ async def _update_display_loop():
                 except Exception:
                     pass  # Non-fatal
 
-            # Update delay depends on current screen mode
-            # Face gets fastest refresh (200ms) — most visible, shows animations
-            # Interactive screens with scrolling/drawing get 300ms
-            # Static info screens get base_delay (200ms)
-            current_mode = _screen_renderer.get_mode() if _screen_renderer else None
-            interactive_screens = {
-                ScreenMode.NOTEPAD, ScreenMode.MESSAGES,
-                ScreenMode.QUESTIONS, ScreenMode.VISITORS,
-            }
-
+            # Delay until next render — same for all screens (200ms = 5Hz)
+            # Event-driven: mode_change_event breaks out of wait immediately
             if consecutive_errors > 0:
                 delay = min(base_delay * (1.5 ** min(consecutive_errors, 3)), max_delay)
-            elif current_mode in interactive_screens:
-                delay = 0.3  # Scrollable screens: 300ms
             else:
-                delay = base_delay  # Face + info screens: 200ms
+                delay = base_delay
 
             # Wait for delay OR mode change event (whichever comes first)
             # This makes screen switching feel instant
             try:
                 await asyncio.wait_for(mode_change_event.wait(), timeout=delay)
                 mode_change_event.clear()  # Reset for next mode change
-                # Mode changed - render immediately with minimal delay
-                await asyncio.sleep(0.05)  # Small delay to let input settle
+                quick_render = True  # Skip heavy subsystems, just render
+                # Mode changed - render immediately with minimal settle delay
+                await asyncio.sleep(0.015)  # 15ms — let GPIO debounce finish
             except asyncio.TimeoutError:
                 pass  # Normal timeout - continue with next iteration
             
