@@ -3560,7 +3560,7 @@ class ScreenRenderer:
 
         new_fx, new_fy, new_dir = self._active_era.drift_focus(
             era_state, self._intent.focus_x, self._intent.focus_y,
-            self._intent.direction, stability, presence, C)
+            self._intent.direction, stability, presence, C, clarity)
         self._intent.focus_x = new_fx
         self._intent.focus_y = new_fy
         self._intent.direction = new_dir

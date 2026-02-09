@@ -403,15 +403,27 @@ class GeometricEra:
         stability: float,
         presence: float,
         coherence: float,
+        clarity: float = 0.5,
     ) -> Tuple[float, float, float]:
         """Jump to new position after each shape.
 
         Geometric shapes are standalone — focus jumps rather than drifts.
-        Some bias toward center to keep shapes on canvas.
+        Clarity modulates spread: high clarity = tighter clustering near
+        current position, low clarity = scattered across canvas.
         """
-        # Jump to a new random position, biased toward center
-        focus_x = random.gauss(120, 40)
-        focus_y = random.gauss(120, 40)
+        # Spread inversely proportional to clarity
+        # clarity 1.0 → spread 15 (tight cluster), clarity 0.0 → spread 55 (scattered)
+        spread = 15 + (1.0 - clarity) * 40
+
+        if clarity > 0.6:
+            # Focused: small jumps from current position
+            focus_x += random.gauss(0, spread)
+            focus_y += random.gauss(0, spread)
+        else:
+            # Scattered: jump around center
+            focus_x = random.gauss(120, spread)
+            focus_y = random.gauss(120, spread)
+
         direction = random.uniform(0, 2 * math.pi)
 
         # Clamp to canvas with margin
