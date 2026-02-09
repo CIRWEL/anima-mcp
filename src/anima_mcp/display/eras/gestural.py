@@ -155,10 +155,12 @@ class GesturalEra:
         stability: float,
         presence: float,
         coherence: float,
+        clarity: float = 0.5,
     ) -> Tuple[float, float, float]:
-        """Drift the focus point — wander influenced by stability, coherence, occasional jumps.
+        """Drift the focus point — wander influenced by stability, coherence, clarity.
 
-        Returns (new_focus_x, new_focus_y, new_direction).
+        clarity modulates direction wobble and jump probability:
+        high clarity = steadier direction, fewer jumps (focused strokes).
         """
         C = coherence
 
@@ -170,11 +172,12 @@ class GesturalEra:
             if state.direction_lock_remaining <= 0:
                 state.direction_locked = False
         elif not state.orbit_active:
-            # Normal wobble — constant moderate wander
-            direction += random.gauss(0, 0.2)
+            # Wobble modulated by clarity: high clarity = steadier hand
+            wobble = 0.1 + (1.0 - clarity) * 0.2  # 0.1 at clarity=1, 0.3 at clarity=0
+            direction += random.gauss(0, wobble)
 
-            # Lock probability: coherence only
-            lock_prob = 0.03 * (0.5 + C)
+            # Lock probability: coherence + clarity (focused = more sustained lines)
+            lock_prob = 0.03 * (0.5 + C) * (0.5 + clarity * 0.5)
             if random.random() < lock_prob:
                 state.direction_locked = True
                 state.direction_lock_remaining = random.randint(15, 40)
@@ -220,8 +223,8 @@ class GesturalEra:
             direction = random.uniform(-math.pi * 3 / 4, -math.pi / 4)
             focus_y = float(240 - margin)
 
-        # Focus jump — coherence reduces jumps
-        jump_prob = 0.03 * (1.0 - 0.4 * C)
+        # Focus jump — coherence and clarity reduce jumps
+        jump_prob = 0.03 * (1.0 - 0.4 * C) * (1.0 - 0.4 * clarity)
         if not state.orbit_active and random.random() < jump_prob:
             focus_x = random.uniform(40, 200)
             focus_y = random.uniform(40, 200)

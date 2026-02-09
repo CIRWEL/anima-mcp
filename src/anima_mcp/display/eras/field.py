@@ -171,8 +171,13 @@ class FieldEra:
         stability: float,
         presence: float,
         coherence: float,
+        clarity: float = 0.5,
     ) -> Tuple[float, float, float]:
-        """Follow flow lines with occasional cross-field jumps."""
+        """Follow flow lines with occasional cross-field jumps.
+
+        Clarity modulates line tightness and flow length: high clarity =
+        longer, tighter flow lines. Low clarity = shorter, driftier lines.
+        """
         C = coherence
 
         state.flow_steps += 1
@@ -189,13 +194,13 @@ class FieldEra:
             focus_x += math.cos(direction) * step
             focus_y += math.sin(direction) * step
 
-            # Small perpendicular drift for width (not just a single line)
+            # Perpendicular drift: tighter when focused
+            perp_sigma = 0.5 + (1.0 - clarity) * 2.0  # 0.5 at clarity=1, 2.5 at clarity=0
             perp = direction + math.pi / 2
-            focus_x += math.cos(perp) * random.gauss(0, 1.5)
-            focus_y += math.sin(perp) * random.gauss(0, 1.5)
+            focus_x += math.cos(perp) * random.gauss(0, perp_sigma)
+            focus_y += math.sin(perp) * random.gauss(0, perp_sigma)
         else:
             # Flow exhausted — jump to new position, start new flow line
-            # Cross-field jump: perpendicular to current direction
             if random.random() < 0.6:
                 # Nearby jump — perpendicular offset
                 perp = direction + math.pi / 2
@@ -207,9 +212,9 @@ class FieldEra:
                 focus_x = random.uniform(30, 210)
                 focus_y = random.uniform(30, 210)
 
-            # Reset flow tracking
+            # Reset flow tracking — clarity extends flow lines (longer focus)
             state.flow_steps = 0
-            state.flow_max = random.randint(25, 70 + int(30 * C))
+            state.flow_max = random.randint(25, 70 + int(30 * C) + int(20 * clarity))
             direction = self._field_angle(state, focus_x, focus_y)
 
         # Soft bounce off edges
