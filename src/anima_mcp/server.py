@@ -227,8 +227,11 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     # Try shared memory first (broker mode)
     shm_client = _get_shm_client()
     shm_data = shm_client.read()
+    # Unwrap nested "data" envelope if present (broker writes {updated_at, pid, data: {readings, anima, ...}})
+    if shm_data and "data" in shm_data and isinstance(shm_data["data"], dict):
+        shm_data = shm_data["data"]
     _last_shm_data = shm_data  # Cache for reuse within same iteration
-    
+
     # Check if shared memory data is recent (within last 5 seconds)
     shm_stale = True
     shm_valid = False
