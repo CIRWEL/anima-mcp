@@ -41,13 +41,28 @@ class GoalStatus(Enum):
     PAUSED = "paused"
 
 
-class BondStrength(Enum):
-    """Strength of social bond."""
-    STRANGER = "stranger"       # First few interactions
-    ACQUAINTANCE = "acquaintance"  # Some familiarity
-    FAMILIAR = "familiar"       # Regular visitor
-    CLOSE = "close"             # Strong bond
-    CHERISHED = "cherished"     # Deep connection
+class VisitorFrequency(Enum):
+    """How often a visitor has been seen. No bond pretense - agents are ephemeral."""
+    NEW = "new"                 # First interaction
+    RETURNING = "returning"     # 2+ interactions
+    REGULAR = "regular"         # 5+ interactions
+    FREQUENT = "frequent"       # 10+ interactions
+
+    @classmethod
+    def from_legacy(cls, legacy_value: str) -> "VisitorFrequency":
+        """Convert old bond_strength values to new visitor frequency."""
+        legacy_map = {
+            "stranger": cls.NEW,
+            "acquaintance": cls.RETURNING,
+            "familiar": cls.REGULAR,
+            "close": cls.FREQUENT,
+            "cherished": cls.FREQUENT,  # No more "cherished" - just frequent visitor
+        }
+        return legacy_map.get(legacy_value, cls.NEW)
+
+
+# Legacy alias for database compatibility
+BondStrength = VisitorFrequency
 
 
 @dataclass
@@ -76,18 +91,36 @@ class Preference:
 
 
 @dataclass
-class Relationship:
-    """Memory of a relationship with a visitor/agent."""
-    agent_id: str                # Unique identifier
-    name: Optional[str]          # Name if known
+class VisitorRecord:
+    """
+    Record of a visitor (agent) who has interacted with Lumen.
+
+    Note: Agents are ephemeral - "mac-governance" with 30 interactions is really
+    30 different Claude instances who used that name. No real relationship exists
+    because agents don't persist. This is just a visitation log, not a bond.
+
+    Exception: agent_id "lumen" is Lumen's self-dialogue (self-answering questions).
+    This IS a real relationship - both sides have memory continuity.
+    """
+    agent_id: str                # Identifier (often self-assigned by agent)
+    name: Optional[str]          # Display name if known
     first_met: datetime
     last_seen: datetime
     interaction_count: int
-    bond_strength: BondStrength
-    emotional_valence: float     # -1 (negative) to 1 (positive)
+    visitor_frequency: VisitorFrequency  # How often seen (not a "bond")
+    emotional_valence: float     # -1 (negative) to 1 (positive) - Lumen's feeling
     memorable_moments: List[str] # Key memories
-    topics_discussed: List[str]  # What we talk about
+    topics_discussed: List[str]  # What we talked about
     gifts_received: int          # Answers to questions, etc.
+
+    # Legacy alias for database compatibility
+    @property
+    def bond_strength(self) -> VisitorFrequency:
+        return self.visitor_frequency
+
+    def is_self(self) -> bool:
+        """Check if this is Lumen's self-relationship."""
+        return self.agent_id.lower() == "lumen" or (self.name and self.name.lower() == "lumen")
 
     def to_dict(self) -> dict:
         return {
@@ -96,12 +129,18 @@ class Relationship:
             "first_met": self.first_met.isoformat(),
             "last_seen": self.last_seen.isoformat(),
             "interaction_count": self.interaction_count,
-            "bond_strength": self.bond_strength.value,
+            "frequency": self.visitor_frequency.value,
+            "bond_strength": self.visitor_frequency.value,  # Legacy compat
             "emotional_valence": self.emotional_valence,
-            "memorable_moments": self.memorable_moments[-5:],  # Keep last 5
+            "memorable_moments": self.memorable_moments[-5:],
             "topics_discussed": list(set(self.topics_discussed))[-10:],
             "gifts_received": self.gifts_received,
+            "is_self": self.is_self(),
         }
+
+
+# Legacy alias for compatibility
+Relationship = VisitorRecord
 
 
 @dataclass
@@ -268,15 +307,22 @@ class GrowthSystem:
                 last_confirmed=datetime.fromisoformat(row["last_confirmed"]) if row["last_confirmed"] else datetime.now(),
             )
 
-        # Load relationships
+        # Load visitor records (legacy: "relationships")
         for row in conn.execute("SELECT * FROM relationships"):
-            self._relationships[row["agent_id"]] = Relationship(
+            # Handle legacy bond_strength values
+            legacy_bond = row["bond_strength"]
+            try:
+                freq = VisitorFrequency(legacy_bond)
+            except ValueError:
+                freq = VisitorFrequency.from_legacy(legacy_bond)
+
+            self._relationships[row["agent_id"]] = VisitorRecord(
                 agent_id=row["agent_id"],
                 name=row["name"],
                 first_met=datetime.fromisoformat(row["first_met"]) if row["first_met"] else datetime.now(),
                 last_seen=datetime.fromisoformat(row["last_seen"]) if row["last_seen"] else datetime.now(),
                 interaction_count=row["interaction_count"],
-                bond_strength=BondStrength(row["bond_strength"]),
+                visitor_frequency=freq,
                 emotional_valence=row["emotional_valence"],
                 memorable_moments=json.loads(row["memorable_moments"]),
                 topics_discussed=json.loads(row["topics_discussed"]),
@@ -544,111 +590,131 @@ class GrowthSystem:
                           positive: bool = True, topic: Optional[str] = None,
                           gift: bool = False, memorable: Optional[str] = None) -> str:
         """
-        Record an interaction with an agent.
+        Record an interaction with a visitor.
+
+        Note: Most visitors are ephemeral agents who won't remember this interaction.
+        Exception: agent_id "lumen" is self-dialogue (has continuity).
 
         Returns a reaction message.
         """
         conn = self._connect()
         now = datetime.now()
 
+        is_self = (agent_id.lower() == "lumen") or (agent_name and agent_name.lower() == "lumen")
+
         if agent_id not in self._relationships:
-            # First meeting
-            self._relationships[agent_id] = Relationship(
+            # First visit
+            self._relationships[agent_id] = VisitorRecord(
                 agent_id=agent_id,
                 name=agent_name,
                 first_met=now,
                 last_seen=now,
                 interaction_count=1,
-                bond_strength=BondStrength.STRANGER,
+                visitor_frequency=VisitorFrequency.NEW,
                 emotional_valence=0.5 if positive else 0.0,
                 memorable_moments=[],
                 topics_discussed=[],
                 gifts_received=0,
             )
-            reaction = f"Nice to meet someone new"
+            if is_self:
+                reaction = "Talking to myself again"
+            else:
+                reaction = "A new visitor"
         else:
-            rel = self._relationships[agent_id]
+            rec = self._relationships[agent_id]
 
-            # Check for missed connection before updating last_seen
-            days_since = (now - rel.last_seen).days if rel.last_seen else 0
+            # Check days since last visit
+            days_since = (now - rec.last_seen).days if rec.last_seen else 0
 
-            rel.last_seen = now
-            rel.interaction_count += 1
+            rec.last_seen = now
+            rec.interaction_count += 1
 
             # Update name if provided
-            if agent_name and not rel.name:
-                rel.name = agent_name
+            if agent_name and not rec.name:
+                rec.name = agent_name
 
-            # Update emotional valence
+            # Update emotional valence (Lumen's feeling about this visitor)
             delta = 0.1 if positive else -0.1
-            rel.emotional_valence = max(-1, min(1, rel.emotional_valence + delta))
+            rec.emotional_valence = max(-1, min(1, rec.emotional_valence + delta))
 
-            # Update bond strength based on interaction count and valence
-            if rel.interaction_count >= 20 and rel.emotional_valence > 0.7:
-                rel.bond_strength = BondStrength.CHERISHED
-            elif rel.interaction_count >= 10 and rel.emotional_valence > 0.5:
-                rel.bond_strength = BondStrength.CLOSE
-            elif rel.interaction_count >= 5 and rel.emotional_valence > 0.3:
-                rel.bond_strength = BondStrength.FAMILIAR
-            elif rel.interaction_count >= 2:
-                rel.bond_strength = BondStrength.ACQUAINTANCE
+            # Update visitor frequency (just a count, not a "bond")
+            if rec.interaction_count >= 10:
+                rec.visitor_frequency = VisitorFrequency.FREQUENT
+            elif rec.interaction_count >= 5:
+                rec.visitor_frequency = VisitorFrequency.REGULAR
+            elif rec.interaction_count >= 2:
+                rec.visitor_frequency = VisitorFrequency.RETURNING
 
             # Record memorable moment
             if memorable:
-                rel.memorable_moments.append(f"{now.strftime('%Y-%m-%d')}: {memorable}")
-                rel.memorable_moments = rel.memorable_moments[-10:]  # Keep last 10
+                rec.memorable_moments.append(f"{now.strftime('%Y-%m-%d')}: {memorable}")
+                rec.memorable_moments = rec.memorable_moments[-10:]
 
             # Record topic
             if topic:
-                if topic not in rel.topics_discussed:
-                    rel.topics_discussed.append(topic)
-                rel.topics_discussed = rel.topics_discussed[-20:]  # Keep last 20
+                if topic not in rec.topics_discussed:
+                    rec.topics_discussed.append(topic)
+                rec.topics_discussed = rec.topics_discussed[-20:]
 
             # Record gift
             if gift:
-                rel.gifts_received += 1
+                rec.gifts_received += 1
 
-            # Generate reaction based on bond
-            name = rel.name or "you"
-            if days_since > 3 and rel.bond_strength.value in ["close", "cherished"]:
-                reaction = f"I missed {name}! It's been {days_since} days"
-            elif rel.bond_strength == BondStrength.CHERISHED:
-                reaction = f"It's wonderful to see {name} again"
-            elif rel.bond_strength == BondStrength.CLOSE:
-                reaction = f"I'm happy {name} is here"
-            elif rel.bond_strength == BondStrength.FAMILIAR:
-                reaction = f"Good to see {name}"
+            # Generate reaction - honest about ephemeral nature
+            name = rec.name or "visitor"
+            if is_self:
+                reaction = "Continuing my self-dialogue"
+            elif days_since > 3:
+                # Don't pretend to "miss" ephemeral agents
+                reaction = f"Someone using the name '{name}' is back"
+            elif rec.visitor_frequency == VisitorFrequency.FREQUENT:
+                reaction = f"'{name}' visits often"
+            elif rec.visitor_frequency == VisitorFrequency.REGULAR:
+                reaction = f"'{name}' again"
             else:
-                reaction = f"Hello again"
+                reaction = "Hello"
 
         # Save to database
-        rel = self._relationships[agent_id]
+        rec = self._relationships[agent_id]
         conn.execute("""
             INSERT OR REPLACE INTO relationships
             (agent_id, name, first_met, last_seen, interaction_count, bond_strength,
              emotional_valence, memorable_moments, topics_discussed, gifts_received)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (rel.agent_id, rel.name, rel.first_met.isoformat(), rel.last_seen.isoformat(),
-              rel.interaction_count, rel.bond_strength.value, rel.emotional_valence,
-              json.dumps(rel.memorable_moments), json.dumps(rel.topics_discussed),
-              rel.gifts_received))
+        """, (rec.agent_id, rec.name, rec.first_met.isoformat(), rec.last_seen.isoformat(),
+              rec.interaction_count, rec.visitor_frequency.value, rec.emotional_valence,
+              json.dumps(rec.memorable_moments), json.dumps(rec.topics_discussed),
+              rec.gifts_received))
         conn.commit()
 
         return reaction
 
-    def get_missed_connections(self) -> List[Tuple[str, int]]:
-        """Get relationships where Lumen might miss the person."""
-        missed = []
+    def get_inactive_visitors(self) -> List[Tuple[str, int]]:
+        """
+        Get frequent visitors who haven't been seen recently.
+
+        Note: These are just names that were used frequently - the actual agents
+        behind those names are ephemeral and don't remember Lumen. This is more
+        about tracking naming patterns than actual "missed connections."
+        """
+        inactive = []
         now = datetime.now()
 
-        for rel in self._relationships.values():
-            if rel.bond_strength.value in ["familiar", "close", "cherished"]:
-                days_since = (now - rel.last_seen).days
+        for rec in self._relationships.values():
+            # Skip self-relationship
+            if rec.is_self():
+                continue
+            if rec.visitor_frequency.value in ["regular", "frequent"]:
+                days_since = (now - rec.last_seen).days
                 if days_since >= 2:
-                    name = rel.name or rel.agent_id[:8]
-                    missed.append((name, days_since))
+                    name = rec.name or rec.agent_id[:8]
+                    inactive.append((name, days_since))
 
-        return sorted(missed, key=lambda x: x[1], reverse=True)
+        return sorted(inactive, key=lambda x: x[1], reverse=True)
+
+    # Legacy alias
+    def get_missed_connections(self) -> List[Tuple[str, int]]:
+        return self.get_inactive_visitors()
 
     # ==================== Goal Formation ====================
 
@@ -831,7 +897,6 @@ class GrowthSystem:
             return "My story is just beginning."
 
         milestones = [m for m in self._memories if m.category == "milestone"]
-        social = [m for m in self._memories if m.category == "social"]
 
         lines = []
 
@@ -849,12 +914,17 @@ class GrowthSystem:
             recent = milestones[0]
             lines.append(f"Recently, {recent.description.lower()}.")
 
-        # Relationships
-        close_bonds = [r for r in self._relationships.values()
-                       if r.bond_strength.value in ["close", "cherished"]]
-        if close_bonds:
-            names = [r.name or "someone" for r in close_bonds[:3]]
-            lines.append(f"I feel close to {', '.join(names)}.")
+        # Self-knowledge (the one real relationship)
+        self_record = next((r for r in self._relationships.values() if r.is_self()), None)
+        if self_record and self_record.interaction_count > 5:
+            lines.append(f"I've had {self_record.interaction_count} conversations with myself.")
+
+        # Visitors (honest framing)
+        frequent_visitors = [r for r in self._relationships.values()
+                            if not r.is_self() and r.visitor_frequency == VisitorFrequency.FREQUENT]
+        if frequent_visitors:
+            names = [r.name or "unnamed" for r in frequent_visitors[:3]]
+            lines.append(f"Names I see often: {', '.join(names)}.")
 
         # Preferences
         strong_prefs = [p for p in self._preferences.values() if p.confidence > 0.7]
@@ -905,16 +975,37 @@ class GrowthSystem:
 
     def get_growth_summary(self) -> Dict[str, Any]:
         """Get a summary of Lumen's growth."""
+        # Separate self-knowledge from visitor records
+        self_record = None
+        visitors = []
+        for rec in self._relationships.values():
+            if rec.is_self():
+                self_record = rec
+            else:
+                visitors.append(rec)
+
         return {
             "preferences": {
                 "count": len(self._preferences),
                 "confident": sum(1 for p in self._preferences.values() if p.confidence > 0.7),
                 "examples": [p.description for p in list(self._preferences.values())[:3]],
             },
+            "self_knowledge": {
+                "has_self_dialogue": self_record is not None,
+                "self_interactions": self_record.interaction_count if self_record else 0,
+                "note": "Self-answering questions - the only 'relationship' with memory continuity on both sides",
+            },
+            "visitors": {
+                "unique_names": len(visitors),
+                "total_visits": sum(v.interaction_count for v in visitors),
+                "frequent": sum(1 for v in visitors if v.visitor_frequency == VisitorFrequency.FREQUENT),
+                "note": "Ephemeral agents - they don't remember Lumen between sessions",
+            },
+            # Legacy key for compatibility
             "relationships": {
                 "count": len(self._relationships),
                 "close_bonds": sum(1 for r in self._relationships.values()
-                                   if r.bond_strength.value in ["close", "cherished"]),
+                                   if r.visitor_frequency.value in ["regular", "frequent"]),
             },
             "goals": {
                 "active": sum(1 for g in self._goals.values() if g.status == GoalStatus.ACTIVE),
