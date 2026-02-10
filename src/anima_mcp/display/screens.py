@@ -3573,8 +3573,12 @@ class ScreenRenderer:
         if len(self._intent.eisv.gesture_history) > 20:
             self._intent.eisv.gesture_history.pop(0)
 
-        # --- Deplete energy (flat + EISV coupling) ---
-        self._intent.energy = max(0.01, self._intent.energy - 0.001 + dE_coupling)
+        # --- Deplete energy (coherence-modulated drain + EISV coupling) ---
+        # High coherence (Lumen in a groove) → drain slows → denser compositions
+        # Low coherence (scattered) → drain at full rate → lighter pieces
+        # C=0: drain=0.001 (1000 marks), C=1: drain=0.0004 (2500 marks)
+        base_drain = 0.001 * (1.0 - 0.6 * C)
+        self._intent.energy = max(0.01, self._intent.energy - base_drain + dE_coupling)
 
         # Sync energy/marks to canvas for persistence across restarts
         self._canvas.energy = self._intent.energy
