@@ -1878,16 +1878,13 @@ async def _update_display_loop():
                             if _screen_renderer:
                                 _screen_renderer.update_connection_status(wifi=True, governance=True)
 
-                            # Log periodically
-                            if loop_count % 60 == 0:  # Log every 2 minutes
-                                action = decision.get("action", "unknown")
-                                margin = decision.get("margin", "unknown")
-                                source = decision.get("source", "unknown")
-                                print(f"[Governance] Check-in: {action} ({margin}) from {source}", file=sys.stderr, flush=True)
-
-                            # Future: Expression feedback loop
-                            # If governance says "pause" or "tight margin", could subtly influence expression
-                            # For now, just store the decision - expression remains independent
+                            # Log periodically (or always on non-proceed)
+                            action = decision.get("action", "unknown")
+                            margin = decision.get("margin", "unknown")
+                            source = decision.get("source", "unknown")
+                            if loop_count % 60 == 0 or action != "proceed":
+                                de = f" drawing={drawing_eisv}" if drawing_eisv else ""
+                                print(f"[Governance] {action} ({margin}) from {source}{de}", file=sys.stderr, flush=True)
                         else:
                             _last_governance_decision = None
                             # Update screen renderer - governance not responding
