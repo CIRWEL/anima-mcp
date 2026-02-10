@@ -496,12 +496,19 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Apply brightness with heartbeat modulation (always active — "I'm alive" signal)
-            # When manual dimmer is 0 (Night mode), allow LEDs to be fully off
-            floor = 0.0 if self._manual_brightness_factor <= 0.01 else self._hardware_brightness_floor
-            purr_mod = self._get_purr_modulation()
-            final_brightness = state.brightness * purr_mod
-            self._dots.brightness = max(floor, min(0.5, final_brightness))
+            # Apply heartbeat modulation (always active — "I'm alive" signal)
+            # Heartbeat is applied as an absolute oscillation on top of a minimum,
+            # not as a multiplier on pipeline brightness. This way even at very low
+            # computed brightness, the heartbeat is visible.
+            # Night mode (manual dimmer = 0): LEDs fully off, no heartbeat.
+            if self._manual_brightness_factor <= 0.01:
+                self._dots.brightness = 0.0
+            else:
+                purr_mod = self._get_purr_modulation()  # ~0.65 to ~1.35
+                # Ensure heartbeat is visible: use at least 0.04 as base before purr
+                effective = max(0.04, state.brightness)
+                final_brightness = effective * purr_mod
+                self._dots.brightness = max(0.02, min(0.5, final_brightness))
 
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
@@ -619,11 +626,13 @@ class LEDDisplay:
                 # Update purr rhythm even on cached path (smooth transitions)
                 self._update_purr_from_activity(activity_brightness)
                 if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
-                    # Apply heartbeat on top of last pipeline brightness
-                    purr_mod = self._get_purr_modulation()
-                    final = self._cached_pipeline_brightness * purr_mod
-                    floor = 0.0 if self._manual_brightness_factor <= 0.01 else self._hardware_brightness_floor
-                    self._dots.brightness = max(floor, min(0.5, final))
+                    # Apply heartbeat on cached brightness
+                    if self._manual_brightness_factor <= 0.01:
+                        self._dots.brightness = 0.0
+                    else:
+                        purr_mod = self._get_purr_modulation()
+                        effective = max(0.04, self._cached_pipeline_brightness)
+                        self._dots.brightness = max(0.02, min(0.5, effective * purr_mod))
                     self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
