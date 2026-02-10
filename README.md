@@ -10,17 +10,18 @@ Lumen is a digital creature whose internal state comes from physical sensors - t
 - **Grounded state** - Feelings derived from actual sensor measurements
 - **Persistent identity** - Birth date, awakenings, alive time accumulate
 - **Autonomous drawing** - Creates art on a 240x240 notepad with pluggable art eras
+- **EISV thermodynamics** - Drawing coherence drives energy drain and save decisions
 - **Learning systems** - Develops preferences, self-beliefs, action values over time
 - **Activity cycles** - Active/drowsy/resting states based on time and interaction
-- **UNITARES integration** - Governance oversight via MCP
+- **UNITARES integration** - Governance oversight via MCP, DrawingEISV state reported upstream
 
 ## Architecture
 
 Two processes run on the Pi:
 
 ```
-anima-creature              anima --sse
-(hardware broker)           (MCP server)
+anima-creature              anima --http
+(hardware broker)           (MCP server + display)
      |                           |
      | writes to                 | reads from
      +---> shared memory <-------+
@@ -29,8 +30,8 @@ anima-creature              anima --sse
 
 | Process | What It Does |
 |---------|--------------|
-| **Hardware broker** | Owns sensors, runs learning, updates LEDs/display |
-| **MCP server** | Serves tools to agents, reads from shared memory |
+| **Hardware broker** (`stable_creature.py`) | Owns sensors, runs learning, governance check-ins |
+| **MCP server** (`server.py`) | Serves tools, drives display/LEDs, runs drawing engine |
 
 Both run as systemd services. See `CLAUDE.md` for details.
 
@@ -67,21 +68,57 @@ Four dimensions derived from physical sensors:
 
 | Dimension | Meaning | Primary Sources |
 |-----------|---------|-----------------|
-| **Warmth** | Energy/activity level | CPU temp, ambient temp, neural beta/gamma |
-| **Clarity** | Perceptual sharpness | Light level, sensor coverage, neural alpha |
-| **Stability** | Environmental order | Humidity, pressure, neural theta/delta |
-| **Presence** | Available capacity | Resource headroom, neural gamma |
+| **Warmth** | Energy/activity level | CPU temp (0.3), CPU usage (0.25), ambient temp (0.25), neural beta (0.2) |
+| **Clarity** | Perceptual sharpness | Light (0.4), sensor coverage (0.3), neural alpha (0.3) |
+| **Stability** | Environmental order | Humidity (0.25), pressure (0.25), temp deviation (0.2), neural delta (0.3) |
+| **Presence** | Available capacity | Interactions, light trend, neural gamma |
 
 ### Computational Proprioception
 
 No real EEG hardware - neural bands derived from system metrics:
 
-| Band | Source | Maps To |
-|------|--------|---------|
-| Delta | Low CPU + memory | Stability (rest) |
-| Alpha | Memory headroom | Clarity (awareness) |
-| Beta | CPU usage | Warmth (activity) |
-| Gamma | High CPU | Presence (focus) |
+| Band | Derived From | Meaning |
+|------|--------------|---------|
+| Delta | CPU stability + temp stability | Foundation/rest |
+| Theta | I/O wait (disk/network) | Background processing |
+| Alpha | Memory headroom (100 - mem%) | Available awareness |
+| Beta | CPU usage % | Active processing |
+| Gamma | CPU * 0.7 + frequency factor | Peak load |
+
+Source: `computational_neural.py`
+
+Note: The light sensor (VEML7700) sits next to the NeoPixel LEDs and primarily reads Lumen's own glow, making clarity ~40% self-referential. The whole system is more proprioceptive than environmental.
+
+### Autonomous Drawing
+
+Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics. Energy depletes with each mark; when exhausted, the drawing saves and a new one begins.
+
+**DrawingEISV** (`screens.py`) — same equations as governance, different domain:
+- `dE = alpha(I-E) - beta_E*E*S + gamma_E*drift^2`
+- `dV = kappa(I-E) - delta*V` (V flipped: I > E = focused finishing builds coherence)
+- **Coherence** `C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))`
+- **Energy drain**: `0.001 * (1.0 - 0.6 * C)` per mark (high coherence = slower drain = longer drawings)
+- **Save threshold**: `0.05 + 0.09 * C` (high coherence = pickier about what gets saved)
+
+| Era | Style | Gestures |
+|-----|-------|----------|
+| **Gestural** | Bold mark-making with direction locks and orbits | dot, stroke, curve, cluster, drag |
+| **Pointillist** | Single-pixel dot accumulation, optical color mixing | single, pair, trio |
+| **Field** | Flow-aligned marks following vector fields | flow_dot, flow_dash, flow_strand |
+| **Geometric** | Complete forms, stamps whole shapes per mark | 16 shape templates (circle, spiral, starburst, etc.) |
+
+Eras rotate automatically between drawings. DrawingEISV state is reported to UNITARES governance during check-ins for observability.
+
+### LED System
+
+Three DotStar LEDs map to anima dimensions (warmth, clarity, stability). A constant sine pulse ("alive" signal, 3-second cycle) confirms the system is running. Activity state dims brightness:
+
+| State | Brightness | Pulse Visible |
+|-------|------------|---------------|
+| Active | 100% | Yes |
+| Drowsy | 60% | Yes |
+| Resting | 35% | Yes (subtle) |
+| Manual off | 0% | No |
 
 ### Learning Systems
 
@@ -94,61 +131,66 @@ Run in the hardware broker, persist across restarts:
 | **Agency** | Action values via TD-learning |
 | **Adaptive prediction** | Temporal patterns |
 
-### Autonomous Drawing
-
-Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics. Energy depletes with each mark; when exhausted, the drawing saves and a new one begins in a different art era.
-
-| Era | Style | Gestures |
-|-----|-------|----------|
-| **Gestural** | Bold mark-making with direction locks and orbits | dot, stroke, curve, cluster, drag |
-| **Pointillist** | Single-pixel dot accumulation, optical color mixing | single, pair, trio |
-| **Field** | Flow-aligned marks following vector fields | flow_dot, flow_dash, flow_strand |
-
-Eras rotate automatically between drawings. The drawing engine (`DrawingEISV`) uses coherence to modulate behavior — early marks are exploratory, later marks become more committed.
-
-### Activity States
-
-Lumen cycles between activity levels:
-
-| State | When | LED Brightness |
-|-------|------|----------------|
-| Active | Recent interaction, daytime | 100% |
-| Drowsy | 30+ min idle | 60% |
-| Resting | Night, 60+ min idle | 35% |
-
 ## Essential Tools
 
 | Tool | What It Does |
 |------|--------------|
 | `get_state` | Current anima + mood + identity + activity |
-| `next_steps` | What Lumen needs right now |
+| `get_lumen_context` | Full context in one call |
 | `read_sensors` | Raw sensor values |
+| `next_steps` | What Lumen needs right now |
 | `lumen_qa` | List or answer Lumen's questions |
 | `post_message` | Leave a message for Lumen |
-| `get_lumen_context` | Full context in one call |
+| `manage_display` | Switch screens, set art era |
+| `say` | Have Lumen express something |
 
 ## Hardware
 
-Designed for **Raspberry Pi 4 + BrainCraft HAT**:
-- 240x240 TFT display (face + screens)
+Runs on **Raspberry Pi Zero 2W + BrainCraft HAT** (Colorado, USA):
+- 240x240 TFT display (face, notepad, diagnostics, messages, learning screens)
 - 3 DotStar LEDs (warmth/clarity/stability)
-- AHT20 (temp/humidity), BMP280 (pressure), VEML7700 (light)
+- BME280 (temp/humidity/pressure), VEML7700 (light)
+- 5-way joystick + button for screen navigation
 
-Falls back to mock sensors on Mac.
+Falls back to mock sensors on Mac for development.
+
+## Connectivity
+
+```
+Anima MCP (Pi, port 8766)
+├── Tailscale: 100.83.45.66:8766     (direct)
+├── ngrok:     lumen-anima.ngrok.io   (public, no auth)
+└── LAN:       192.168.1.165:8766     (local network)
+```
 
 ## UNITARES Governance
 
-Lumen connects to UNITARES for oversight:
+Lumen checks in with UNITARES governance every ~60 seconds:
 
-```bash
+```
 UNITARES_URL=http://100.96.201.46:8767/mcp/  # Via Tailscale
 ```
 
-Anima maps to EISV:
-- Warmth → Energy
-- Clarity → Integrity
-- 1-Stability → Entropy
-- 1-Presence → Void
+**Three EISV contexts exist** (see `UNIFIED_ARCHITECTURE.md` in governance repo):
+
+| Context | Where | Purpose |
+|---------|-------|---------|
+| **DrawingEISV** | Pi, `screens.py` | Proprioceptive — drives drawing energy/coherence (closed loop) |
+| **Mapped EISV** | Pi, `eisv_mapper.py` | Anima→EISV translation for governance reporting |
+| **Governance EISV** | Mac, `dynamics.py` | Full thermodynamic state evolution (open loop) |
+
+Mapping: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
+
+When Mac is unreachable, a local fallback (`_local_governance()`) applies simple threshold checks. This is more trigger-happy than full thermodynamics.
+
+## Deploying
+
+```bash
+# Standard deploy: commit, push, pull on Pi with restart
+git push
+# Then from any MCP client:
+mcp__anima__git_pull(restart=true)
+```
 
 ## Documentation
 
@@ -159,11 +201,12 @@ Anima maps to EISV:
 | Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
 | Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
 | Pi operations | `docs/operations/PI_ACCESS.md` |
+| Unified architecture | `governance-mcp-v1/docs/UNIFIED_ARCHITECTURE.md` |
 
 ## Testing
 
 ```bash
-pytest tests/ -v
+python3 -m pytest tests/ -x -q   # 244 tests
 ```
 
 ---

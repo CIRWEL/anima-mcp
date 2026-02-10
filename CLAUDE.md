@@ -72,10 +72,12 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 
 **Engine** (in `screens.py` — universal, stays fixed):
 - `CanvasState` — pixel buffer, persistence, phase tracking
-- `DrawingEISV` — thermodynamic coherence (E/I/S/V → coherence C)
+- `DrawingEISV` — thermodynamic coherence (E/I/S/V → coherence C), V flipped (I-E not E-I)
 - `DrawingIntent` — focus position, direction, energy, era state
 - `_lumen_draw()` — orchestration loop, delegates to active era
-- Energy depletion (0.001/mark + EISV coupling), auto-save at threshold
+- Energy depletion: `0.001 * (1.0 - 0.6 * C)` per mark (coherence-modulated)
+- Save threshold: `0.05 + 0.09 * C` (high coherence = pickier)
+- `get_drawing_eisv()` — exposes state to governance via bridge check-in
 
 **Art Eras** (pluggable modules in `display/eras/`):
 | Era | Gestures | Character | Active Pool |
@@ -146,18 +148,27 @@ mcp__anima__git_pull(restart=true)
 
 Or manually:
 ```bash
-ssh unitares-anima@100.89.201.36 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-creature anima'
+ssh unitares-anima@100.83.45.66 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-creature anima'
 ```
 
 ## UNITARES Integration
 
-The broker connects to UNITARES governance via Tailscale:
+Lumen checks in with UNITARES governance every ~60 seconds via Tailscale:
 
 ```
 UNITARES_URL=http://100.96.201.46:8767/mcp/
 ```
 
-Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, 1-Presence→Void
+Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
+
+**Three EISV contexts:**
+- **DrawingEISV** (screens.py) — proprioceptive, drives drawing behavior (closed loop)
+- **Mapped EISV** (eisv_mapper.py) — anima→EISV for governance reporting
+- **Governance EISV** (Mac, dynamics.py) — full thermodynamics (open loop, advisory)
+
+DrawingEISV state is included in governance check-in payload (`sensor_data.drawing_eisv`) when drawing.
+Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
+Non-proceed verdicts are logged immediately with DrawingEISV state if available.
 
 ## Shared Memory Schema
 
