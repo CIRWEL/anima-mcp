@@ -6,7 +6,7 @@
 # DEFINITIVE: anima-mcp runs on port 8766 - see docs/operations/DEFINITIVE_PORTS.md
 PI_HOST="192.168.1.165"
 PI_PORT="8766"
-PI_TAILSCALE="100.89.201.36"
+PI_TAILSCALE="100.83.45.66"
 
 # Local UNITARES governance
 UNITARES_HOST="localhost"
@@ -36,9 +36,10 @@ if ! curl -s --max-time 5 "http://${UNITARES_HOST}:${UNITARES_PORT}/health" > /d
 fi
 
 # Check Pi anima service via SSH (optional, uses Tailscale)
+# Only log to file, don't fire macOS notification — HTTP check above is the real test
 if ! ssh -o ConnectTimeout=5 -o BatchMode=yes -i ~/.ssh/id_ed25519_pi unitares-anima@${PI_TAILSCALE} "systemctl is-active anima" > /dev/null 2>&1; then
-    log_alert "Pi anima service may be down"
-    # Don't exit 1 - SSH might fail but HTTP works
+    echo "$(date '+%Y-%m-%d %H:%M:%S') WARN: SSH check failed (Pi anima service unconfirmed via SSH)" >> "$LOG_FILE"
+    # Don't alert — SSH can fail for many reasons while HTTP is fine
 fi
 
 echo "$(date '+%Y-%m-%d %H:%M:%S') OK: All checks passed" >> "$LOG_FILE"
