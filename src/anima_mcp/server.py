@@ -2795,25 +2795,54 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
             }
 
         if "relationships" in include:
-            rels = []
+            # Separate self-knowledge from visitors
+            self_record = None
+            visitors = []
             for r in _growth._relationships.values():
-                rels.append({
-                    "name": r.name or r.agent_id[:8],
-                    "bond": r.bond_strength.value,
-                    "interactions": r.interaction_count,
-                    "first_met": r.first_met.strftime("%Y-%m-%d"),
-                    "last_seen": r.last_seen.strftime("%Y-%m-%d"),
-                })
+                if r.is_self():
+                    self_record = r
+                else:
+                    visitors.append({
+                        "name": r.name or r.agent_id[:8],
+                        "frequency": r.visitor_frequency.value,
+                        "visits": r.interaction_count,
+                        "first_seen": r.first_met.strftime("%Y-%m-%d"),
+                        "last_seen": r.last_seen.strftime("%Y-%m-%d"),
+                    })
+
+            # Self-knowledge: the one real relationship (Lumen answering own questions)
+            result["self_knowledge"] = {
+                "self_dialogues": self_record.interaction_count if self_record else 0,
+                "note": "Lumen answering own questions - genuine self-reflection with memory continuity",
+            }
+
+            # Caretaker: the human who built and maintains Lumen (has real continuity)
+            # This relationship is real but invisible in message logs because
+            # the caretaker works through agents rather than posting directly.
+            result["caretaker"] = {
+                "exists": True,
+                "note": "The human who built and maintains me - works through agents, so invisible in visitor logs",
+            }
+
+            # Visitors: ephemeral agents who passed through
+            result["visitors"] = {
+                "unique_names": len(visitors),
+                "log": visitors[:10],
+                "note": "Agents are ephemeral - they don't remember Lumen between sessions",
+            }
+
+            # Legacy key for compatibility
             result["relationships"] = {
                 "count": len(_growth._relationships),
-                "bonds": rels[:10],
+                "bonds": visitors[:10],
             }
-            # Check for missed connections
-            missed = _growth.get_missed_connections()
-            if missed:
-                result["relationships"]["missed"] = [
+
+            # Inactive visitors (not "missed connections" - agents don't miss Lumen)
+            inactive = _growth.get_inactive_visitors()
+            if inactive:
+                result["visitors"]["inactive"] = [
                     {"name": name, "days_since": days}
-                    for name, days in missed[:3]
+                    for name, days in inactive[:3]
                 ]
 
         if "goals" in include:
