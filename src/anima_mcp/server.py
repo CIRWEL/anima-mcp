@@ -1847,6 +1847,14 @@ async def _update_display_loop():
                     # Track if this is the first check-in (for identity sync)
                     is_first_check_in = (loop_count == 30)
 
+                    # Get DrawingEISV from screen renderer (None when not drawing)
+                    drawing_eisv = None
+                    if _screen_renderer:
+                        try:
+                            drawing_eisv = _screen_renderer.get_drawing_eisv()
+                        except Exception:
+                            pass
+
                     async def check_in_governance():
                         # Use singleton bridge (connection pooling, no session leaks)
                         bridge = _get_unitares_bridge(unitares_url, identity)
@@ -1854,7 +1862,8 @@ async def _update_display_loop():
                         decision = await bridge.check_in(
                             anima, readings,
                             identity=identity,
-                            is_first_check_in=is_first_check_in
+                            is_first_check_in=is_first_check_in,
+                            drawing_eisv=drawing_eisv
                         )
                         return decision
                     
