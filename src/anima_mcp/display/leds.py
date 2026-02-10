@@ -236,13 +236,13 @@ class LEDDisplay:
         """
         if activity_brightness > 0.8:      # ACTIVE
             target_cycle = 1.8
-            target_intensity = 0.12  # ±12% — noticeable double-bump
+            target_intensity = 0.35  # ±35% — visible heartbeat
         elif activity_brightness > 0.4:    # DROWSY
             target_cycle = 3.5
-            target_intensity = 0.08  # ±8% — gentle pulse
+            target_intensity = 0.25  # ±25% — gentle but visible pulse
         else:                              # RESTING
-            target_cycle = 6.0
-            target_intensity = 0.05  # ±5% — barely perceptible throb
+            target_cycle = 5.0
+            target_intensity = 0.18  # ±18% — slow sleepy throb, still visible
 
         # Smooth transitions (don't jump between states)
         self._purr_cycle_seconds += (target_cycle - self._purr_cycle_seconds) * 0.05
