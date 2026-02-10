@@ -199,10 +199,11 @@ try:
         feeling = anima.feeling()
 
         # Get identity
-        identity = IdentityStore()
+        store = IdentityStore()
+        creature = store.get_identity()
 
         print(json.dumps({
-            "name": identity.name or "Lumen",
+            "name": (creature.name or "Lumen") if creature else "Lumen",
             "mood": feeling["mood"],
             "warmth": anima.warmth,
             "clarity": anima.clarity,
@@ -213,7 +214,7 @@ try:
             "ambient_temp": readings.ambient_temp_c or 0,
             "light": readings.light_lux or 0,
             "humidity": readings.humidity_pct or 0,
-            "awakenings": identity.total_awakenings,
+            "awakenings": creature.total_awakenings if creature else 0,
             "timestamp": readings.timestamp,
             "source": "shared_memory"
         }))

@@ -624,12 +624,19 @@ async def _update_display_loop():
                                         _screen_renderer.qa_toggle_expand()
                                         print(f"[Questions] Toggled Q&A expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.NOTEPAD:
-                                        # In notepad: manual snapshot save (Lumen keeps drawing)
-                                        saved = _screen_renderer.canvas_save(manual=True)
-                                        if saved:
-                                            print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
+                                        # In notepad: button behavior depends on era
+                                        # Gestural era: no manual saves — drawing completes naturally
+                                        # Other eras: manual snapshot save (Lumen keeps drawing)
+                                        era_name = getattr(_screen_renderer, '_active_era', None)
+                                        era_name = getattr(era_name, 'name', '') if era_name else ''
+                                        if era_name == 'gestural':
+                                            print(f"[Notepad] Gestural era — no manual save", file=sys.stderr, flush=True)
                                         else:
-                                            print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
+                                            saved = _screen_renderer.canvas_save(manual=True)
+                                            if saved:
+                                                print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
+                                            else:
+                                                print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.ART_ERAS:
                                         # In art eras: select highlighted era or toggle auto-rotate
                                         result = _screen_renderer.era_select_current()
