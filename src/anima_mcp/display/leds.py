@@ -11,7 +11,7 @@ Note: DotStar array index 0 is physically rightmost, index 2 is leftmost.
 (led0 in code = warmth = physical left, led2 in code = stability = physical right)
 
 Brightness controlled by user via joystick on face screen (LEDs only, screen stays full).
-Heartbeat/purring animation: double-bump rhythm adapts to activity state
+Simple sine pulse as "I'm alive" signal — always on unless night mode
 (ACTIVE=fast ~1.8s, DROWSY=moderate ~3.5s, RESTING=slow ~6s).
 """
 
@@ -146,7 +146,7 @@ class LEDDisplay:
         self._cached_light_level = None
         self._cached_activity_brightness = None  # Track activity transitions
         self._cached_manual_brightness = None  # Track manual dimmer changes
-        self._cached_pipeline_brightness = None  # Last fully-computed brightness (before purring)
+        self._cached_pipeline_brightness = None  # Last fully-computed brightness (before pulse)
         self._cached_state_change_threshold = 0.05  # Only recalculate if change > 5%
         # Emotional dance state
         self._current_dance: Optional[Dance] = None
@@ -154,9 +154,9 @@ class LEDDisplay:
         self._last_dance_trigger: Optional[str] = None
         self._spontaneous_dance_chance: float = 0.003  # ~0.3% per update chance of spontaneous dance
         self._manual_brightness_factor: float = 1.0  # User dimmer multiplier (set from server.py)
-        # Purr/heartbeat animation state
-        self._purr_cycle_seconds: float = 3.0   # Current cycle length (updated from activity)
-        self._purr_intensity: float = 0.10      # Current amplitude (updated from activity)
+        # Pulse animation ("I'm alive" signal)
+        self._pulse_cycle: float = 3.0  # Seconds per cycle
+        self._pulse_amount: float = 0.03  # Absolute brightness added at peak
         self._init_leds()
     
     def _init_leds(self):
@@ -193,57 +193,9 @@ class LEDDisplay:
         """Check if LEDs are available."""
         return self._dots is not None
     
-    def _get_purr_modulation(self) -> float:
-        """Heartbeat/purring brightness modulation — ALWAYS active.
-
-        This is the "I'm alive" signal. Double-bump waveform like a heartbeat.
-        Speed adapts to activity state (ACTIVE=fast, RESTING=slow).
-        Returns a multiplier around 1.0.
-        """
-        t = time.time()
-        cycle = self._purr_cycle_seconds  # 1.8s (active) to 6s (resting)
-        phase = (t % cycle) / cycle       # 0.0 → 1.0
-
-        # Heartbeat waveform:
-        #   0.00-0.08  first bump (main beat)   — quick rise to peak
-        #   0.08-0.16  dip between beats        — brief valley
-        #   0.16-0.24  second bump (smaller)    — secondary beat
-        #   0.24-1.00  rest                     — long quiet period
-        if phase < 0.08:
-            # First beat: sharp rise
-            beat = math.sin(phase / 0.08 * math.pi)
-        elif phase < 0.16:
-            # Dip between beats
-            beat = math.sin((phase - 0.08) / 0.08 * math.pi) * -0.3
-        elif phase < 0.24:
-            # Second beat: smaller
-            beat = math.sin((phase - 0.16) / 0.08 * math.pi) * 0.6
-        else:
-            # Rest period: gentle return to baseline
-            rest_phase = (phase - 0.24) / 0.76
-            beat = -0.1 * (1.0 - rest_phase)  # slight dip during rest, easing back
-
-        # Scale by purr intensity (stronger when active, gentler when resting)
-        return 1.0 + beat * self._purr_intensity
-
-    def _update_purr_from_activity(self, activity_brightness: float):
-        """Adjust purr speed and intensity based on activity state.
-
-        activity_brightness: 1.0 (ACTIVE), 0.6 (DROWSY), 0.35 (RESTING)
-        """
-        if activity_brightness > 0.8:      # ACTIVE
-            target_cycle = 1.8
-            target_intensity = 0.35  # ±35% — visible heartbeat
-        elif activity_brightness > 0.4:    # DROWSY
-            target_cycle = 3.5
-            target_intensity = 0.25  # ±25% — gentle but visible pulse
-        else:                              # RESTING
-            target_cycle = 5.0
-            target_intensity = 0.18  # ±18% — slow sleepy throb, still visible
-
-        # Smooth transitions (don't jump between states)
-        self._purr_cycle_seconds += (target_cycle - self._purr_cycle_seconds) * 0.05
-        self._purr_intensity += (target_intensity - self._purr_intensity) * 0.05
+    def _get_pulse(self) -> float:
+        """Sine pulse — returns 0.0 to 1.0. Always active. "I'm alive" signal."""
+        return (1.0 + math.sin(time.time() * 2 * math.pi / self._pulse_cycle)) * 0.5
     
     def _detect_state_change(self, warmth: float, clarity: float, stability: float, presence: float) -> Optional[str]:
         """
@@ -496,19 +448,12 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Apply heartbeat modulation (always active — "I'm alive" signal)
-            # Heartbeat is applied as an absolute oscillation on top of a minimum,
-            # not as a multiplier on pipeline brightness. This way even at very low
-            # computed brightness, the heartbeat is visible.
-            # Night mode (manual dimmer = 0): LEDs fully off, no heartbeat.
+            # Brightness + pulse ("I'm alive" signal, always on unless night mode)
             if self._manual_brightness_factor <= 0.01:
                 self._dots.brightness = 0.0
             else:
-                purr_mod = self._get_purr_modulation()  # ~0.65 to ~1.35
-                # Ensure heartbeat is visible: use at least 0.04 as base before purr
-                effective = max(0.04, state.brightness)
-                final_brightness = effective * purr_mod
-                self._dots.brightness = max(0.02, min(0.5, final_brightness))
+                pulse = self._get_pulse() * self._pulse_amount  # 0 to 0.03
+                self._dots.brightness = max(0.02, min(0.5, state.brightness + pulse))
 
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
@@ -621,18 +566,14 @@ class LEDDisplay:
                              abs(self._manual_brightness_factor - self._cached_manual_brightness) > 0.01)
 
             if max_delta < self._cached_state_change_threshold and not light_changed and not activity_changed and not manual_changed:
-                # State essentially unchanged - skip color calculations, just animate purr
+                # State essentially unchanged - skip color calculations, just animate pulse
                 state_changed = False
-                # Update purr rhythm even on cached path (smooth transitions)
-                self._update_purr_from_activity(activity_brightness)
                 if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
-                    # Apply heartbeat on cached brightness
                     if self._manual_brightness_factor <= 0.01:
                         self._dots.brightness = 0.0
                     else:
-                        purr_mod = self._get_purr_modulation()
-                        effective = max(0.04, self._cached_pipeline_brightness)
-                        self._dots.brightness = max(0.02, min(0.5, effective * purr_mod))
+                        pulse = self._get_pulse() * self._pulse_amount
+                        self._dots.brightness = max(0.02, min(0.5, self._cached_pipeline_brightness + pulse))
                     self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
@@ -642,9 +583,6 @@ class LEDDisplay:
         self._cached_light_level = light_level
         self._cached_activity_brightness = activity_brightness
         self._cached_manual_brightness = self._manual_brightness_factor
-
-        # Update purr rhythm from activity state
-        self._update_purr_from_activity(activity_brightness)
 
         # Detect state changes for pattern triggers
         pattern_trigger = None
@@ -698,7 +636,7 @@ class LEDDisplay:
         # 2. Pulsing (low clarity/stability warning)
         # 3. Auto-brightness (environmental adaptation)
         # 4. Wave patterns (subtle animation, disabled by default to reduce complexity)
-        # 5. Purring (heartbeat animation — speed adapts to activity state)
+        # 5. Pulse ("I'm alive" sine wave — applied in set_all, not here)
         
         # Start with base brightness
         state.brightness = self._base_brightness
@@ -1204,10 +1142,9 @@ class LEDDisplay:
             "has_dotstar": HAS_DOTSTAR,
             "update_count": self._update_count,
             "base_brightness": self._base_brightness,
-            "current_brightness": self._base_brightness * self._get_purr_modulation() if self._enable_breathing else self._base_brightness,
-            "breathing_enabled": self._enable_breathing,
-            "purr_cycle_seconds": self._purr_cycle_seconds,
-            "purr_intensity": self._purr_intensity,
+            "current_brightness": self._base_brightness + self._get_pulse() * self._pulse_amount,
+            "pulse_cycle": self._pulse_cycle,
+            "pulse_amount": self._pulse_amount,
             "pulsing_enabled": self._pulsing_enabled,
             "color_transitions_enabled": self._color_transitions_enabled,
             "pattern_mode": self._pattern_mode,
