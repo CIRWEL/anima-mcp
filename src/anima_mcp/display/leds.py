@@ -194,15 +194,12 @@ class LEDDisplay:
         return self._dots is not None
     
     def _get_purr_modulation(self) -> float:
-        """Heartbeat/purring brightness modulation.
+        """Heartbeat/purring brightness modulation — ALWAYS active.
 
-        Double-bump waveform: quick rise, dip, smaller rise, long rest.
-        Speed adapts to activity state (ACTIVE=fast, RESTING=very slow).
-        Returns a multiplier around 1.0 (typically 0.88-1.12).
+        This is the "I'm alive" signal. Double-bump waveform like a heartbeat.
+        Speed adapts to activity state (ACTIVE=fast, RESTING=slow).
+        Returns a multiplier around 1.0.
         """
-        if not self._enable_breathing:  # reuse existing toggle
-            return 1.0
-
         t = time.time()
         cycle = self._purr_cycle_seconds  # 1.8s (active) to 6s (resting)
         phase = (t % cycle) / cycle       # 0.0 → 1.0
@@ -499,16 +496,12 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Apply brightness (state.brightness already includes auto-adjust, pulsing, activity, manual)
-            # Then apply purr/heartbeat modulation on top
+            # Apply brightness with heartbeat modulation (always active — "I'm alive" signal)
             # When manual dimmer is 0 (Night mode), allow LEDs to be fully off
             floor = 0.0 if self._manual_brightness_factor <= 0.01 else self._hardware_brightness_floor
-            if self._enable_breathing:
-                purr_mod = self._get_purr_modulation()
-                final_brightness = state.brightness * purr_mod
-                self._dots.brightness = max(floor, min(0.5, final_brightness))
-            else:
-                self._dots.brightness = max(floor, min(0.5, max(0.0, state.brightness)))
+            purr_mod = self._get_purr_modulation()
+            final_brightness = state.brightness * purr_mod
+            self._dots.brightness = max(floor, min(0.5, final_brightness))
 
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
@@ -626,12 +619,9 @@ class LEDDisplay:
                 # Update purr rhythm even on cached path (smooth transitions)
                 self._update_purr_from_activity(activity_brightness)
                 if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
-                    # Apply purr/heartbeat modulation on top of last pipeline brightness
-                    if self._enable_breathing:
-                        purr_mod = self._get_purr_modulation()
-                        final = self._cached_pipeline_brightness * purr_mod
-                    else:
-                        final = self._cached_pipeline_brightness
+                    # Apply heartbeat on top of last pipeline brightness
+                    purr_mod = self._get_purr_modulation()
+                    final = self._cached_pipeline_brightness * purr_mod
                     floor = 0.0 if self._manual_brightness_factor <= 0.01 else self._hardware_brightness_floor
                     self._dots.brightness = max(floor, min(0.5, final))
                     self._dots.show()
