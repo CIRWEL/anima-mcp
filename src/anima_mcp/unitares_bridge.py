@@ -215,7 +215,8 @@ class UnitaresBridge:
         neural_weight: float = 0.3,
         physical_weight: float = 0.7,
         identity: Optional['CreatureIdentity'] = None,
-        is_first_check_in: bool = False
+        is_first_check_in: bool = False,
+        drawing_eisv: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         Check in with UNITARES governance.
@@ -229,6 +230,7 @@ class UnitaresBridge:
             physical_weight: Weight for physical signals in EISV mapping
             identity: Optional CreatureIdentity for metadata sync
             is_first_check_in: If True, syncs identity metadata to UNITARES
+            drawing_eisv: Optional DrawingEISV state from ScreenRenderer (None when not drawing)
 
         Returns:
             Governance decision dict with:
@@ -259,7 +261,7 @@ class UnitaresBridge:
         if unitares_available:
             try:
                 logger.info("Calling UNITARES (agent_id=%s)", self._agent_id[:8] if self._agent_id else 'None')
-                result = await self._call_unitares(anima, readings, eisv, identity=identity)
+                result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv)
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 return result
             except Exception as e:
@@ -276,7 +278,8 @@ class UnitaresBridge:
         anima: Anima,
         readings: SensorReadings,
         eisv: EISVMetrics,
-        identity: Optional['CreatureIdentity'] = None
+        identity: Optional['CreatureIdentity'] = None,
+        drawing_eisv: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """Call UNITARES governance via HTTP/SSE."""
         try:
@@ -303,7 +306,11 @@ class UnitaresBridge:
                     "alive_ratio": identity.alive_ratio() if hasattr(identity, 'alive_ratio') else 0.0,
                     "age_seconds": identity.age_seconds() if hasattr(identity, 'age_seconds') else 0.0,
                 }
-            
+
+            # Include DrawingEISV if Lumen is actively drawing
+            if drawing_eisv:
+                sensor_data["drawing_eisv"] = drawing_eisv
+
             # Build arguments for process_agent_update
             update_arguments = {
                 "complexity": complexity,

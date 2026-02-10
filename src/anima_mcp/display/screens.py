@@ -3702,6 +3702,27 @@ class ScreenRenderer:
             "all_eras": list_all_era_info(),
         }
 
+    def get_drawing_eisv(self) -> Optional[Dict]:
+        """Return current DrawingEISV state for governance reporting.
+
+        Returns None when not actively drawing. When drawing, returns the
+        proprioceptive EISV state that drives energy drain and save decisions.
+        """
+        if not self._intent or not hasattr(self._intent, 'eisv'):
+            return None
+        eisv = self._intent.eisv
+        C = eisv.coherence()
+        return {
+            "E": round(eisv.E, 4),
+            "I": round(eisv.I, 4),
+            "S": round(eisv.S, 4),
+            "V": round(eisv.V, 4),
+            "C": round(C, 4),
+            "marks": self._intent.mark_count,
+            "phase": self._canvas.drawing_phase if self._canvas else "unknown",
+            "era": self._active_era.name if self._active_era else "unknown",
+        }
+
     def set_era(self, era_name: str) -> dict:
         """Switch to a different art era immediately."""
         from .eras import get_era
