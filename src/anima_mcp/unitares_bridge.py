@@ -333,12 +333,13 @@ class UnitaresBridge:
             # Compute confidence from current state + transition rate
             confidence = compute_confidence(anima, readings, self._prev_anima)
 
-            # Store current state for next check-in's delta computation
-            # Create shallow copies so anima mutations don't affect our snapshot
-            self._prev_anima = Anima(
-                warmth=anima.warmth, clarity=anima.clarity,
-                stability=anima.stability, presence=anima.presence,
-            )
+            # Store current state snapshot for next check-in's delta computation
+            # Use a simple namespace instead of Anima (which requires readings arg)
+            class _AnimaSnapshot:
+                __slots__ = ('warmth', 'clarity', 'stability', 'presence')
+                def __init__(self, w, c, s, p):
+                    self.warmth, self.clarity, self.stability, self.presence = w, c, s, p
+            self._prev_anima = _AnimaSnapshot(anima.warmth, anima.clarity, anima.stability, anima.presence)
             self._prev_readings = readings
             self._prev_complexity = complexity
 
