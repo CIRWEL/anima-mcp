@@ -71,13 +71,32 @@ The `ActivityManager` (in broker) controls Lumen's wakefulness:
 Lumen draws autonomously on the 240x240 notepad screen. The system has two layers:
 
 **Engine** (in `screens.py` — universal, stays fixed):
-- `CanvasState` — pixel buffer, persistence, phase tracking
-- `DrawingEISV` — thermodynamic coherence (E/I/S/V → coherence C), V flipped (I-E not E-I)
-- `DrawingIntent` — focus position, direction, energy, era state
+- `CanvasState` — pixel buffer, persistence, attention/narrative state
+- `DrawingState` — EISV core + attention signals + coherence tracking + narrative arc
+- `DrawingIntent` — focus position, mark count, state (energy is attention-derived)
 - `_lumen_draw()` — orchestration loop, delegates to active era
-- Energy depletion: `0.001 * (1.0 - 0.6 * C)` per mark (coherence-modulated)
-- Save threshold: `0.05 + 0.09 * C` (high coherence = pickier)
+- `_update_attention()` — curiosity depletes exploring, regenerates with patterns
+- `_update_coherence_tracking()` — tracks C history and velocity for settling detection
+- `_update_narrative_arc()` — state-driven phase transitions (opening→developing→resolving→closing)
+- Completion: `narrative_complete()` = coherence settled + attention exhausted
+- Fallback: 3000 mark limit for chaotic pieces that never settle
 - `get_drawing_eisv()` — exposes state to governance via bridge check-in
+
+**Attention signals** (replace arbitrary energy depletion):
+| Signal | Behavior |
+|--------|----------|
+| curiosity | Depletes exploring (low C), regenerates with pattern (high C) |
+| engagement | Rises with intentionality, falls with entropy |
+| fatigue | Accumulates per gesture switch, never decreases during drawing |
+| energy | Derived: `0.6*curiosity + 0.4*engagement * (1-0.5*fatigue)` |
+
+**Narrative arc phases** (replace energy-threshold phases):
+| Phase | Entry Condition |
+|-------|-----------------|
+| opening | Fresh canvas or regression (low I momentum) |
+| developing | I momentum > 0.4, explored (10+ marks) |
+| resolving | C > 0.6, coherence velocity stable |
+| closing | narrative_complete() |
 
 **Art Eras** (pluggable modules in `display/eras/`):
 | Era | Gestures | Character | Active Pool |
