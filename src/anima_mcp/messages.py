@@ -243,22 +243,24 @@ class MessageBoard:
             # Validate that the question exists - require exact match
             question_text = None
             question_context = None
+            question_timestamp = None
             question_found = False
-            
+
             # First try exact match
             for m in self._messages:
                 if m.message_id == responds_to and m.msg_type == MESSAGE_TYPE_QUESTION:
                     m.answered = True
                     question_text = m.text
                     question_context = getattr(m, 'context', None)
+                    question_timestamp = m.timestamp
                     question_found = True
                     break
             
             # If exact match failed, try prefix matching for better UX
             if not question_found:
                 matching_questions = [
-                    m for m in self._messages 
-                    if m.msg_type == MESSAGE_TYPE_QUESTION 
+                    m for m in self._messages
+                    if m.msg_type == MESSAGE_TYPE_QUESTION
                     and m.message_id.startswith(responds_to)
                 ]
                 if len(matching_questions) == 1:
@@ -267,6 +269,7 @@ class MessageBoard:
                     q.answered = True
                     question_text = q.text
                     question_context = getattr(q, 'context', None)
+                    question_timestamp = q.timestamp
                     question_found = True
                     # Update responds_to to full ID
                     responds_to = q.message_id
@@ -279,6 +282,7 @@ class MessageBoard:
                     q.answered = True
                     question_text = q.text
                     question_context = getattr(q, 'context', None)
+                    question_timestamp = q.timestamp
                     question_found = True
                     responds_to = q.message_id
             
@@ -297,7 +301,8 @@ class MessageBoard:
             self._save()
 
             # Compute feedback for agency learning (was this question well-formed?)
-            if question_text:
+            # Skip self-answers - Lumen answering own questions is circular learning
+            if question_text and agent_name.lower() != "lumen":
                 feedback = self._compute_question_feedback(question_text, text, question_context)
                 if feedback:
                     try:
@@ -307,6 +312,16 @@ class MessageBoard:
                         print(f"[Feedback] Question '{question_text[:30]}...' got score {feedback['score']:.2f}", file=sys.stderr, flush=True)
                     except Exception as e:
                         pass  # Agency not available, that's fine
+            elif question_text and agent_name.lower() == "lumen":
+                print(f"[Feedback] Skipping self-answer feedback (circular learning)", file=sys.stderr, flush=True)
+                # Record self-dialogue topic for self-knowledge tracking
+                try:
+                    from .growth import get_growth_system
+                    growth = get_growth_system()
+                    topic = growth.record_self_dialogue_topic(question_text)
+                    print(f"[Self-knowledge] Self-dialogue topic: {topic}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[Self-knowledge] Topic recording failed: {e}", file=sys.stderr, flush=True)
 
             # Extract insight from Q&A — learn from the answer
             if question_text:

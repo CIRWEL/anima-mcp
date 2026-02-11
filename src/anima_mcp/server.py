@@ -2329,7 +2329,7 @@ async def handle_get_questions(arguments: dict) -> list[TextContent]:
         "unanswered_count": len(unanswered_questions),
         "total_questions": len(all_questions),
         "how_to_answer": "To answer a question: call leave_agent_note (or post_message) with responds_to='<id>' where <id> is the question's id field above. This links your answer to the question.",
-        "note": "Questions auto-expire after 1 hour if unanswered."
+        "note": "Questions auto-expire after 4 hours if unanswered."
     }))]
 
 
@@ -2811,8 +2811,18 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
                     })
 
             # Self-knowledge: the one real relationship (Lumen answering own questions)
+            self_dialogues = self_record.interaction_count if self_record else 0
+            topics = self_record.self_dialogue_topics if self_record else []
+            # Count topic frequencies
+            topic_counts = {}
+            for t in topics:
+                topic_counts[t] = topic_counts.get(t, 0) + 1
+            # Sort by frequency
+            top_topics = sorted(topic_counts.items(), key=lambda x: -x[1])[:5]
+
             result["self_knowledge"] = {
-                "self_dialogues": self_record.interaction_count if self_record else 0,
+                "self_dialogues": self_dialogues,
+                "topics": top_topics if top_topics else None,
                 "note": "Lumen answering own questions - genuine self-reflection with memory continuity",
             }
 
@@ -5278,7 +5288,10 @@ def run_http_server(host: str, port: int):
                         "awakenings": identity.total_awakenings if identity else 0,
                         "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
                         "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
-                        "activity": _activity.get_status() if _activity else {"level": "active"},
+                        "activity": {
+                            **(_activity.get_status() if _activity else {"level": "active"}),
+                            "sleep": _activity.get_sleep_summary() if _activity else {"sessions": 0},
+                        },
                         "timestamp": str(readings.timestamp) if readings.timestamp else "",
                     })
                 except Exception as e:
