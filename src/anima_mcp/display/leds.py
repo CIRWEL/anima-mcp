@@ -674,6 +674,10 @@ class LEDDisplay:
         if self._manual_brightness_factor < 1.0:
             state.brightness *= self._manual_brightness_factor
 
+        # Debug: Log manual factor periodically
+        if self._update_count % 10 == 1:
+            print(f"[LEDs] Manual factor: {self._manual_brightness_factor:.2f}, activity: {activity_brightness:.2f}", file=sys.stderr, flush=True)
+
         # 4c. Enforce visible minimum — if Lumen is on, LEDs should be on.
         # The hardware floor in set_all() is a safety net; this is the intent.
         state.brightness = max(self._hardware_brightness_floor, state.brightness)
