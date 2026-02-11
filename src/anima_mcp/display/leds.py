@@ -743,9 +743,26 @@ class LEDDisplay:
         # LEDs are independent from face - they reflect raw proprioceptive state
         # Face = what Lumen wants to communicate (conscious expression)
         # LEDs = what Lumen actually feels (unconscious body state)
-        # This allows LEDs to show subtle changes even when face stays neutral
-        # Like a fragile baby: face might smile while LEDs show subtle fatigue
-        
+
+        # === SMOOTH DIMMING: split brightness between DotStar global and RGB scaling ===
+        # DotStar's global brightness is coarse at low values (PWM steps are large).
+        # For smoother dimming, we keep global brightness at a minimum working level
+        # and scale the RGB values down instead. This gives finer perceptual gradation.
+        #
+        # Strategy: Use global brightness = max(target, 0.08) and scale RGB by the ratio.
+        # At Full (0.15): global=0.15, RGB scale=1.0 (no change)
+        # At Medium (0.08): global=0.08, RGB scale=1.0
+        # At Dim (0.04): global=0.08, RGB scale=0.5 (colors half intensity)
+        # At Night (0.02): global=0.08, RGB scale=0.25 (colors quarter intensity)
+        GLOBAL_FLOOR = 0.08  # Minimum DotStar global for smooth PWM
+        if state.brightness < GLOBAL_FLOOR:
+            # Scale RGB values down for finer dimming
+            rgb_scale = state.brightness / GLOBAL_FLOOR
+            state.led0 = tuple(max(1, int(c * rgb_scale)) for c in state.led0)
+            state.led1 = tuple(max(1, int(c * rgb_scale)) for c in state.led1)
+            state.led2 = tuple(max(1, int(c * rgb_scale)) for c in state.led2)
+            state.brightness = GLOBAL_FLOOR
+
         # Apply LED state - safe, never crashes
         # CRITICAL: Never clear LEDs on error - they should stay in last state
         try:
@@ -1289,25 +1306,21 @@ def _create_gradient_palette(warmth: float, clarity: float, stability: float, pr
         led1 = _interpolate_color((i, i, int(i * 0.5)),
                                   (i, i, int(i * 0.7)), ratio)  # Soft yellow → warm white
 
-    # LED 2 (right): Stability + Presence — yellow-green range only (no red warnings, no teal)
-    # Constrained to avoid dramatic color swings
+    # LED 2 (right): Stability + Presence — warm gold-to-sage range
+    # Stays in the warm family: gold → amber-green → warm sage
+    # No saturated greens — keeps visual coherence with LED0 and LED1
     combined = (stability * 0.6 + presence * 0.4)  # Stability-weighted
     if combined < 0.3:
-        led2 = (200, 160, 40)                      # Warm yellow (low stability)
+        led2 = (200, 160, 50)                      # Warm gold (low stability)
     elif combined < 0.5:
         ratio = (combined - 0.3) / 0.2
-        led2 = _interpolate_color((200, 160, 40), (160, 200, 60), ratio)   # Warm yellow → yellow-green
+        led2 = _interpolate_color((200, 160, 50), (180, 180, 60), ratio)   # Warm gold → yellow
     elif combined < 0.7:
         ratio = (combined - 0.5) / 0.2
-        led2 = _interpolate_color((160, 200, 60), (100, 200, 80), ratio)   # Yellow-green → soft green
+        led2 = _interpolate_color((180, 180, 60), (140, 180, 70), ratio)   # Yellow → soft yellow-green
     else:
         ratio = (combined - 0.7) / 0.3
-        led2 = _interpolate_color((100, 200, 80), (80, 180, 120), ratio)   # Soft green → sage
-
-    # Presence tint: subtle green-blue shift when very present (reduced from cyan)
-    if presence > 0.8:
-        tint = (presence - 0.8) * 0.3  # Very subtle
-        led2 = blend_colors(led2, (60, 180, 140), ratio=tint)
+        led2 = _interpolate_color((140, 180, 70), (120, 170, 90), ratio)   # Yellow-green → warm sage
     
     return (led0, led1, led2)
 
@@ -1431,19 +1444,20 @@ def derive_led_state(warmth: float, clarity: float,
             led1 = tuple(max(0, min(255, c)) for c in led1)
             led2 = tuple(max(0, min(255, c)) for c in led2)
         
-        # Enhanced color mixing with clarity
-        if enable_color_mixing and clarity > 0.5:
-            # Clarity adds brightness and white tint
-            clarity_boost = (clarity - 0.5) * 0.4
-            white_tint = (int(255 * clarity_boost), int(255 * clarity_boost), int(255 * clarity_boost))
-            led0 = blend_colors(led0, white_tint, ratio=clarity_boost * 0.3)
-        
-        # Enhanced presence mixing for LED 2
-        if enable_color_mixing and presence > 0.5:
-            # Presence adds cyan/blue glow
-            presence_glow = (presence - 0.5) * 0.5
-            glow_color = (0, int(150 * presence_glow), int(255 * presence_glow))
-            led2 = blend_colors(led2, glow_color, ratio=presence_glow)
+        # Color mixing: keep within warm family
+        # Clarity warms LED0 slightly (no white/cold tints)
+        if enable_color_mixing and clarity > 0.6:
+            # High clarity → slightly brighter, warmer gold (not white)
+            warm_bright = (240, 200, 80)
+            clarity_blend = (clarity - 0.6) * 0.25  # Max 0.1 blend at clarity=1.0
+            led0 = blend_colors(led0, warm_bright, ratio=clarity_blend)
+
+        # Presence warms LED2 slightly (no cyan/blue)
+        if enable_color_mixing and presence > 0.7:
+            # High presence → subtle warm-green tint (not cyan)
+            warm_present = (100, 180, 70)
+            presence_blend = (presence - 0.7) * 0.2  # Max 0.06 blend at presence=1.0
+            led2 = blend_colors(led2, warm_present, ratio=presence_blend)
     
         return LEDState(
             led0=led0,

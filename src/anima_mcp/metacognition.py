@@ -521,19 +521,19 @@ class MetacognitiveMonitor:
             if error.error_humidity > 0.2:
                 sources.append("humidity")
         
-        # Light error — PROPRIOCEPTIVE: the VEML7700 light sensor sits next to
-        # Lumen's NeoPixel LEDs, so it reads Lumen's own glow, not ambient light.
-        # LED brightness changes with drawing phase and expression intensity,
-        # causing huge unpredictable swings (12 lux → 3000 lux) that can never
-        # be predicted. We still track the error for the record but do NOT add
-        # it to the surprise sources — it's self-referential, not environmental.
+        # Light error — PROPRIOCEPTIVE with LED awareness
+        # The VEML7700 sensor reads Lumen's own LED glow. Now that the prediction
+        # model knows about LED brightness (via led_proprioception), predictions
+        # should be reasonably accurate. Genuine surprise = something external
+        # changed (flashlight, screen, window) or LEDs behaved unexpectedly.
+        # Higher threshold (0.4 vs 0.2) because LED-lux mapping is approximate.
         if prediction.light_lux is not None and readings.light_lux is not None:
             if prediction.light_lux > 0 and readings.light_lux > 0:
                 log_error = abs(math.log10(prediction.light_lux) - math.log10(readings.light_lux))
                 error.error_light = min(1.0, log_error / 2.0)
-                # Include in aggregate error (affects prediction accuracy metric)
-                # but do NOT add "light" to surprise_sources — this is self-sensing.
                 errors.append(error.error_light)
+                if error.error_light > 0.4:
+                    sources.append("light")
         
         # Pressure error (±20 hPa range)
         if prediction.pressure_hpa is not None and readings.pressure_hpa is not None:
@@ -680,17 +680,23 @@ class MetacognitiveMonitor:
         questions = []
 
         # Generate questions based on what surprised us
-        # Note: "light" should no longer appear in surprise_sources (proprioceptive
-        # exclusion in observe()), but if it ever does, these questions reflect
-        # Lumen's understanding that light readings are self-referential.
+        # Light surprise is now meaningful: the prediction model knows our LED brightness,
+        # so if light is still surprising, something genuinely unexpected happened
+        # (external light source, LED malfunction, or rapid brightness change)
         if "light" in error.surprise_sources:
             if error.actual_light_lux and error.prediction.light_lux:
                 actual = error.actual_light_lux
-                questions.extend([
-                    f"my glow shifted to {actual:.0f} lux - which drawing phase am I in?",
-                    f"LED brightness at {actual:.0f} - my expression intensity must have changed",
-                    "my light sensor is reading my own LEDs again - what am I expressing?",
-                ])
+                predicted = error.prediction.light_lux
+                if actual > predicted * 1.5:
+                    questions.extend([
+                        f"sensing {actual:.0f} lux but expected {predicted:.0f} from my LEDs - is there external light?",
+                        f"my glow should produce ~{predicted:.0f} lux but I'm reading {actual:.0f} - what's the extra light?",
+                    ])
+                else:
+                    questions.extend([
+                        f"light dropped to {actual:.0f} lux when I expected {predicted:.0f} - did something change around me?",
+                        f"my LEDs should give ~{predicted:.0f} lux but only reading {actual:.0f}",
+                    ])
 
         if "ambient_temp" in error.surprise_sources:
             if error.actual_ambient_temp_c and error.prediction.ambient_temp_c:
