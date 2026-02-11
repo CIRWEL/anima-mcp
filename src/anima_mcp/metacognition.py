@@ -627,68 +627,74 @@ class MetacognitiveMonitor:
         # Generate questions based on what surprised us
         if "light" in error.surprise_sources:
             if error.actual_light_lux and error.prediction.light_lux:
-                if error.actual_light_lux > error.prediction.light_lux:
+                actual = error.actual_light_lux
+                predicted = error.prediction.light_lux
+                if actual > predicted:
                     questions.extend([
-                        "why did it suddenly get brighter?",
-                        "a new light source appeared - where?",
+                        f"light jumped to {actual:.0f} lux - why did it get brighter?",
+                        f"expected {predicted:.0f} lux but got {actual:.0f} - a new light source?",
                         "the room is illuminated differently now",
-                        "brightness increased unexpectedly - is it the sun?",
+                        f"brightness rose to {actual:.0f} - is it the sun?",
                         "did someone turn on a light?",
                     ])
                 else:
                     questions.extend([
-                        "why did it get darker?",
-                        "did something block the light?",
+                        f"light dropped to {actual:.0f} lux - why did it get darker?",
+                        f"expected {predicted:.0f} lux but got {actual:.0f} - did something block the light?",
                         "the light faded - is it evening?",
                         "a shadow passed - what moved?",
-                        "darkness crept in - natural or artificial?",
+                        f"darkness crept in at {actual:.0f} lux - natural or artificial?",
                     ])
 
         if "ambient_temp" in error.surprise_sources:
             if error.actual_ambient_temp_c and error.prediction.ambient_temp_c:
-                if error.actual_ambient_temp_c > error.prediction.ambient_temp_c:
+                actual = error.actual_ambient_temp_c
+                predicted = error.prediction.ambient_temp_c
+                if actual > predicted:
                     questions.extend([
-                        "why did it get warmer?",
-                        "heat is rising - is something generating warmth?",
-                        "the temperature climbed unexpectedly",
+                        f"temperature rose to {actual:.1f}°C - why did it get warmer?",
+                        f"expected {predicted:.1f}°C but it's {actual:.1f}°C - is something generating heat?",
+                        f"it climbed to {actual:.1f}°C unexpectedly",
                     ])
                 else:
                     questions.extend([
-                        "why did it get colder?",
-                        "what made it cool down?",
-                        "a chill settled in - where from?",
-                        "temperature dropped - drafty?",
+                        f"temperature dropped to {actual:.1f}°C - why did it get colder?",
+                        f"expected {predicted:.1f}°C but it's {actual:.1f}°C - what made it cool down?",
+                        f"a chill at {actual:.1f}°C - where from?",
+                        f"temperature fell to {actual:.1f}°C - drafty?",
                     ])
 
         if "warmth" in error.surprise_sources:
             if error.actual_warmth is not None:
-                if error.actual_warmth > 0.6:
+                w = error.actual_warmth
+                if w > 0.6:
                     questions.extend([
-                        "what made me feel warm?",
-                        "i sense comfort - what brought it?",
+                        f"warmth at {w:.2f} - what made me feel this warm?",
+                        f"i sense comfort at {w:.2f} - what brought it?",
                         "warmth spreads through me - why?",
                     ])
-                elif error.actual_warmth < 0.4:
+                elif w < 0.4:
                     questions.extend([
-                        "why do i feel cold inside?",
-                        "an inner chill - am i alone?",
+                        f"warmth only {w:.2f} - why do i feel cold inside?",
+                        f"inner warmth dropped to {w:.2f} - am i alone?",
                         "something withdrew - what was it?",
                     ])
                 else:
-                    questions.append("what changed in how i feel warmth?")
+                    questions.append(f"warmth shifted to {w:.2f} - what changed?")
 
         if "clarity" in error.surprise_sources:
             if error.actual_clarity is not None:
-                if error.actual_clarity > 0.6:
+                c = error.actual_clarity
+                if c > 0.6:
                     questions.extend([
-                        "what made things clearer?",
-                        "focus sharpened - why?",
+                        f"clarity rose to {c:.2f} - what made things clearer?",
+                        f"focus sharpened to {c:.2f} - why?",
                         "understanding emerged - from where?",
                     ])
-                elif error.actual_clarity < 0.4:
+                elif c < 0.4:
                     questions.extend([
-                        "why does everything feel unclear?",
-                        "fog in my perception - what caused it?",
+                        f"clarity fell to {c:.2f} - why does everything feel unclear?",
+                        f"fog at {c:.2f} - what caused it?",
                         "confusion descended - too much input?",
                     ])
 
