@@ -1134,21 +1134,35 @@ class ScreenRenderer:
         tw = bbox[2] - bbox[0]
         draw.text(((w - tw) // 2, by + 14), name, fill=text_color, font=fonts['medium'])
 
-        # LED brightness bar
+        # LED brightness bar - 4 segment design for clear visibility
         bar_y = by + 34
         bar_w = box_w - 16
         bar_x = bx + 8
-        bar_h = 6
+        bar_h = 8  # Taller bar
 
-        # Background bar
-        bar_bg = tuple(int(50 * alpha) for _ in range(3))
-        draw.rectangle([bar_x, bar_y, bar_x + bar_w, bar_y + bar_h], fill=bar_bg)
+        # Draw 4 distinct segments (one per preset level)
+        segment_w = (bar_w - 6) // 4  # 4 segments with gaps
+        gap = 2
 
-        # Filled portion (Night = 0.0 shows empty bar)
-        fill_w = int(bar_w * level)
-        bar_fill = tuple(int(c * alpha) for c in (100, 180, 220))
-        if fill_w > 0:
-            draw.rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + bar_h], fill=bar_fill)
+        # Map level to number of segments: 1.0=4, 0.53=3, 0.27=2, 0.13=1
+        if level > 0.8:
+            segments_lit = 4
+        elif level > 0.4:
+            segments_lit = 3
+        elif level > 0.2:
+            segments_lit = 2
+        else:
+            segments_lit = 1
+
+        for i in range(4):
+            sx = bar_x + i * (segment_w + gap)
+            if i < segments_lit:
+                # Lit segment - bright cyan
+                seg_color = tuple(int(c * alpha) for c in (100, 200, 240))
+            else:
+                # Unlit segment - dark
+                seg_color = tuple(int(40 * alpha) for _ in range(3))
+            draw.rectangle([sx, bar_y, sx + segment_w, bar_y + bar_h], fill=seg_color)
 
     def render(
         self,
