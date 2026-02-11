@@ -34,6 +34,9 @@ class SensorReadings:
     # Power (if measurable)
     power_watts: Optional[float] = None
 
+    # Proprioceptive outputs (own state affecting sensors)
+    led_brightness: Optional[float] = None  # 0.0-1.0, own LED brightness level
+
     # Barometric pressure (hPa/mbar) - BMP280 sensor
     pressure_hpa: Optional[float] = None  # Absolute pressure
     pressure_temp_c: Optional[float] = None  # BMP280's temperature reading
@@ -70,6 +73,7 @@ class SensorReadings:
             "memory_percent": self.memory_percent,
             "disk_percent": self.disk_percent,
             "power_watts": self.power_watts,
+            "led_brightness": self.led_brightness,
             "pressure_hpa": self.pressure_hpa,
             "pressure_temp_c": self.pressure_temp_c,
             # EEG raw channels
