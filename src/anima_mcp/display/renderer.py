@@ -103,11 +103,14 @@ class PilRenderer(DisplayRenderer):
         self._cached_brightness: float = 1.0
         # Manual brightness control (user-adjustable via joystick on face screen)
         # Screen always stays full brightness — only LEDs dim.
+        # LED brightness presets - ABSOLUTE values, not multipliers
+        # "leds" value is now the target brightness directly (0-1 scale, 0.15 = typical max)
+        # This bypasses auto-brightness which was giving tiny values due to lux sensor feedback
         self._brightness_presets = [
-            {"name": "Full",   "display": 1.0,  "leds": 1.0},   # ~0.15-0.18 effective
-            {"name": "Medium", "display": 1.0,  "leds": 0.5},   # ~0.08-0.09 effective
-            {"name": "Dim",    "display": 1.0,  "leds": 0.25},  # ~0.04-0.05 effective
-            {"name": "Night",  "display": 1.0,  "leds": 0.12},  # ~0.02-0.03 effective (near floor)
+            {"name": "Full",   "display": 1.0,  "leds": 0.15, "absolute": True},   # Bright
+            {"name": "Medium", "display": 1.0,  "leds": 0.08, "absolute": True},   # Moderate
+            {"name": "Dim",    "display": 1.0,  "leds": 0.04, "absolute": True},   # Dim
+            {"name": "Night",  "display": 1.0,  "leds": 0.02, "absolute": True},   # Minimal
         ]
         self._brightness_index: int = 0  # Index into presets
         self._manual_brightness: float = 1.0  # Display multiplier
