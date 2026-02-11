@@ -156,6 +156,8 @@ class LEDDisplay:
         self._last_dance_trigger: Optional[str] = None
         self._spontaneous_dance_chance: float = 0.001  # ~0.1% per update - less frequent to avoid lux chaos
         self._manual_brightness_factor: float = 1.0  # User dimmer multiplier (set from server.py)
+        self._current_brightness: float = 0.1  # Actual current brightness (for smooth transitions)
+        self._brightness_transition_speed: float = 0.08  # How fast brightness changes (0-1, per update)
         # Pulse animation ("I'm alive" signal) - SUBTLE to avoid lux sensor chaos
         self._pulse_cycle: float = 4.0  # Seconds per cycle (slower = calmer)
         self._pulse_amount: float = 0.015  # Absolute brightness added at peak (halved for subtlety)
@@ -569,9 +571,14 @@ class LEDDisplay:
                 # State essentially unchanged - skip color calculations, just animate pulse
                 state_changed = False
                 if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
-                    # Always use hardware floor - LEDs never fully off
+                    # Continue smooth brightness transition even on fast path
+                    target = self._cached_pipeline_brightness
+                    delta_b = target - self._current_brightness
+                    if abs(delta_b) > 0.001:
+                        self._current_brightness += delta_b * self._brightness_transition_speed
+                    brightness = max(self._hardware_brightness_floor, self._current_brightness)
                     pulse = self._get_pulse() * self._pulse_amount
-                    self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, self._cached_pipeline_brightness + pulse))
+                    self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
                     self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
@@ -680,6 +687,20 @@ class LEDDisplay:
         # 4c. Enforce visible minimum — if Lumen is on, LEDs should be on.
         # The hardware floor in set_all() is a safety net; this is the intent.
         state.brightness = max(self._hardware_brightness_floor, state.brightness)
+
+        # 4d. Smooth brightness transition — never snap, always glide
+        # This prevents jarring LED jumps when dimming or auto-brightness changes
+        target_brightness = state.brightness
+        delta = target_brightness - self._current_brightness
+        if abs(delta) > 0.001:
+            # Ease toward target: faster when far away, slower when close
+            speed = self._brightness_transition_speed
+            if abs(delta) > 0.05:
+                speed = min(0.2, speed * 2)  # Faster for big changes (preset switch)
+            self._current_brightness += delta * speed
+        else:
+            self._current_brightness = target_brightness
+        state.brightness = max(self._hardware_brightness_floor, self._current_brightness)
 
         # Cache the pipeline brightness for the early-return path
         self._cached_pipeline_brightness = state.brightness

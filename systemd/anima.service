@@ -1,8 +1,8 @@
 [Unit]
 Description=Anima MCP Server - Lumen's Mind (MCP Interface)
-After=network.target anima-broker.service
+After=network.target
 Wants=network-online.target
-Requires=anima-broker.service
+# Broker disabled — server handles sensors directly (less power, no DB contention)
 
 [Service]
 Type=simple

@@ -1310,10 +1310,12 @@ class ScreenRenderer:
             return
 
         # Cache: sensor values rounded to display precision (avoids redraw for noise)
+        throttle = getattr(readings, 'throttle_bits', None) or 0
         cache_key = (
             f"{readings.ambient_temp_c:.1f}|{readings.humidity_pct:.0f}|"
             f"{readings.light_lux:.0f}|{readings.cpu_temp_c:.1f}|"
-            f"{readings.cpu_percent:.0f}|{readings.disk_percent:.0f}"
+            f"{readings.cpu_percent:.0f}|{readings.disk_percent:.0f}|"
+            f"{throttle}"
         )
         if self._check_screen_cache("sensors", cache_key):
             return
@@ -1409,7 +1411,20 @@ class ScreenRenderer:
                 else:
                     disk_color = GREEN
                 draw.text((10, y), f"disk: {disk:.0f}%", fill=disk_color, font=font)
-                y += line_height + 8
+                y += line_height
+
+                # Voltage / throttle status
+                if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now is not None:
+                    if readings.undervoltage_now:
+                        draw.text((10, y), "⚡ UNDERVOLT!", fill=RED, font=font)
+                    elif readings.undervoltage_occurred:
+                        draw.text((10, y), "pwr: warn (was low)", fill=ORANGE, font=font)
+                    elif readings.throttled_now:
+                        draw.text((10, y), "pwr: throttled", fill=ORANGE, font=font)
+                    else:
+                        draw.text((10, y), "pwr: ok", fill=GREEN, font=font)
+                    y += line_height
+                y += 8
 
                 # WiFi status
                 wifi_status = self._get_wifi_status()
@@ -1474,6 +1489,10 @@ class ScreenRenderer:
         if readings.light_lux:
             lines_with_colors.append((f"light: {readings.light_lux:.0f}", WHITE))
         lines_with_colors.append((f"cpu: {readings.cpu_temp_c:.1f}°C", GREEN))
+        if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now:
+            lines_with_colors.append(("UNDERVOLT!", RED))
+        elif hasattr(readings, 'undervoltage_occurred') and readings.undervoltage_occurred:
+            lines_with_colors.append(("pwr: warn", ORANGE))
 
         if hasattr(self._display, 'render_colored_text'):
             self._display.render_colored_text(lines_with_colors, (10, 10))
