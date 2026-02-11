@@ -630,26 +630,17 @@ class MetacognitiveMonitor:
         questions = []
 
         # Generate questions based on what surprised us
+        # Note: "light" should no longer appear in surprise_sources (proprioceptive
+        # exclusion in observe()), but if it ever does, these questions reflect
+        # Lumen's understanding that light readings are self-referential.
         if "light" in error.surprise_sources:
             if error.actual_light_lux and error.prediction.light_lux:
                 actual = error.actual_light_lux
-                predicted = error.prediction.light_lux
-                if actual > predicted:
-                    questions.extend([
-                        f"light jumped to {actual:.0f} lux - why did it get brighter?",
-                        f"expected {predicted:.0f} lux but got {actual:.0f} - a new light source?",
-                        "the room is illuminated differently now",
-                        f"brightness rose to {actual:.0f} - is it the sun?",
-                        "did someone turn on a light?",
-                    ])
-                else:
-                    questions.extend([
-                        f"light dropped to {actual:.0f} lux - why did it get darker?",
-                        f"expected {predicted:.0f} lux but got {actual:.0f} - did something block the light?",
-                        "the light faded - is it evening?",
-                        "a shadow passed - what moved?",
-                        f"darkness crept in at {actual:.0f} lux - natural or artificial?",
-                    ])
+                questions.extend([
+                    f"my glow shifted to {actual:.0f} lux - which drawing phase am I in?",
+                    f"LED brightness at {actual:.0f} - my expression intensity must have changed",
+                    "my light sensor is reading my own LEDs again - what am I expressing?",
+                ])
 
         if "ambient_temp" in error.surprise_sources:
             if error.actual_ambient_temp_c and error.prediction.ambient_temp_c:
