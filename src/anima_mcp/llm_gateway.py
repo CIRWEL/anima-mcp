@@ -4,8 +4,9 @@ LLM Gateway - Generative inner voice for Lumen.
 Multi-provider support with automatic failover:
 1. Direct Groq API (Llama models, free tier, fastest)
 2. Together.ai (Llama, Mixtral, fast inference)
-3. Hugging Face Inference API (Phi-3, Phi-4)
-4. ngrok AI Gateway (last resort — consumes ngrok bandwidth credit)
+3. Anthropic (Claude Haiku, reliable paid fallback)
+4. Hugging Face Inference API (Phi-3, Phi-4)
+5. ngrok AI Gateway (last resort — consumes ngrok bandwidth credit)
 
 Lumen can now genuinely reflect, wonder, and express desires through LLM generation.
 """
@@ -45,22 +46,25 @@ class LLMGateway:
     Multi-provider LLM client - Lumen's inner voice.
 
     Supports:
-    - ngrok AI Gateway (multi-provider routing with failover)
+    - Direct Groq API (Llama, free tier, fastest)
     - Together.ai (fast inference, many models)
+    - Anthropic Messages API (Claude Haiku, reliable paid fallback)
     - Hugging Face Inference API (Phi models)
-    - Direct Groq API (Llama, free tier)
+    - ngrok AI Gateway (last resort)
     """
 
     # Provider endpoints
     NGROK_GATEWAY_URL = "https://ai-gateway.ngrok.app"
     TOGETHER_API_URL = "https://api.together.xyz/v1/chat/completions"
     GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
+    ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
     HF_INFERENCE_URL = "https://router.huggingface.co/hf"  # Updated from deprecated api-inference
 
     # Models by provider
     MODELS = {
         "groq": "llama-3.1-8b-instant",  # Fast, free tier
         "together": "meta-llama/Llama-3.2-3B-Instruct-Turbo",  # Fast, small
+        "anthropic": "claude-haiku-4-5-20251001",  # Fast, cheap, reliable
         "phi": "microsoft/Phi-3.5-mini-instruct",  # Small, efficient
         "phi4": "microsoft/phi-4",  # Newest Phi
     }
@@ -69,32 +73,38 @@ class LLMGateway:
         """
         Initialize the gateway client.
 
-        Checks for API keys:
-        - NGROK_API_KEY: ngrok AI Gateway (preferred - multi-provider)
+        Checks for API keys (fallback order):
+        - GROQ_API_KEY: Direct Groq API (free, fastest)
         - TOGETHER_API_KEY: Together.ai (fast inference)
+        - ANTHROPIC_API_KEY: Anthropic (Claude Haiku, reliable paid)
         - HF_TOKEN: Hugging Face Inference API (for Phi models)
-        - GROQ_API_KEY: Direct Groq API (fallback)
+        - NGROK_API_KEY: ngrok AI Gateway (last resort)
         """
+        self.groq_key = os.environ.get("GROQ_API_KEY", "")
+        self.together_key = os.environ.get("TOGETHER_API_KEY", "")
+        self.anthropic_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        self.hf_token = os.environ.get("HF_TOKEN", "")
         self.ngrok_key = os.environ.get("NGROK_API_KEY", "")
         self.ngrok_url = os.environ.get("NGROK_GATEWAY_URL", self.NGROK_GATEWAY_URL)
-        self.together_key = os.environ.get("TOGETHER_API_KEY", "")
-        self.hf_token = os.environ.get("HF_TOKEN", "")
-        self.groq_key = os.environ.get("GROQ_API_KEY", "")
 
-        # Build provider priority list (direct APIs first, ngrok gateway last)
+        # Build provider priority list (free/fast first, paid reliable next, last resort last)
         self._providers = []
 
         if self.groq_key:
             self._providers.append(("groq", self.GROQ_API_URL, self.groq_key))
-            print("[LLMGateway] Groq API configured (Llama models, primary)", file=sys.stderr, flush=True)
+            print("[LLMGateway] Groq API configured (Llama, primary)", file=sys.stderr, flush=True)
 
         if self.together_key:
             self._providers.append(("together", self.TOGETHER_API_URL, self.together_key))
-            print("[LLMGateway] Together.ai configured (Llama models)", file=sys.stderr, flush=True)
+            print("[LLMGateway] Together.ai configured (Llama)", file=sys.stderr, flush=True)
+
+        if self.anthropic_key:
+            self._providers.append(("anthropic", self.ANTHROPIC_API_URL, self.anthropic_key))
+            print("[LLMGateway] Anthropic configured (Claude Haiku)", file=sys.stderr, flush=True)
 
         if self.hf_token:
             self._providers.append(("huggingface", self.HF_INFERENCE_URL, self.hf_token))
-            print("[LLMGateway] Hugging Face Inference API configured (Phi models)", file=sys.stderr, flush=True)
+            print("[LLMGateway] Hugging Face configured (Phi models)", file=sys.stderr, flush=True)
 
         if self.ngrok_key:
             self._providers.append(("ngrok", self.ngrok_url, self.ngrok_key))
@@ -102,7 +112,7 @@ class LLMGateway:
 
         if not self._providers:
             print("[LLMGateway] No API keys found - generative reflection disabled", file=sys.stderr, flush=True)
-            print("[LLMGateway] Set one of: NGROK_API_KEY, TOGETHER_API_KEY, HF_TOKEN, or GROQ_API_KEY", file=sys.stderr, flush=True)
+            print("[LLMGateway] Set one of: GROQ_API_KEY, TOGETHER_API_KEY, ANTHROPIC_API_KEY, HF_TOKEN, or NGROK_API_KEY", file=sys.stderr, flush=True)
 
     @property
     def enabled(self) -> bool:
@@ -166,6 +176,9 @@ class LLMGateway:
             if provider == "huggingface":
                 return await self._call_huggingface(
                     client, api_key, system, prompt, max_tokens=max_tokens, long_form=long_form)
+            elif provider == "anthropic":
+                return await self._call_anthropic(
+                    client, api_key, system, prompt, max_tokens=max_tokens, long_form=long_form)
             else:
                 return await self._call_openai_compatible(
                     client, url, api_key, system, prompt, provider,
@@ -223,6 +236,57 @@ class LLMGateway:
                 return None
 
         # Retry with backoff for transient errors
+        try:
+            return await retry_with_backoff_async(
+                make_request,
+                config=RetryConfig(max_attempts=2, initial_delay=0.5, max_delay=2.0),
+            )
+        except Exception:
+            return None
+
+    async def _call_anthropic(
+        self, client, api_key: str, system: str, prompt: str,
+        max_tokens: int = 150, long_form: bool = False,
+    ) -> Optional[str]:
+        """Call Anthropic Messages API (Claude Haiku)."""
+        model = self.MODELS["anthropic"]
+
+        async def make_request():
+            response = await client.post(
+                self.ANTHROPIC_API_URL,
+                headers={
+                    "x-api-key": api_key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "max_tokens": max_tokens,
+                    "system": system,
+                    "messages": [
+                        {"role": "user", "content": prompt}
+                    ],
+                    "temperature": 0.8,
+                }
+            )
+
+            if response.status_code == 200:
+                data = response.json()
+                content = data.get("content", [])
+                if not content:
+                    print("[LLMGateway] Anthropic malformed response: no content", file=sys.stderr, flush=True)
+                    return None
+                text = content[0].get("text", "")
+                return self._clean_response(text, long_form=long_form)
+            elif response.status_code in RETRYABLE_STATUS_CODES:
+                error = response.text[:200] if response.text else "unknown"
+                print(f"[LLMGateway] Anthropic retryable {response.status_code}: {error}", file=sys.stderr, flush=True)
+                raise Exception(f"Retryable HTTP {response.status_code}")
+            else:
+                error = response.text[:200] if response.text else "unknown"
+                print(f"[LLMGateway] Anthropic error {response.status_code}: {error}", file=sys.stderr, flush=True)
+                return None
+
         try:
             return await retry_with_backoff_async(
                 make_request,
