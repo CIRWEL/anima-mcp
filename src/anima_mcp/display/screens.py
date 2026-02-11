@@ -1423,6 +1423,11 @@ class ScreenRenderer:
                 draw.text((10, y), f"disk: {disk:.0f}%", fill=disk_color, font=font)
                 y += line_height
 
+                # Hint when I2C sensors (air, humidity, light) all missing
+                if not any([readings.ambient_temp_c, readings.humidity_pct, readings.light_lux]):
+                    draw.text((10, y), "I2C off? run: sudo raspi-config", fill=COLORS.TEXT_DIM, font=font_small)
+                    y += line_height
+
                 # Voltage / throttle status
                 if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now is not None:
                     if readings.undervoltage_now:
@@ -1488,6 +1493,8 @@ class ScreenRenderer:
 
         # Fallback to text rendering
         lines_with_colors = []
+        if not any([readings.ambient_temp_c, readings.humidity_pct, readings.light_lux]):
+            lines_with_colors.append(("I2C off? sudo raspi-config", COLORS.TEXT_DIM))
         if readings.ambient_temp_c:
             temp = readings.ambient_temp_c
             temp_color = ORANGE if temp > 25 else CYAN if temp < 18 else GREEN

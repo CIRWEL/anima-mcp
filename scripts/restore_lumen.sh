@@ -17,7 +17,7 @@ SSH_OPTS="-i ${SSH_KEY} -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
 
 # Fallback hosts if primary fails
 if [ "$PI_HOST" = "lumen.local" ]; then
-    HOSTS="lumen.local 192.168.1.165 100.83.45.66"
+    HOSTS="lumen.local 192.168.1.165 100.103.208.117"
 else
     HOSTS="$PI_HOST"
 fi
@@ -108,18 +108,15 @@ log "Enabling I2C and SPI interfaces..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo raspi-config nonint do_i2c 0 2>/dev/null; sudo raspi-config nonint do_spi 0 2>/dev/null; true"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo usermod -aG i2c,gpio,spi $PI_USER 2>/dev/null; true"
 
-# 5. Server-only mode: disable broker (avoids DB contention crashes)
-log "Configuring server-only mode (broker disabled)..."
-ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo systemctl stop anima-broker 2>/dev/null; sudo systemctl disable anima-broker 2>/dev/null; true"
-
-# 6. Install anima.service (MCP server only)
-log "Installing anima service..."
-ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable anima && sudo systemctl start anima"
+# 5. Install and enable broker (sensors) + anima (MCP server)
+# Broker owns sensors, writes to shared memory; server owns DB (Option 1 - no contention)
+log "Installing systemd services (broker + anima)..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo cp ~/anima-mcp/systemd/anima-broker.service /etc/systemd/system/ && sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable anima-broker anima && sudo systemctl start anima-broker && sudo systemctl start anima"
 
 # 7. Verify
 sleep 3
 log "Verifying..."
-ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima" || log "  anima may still be starting"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-broker anima" || log "  services may still be starting"
 
 # 8. Tailscale (optional — for remote access when not on same WiFi)
 if [ -n "${RESTORE_TAILSCALE:-}" ]; then
@@ -135,7 +132,7 @@ else
     log "Tip: RESTORE_TAILSCALE=1 (or + TAILSCALE_AUTH_KEY=tskey-xxx) $0 to add Tailscale"
 fi
 
-log "Done. Lumen should be running (server-only mode, no broker)."
+log "Done. Lumen running (broker + server, no DB contention)."
 log "If I2C sensors (temp/humidity/light) fail: reboot required for interfaces. Run: ssh $PI_USER@$PI_HOST 'sudo reboot'"
 log "Check: ssh $PI_USER@$PI_HOST 'journalctl -u anima -f'"
 log "MCP: http://$PI_HOST:8766/mcp/"

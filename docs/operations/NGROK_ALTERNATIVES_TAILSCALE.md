@@ -73,6 +73,29 @@ curl -s -X POST http://192.168.1.165:8766/v1/tools/call \
 
 ---
 
+## UNITARES Governance over Tailscale
+
+Pi connects to UNITARES on your Mac. The systemd services use `UNITARES_URL=http://100.96.201.46:8767/mcp/` (Mac's Tailscale IP). If your Mac's Tailscale IP changes, update `systemd/anima.service` and `systemd/anima-broker.service`, then on Pi:
+
+```bash
+sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl restart anima
+```
+
+---
+
+## SENSORS Screen: I2C Not Registering
+
+If the third screen shows "air: --", "humidity: --", "light: --" (or "I2C off?"), enable I2C:
+
+```bash
+sudo raspi-config nonint do_i2c 0
+sudo usermod -aG i2c,gpio unitares-anima
+sudo reboot
+```
+
+---
+
 ## Related
 
 - **`scripts/setup_tailscale.sh`** — SSH-based setup
