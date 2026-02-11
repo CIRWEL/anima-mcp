@@ -79,7 +79,7 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 - `_update_coherence_tracking()` — tracks C history and velocity for settling detection
 - `_update_narrative_arc()` — state-driven phase transitions (opening→developing→resolving→closing)
 - Completion: `narrative_complete()` = coherence settled + attention exhausted
-- Fallback: 3000 mark limit for chaotic pieces that never settle
+- No arbitrary mark limit — fatigue accumulates naturally (canvas 15000px limit is only hard cap)
 - `get_drawing_eisv()` — exposes state to governance via bridge check-in
 
 **Attention signals** (replace arbitrary energy depletion):

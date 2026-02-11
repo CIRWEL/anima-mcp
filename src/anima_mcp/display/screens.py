@@ -4365,9 +4365,9 @@ class ScreenRenderer:
 
         Narrative-based: saves when the drawing naturally completes its arc.
         - Coherence settling (pattern found itself) + attention exhausted
-        - 3000 mark fallback for chaotic pieces that never settle
         - Lumen saying "finished" still respected as priority
         - 60s safety floor between saves (prevents edge-case spam)
+        - No arbitrary mark limit - fatigue accumulates naturally
         """
         if anima is None:
             return None
@@ -4410,16 +4410,8 @@ class ScreenRenderer:
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
-        # === FALLBACK: 3000 mark limit for chaotic pieces that never settle ===
-        if self._intent.mark_count > 3000 and pixel_count >= 50:
-            C = state.coherence()
-            print(f"[Canvas] Mark limit reached — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f})", file=sys.stderr, flush=True)
-            saved_path = self.canvas_save(announce=True)
-            if saved_path:
-                self.canvas_clear(persist=True, already_saved=True)
-                self._intent.reset()
-                self._canvas.save_to_disk()
-                return "saved_and_cleared"
+        # No arbitrary mark limit - fatigue accumulates (0.0005/mark + 0.005/switch)
+        # so attention exhausts naturally. Canvas pixel limit (15000) is the only hard cap.
 
         # Periodically persist canvas state (every 60s of drawing)
         time_since_clear = now - self._canvas.last_clear_time
