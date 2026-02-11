@@ -471,14 +471,19 @@ class MetacognitiveMonitor:
             if error.error_humidity > 0.2:
                 sources.append("humidity")
         
-        # Light error (log scale)
+        # Light error — PROPRIOCEPTIVE: the VEML7700 light sensor sits next to
+        # Lumen's NeoPixel LEDs, so it reads Lumen's own glow, not ambient light.
+        # LED brightness changes with drawing phase and expression intensity,
+        # causing huge unpredictable swings (12 lux → 3000 lux) that can never
+        # be predicted. We still track the error for the record but do NOT add
+        # it to the surprise sources — it's self-referential, not environmental.
         if prediction.light_lux is not None and readings.light_lux is not None:
             if prediction.light_lux > 0 and readings.light_lux > 0:
                 log_error = abs(math.log10(prediction.light_lux) - math.log10(readings.light_lux))
                 error.error_light = min(1.0, log_error / 2.0)
+                # Include in aggregate error (affects prediction accuracy metric)
+                # but do NOT add "light" to surprise_sources — this is self-sensing.
                 errors.append(error.error_light)
-                if error.error_light > 0.2:
-                    sources.append("light")
         
         # Pressure error (±20 hPa range)
         if prediction.pressure_hpa is not None and readings.pressure_hpa is not None:

@@ -104,10 +104,10 @@ class PilRenderer(DisplayRenderer):
         # Manual brightness control (user-adjustable via joystick on face screen)
         # Screen always stays full brightness — only LEDs dim.
         self._brightness_presets = [
-            {"name": "Full",   "display": 1.0,  "leds": 1.0},
-            {"name": "Medium", "display": 1.0,  "leds": 0.6},
-            {"name": "Dim",    "display": 1.0,  "leds": 0.35},
-            {"name": "Night",  "display": 1.0,  "leds": 0.15},  # Never fully off - LEDs always visible
+            {"name": "Full",   "display": 1.0,  "leds": 1.0},   # ~0.15-0.18 effective
+            {"name": "Medium", "display": 1.0,  "leds": 0.5},   # ~0.08-0.09 effective
+            {"name": "Dim",    "display": 1.0,  "leds": 0.25},  # ~0.04-0.05 effective
+            {"name": "Night",  "display": 1.0,  "leds": 0.12},  # ~0.02-0.03 effective (near floor)
         ]
         self._brightness_index: int = 0  # Index into presets
         self._manual_brightness: float = 1.0  # Display multiplier
