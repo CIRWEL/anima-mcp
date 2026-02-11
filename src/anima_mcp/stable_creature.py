@@ -781,15 +781,8 @@ def run_creature():
                 sources = ", ".join(pred_error.surprise_sources) if pred_error.surprise_sources else "general"
                 print(f"Surprise: {pred_error.surprise:.0%} ({sources})")
             
-            # Record state for persistence
-            store.record_state(
-                anima.warmth, anima.clarity, anima.stability, anima.presence,
-                readings.to_dict()
-            )
-
-            # Heartbeat: Periodically save alive time to survive crashes
-            # Only writes to DB every 30s (internal rate limiting)
-            store.heartbeat()
+            # DB writes removed: server owns identity DB (Option 1 - no contention).
+            # Broker only writes to shared memory; server does record_state/heartbeat.
 
             # Periodic learning save: Save learning state every 5 minutes to survive crashes
             if ENHANCED_LEARNING_AVAILABLE and time.time() - last_learning_save > 300:
