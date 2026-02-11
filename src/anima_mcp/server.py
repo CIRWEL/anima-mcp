@@ -3087,10 +3087,15 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
     git_dir = repo_root / ".git"
 
     if not git_dir.exists():
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Not a git repository",
-            "path": str(repo_root)
-        }))]
+        # Bootstrap: init git and fetch (for Pi set up via rsync without .git)
+        for cmd in [
+            [["git", "init"], 10],
+            [["git", "remote", "add", "origin", "https://github.com/CIRWEL/anima-mcp.git"], 10],
+            [["git", "fetch", "origin", "main"], 90],
+            [["git", "reset", "--hard", "origin/main"], 30],
+        ]:
+            subprocess.run(cmd[0], cwd=repo_root, capture_output=True, timeout=cmd[1])
+        # Fall through to restart (skip pull - we just did reset --hard)
 
     try:
         # Stash local changes if requested
