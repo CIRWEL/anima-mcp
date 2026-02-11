@@ -707,8 +707,11 @@ class LEDDisplay:
             self.start_dance(spontaneous_dance, duration=2.0, intensity=0.8)
 
         # Render current dance if active (highest visual priority)
-        if self._current_dance and not self._current_dance.is_complete:
-            state = self._render_dance(state)
+        if self._current_dance:
+            if self._current_dance.is_complete:
+                self._current_dance = None  # Clean up finished dance
+            else:
+                state = self._render_dance(state)
 
         # 6. Apply wave patterns (disabled by default - too complex, conflicts with breathing)
         # Only enable if explicitly requested and patterns are enabled
