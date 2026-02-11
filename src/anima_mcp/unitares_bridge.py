@@ -21,7 +21,9 @@ from .eisv_mapper import (
     EISVMetrics,
     anima_to_eisv,
     estimate_complexity,
-    generate_status_text
+    generate_status_text,
+    compute_ethical_drift,
+    compute_confidence,
 )
 from .anima import Anima
 from .sensors.base import SensorReadings
@@ -62,6 +64,10 @@ class UnitaresBridge:
         self._availability_check_interval = 60.0  # Recheck every 60 seconds if unavailable
         self._http_session = None  # Reusable aiohttp session
         self._session_timeout = None  # Timeout config for session
+        # Previous check-in state for computing deltas (ethical_drift, confidence)
+        self._prev_anima = None        # Previous Anima snapshot (warmth, clarity, stability, presence)
+        self._prev_readings = None     # Previous sensor readings
+        self._prev_complexity = None   # Previous complexity value
         # Basic auth for ngrok tunnels (format: "user:password")
         self._basic_auth = None
         auth_str = os.environ.get("UNITARES_AUTH")
@@ -287,17 +293,25 @@ class UnitaresBridge:
             complexity = estimate_complexity(anima, readings)
             status_text = generate_status_text(anima, readings, eisv)
             
-            # Build sensor_data payload
+            # Build sensor_data payload — include raw sensors for dashboard visibility
             sensor_data = {
                 "eisv": eisv.to_dict(),
                 "anima": {
                     "warmth": anima.warmth,
                     "clarity": anima.clarity,
                     "stability": anima.stability,
-                    "presence": anima.presence
-                }
+                    "presence": anima.presence,
+                },
+                "environment": {
+                    "cpu_temp_c": getattr(readings, 'cpu_temp_c', None),
+                    "ambient_temp_c": getattr(readings, 'ambient_temp_c', None),
+                    "humidity_pct": getattr(readings, 'humidity_pct', None),
+                    "light_lux": getattr(readings, 'light_lux', None),
+                    "cpu_percent": getattr(readings, 'cpu_percent', None),
+                    "memory_percent": getattr(readings, 'memory_percent', None),
+                },
             }
-            
+
             # Include identity metadata if available
             if identity:
                 sensor_data["identity"] = {
@@ -311,9 +325,28 @@ class UnitaresBridge:
             if drawing_eisv:
                 sensor_data["drawing_eisv"] = drawing_eisv
 
+            # Compute ethical drift from state changes between check-ins
+            ethical_drift = compute_ethical_drift(
+                anima, self._prev_anima,
+                readings, self._prev_readings,
+            )
+            # Compute confidence from current state + transition rate
+            confidence = compute_confidence(anima, readings, self._prev_anima)
+
+            # Store current state for next check-in's delta computation
+            # Create shallow copies so anima mutations don't affect our snapshot
+            self._prev_anima = Anima(
+                warmth=anima.warmth, clarity=anima.clarity,
+                stability=anima.stability, presence=anima.presence,
+            )
+            self._prev_readings = readings
+            self._prev_complexity = complexity
+
             # Build arguments for process_agent_update
             update_arguments = {
                 "complexity": complexity,
+                "confidence": confidence,
+                "ethical_drift": ethical_drift,
                 "response_text": status_text,
                 "parameters": [{"key": "sensor_data", "value": json.dumps(sensor_data)}]
             }
