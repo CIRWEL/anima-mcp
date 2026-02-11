@@ -49,3 +49,6 @@ message_server.pid
 
 # Credential envelopes (never commit)
 scripts/envelope.pi
+config/anima.env
+*.env
+!*.env.example

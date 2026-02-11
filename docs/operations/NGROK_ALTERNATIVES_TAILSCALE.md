@@ -102,3 +102,4 @@ sudo reboot
 - **`scripts/setup_tailscale_via_http.sh`** — HTTP-based (headless)
 - **`docs/operations/SSH_TIMEOUT_FIX.md`** — When SSH is blocked
 - **`docs/operations/MULTIPLE_TUNNELS_SETUP.md`** — ngrok redundancy
+- **`docs/operations/SECRETS_AND_ENV.md`** — API keys (never in git)

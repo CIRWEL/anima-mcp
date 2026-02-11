@@ -61,6 +61,8 @@ rsync -avz -e "ssh $SSH_OPTS" \
 # 2. Restore data
 log "Restoring Lumen data to ~/.anima/ on Pi..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "mkdir -p ~/.anima"
+# Create anima.env from example if missing (secrets — add GROQ_API_KEY, UNITARES_AUTH)
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "test -f ~/.anima/anima.env || cp ~/anima-mcp/config/anima.env.example ~/.anima/anima.env" && true
 
 # Prefer clean snapshot if main backup is corrupted (common after hot copy)
 DB_TO_RESTORE=""
@@ -133,6 +135,7 @@ else
 fi
 
 log "Done. Lumen running (broker + server, no DB contention)."
-log "If I2C sensors (temp/humidity/light) fail: reboot required for interfaces. Run: ssh $PI_USER@$PI_HOST 'sudo reboot'"
+log "Secrets: edit ~/.anima/anima.env on Pi — add GROQ_API_KEY, UNITARES_AUTH (see config/anima.env.example)"
+log "If I2C sensors (temp/humidity/light) fail: reboot required. Run: ssh $PI_USER@$PI_HOST 'sudo reboot'"
 log "Check: ssh $PI_USER@$PI_HOST 'journalctl -u anima -f'"
 log "MCP: http://$PI_HOST:8766/mcp/"
