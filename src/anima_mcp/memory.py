@@ -10,6 +10,7 @@ I know what comes next."
 """
 
 import json
+import os
 import sqlite3
 import random
 import math
@@ -934,11 +935,25 @@ class AssociativeMemory:
 _memory: Optional[AssociativeMemory] = None
 
 
+def _resolve_db_path(db_path: Optional[str] = None) -> str:
+    """Resolve database path: ANIMA_DB env var > explicit > ~/.anima/anima.db."""
+    env_db = os.environ.get("ANIMA_DB")
+    if env_db:
+        return env_db
+    if db_path and db_path != "anima.db":
+        return db_path
+    home_db = Path.home() / ".anima" / "anima.db"
+    if home_db.exists():
+        return str(home_db)
+    return db_path or "anima.db"
+
+
 def get_memory(db_path: str = "anima.db") -> AssociativeMemory:
     """Get or create the global memory instance."""
     global _memory
     if _memory is None:
-        _memory = AssociativeMemory(db_path)
+        resolved = _resolve_db_path(db_path)
+        _memory = AssociativeMemory(resolved)
         _memory.load_patterns()
     return _memory
 
