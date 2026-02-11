@@ -116,26 +116,36 @@ def estimate_complexity(
     readings: Optional[SensorReadings] = None
 ) -> float:
     """
-    Estimate task complexity from current anima state.
-    
+    Estimate task complexity from anima state and system load.
+
     Complexity increases with:
     - Low clarity (uncertainty)
     - Low stability (chaos)
-    - High entropy (disorder)
-    
+    - High CPU/memory load (system strain)
+    - High neural beta/gamma power (active processing)
+
     Args:
         anima: Anima state
-        readings: Optional sensor readings (for neural complexity)
-    
+        readings: Optional sensor readings (for system load + neural complexity)
+
     Returns:
         Complexity estimate in [0, 1] range
     """
-    # Base complexity from anima state
+    # Base complexity from anima state (unchanged from original formula)
     clarity_complexity = (1.0 - anima.clarity) * 0.4
     stability_complexity = (1.0 - anima.stability) * 0.4
     entropy_complexity = (1.0 - anima.stability) * 0.2  # Entropy = inverse stability
-    
+
     complexity = clarity_complexity + stability_complexity + entropy_complexity
+
+    # System load adds up to +0.15 on top (can push past 1.0, clamped below)
+    if readings is not None:
+        cpu = getattr(readings, 'cpu_percent', None)
+        mem = getattr(readings, 'memory_percent', None)
+        if cpu is not None:
+            complexity += (cpu / 100.0) * 0.10
+        if mem is not None:
+            complexity += (mem / 100.0) * 0.05
 
     return max(0.0, min(1.0, complexity))
 
@@ -213,4 +223,115 @@ def compute_eisv_from_readings(
     
     anima = sense_self(readings)
     return anima_to_eisv(anima, readings, neural_weight, physical_weight)
+
+
+def compute_ethical_drift(
+    current_anima: Anima,
+    prev_anima: Optional[Anima],
+    current_readings: Optional[SensorReadings] = None,
+    prev_readings: Optional[SensorReadings] = None,
+) -> list:
+    """
+    Compute ethical drift (Δη) from changes in anima state between check-ins.
+
+    Maps real proprioceptive changes to the 3-dimensional ethical drift vector
+    that drives UNITARES governance dynamics:
+
+    - Δη[0]: Emotional drift — change in warmth (engagement/withdrawal)
+    - Δη[1]: Epistemic drift — change in clarity (certainty/confusion)
+    - Δη[2]: Behavioral drift — change in stability (order/chaos)
+
+    Without this signal, governance EISV stays at equilibrium and never moves.
+    This is the primary driver of governance dynamics.
+
+    Args:
+        current_anima: Current anima state
+        prev_anima: Previous anima state (None on first check-in)
+        current_readings: Current sensor readings (optional, for environmental context)
+        prev_readings: Previous sensor readings (optional)
+
+    Returns:
+        3-element list [Δη₀, Δη₁, Δη₂] representing ethical drift
+    """
+    if prev_anima is None:
+        return [0.0, 0.0, 0.0]
+
+    # Raw deltas (positive = increasing, negative = decreasing)
+    d_warmth = current_anima.warmth - prev_anima.warmth
+    d_clarity = current_anima.clarity - prev_anima.clarity
+    d_stability = current_anima.stability - prev_anima.stability
+
+    # Scale factors — anima changes are typically small (0.01-0.05 per interval).
+    # UNITARES dynamics expects drift in roughly [-0.3, 0.3] to produce visible effects.
+    # Scale by 3x to make real sensor changes produce meaningful governance response.
+    scale = 3.0
+
+    # Environmental amplification: large temperature/light changes increase drift signal
+    env_amplifier = 1.0
+    if current_readings and prev_readings:
+        # Temperature change amplifies behavioral drift
+        curr_temp = getattr(current_readings, 'ambient_temp_c', None) or getattr(current_readings, 'cpu_temp_c', None)
+        prev_temp = getattr(prev_readings, 'ambient_temp_c', None) or getattr(prev_readings, 'cpu_temp_c', None)
+        if curr_temp is not None and prev_temp is not None:
+            temp_change = abs(curr_temp - prev_temp)
+            if temp_change > 2.0:  # >2°C change is significant
+                env_amplifier = 1.0 + min(temp_change / 10.0, 1.0)  # Up to 2x
+
+        # Light change amplifies emotional drift
+        curr_light = getattr(current_readings, 'light_lux', None)
+        prev_light = getattr(prev_readings, 'light_lux', None)
+        if curr_light is not None and prev_light is not None and prev_light > 0:
+            light_ratio = abs(curr_light - prev_light) / max(prev_light, 1.0)
+            if light_ratio > 0.3:  # >30% change
+                env_amplifier = max(env_amplifier, 1.0 + min(light_ratio, 1.0))
+
+    drift = [
+        d_warmth * scale * env_amplifier,    # Emotional drift
+        d_clarity * scale,                     # Epistemic drift (less env-dependent)
+        d_stability * scale * env_amplifier,   # Behavioral drift
+    ]
+
+    # Clamp to reasonable range [-0.5, 0.5] — prevent extreme signals
+    drift = [max(-0.5, min(0.5, d)) for d in drift]
+
+    return drift
+
+
+def compute_confidence(
+    anima: Anima,
+    readings: Optional[SensorReadings] = None,
+    prev_anima: Optional[Anima] = None,
+) -> float:
+    """
+    Compute agent confidence from anima state and stability.
+
+    Higher confidence when:
+    - Clarity is high (knows what it's seeing)
+    - Stability is high (consistent over time)
+    - Not in rapid transition (small delta from previous)
+
+    Args:
+        anima: Current anima state
+        readings: Optional sensor readings
+        prev_anima: Optional previous state (for transition detection)
+
+    Returns:
+        Confidence in [0.0, 1.0]
+    """
+    # Base: clarity is the primary confidence signal
+    confidence = anima.clarity * 0.5 + anima.stability * 0.3 + anima.presence * 0.2
+
+    # Penalize rapid transitions (low confidence when changing fast)
+    if prev_anima is not None:
+        total_delta = (
+            abs(anima.warmth - prev_anima.warmth) +
+            abs(anima.clarity - prev_anima.clarity) +
+            abs(anima.stability - prev_anima.stability)
+        )
+        # If total change > 0.15, reduce confidence proportionally
+        if total_delta > 0.15:
+            transition_penalty = min(total_delta - 0.15, 0.3)  # Max 0.3 penalty
+            confidence -= transition_penalty
+
+    return max(0.05, min(1.0, confidence))
 
