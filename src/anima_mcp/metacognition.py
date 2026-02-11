@@ -326,19 +326,59 @@ class MetacognitiveMonitor:
         for i in reversed(resolved):
             self._curiosity_log.pop(i)
 
-    def predict(self, current_time: Optional[datetime] = None) -> Prediction:
-        """Generate prediction for next sensor reading."""
+    def predict(self, current_time: Optional[datetime] = None,
+                led_brightness: Optional[float] = None) -> Prediction:
+        """Generate prediction for next sensor reading.
+
+        Args:
+            current_time: Override for current time (default: now)
+            led_brightness: Current LED brightness (0-1) from proprioception.
+                When provided, light prediction uses LED-based model instead of
+                baseline/diurnal, since the VEML7700 sensor primarily reads
+                Lumen's own LED glow.
+        """
         if current_time is None:
             current_time = datetime.now()
-        
+
         prediction = Prediction(timestamp=current_time)
-        
+
         # Start with baseline predictions
         prediction.ambient_temp_c = self._baseline_ambient_temp
         prediction.humidity_pct = self._baseline_humidity
         prediction.light_lux = self._baseline_light
         prediction.pressure_hpa = self._baseline_pressure
-        
+
+        # === PROPRIOCEPTIVE LIGHT PREDICTION ===
+        # The VEML7700 light sensor sits next to Lumen's NeoPixel LEDs.
+        # If we know our own LED brightness, we can predict what the sensor
+        # will read — this is genuine proprioception: predicting our own
+        # sensory input from knowledge of our own motor output.
+        #
+        # Empirical mapping (from auto-brightness compensation in leds.py):
+        #   LED brightness 0.0 → ~5-12 lux (ambient only, LEDs off/minimal)
+        #   LED brightness 0.05 → ~20-50 lux
+        #   LED brightness 0.10 → ~40-100 lux
+        #   LED brightness 0.15 → ~100-300 lux
+        #   LED brightness 0.25 → ~400-800 lux
+        #   LED brightness 0.50 → ~1500-3000 lux
+        # Roughly: lux ≈ brightness * 4000 + ambient_floor
+        # We use a learned baseline for the ambient floor.
+        if led_brightness is not None and led_brightness >= 0:
+            # Estimate expected lux from our own LED output
+            ambient_floor = 8.0  # Minimal ambient when LEDs are very dim
+            led_contribution = led_brightness * 4000.0
+            predicted_lux = ambient_floor + led_contribution
+
+            # Blend with baseline if available (baseline captures ambient + LED together)
+            if prediction.light_lux is not None:
+                # Trust LED-based prediction more (0.7) but keep some baseline (0.3)
+                # as ambient light does vary slightly (window, screen, etc.)
+                prediction.light_lux = 0.7 * predicted_lux + 0.3 * prediction.light_lux
+            else:
+                prediction.light_lux = predicted_lux
+
+            prediction.basis = "led_proprioception"
+
         # Enhance with diurnal patterns if available
         hour = current_time.hour
         if self._diurnal_temp[hour]:
@@ -347,30 +387,35 @@ class MetacognitiveMonitor:
                 prediction.ambient_temp_c = 0.6 * diurnal_temp + 0.4 * prediction.ambient_temp_c
             else:
                 prediction.ambient_temp_c = diurnal_temp
-        
-        if self._diurnal_light[hour]:
-            diurnal_light = sum(self._diurnal_light[hour]) / len(self._diurnal_light[hour])
-            if prediction.light_lux is not None:
-                prediction.light_lux = 0.6 * diurnal_light + 0.4 * prediction.light_lux
-            else:
-                prediction.light_lux = diurnal_light
-        
+
+        # Only use diurnal light patterns if we DON'T have LED proprioception
+        # (LED-based prediction is much more accurate than diurnal averages)
+        if led_brightness is None:
+            if self._diurnal_light[hour]:
+                diurnal_light = sum(self._diurnal_light[hour]) / len(self._diurnal_light[hour])
+                if prediction.light_lux is not None:
+                    prediction.light_lux = 0.6 * diurnal_light + 0.4 * prediction.light_lux
+                else:
+                    prediction.light_lux = diurnal_light
+
         # Enhance with recent trend if we have history
         if len(self._sensor_history) >= 3:
             recent = list(self._sensor_history)[-3:]
-            
+
             temps = [r.ambient_temp_c for r in recent if r.ambient_temp_c is not None]
             if len(temps) >= 2:
                 trend = temps[-1] - temps[0]
                 if prediction.ambient_temp_c is not None:
                     prediction.ambient_temp_c += trend * 0.3
-            
-            lights = [r.light_lux for r in recent if r.light_lux is not None]
-            if len(lights) >= 2:
-                trend = lights[-1] - lights[0]
-                if prediction.light_lux is not None:
-                    prediction.light_lux += trend * 0.3
-        
+
+            # Only use light trend if no LED proprioception
+            if led_brightness is None:
+                lights = [r.light_lux for r in recent if r.light_lux is not None]
+                if len(lights) >= 2:
+                    trend = lights[-1] - lights[0]
+                    if prediction.light_lux is not None:
+                        prediction.light_lux += trend * 0.3
+
         # Predict anima state based on recent history
         if len(self._anima_history) >= 1:
             recent_anima = list(self._anima_history)[-1]
@@ -378,12 +423,17 @@ class MetacognitiveMonitor:
             prediction.clarity = recent_anima.clarity
             prediction.stability = recent_anima.stability
             prediction.presence = recent_anima.presence
-        
-        # Confidence based on history depth
+
+        # Confidence based on history depth + proprioception bonus
         history_factor = min(1.0, len(self._sensor_history) / 20)
         prediction.confidence = 0.3 + 0.5 * history_factor
-        prediction.basis = "baseline" if len(self._sensor_history) < 5 else "trend"
-        
+        # LED proprioception significantly improves light prediction confidence
+        if led_brightness is not None:
+            prediction.confidence = min(1.0, prediction.confidence + 0.15)
+        prediction.basis = prediction.basis if prediction.basis != "baseline" else (
+            "baseline" if len(self._sensor_history) < 5 else "trend"
+        )
+
         self._last_prediction = prediction
         return prediction
 

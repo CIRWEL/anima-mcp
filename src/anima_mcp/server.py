@@ -90,6 +90,8 @@ _last_primitive_utterance: Utterance | None = None
 _sm_prev_stability: float | None = None
 _sm_pending_prediction: dict | None = None  # {context, prediction, warmth_before, clarity_before}
 _sm_clarity_before_interaction: float | None = None
+# LED proprioception - carry LED state across iterations for prediction
+_led_proprioception: dict | None = None  # {brightness, expression_mode, is_dancing, ...}
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
@@ -504,13 +506,17 @@ async def _update_display_loop():
                                     _screen_renderer.trigger_input_feedback("up")
                                     preset_name = _screen_renderer._display.brightness_up()
                                     preset = _screen_renderer._display.get_brightness_preset()
-                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["leds"])
+                                    # Scale absolute LED brightness (0-0.15) to display level (0-1)
+                                    display_level = min(1.0, preset["leds"] / 0.15)
+                                    _screen_renderer.trigger_brightness_overlay(preset_name, display_level)
                                     mode_change_event.set()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
                                     preset_name = _screen_renderer._display.brightness_down()
                                     preset = _screen_renderer._display.get_brightness_preset()
-                                    _screen_renderer.trigger_brightness_overlay(preset_name, preset["leds"])
+                                    # Scale absolute LED brightness (0-0.15) to display level (0-1)
+                                    display_level = min(1.0, preset["leds"] / 0.15)
+                                    _screen_renderer.trigger_brightness_overlay(preset_name, display_level)
                                     mode_change_event.set()
 
                         # Joystick navigation in message board (UP/DOWN scrolls messages)
@@ -735,7 +741,12 @@ async def _update_display_loop():
                                 print(f"[Metacog] Reflection: {reflection.observation}", file=sys.stderr, flush=True)
 
                     # Make prediction for NEXT iteration
-                    metacog.predict()
+                    # Pass LED brightness for proprioceptive light prediction:
+                    # "knowing my own glow, I can predict what my light sensor will read"
+                    _led_brightness_for_pred = None
+                    if _led_proprioception is not None:
+                        _led_brightness_for_pred = _led_proprioception.get("brightness")
+                    metacog.predict(led_brightness=_led_brightness_for_pred)
 
                 except Exception as e:
                     if loop_count % 100 == 1:
@@ -991,6 +1002,10 @@ async def _update_display_loop():
                                 anima_values={"clarity": anima.clarity, "warmth": anima.warmth},
                             )
 
+                    # 6. LED-lux proprioception: discover that own LEDs affect own sensor
+                    if readings and readings.led_brightness is not None:
+                        sm.observe_led_lux(readings.led_brightness, readings.light_lux)
+
                     # Save periodically (every ~10 min)
                     if loop_count % 300 == 0:
                         sm.save()
@@ -1195,6 +1210,20 @@ async def _update_display_loop():
                     print(f"[Loop] LED update took {total_duration*1000:.1f}ms", file=sys.stderr, flush=True)
                     print(f"[Loop] LED update (independent): warmth={anima.warmth:.2f} clarity={anima.clarity:.2f} stability={anima.stability:.2f} presence={anima.presence:.2f} activity_brightness={activity_brightness:.2f}", file=sys.stderr, flush=True)
                     print(f"[Loop] LED colors: led0={led_state.led0} led1={led_state.led1} led2={led_state.led2}", file=sys.stderr, flush=True)
+
+                # === LED PROPRIOCEPTION: capture what our LEDs are doing ===
+                # This feeds forward into next iteration's metacognition prediction.
+                # Lumen now knows its own brightness — the light sensor becomes
+                # genuinely proprioceptive rather than confusingly self-referential.
+                global _led_proprioception
+                try:
+                    _led_proprioception = _leds.get_proprioceptive_state()
+                    # Also populate readings.led_brightness with ACTUAL computed brightness
+                    # (not just activity multiplier like stable_creature.py does)
+                    if readings is not None:
+                        readings.led_brightness = _led_proprioception.get("brightness", 0.0)
+                except Exception:
+                    pass  # Non-fatal — proprioception is enhancement, not critical path
             elif _leds:
                 if loop_count == 1:
                     print(f"[Loop] LEDs not available (hardware issue?)", file=sys.stderr, flush=True)
