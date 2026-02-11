@@ -657,11 +657,12 @@ class ScreenRenderer:
         """Check if cached image matches current state. If hit, apply it.
 
         Returns True if cache hit (caller should return immediately).
+        Uses copy() so post-processing (overlays, transitions) never mutates the cache.
         """
         entry = self._screen_cache.get(screen_name)
         if entry and entry[0] == cache_key:
             if hasattr(self._display, '_image'):
-                self._display._image = entry[1]
+                self._display._image = entry[1].copy()
             if hasattr(self._display, '_show'):
                 self._display._show()
             return True
@@ -1281,7 +1282,14 @@ class ScreenRenderer:
 
                     self._display._image = image
             except Exception as e:
-                pass
+                print(f"[Screen] Post-processing error: {e}", file=sys.stderr, flush=True)
+
+            # Ensure we have something to display — prevent blank screens
+            if not hasattr(self._display, '_image') or self._display._image is None:
+                try:
+                    self._display.show_default()
+                except Exception:
+                    pass
 
             # Single SPI push — all drawing is done, flush to hardware
             self._display._deferred = False
@@ -1310,11 +1318,12 @@ class ScreenRenderer:
             return
 
         # Cache: sensor values rounded to display precision (avoids redraw for noise)
+        # Use (x or 0) to handle None when I2C/sensors fail
         throttle = getattr(readings, 'throttle_bits', None) or 0
         cache_key = (
-            f"{readings.ambient_temp_c:.1f}|{readings.humidity_pct:.0f}|"
-            f"{readings.light_lux:.0f}|{readings.cpu_temp_c:.1f}|"
-            f"{readings.cpu_percent:.0f}|{readings.disk_percent:.0f}|"
+            f"{(readings.ambient_temp_c or 0):.1f}|{(readings.humidity_pct or 0):.0f}|"
+            f"{(readings.light_lux or 0):.0f}|{(readings.cpu_temp_c or 0):.1f}|"
+            f"{(readings.cpu_percent or 0):.0f}|{(readings.disk_percent or 0):.0f}|"
             f"{throttle}"
         )
         if self._check_screen_cache("sensors", cache_key):
@@ -1389,8 +1398,8 @@ class ScreenRenderer:
                     draw.text((10, y), "light: --", fill=LIGHT_CYAN, font=font)
                 y += line_height + 10
 
-                # System
-                cpu_temp = readings.cpu_temp_c
+                # System (handle None when sensors fail)
+                cpu_temp = readings.cpu_temp_c or 0
                 if cpu_temp > 60:
                     cpu_color = RED
                 elif cpu_temp > 50:
@@ -1399,11 +1408,12 @@ class ScreenRenderer:
                     cpu_color = GREEN
                 draw.text((10, y), f"cpu: {cpu_temp:.1f}°C", fill=cpu_color, font=font)
                 y += line_height
-                draw.text((10, y), f"load: {readings.cpu_percent:.0f}%", fill=LIGHT_CYAN, font=font)
+                cpu_pct = readings.cpu_percent or 0
+                draw.text((10, y), f"load: {cpu_pct:.0f}%", fill=LIGHT_CYAN, font=font)
                 y += line_height
 
                 # Disk space
-                disk = readings.disk_percent
+                disk = readings.disk_percent or 0
                 if disk > 80:
                     disk_color = RED
                 elif disk > 60:
@@ -1488,17 +1498,21 @@ class ScreenRenderer:
             lines_with_colors.append((f"humidity: {hum:.0f}%", hum_color))
         if readings.light_lux:
             lines_with_colors.append((f"light: {readings.light_lux:.0f}", WHITE))
-        lines_with_colors.append((f"cpu: {readings.cpu_temp_c:.1f}°C", GREEN))
+        cpu_t = readings.cpu_temp_c or 0
+        lines_with_colors.append((f"cpu: {cpu_t:.1f}°C", GREEN))
         if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now:
             lines_with_colors.append(("UNDERVOLT!", RED))
         elif hasattr(readings, 'undervoltage_occurred') and readings.undervoltage_occurred:
             lines_with_colors.append(("pwr: warn", ORANGE))
 
-        if hasattr(self._display, 'render_colored_text'):
-            self._display.render_colored_text(lines_with_colors, (10, 10))
+        if lines_with_colors:
+            if hasattr(self._display, 'render_colored_text'):
+                self._display.render_colored_text(lines_with_colors, (10, 10))
+            else:
+                text = "\n".join([line for line, _ in lines_with_colors])
+                self._display.render_text(text, (10, 10))
         else:
-            text = "\n".join([line for line, _ in lines_with_colors])
-            self._display.render_text(text, (10, 10))
+            self._display.render_text("SENSORS\n\nno data", (10, 10), color=COLORS.TEXT_DIM)
     
     def _render_identity(self, identity: Optional[CreatureIdentity]):
         """Render identity screen with colors and nav dots."""

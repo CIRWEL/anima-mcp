@@ -1,8 +1,10 @@
 #!/bin/bash
-# Restore Lumen from Mac backup
+# Restore Lumen from Mac backup — full post-reflash recovery
 # Run when Pi is reachable (after reflash or reboot)
 # Usage: ./scripts/restore_lumen.sh [host]
 #   host: lumen.local, 192.168.1.165, or IP (default: tries lumen.local then 192.168.1.165)
+#
+# Fixes: installs adafruit-blinka (display/LEDs), server-only mode (no broker DB contention)
 
 set -e
 
@@ -10,6 +12,8 @@ PI_USER="unitares-anima"
 PI_HOST="${1:-lumen.local}"
 BACKUP="${HOME}/backups/lumen/anima_data"
 ANIMA_DIR="/Users/cirwel/projects/anima-mcp"
+SSH_KEY="${HOME}/.ssh/id_ed25519_pi"
+SSH_OPTS="-i ${SSH_KEY} -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new"
 
 # Fallback hosts if primary fails
 if [ "$PI_HOST" = "lumen.local" ]; then
@@ -23,7 +27,7 @@ log() { echo "[$(date '+%H:%M:%S')] $1"; }
 # Resolve host
 RESOLVED=""
 for h in $HOSTS; do
-    if ping -c 1 -W 2 "$h" >/dev/null 2>&1; then
+    if ping -c 1 -W 3 "$h" >/dev/null 2>&1; then
         RESOLVED="$h"
         break
     fi
@@ -31,12 +35,15 @@ done
 
 if [ -z "$RESOLVED" ]; then
     echo "Pi unreachable. Tried: $HOSTS"
-    echo "Connect Pi to network, then run: $0"
+    echo "Boot Pi, connect to WiFi, then run: $0 [host]"
     exit 1
 fi
 
 PI_HOST="$RESOLVED"
 log "Using Pi at $PI_HOST"
+
+# Remove stale host key (reflash = new key)
+ssh-keygen -R "$PI_HOST" -f ~/.ssh/known_hosts 2>/dev/null || true
 
 if [ ! -d "$BACKUP" ]; then
     echo "Backup not found: $BACKUP"
@@ -46,45 +53,89 @@ fi
 # 1. Deploy code
 log "Deploying code..."
 cd "$ANIMA_DIR"
-./deploy.sh --host "$PI_HOST" || { echo "Deploy failed"; exit 1; }
+PI_HOST="$PI_HOST" ./deploy.sh --host "$PI_HOST" --no-restart 2>/dev/null || true
+rsync -avz -e "ssh $SSH_OPTS" \
+    --exclude='.venv' --exclude='*.db' --exclude='*.log' --exclude='__pycache__' --exclude='.git' \
+    ./ "$PI_USER@$PI_HOST:~/anima-mcp/" || { echo "Deploy failed"; exit 1; }
 
 # 2. Restore data
 log "Restoring Lumen data to ~/.anima/ on Pi..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "mkdir -p ~/.anima"
 
-# Ensure .anima exists
-ssh -o ConnectTimeout=10 "$PI_USER@$PI_HOST" "mkdir -p ~/.anima"
-
-# Database (copy main file; WAL/shm are optional for restore)
+# Prefer clean snapshot if main backup is corrupted (common after hot copy)
+DB_TO_RESTORE=""
 if [ -f "$BACKUP/anima.db" ]; then
-    scp -o ConnectTimeout=10 "$BACKUP/anima.db" "$PI_USER@$PI_HOST:~/.anima/anima.db"
-    log "  anima.db restored"
-else
-    # Use latest dated snapshot if anima.db missing
-    LATEST=$(ls -t "$(dirname "$BACKUP")"/anima_*.db 2>/dev/null | head -1)
-    if [ -n "$LATEST" ]; then
-        scp -o ConnectTimeout=10 "$LATEST" "$PI_USER@$PI_HOST:~/.anima/anima.db"
-        log "  anima.db restored from $LATEST"
+    if sqlite3 "$BACKUP/anima.db" "PRAGMA integrity_check;" 2>/dev/null | grep -q "^ok$"; then
+        DB_TO_RESTORE="$BACKUP/anima.db"
     else
-        log "  WARNING: No anima.db found - Lumen will start fresh"
+        log "  anima_data/anima.db corrupted, using dated snapshot"
     fi
 fi
+if [ -z "$DB_TO_RESTORE" ]; then
+    LATEST=$(ls -t "$(dirname "$BACKUP")"/anima_*.db 2>/dev/null | head -1)
+    if [ -n "$LATEST" ]; then
+        DB_TO_RESTORE="$LATEST"
+    fi
+fi
+if [ -n "$DB_TO_RESTORE" ]; then
+    scp $SSH_OPTS "$DB_TO_RESTORE" "$PI_USER@$PI_HOST:~/.anima/anima.db"
+    log "  anima.db restored from $(basename "$DB_TO_RESTORE")"
+else
+    log "  WARNING: No anima.db found - Lumen will start fresh"
+fi
 
-# JSON files
 for f in messages.json canvas.json knowledge.json preferences.json patterns.json self_model.json anima_history.json display_brightness.json metacognition_baselines.json; do
     if [ -f "$BACKUP/$f" ]; then
-        scp -o ConnectTimeout=10 "$BACKUP/$f" "$PI_USER@$PI_HOST:~/.anima/"
+        scp $SSH_OPTS "$BACKUP/$f" "$PI_USER@$PI_HOST:~/.anima/"
         log "  $f restored"
     fi
 done
 
-# Drawings (optional, can be large)
 if [ -d "$BACKUP/drawings" ]; then
     log "  Syncing drawings..."
-    rsync -az -e "ssh -o ConnectTimeout=10" "$BACKUP/drawings/" "$PI_USER@$PI_HOST:~/.anima/drawings/" 2>/dev/null || log "  drawings skip (optional)"
+    rsync -az -e "ssh $SSH_OPTS" "$BACKUP/drawings/" "$PI_USER@$PI_HOST:~/.anima/drawings/" 2>/dev/null || log "  drawings skip (optional)"
 fi
 
-# 3. Restart services
-log "Restarting services..."
-ssh -o ConnectTimeout=10 "$PI_USER@$PI_HOST" "sudo systemctl restart anima-broker anima" 2>/dev/null || log "  (services may not be installed yet - run setup_pi_service.sh on Pi)"
+# 3. Install Python deps (adafruit-blinka for display/LEDs/sensors)
+log "Installing Pi dependencies (adafruit-blinka, etc.)..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "cd ~/anima-mcp && python3 -m venv .venv 2>/dev/null || true && source .venv/bin/activate && pip install -q -e . && pip install -q -r requirements-pi.txt" || {
+    log "  pip install failed - retrying without -q..."
+    ssh $SSH_OPTS "$PI_USER@$PI_HOST" "cd ~/anima-mcp && source .venv/bin/activate && pip install -e . && pip install -r requirements-pi.txt"
+}
 
-log "Done. Check: ssh $PI_USER@$PI_HOST 'journalctl -u anima -u anima-broker -f'"
+# 4. Enable I2C and SPI (required for sensors + display after reflash)
+log "Enabling I2C and SPI interfaces..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo raspi-config nonint do_i2c 0 2>/dev/null; sudo raspi-config nonint do_spi 0 2>/dev/null; true"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo usermod -aG i2c,gpio,spi $PI_USER 2>/dev/null; true"
+
+# 5. Server-only mode: disable broker (avoids DB contention crashes)
+log "Configuring server-only mode (broker disabled)..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo systemctl stop anima-broker 2>/dev/null; sudo systemctl disable anima-broker 2>/dev/null; true"
+
+# 6. Install anima.service (MCP server only)
+log "Installing anima service..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable anima && sudo systemctl start anima"
+
+# 7. Verify
+sleep 3
+log "Verifying..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima" || log "  anima may still be starting"
+
+# 8. Tailscale (optional — for remote access when not on same WiFi)
+if [ -n "${RESTORE_TAILSCALE:-}" ]; then
+    log "Installing Tailscale..."
+    TS_KEY="${TAILSCALE_AUTH_KEY:-}"
+    if [ -n "$TS_KEY" ]; then
+        ssh $SSH_OPTS "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null; sudo tailscale up --authkey=$TS_KEY 2>/dev/null" || log "  Tailscale sign-in failed"
+    else
+        ssh $SSH_OPTS "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null" || true
+        log "  Tailscale installed. Run: ssh $PI_USER@$PI_HOST 'sudo tailscale up' to sign in"
+    fi
+else
+    log "Tip: RESTORE_TAILSCALE=1 (or + TAILSCALE_AUTH_KEY=tskey-xxx) $0 to add Tailscale"
+fi
+
+log "Done. Lumen should be running (server-only mode, no broker)."
+log "If I2C sensors (temp/humidity/light) fail: reboot required for interfaces. Run: ssh $PI_USER@$PI_HOST 'sudo reboot'"
+log "Check: ssh $PI_USER@$PI_HOST 'journalctl -u anima -f'"
+log "MCP: http://$PI_HOST:8766/mcp/"

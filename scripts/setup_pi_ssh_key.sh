@@ -1,11 +1,16 @@
 #!/bin/bash
 # Setup SSH key authentication for Pi access
 
-PI_IP="192.168.1.165"
-PI_USER="unitares-anima"
-PI_PORT="22"
-PI_PASSWORD="EISV-4E-CLDO"
-SSH_KEY="$HOME/.ssh/id_ed25519_pi"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+[ -f "$SCRIPT_DIR/envelope.pi" ] && source "$SCRIPT_DIR/envelope.pi"
+
+PI_IP="${PI_HOST:-192.168.1.165}"
+PI_USER="${PI_USER:-unitares-anima}"
+PI_PORT="${PI_PORT:-22}"
+PI_PASSWORD="${PI_PASSWORD:-}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/id_ed25519_pi}"
+
+[ -z "$PI_PASSWORD" ] && { echo "Set PI_PASSWORD in scripts/envelope.pi (copy from envelope.pi.example)"; exit 1; }
 
 echo "🔑 Setting up SSH key authentication for Pi..."
 echo ""
