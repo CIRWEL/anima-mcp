@@ -34,6 +34,13 @@ class SensorReadings:
     # Power (if measurable)
     power_watts: Optional[float] = None
 
+    # Voltage / Throttle state (Pi vcgencmd get_throttled)
+    throttle_bits: Optional[int] = None  # Raw hex from vcgencmd (e.g. 0x50005)
+    undervoltage_now: Optional[bool] = None  # Currently under-voltage (bit 0)
+    throttled_now: Optional[bool] = None  # Currently throttled (bit 1)
+    freq_capped_now: Optional[bool] = None  # Currently frequency capped (bit 2)
+    undervoltage_occurred: Optional[bool] = None  # Under-voltage has occurred since boot (bit 16)
+
     # Proprioceptive outputs (own state affecting sensors)
     led_brightness: Optional[float] = None  # 0.0-1.0, own LED brightness level
 
@@ -73,6 +80,11 @@ class SensorReadings:
             "memory_percent": self.memory_percent,
             "disk_percent": self.disk_percent,
             "power_watts": self.power_watts,
+            "throttle_bits": self.throttle_bits,
+            "undervoltage_now": self.undervoltage_now,
+            "throttled_now": self.throttled_now,
+            "freq_capped_now": self.freq_capped_now,
+            "undervoltage_occurred": self.undervoltage_occurred,
             "led_brightness": self.led_brightness,
             "pressure_hpa": self.pressure_hpa,
             "pressure_temp_c": self.pressure_temp_c,

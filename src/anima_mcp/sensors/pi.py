@@ -126,6 +126,37 @@ class PiSensors(SensorBackend):
             default=None
         )
 
+    def _read_throttle_status(self) -> dict:
+        """Read Pi voltage/throttle state from vcgencmd.
+
+        Returns dict with parsed throttle flags:
+          throttle_bits: raw int (e.g. 0x50005)
+          undervoltage_now: bool (bit 0)
+          throttled_now: bool (bit 1)
+          freq_capped_now: bool (bit 2)
+          undervoltage_occurred: bool (bit 16)
+        """
+        import subprocess
+        try:
+            result = subprocess.run(
+                ["vcgencmd", "get_throttled"],
+                capture_output=True, text=True, timeout=2
+            )
+            if result.returncode == 0 and "throttled=" in result.stdout:
+                # Output: "throttled=0x50005\n"
+                hex_str = result.stdout.strip().split("=")[1]
+                bits = int(hex_str, 16)
+                return {
+                    "throttle_bits": bits,
+                    "undervoltage_now": bool(bits & 0x1),
+                    "throttled_now": bool(bits & 0x2),
+                    "freq_capped_now": bool(bits & 0x4),
+                    "undervoltage_occurred": bool(bits & 0x10000),
+                }
+        except Exception:
+            pass
+        return {}
+
     def read(self) -> SensorReadings:
         """Read all available sensors."""
         now = datetime.now()
@@ -187,6 +218,9 @@ class PiSensors(SensorBackend):
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 
+        # Voltage / throttle state
+        throttle = self._read_throttle_status()
+
         # Neural Signals: Computational Proprioception
         # Lumen's "brain" IS the Pi's CPU. We map computational state directly to neural bands.
         # This is not a simulation - it is the actual measurement of the creature's cognitive substrate.
@@ -225,6 +259,11 @@ class PiSensors(SensorBackend):
             memory_percent=memory.percent,
             disk_percent=disk.percent,
             power_watts=None,  # Would need INA219 sensor
+            throttle_bits=throttle.get("throttle_bits"),
+            undervoltage_now=throttle.get("undervoltage_now"),
+            throttled_now=throttle.get("throttled_now"),
+            freq_capped_now=throttle.get("freq_capped_now"),
+            undervoltage_occurred=throttle.get("undervoltage_occurred"),
             pressure_hpa=pressure,
             pressure_temp_c=pressure_temp,
             # EEG channel fields (Reserved/Legacy - always None, preserved for schema compatibility)
