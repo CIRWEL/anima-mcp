@@ -43,6 +43,16 @@ When ngrok is at 100% and you can't SSH:
 
 ---
 
+## One-Time Bootstrap (When Pi Has No New Code)
+
+If `git_pull` and `setup_tailscale` return "Unknown tool" or "Not a git repository", the Pi has old code. Run this once on the Pi (physical access or any shell):
+
+```bash
+curl -s https://raw.githubusercontent.com/CIRWEL/anima-mcp/main/scripts/bootstrap_deploy.py | python3
+```
+
+That deploys the latest code and restarts. Then `setup_tailscale` works via HTTP.
+
 ## With SSH Access
 
 ```bash

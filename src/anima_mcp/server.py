@@ -3087,18 +3087,56 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
     git_dir = repo_root / ".git"
 
     if not git_dir.exists():
-        # Bootstrap: init git and fetch (for Pi set up via rsync without .git)
-        for cmd in [
-            [["git", "init"], 10],
-            [["git", "remote", "add", "origin", "https://github.com/CIRWEL/anima-mcp.git"], 10],
-            [["git", "fetch", "origin", "main"], 90],
-            [["git", "reset", "--hard", "origin/main"], 30],
-        ]:
-            subprocess.run(cmd[0], cwd=repo_root, capture_output=True, timeout=cmd[1])
-        # Fall through to restart (skip pull - we just did reset --hard)
+        # Bootstrap: deploy from GitHub zip (no git needed — for Pi set up via rsync without .git)
+        try:
+            import urllib.request
+            import zipfile
+            import shutil
+
+            url = "https://github.com/CIRWEL/anima-mcp/archive/refs/heads/main.zip"
+            zip_path = Path("/tmp") / "anima-mcp-main.zip"
+            ext_path = Path("/tmp") / "anima-mcp-main"
+
+            urllib.request.urlretrieve(url, zip_path)
+            with zipfile.ZipFile(zip_path, "r") as z:
+                z.extractall(ext_path.parent)
+            zip_path.unlink(missing_ok=True)
+
+            src = ext_path
+            skip = {".venv", ".git", "__pycache__", ".env"}
+            for item in src.iterdir():
+                if item.name in skip or item.name.endswith(".db"):
+                    continue
+                dst = repo_root / item.name
+                if item.is_dir():
+                    if dst.exists():
+                        shutil.rmtree(dst, ignore_errors=True)
+                    shutil.copytree(item, dst, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db", ".env"))
+                else:
+                    shutil.copy2(item, dst)
+            shutil.rmtree(ext_path, ignore_errors=True)
+
+            output = {"success": True, "bootstrap": "Deployed from GitHub zip", "repo": str(repo_root)}
+            if restart:
+                output["restart"] = "Restarting server..."
+                import asyncio
+                async def _delayed_restart():
+                    await asyncio.sleep(1)
+                    try:
+                        subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False)
+                    except Exception:
+                        import os
+                        os._exit(1)
+                asyncio.create_task(_delayed_restart())
+            return [TextContent(type="text", text=json.dumps(output, indent=2))]
+        except Exception as e:
+            return [TextContent(type="text", text=json.dumps({
+                "error": f"Bootstrap (zip deploy) failed: {e}",
+                "repo": str(repo_root),
+            }))]
 
     try:
-        # Stash local changes if requested
+        # Stash local changes if requested (only when .git exists)
         if stash:
             stash_result = subprocess.run(
                 ["git", "stash", "push", "-m", "Auto-stash before git_pull"],
@@ -3360,6 +3398,65 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps({
             "success": False,
             "error": str(e)
+        }))]
+
+
+async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
+    """
+    Deploy latest code from GitHub via zip download. No git required.
+    Use when git_pull fails (no .git) or to force-refresh from main.
+    """
+    import urllib.request
+    import zipfile
+    import shutil
+    from pathlib import Path
+
+    restart = arguments.get("restart", True)
+    repo_root = Path(__file__).parent.parent.parent
+
+    try:
+        url = "https://github.com/CIRWEL/anima-mcp/archive/refs/heads/main.zip"
+        zip_path = Path("/tmp") / "anima-mcp-main.zip"
+        ext_path = Path("/tmp") / "anima-mcp-main"
+
+        urllib.request.urlretrieve(url, zip_path)
+        with zipfile.ZipFile(zip_path, "r") as z:
+            z.extractall(ext_path.parent)
+        zip_path.unlink(missing_ok=True)
+
+        src = ext_path
+        skip = {".venv", ".git", "__pycache__", ".env"}
+        for item in src.iterdir():
+            if item.name in skip or item.name.endswith(".db"):
+                continue
+            dst = repo_root / item.name
+            if item.is_dir():
+                if dst.exists():
+                    shutil.rmtree(dst, ignore_errors=True)
+                shutil.copytree(item, dst, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db", ".env"))
+            else:
+                shutil.copy2(item, dst)
+        shutil.rmtree(ext_path, ignore_errors=True)
+
+        output = {"success": True, "message": "Deployed from GitHub", "repo": str(repo_root)}
+        if restart:
+            output["restart"] = "Restarting server..."
+            import subprocess
+            import asyncio
+            async def _delayed_restart():
+                await asyncio.sleep(1)
+                try:
+                    subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False)
+                except Exception:
+                    import os
+                    os._exit(1)
+            asyncio.create_task(_delayed_restart())
+        return [TextContent(type="text", text=json.dumps(output, indent=2))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "success": False,
+            "error": str(e),
+            "repo": str(repo_root),
         }))]
 
 
@@ -4031,6 +4128,20 @@ TOOLS_STANDARD = [
                 },
             },
             "required": ["service"],
+        },
+    ),
+    Tool(
+        name="deploy_from_github",
+        description="Deploy latest code from GitHub via zip. No git needed. Use when Pi has no .git or git_pull fails.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "restart": {
+                    "type": "boolean",
+                    "description": "Restart anima service after deploy",
+                    "default": True,
+                },
+            },
         },
     ),
     Tool(
@@ -5023,6 +5134,7 @@ HANDLERS = {
     "system_service": handle_system_service,
     "fix_ssh_port": handle_fix_ssh_port,
     "setup_tailscale": handle_setup_tailscale,
+    "deploy_from_github": handle_deploy_from_github,
     "system_power": handle_system_power,
     "primitive_feedback": handle_primitive_feedback,
 }
