@@ -2075,12 +2075,24 @@ async def _update_display_loop():
                 except Exception:
                     pass  # Non-fatal
 
-            # Delay until next render — same for all screens (200ms = 5Hz)
+            # Delay until next render — screen-specific for performance
+            # Heavy screens (notepad, learning) get slower refresh to save CPU
             # Event-driven: mode_change_event breaks out of wait immediately
-            if consecutive_errors > 0:
-                delay = min(base_delay * (1.5 ** min(consecutive_errors, 3)), max_delay)
+            from .display.screens import ScreenMode
+            current_mode = _screen_renderer._state.mode if _screen_renderer else None
+
+            # Screen-specific delays: notepad/learning are heavy, others are light
+            if current_mode in (ScreenMode.NOTEPAD, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH):
+                screen_delay = 1.0  # 1 FPS for heavy screens (drawing, learning visualization)
+            elif current_mode in (ScreenMode.NEURAL,):
+                screen_delay = 0.5  # 2 FPS for neural (animated but not critical)
             else:
-                delay = base_delay
+                screen_delay = base_delay  # 5 FPS for face and simple screens
+
+            if consecutive_errors > 0:
+                delay = min(screen_delay * (1.5 ** min(consecutive_errors, 3)), max_delay)
+            else:
+                delay = screen_delay
 
             # Wait for delay OR mode change event (whichever comes first)
             # This makes screen switching feel instant
