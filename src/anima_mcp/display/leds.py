@@ -450,12 +450,10 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Brightness + pulse ("I'm alive" signal, always on unless night mode)
-            if self._manual_brightness_factor <= 0.01:
-                self._dots.brightness = 0.0
-            else:
-                pulse = self._get_pulse() * self._pulse_amount  # 0 to 0.03
-                self._dots.brightness = max(0.02, min(0.5, state.brightness + pulse))
+            # Brightness + pulse ("I'm alive" signal, ALWAYS on - never fully off)
+            pulse = self._get_pulse() * self._pulse_amount
+            # Use hardware floor - LEDs should always be visible
+            self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, state.brightness + pulse))
 
             # CRITICAL: Always call show() to update LEDs
             # If show() fails, LEDs will stay in previous state (not turn off)
@@ -571,11 +569,9 @@ class LEDDisplay:
                 # State essentially unchanged - skip color calculations, just animate pulse
                 state_changed = False
                 if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
-                    if self._manual_brightness_factor <= 0.01:
-                        self._dots.brightness = 0.0
-                    else:
-                        pulse = self._get_pulse() * self._pulse_amount
-                        self._dots.brightness = max(0.02, min(0.5, self._cached_pipeline_brightness + pulse))
+                    # Always use hardware floor - LEDs never fully off
+                    pulse = self._get_pulse() * self._pulse_amount
+                    self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, self._cached_pipeline_brightness + pulse))
                     self._dots.show()
                     return self._last_state
                 # If no LEDs or no last state, fall through to full update
