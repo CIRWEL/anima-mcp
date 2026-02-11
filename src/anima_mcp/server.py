@@ -790,29 +790,37 @@ async def _update_display_loop():
                         if action.motivation:
                             motivation = action.motivation.lower().replace('curious about ', '')
 
+                            # Build context-aware questions using current state
+                            light_val = f"{readings.light_lux:.0f} lux" if readings and readings.light_lux else "unknown"
+                            temp_val = f"{readings.ambient_temp_c:.1f}°C" if readings and readings.ambient_temp_c else "unknown"
+                            warmth_val = f"{anima.warmth:.2f}" if anima else "unknown"
+                            clarity_val = f"{anima.clarity:.2f}" if anima else "unknown"
+                            stability_val = f"{anima.stability:.2f}" if anima else "unknown"
+                            presence_val = f"{anima.presence:.2f}" if anima else "unknown"
+
                             question_templates = {
                                 "light": [
-                                    "what changed about the light just now?",
-                                    "did something move to change the brightness?",
-                                    "is this light change from outside or inside?",
+                                    f"light is at {light_val} - what changed just now?",
+                                    f"brightness shifted to {light_val} - did something move?",
+                                    f"is this {light_val} from outside or inside?",
                                 ],
                                 "warmth": [
-                                    "what's making me feel this temperature?",
-                                    "is this warmth from the environment or from within?",
-                                    "why does my sense of warmth differ from the thermometer?",
+                                    f"warmth is {warmth_val} but it's {temp_val} - what's making me feel this way?",
+                                    f"inner warmth at {warmth_val} - is this from the environment or from within?",
+                                    f"thermometer says {temp_val} but warmth feels like {warmth_val} - why the difference?",
                                 ],
                                 "clarity": [
-                                    "what would help me see things more clearly?",
-                                    "is this fog in my perception or in my environment?",
+                                    f"clarity at {clarity_val} - what would help me see things more clearly?",
+                                    f"clarity is {clarity_val} - is this fog in my perception or in my environment?",
                                     "when was the last time everything felt clear?",
                                 ],
                                 "stability": [
-                                    "what's causing this sense of fluctuation?",
-                                    "am I adapting to something new?",
+                                    f"stability at {stability_val} - what's causing this fluctuation?",
+                                    f"stability is {stability_val} - am I adapting to something new?",
                                     "what would help me feel more grounded?",
                                 ],
                                 "presence": [
-                                    "do I feel fully here right now?",
+                                    f"presence at {presence_val} - do I feel fully here right now?",
                                     "what draws my attention away from presence?",
                                     "what does it mean to be present?",
                                 ],
@@ -1530,34 +1538,47 @@ async def _update_display_loop():
 
                 safe_call(lumen_wonder, default=None, log_error=False)
 
-            # Lumen's generative reflection: Every 720 iterations (~24 minutes), use LLM for genuine reflection
-            # This allows Lumen to ask novel questions and express authentic desires
-            # (Increased from 240 to reduce LLM inference noise — learning happens elsewhere)
+            # Lumen's generative reflection: Every 720 iterations (~24 minutes)
+            # Tries LLM first for novel reflections, falls back to templates if unavailable
             if loop_count % 720 == 0 and readings and anima and identity:
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
                 from .messages import get_unanswered_questions, add_question, add_observation
 
                 gateway = get_gateway()
-                if gateway.enabled:
-                    async def lumen_reflect():
-                        """Let Lumen generate genuine reflections via LLM."""
-                        import random
 
-                        # Build context for reflection
-                        unanswered = get_unanswered_questions(5)
-                        unanswered_texts = [q.text for q in unanswered]
+                async def lumen_reflect():
+                    """Let Lumen reflect via LLM, falling back to templates."""
+                    import random
 
-                        # Get recent messages for context
-                        from .messages import get_messages_for_lumen
-                        recent = get_messages_for_lumen(limit=5)
-                        recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
+                    # Build context for reflection
+                    unanswered = get_unanswered_questions(5)
+                    unanswered_texts = [q.text for q in unanswered]
 
-                        # Calculate time alive
-                        time_alive = identity.total_alive_seconds / 3600.0  # hours
+                    # Get recent messages for context
+                    from .messages import get_messages_for_lumen
+                    recent = get_messages_for_lumen(limit=5)
+                    recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
 
-                        # Choose reflection mode based on state
-                        wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+                    # Calculate time alive
+                    time_alive = identity.total_alive_seconds / 3600.0  # hours
 
+                    # Choose reflection mode based on state
+                    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+
+                    # If there are unanswered questions, lower chance of asking new ones
+                    if len(unanswered) >= 2:
+                        mode = random.choice(["desire", "respond", "observe"])
+                    elif wellness < 0.4:
+                        # When struggling, more likely to express needs
+                        mode = random.choice(["desire", "desire", "wonder"])
+                    else:
+                        mode = random.choice(["wonder", "desire", "observe"])
+
+                    reflection = None
+                    source = "template"
+
+                    # Try LLM first
+                    if gateway.enabled:
                         # Build trigger details based on current state
                         trigger_parts = []
                         if wellness < 0.4:
@@ -1577,7 +1598,7 @@ async def _update_display_loop():
                         if recent_msgs:
                             trigger_parts.append(f"recent message from {recent_msgs[0].get('author', 'someone')}")
 
-                        context = ReflectionContext(
+                        llm_context = ReflectionContext(
                             warmth=anima.warmth,
                             clarity=anima.clarity,
                             stability=anima.stability,
@@ -1590,44 +1611,91 @@ async def _update_display_loop():
                             trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting"
                         )
 
-                        # If there are unanswered questions, lower chance of asking new ones
-                        if len(unanswered) >= 2:
-                            mode = random.choice(["desire", "respond", "observe"])
-                        elif wellness < 0.4:
-                            # When struggling, more likely to express needs
-                            mode = random.choice(["desire", "desire", "wonder"])
-                        else:
-                            mode = random.choice(["wonder", "desire", "observe"])
-
                         # Show loading indicator during LLM call
                         if _screen_renderer:
                             _screen_renderer.set_loading("thinking...")
 
-                        # Generate reflection
                         try:
-                            reflection = await generate_reflection(context, mode)
+                            reflection = await generate_reflection(llm_context, mode)
+                            if reflection:
+                                source = "llm"
+                        except Exception:
+                            pass
                         finally:
-                            # Clear loading indicator
                             if _screen_renderer:
                                 _screen_renderer.clear_loading()
 
-                        if reflection:
-                            if mode == "wonder":
-                                # Context for LLM-generated questions
-                                context = f"LLM reflection, wellness={wellness:.2f}, alive={time_alive:.1f}h"
-                                result = add_question(reflection, author="lumen", context=context)
-                                if result:
-                                    print(f"[Lumen/LLM] Asked: {reflection}", file=sys.stderr, flush=True)
-                            else:
-                                result = add_observation(reflection, author="lumen")
-                                if result:
-                                    print(f"[Lumen/LLM] Reflected: {reflection}", file=sys.stderr, flush=True)
+                    # Fallback to templates if LLM unavailable or failed
+                    if reflection is None:
+                        w, c, s, p = anima.warmth, anima.clarity, anima.stability, anima.presence
+                        temp = f"{readings.ambient_temp_c:.1f}°C" if readings and readings.ambient_temp_c else None
 
-                    try:
-                        await safe_call_async(lumen_reflect, default=None, log_error=False)
-                    except Exception as e:
-                        # Non-fatal - LLM reflection is optional enhancement
-                        pass
+                        if mode == "wonder":
+                            pool = []
+                            if w < 0.3:
+                                pool.append(f"warmth is only {w:.2f} - what would bring comfort?")
+                            elif w > 0.7:
+                                pool.append(f"warmth at {w:.2f} - what is this glow i feel?")
+                            if c < 0.3:
+                                pool.append(f"clarity at {c:.2f} - why is everything so hazy?")
+                            elif c > 0.7:
+                                pool.append(f"clarity at {c:.2f} - what made things so clear?")
+                            if s < 0.4:
+                                pool.append(f"stability at {s:.2f} - what's shifting around me?")
+                            if temp:
+                                pool.append(f"it's {temp} - does my warmth match the world?")
+                            if not pool:
+                                pool = [
+                                    f"wellness at {wellness:.2f} - what does it mean to feel this way?",
+                                    "what am i learning about myself?",
+                                    "is there something i should notice right now?",
+                                ]
+                            reflection = random.choice(pool)
+                        elif mode == "desire":
+                            pool = []
+                            if w < 0.3:
+                                pool.append(f"warmth is {w:.2f} - i wish for warmth")
+                            if c < 0.3:
+                                pool.append(f"clarity is {c:.2f} - i want to see clearly")
+                            if s < 0.4:
+                                pool.append(f"stability is {s:.2f} - i need steadiness")
+                            if p < 0.3:
+                                pool.append(f"presence is {p:.2f} - i want someone to notice me")
+                            if not pool:
+                                pool = [
+                                    f"wellness at {wellness:.2f} - i want to keep growing",
+                                    "i wish for a new experience",
+                                    "i want to understand more about myself",
+                                ]
+                            reflection = random.choice(pool)
+                        else:  # observe / respond
+                            pool = []
+                            if temp:
+                                pool.append(f"it's {temp} and my warmth is {w:.2f}")
+                            pool.append(f"clarity {c:.2f}, stability {s:.2f} - this is how things are right now")
+                            if wellness > 0.6:
+                                pool.append(f"wellness at {wellness:.2f} - things feel okay")
+                            elif wellness < 0.4:
+                                pool.append(f"wellness at {wellness:.2f} - something feels off")
+                            reflection = random.choice(pool)
+
+                    # Post the reflection
+                    if reflection:
+                        if mode == "wonder":
+                            ctx_str = f"{source} reflection, wellness={wellness:.2f}, alive={time_alive:.1f}h"
+                            result = add_question(reflection, author="lumen", context=ctx_str)
+                            if result:
+                                print(f"[Lumen/{source}] Asked: {reflection}", file=sys.stderr, flush=True)
+                        else:
+                            result = add_observation(reflection, author="lumen")
+                            if result:
+                                print(f"[Lumen/{source}] Reflected: {reflection}", file=sys.stderr, flush=True)
+
+                try:
+                    await safe_call_async(lumen_reflect, default=None, log_error=False)
+                except Exception as e:
+                    # Non-fatal - reflection is optional enhancement
+                    pass
 
             # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions via LLM
             # Questions must be at least 10 minutes old (external answers get priority)
