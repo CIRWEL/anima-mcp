@@ -81,9 +81,12 @@
 | `operations/PI_DEPLOYMENT.md` | Complete deployment guide |
 | `operations/QUICK_START_AGENTS.md` | Code gotchas and agent coordination |
 | `operations/QUICK_START_PI.md` | Quick Pi setup reference |
+| `operations/REFLASH_RECOVERY.md` | Post-reflash restore (broker+anima, anima.env, DB corruption) |
+| `operations/SECRETS_AND_ENV.md` | API keys — GROQ_API_KEY, UNITARES_AUTH (never in git) |
+| `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
 
 **Network access:**
-- **Tailscale** (recommended): Direct Pi access via 100.x.x.x IP
+- **Tailscale** (recommended): Direct Pi access via 100.103.208.117
 - **Local**: lumen.local or 192.168.1.165
 - **ngrok** (legacy): See `archive/2026-02/NGROK_*.md`
 
