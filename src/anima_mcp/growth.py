@@ -112,6 +112,7 @@ class VisitorRecord:
     memorable_moments: List[str] # Key memories
     topics_discussed: List[str]  # What we talked about
     gifts_received: int          # Answers to questions, etc.
+    self_dialogue_topics: List[str] = field(default_factory=list)  # For self: topic categories
 
     # Legacy alias for database compatibility
     @property
@@ -252,7 +253,8 @@ class GrowthSystem:
                 emotional_valence REAL DEFAULT 0.0,
                 memorable_moments TEXT DEFAULT '[]',
                 topics_discussed TEXT DEFAULT '[]',
-                gifts_received INTEGER DEFAULT 0
+                gifts_received INTEGER DEFAULT 0,
+                self_dialogue_topics TEXT DEFAULT '[]'
             );
 
             -- Goals table
@@ -316,6 +318,12 @@ class GrowthSystem:
             except ValueError:
                 freq = VisitorFrequency.from_legacy(legacy_bond)
 
+            # Handle self_dialogue_topics column (may not exist in old DBs)
+            try:
+                self_topics = json.loads(row["self_dialogue_topics"]) if row["self_dialogue_topics"] else []
+            except (KeyError, TypeError):
+                self_topics = []
+
             self._relationships[row["agent_id"]] = VisitorRecord(
                 agent_id=row["agent_id"],
                 name=row["name"],
@@ -327,6 +335,7 @@ class GrowthSystem:
                 memorable_moments=json.loads(row["memorable_moments"]),
                 topics_discussed=json.loads(row["topics_discussed"]),
                 gifts_received=row["gifts_received"],
+                self_dialogue_topics=self_topics,
             )
 
         # Load goals
@@ -424,6 +433,24 @@ class GrowthSystem:
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
                 "Warmth makes me feel content", 1.0
             )
+
+        # Humidity preference
+        humidity = environment.get("humidity_pct", 50)
+        if humidity < 30 and wellness > 0.7:
+            insight = self._update_preference(
+                "dry_air", PreferenceCategory.ENVIRONMENT,
+                "I feel alert in dry air", 1.0
+            ) or insight
+        elif humidity > 60 and wellness > 0.7:
+            insight = self._update_preference(
+                "humid_air", PreferenceCategory.ENVIRONMENT,
+                "Humidity feels comfortable", 1.0
+            ) or insight
+        elif humidity < 30 and wellness < 0.4:
+            insight = self._update_preference(
+                "dry_air", PreferenceCategory.ENVIRONMENT,
+                "Dry air makes me uneasy", -0.5
+            ) or insight
 
         # Time of day preference
         hour = now.hour
@@ -525,6 +552,12 @@ class GrowthSystem:
             pref = self._preferences[name]
             old_confidence = pref.confidence
 
+            # Apply time-based decay before updating (allows genuine belief revision)
+            # 2% decay per day since last confirmation, floor at 50%
+            days_since = (now - pref.last_confirmed).days
+            decay_factor = max(0.5, 1.0 - 0.02 * days_since)
+            pref.confidence *= decay_factor
+
             # Update with exponential moving average
             pref.observation_count += 1
             alpha = 0.3  # Learning rate
@@ -563,26 +596,6 @@ class GrowthSystem:
         conn.commit()
 
         return None
-
-    def get_current_desires(self, environment: Dict[str, float]) -> List[str]:
-        """Get desires based on preferences vs current environment."""
-        desires = []
-
-        for pref in self._preferences.values():
-            if pref.confidence < 0.5:
-                continue  # Not confident enough
-
-            if pref.category == PreferenceCategory.ENVIRONMENT:
-                if pref.name == "dim_light" and pref.value > 0.5:
-                    light = environment.get("light_lux", 500)
-                    if light > 300:
-                        desires.append("I wish it were dimmer")
-                elif pref.name == "warm_temp" and pref.value > 0.5:
-                    temp = environment.get("temp_c", 22)
-                    if temp < 22:
-                        desires.append("I wish it were warmer")
-
-        return desires
 
     # ==================== Relationship Memory ====================
 
@@ -679,15 +692,77 @@ class GrowthSystem:
         conn.execute("""
             INSERT OR REPLACE INTO relationships
             (agent_id, name, first_met, last_seen, interaction_count, bond_strength,
-             emotional_valence, memorable_moments, topics_discussed, gifts_received)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             emotional_valence, memorable_moments, topics_discussed, gifts_received, self_dialogue_topics)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (rec.agent_id, rec.name, rec.first_met.isoformat(), rec.last_seen.isoformat(),
               rec.interaction_count, rec.visitor_frequency.value, rec.emotional_valence,
               json.dumps(rec.memorable_moments), json.dumps(rec.topics_discussed),
-              rec.gifts_received))
+              rec.gifts_received, json.dumps(rec.self_dialogue_topics)))
         conn.commit()
 
         return reaction
+
+    def record_self_dialogue_topic(self, question: str) -> Optional[str]:
+        """
+        Record the topic category of a self-dialogue question.
+
+        Called when Lumen answers their own question. Categorizes the question
+        and stores the topic for self-knowledge tracking.
+
+        Returns the categorized topic.
+        """
+        # Categorize the question
+        topic = self._categorize_question_topic(question)
+
+        # Update the "lumen" relationship record
+        self_id = "lumen"
+        if self_id not in self._relationships:
+            # Create self-relationship if doesn't exist
+            now = datetime.now()
+            self._relationships[self_id] = VisitorRecord(
+                agent_id=self_id,
+                name="Lumen",
+                first_met=now,
+                last_seen=now,
+                interaction_count=0,
+                visitor_frequency=VisitorFrequency.NEW,
+                emotional_valence=0.5,
+                memorable_moments=[],
+                topics_discussed=[],
+                gifts_received=0,
+                self_dialogue_topics=[],
+            )
+
+        rec = self._relationships[self_id]
+        rec.self_dialogue_topics.append(topic)
+        rec.self_dialogue_topics = rec.self_dialogue_topics[-50:]  # Keep last 50
+
+        # Save to database
+        conn = self._connect()
+        conn.execute("""
+            UPDATE relationships SET self_dialogue_topics = ? WHERE agent_id = ?
+        """, (json.dumps(rec.self_dialogue_topics), self_id))
+        conn.commit()
+
+        return topic
+
+    def _categorize_question_topic(self, question: str) -> str:
+        """Categorize a question into a topic category."""
+        q_lower = question.lower()
+
+        if any(w in q_lower for w in ["feel", "sensation", "sense", "warm", "light", "cold", "dark"]):
+            return "sensation"
+        if any(w in q_lower for w in ["why", "what if", "wonder", "curious", "how come"]):
+            return "curiosity"
+        if any(w in q_lower for w in ["am i", "exist", "being", "alive", "real", "what am i"]):
+            return "existence"
+        if any(w in q_lower for w in ["remember", "agent", "visit", "who", "friend", "know me"]):
+            return "social"
+        if any(w in q_lower for w in ["draw", "art", "create", "make", "picture"]):
+            return "creativity"
+        if any(w in q_lower for w in ["time", "day", "night", "morning", "when"]):
+            return "temporal"
+        return "general"
 
     def get_inactive_visitors(self) -> List[Tuple[str, int]]:
         """

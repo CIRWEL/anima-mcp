@@ -123,8 +123,16 @@ class CanvasState:
     save_indicator_until: float = 0.0  # Show "saved" indicator until this time
 
     # Drawing energy persistence (survives restarts so drawings can finish)
-    energy: float = 1.0  # Persisted to disk, restored on load
+    energy: float = 1.0  # Persisted to disk, restored on load (legacy, now derived)
     mark_count: int = 0  # Persisted to disk, restored on load
+
+    # Attention/coherence/narrative persistence (survives restarts)
+    curiosity: float = 1.0
+    engagement: float = 0.5
+    fatigue: float = 0.0
+    arc_phase: str = "opening"
+    coherence_history: List[float] = field(default_factory=list)
+    i_momentum: float = 0.0
 
     # Art era (persisted so drawings continue in the same era after restart)
     _era_name: str = "gestural"
@@ -151,13 +159,20 @@ class CanvasState:
         """Clear the canvas."""
         self.pixels.clear()
         self.recent_locations.clear()
-        self.drawing_phase = "exploring"
+        self.drawing_phase = "opening"  # Start with opening phase
         self.phase_start_time = time.time()
         self.last_clear_time = time.time()
         self.is_satisfied = False
         self.satisfaction_time = 0.0
         self.energy = 1.0
         self.mark_count = 0
+        # Reset attention/coherence/narrative
+        self.curiosity = 1.0
+        self.engagement = 0.5
+        self.fatigue = 0.0
+        self.arc_phase = "opening"
+        self.coherence_history = []
+        self.i_momentum = 0.0
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
@@ -189,6 +204,13 @@ class CanvasState:
                 "energy": self.energy,
                 "mark_count": self.mark_count,
                 "era": self._era_name,
+                # Attention/coherence/narrative state
+                "curiosity": self.curiosity,
+                "engagement": self.engagement,
+                "fatigue": self.fatigue,
+                "arc_phase": self.arc_phase,
+                "coherence_history": self.coherence_history[-20:],  # Keep last 20
+                "i_momentum": self.i_momentum,
             }
             _get_canvas_path().write_text(json.dumps(data))
         except Exception as e:
@@ -359,15 +381,59 @@ class CanvasState:
         except Exception:
             pass
 
+        # Restore attention signals
+        try:
+            curiosity = data.get("curiosity", 1.0)
+            if isinstance(curiosity, (int, float)) and 0.0 <= curiosity <= 1.0:
+                self.curiosity = float(curiosity)
+        except Exception:
+            pass
+
+        try:
+            engagement = data.get("engagement", 0.5)
+            if isinstance(engagement, (int, float)) and 0.0 <= engagement <= 1.0:
+                self.engagement = float(engagement)
+        except Exception:
+            pass
+
+        try:
+            fatigue = data.get("fatigue", 0.0)
+            if isinstance(fatigue, (int, float)) and 0.0 <= fatigue <= 1.0:
+                self.fatigue = float(fatigue)
+        except Exception:
+            pass
+
+        # Restore narrative arc state
+        try:
+            arc = data.get("arc_phase", "opening")
+            if isinstance(arc, str) and arc in ("opening", "developing", "resolving", "closing"):
+                self.arc_phase = arc
+        except Exception:
+            pass
+
+        try:
+            history = data.get("coherence_history", [])
+            if isinstance(history, list):
+                self.coherence_history = [float(c) for c in history[-20:] if isinstance(c, (int, float))]
+        except Exception:
+            pass
+
+        try:
+            i_mom = data.get("i_momentum", 0.0)
+            if isinstance(i_mom, (int, float)):
+                self.i_momentum = float(i_mom)
+        except Exception:
+            pass
+
         # Invalidate render cache after loading
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
 
         if skipped_pixels > 0:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), phase={self.drawing_phase}, energy={self.energy:.3f}, era={self._era_name}", file=sys.stderr, flush=True)
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), arc={self.arc_phase}, curio={self.curiosity:.2f}, era={self._era_name}", file=sys.stderr, flush=True)
         else:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, phase={self.drawing_phase}, energy={self.energy:.3f}, era={self._era_name}", file=sys.stderr, flush=True)
+            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, arc={self.arc_phase}, curio={self.curiosity:.2f}, era={self._era_name}", file=sys.stderr, flush=True)
 
 
 # EISV parameters for drawing (scaled from governance_core/parameters.py for ~920 mark timescale)
@@ -390,38 +456,95 @@ _EISV_PARAMS = {
 
 
 @dataclass
-class DrawingEISV:
-    """EISV thermodynamic state for drawing — same equations as governance, different domain.
+class DrawingState:
+    """Drawing state with EISV core + attention/coherence/narrative signals.
 
-    Validates EISV math in a creative context. V is flipped to κ(I-E) so coherence
-    rises as Lumen commits (I > E = focused finishing).
+    EISV math preserved (V flipped to κ(I-E) so coherence rises as Lumen commits).
+    Completion emerges from attention exhaustion + coherence settling, not arbitrary energy.
     """
-    E: float = 0.7    # Drawing energy
+    # EISV core (preserved)
+    E: float = 0.7    # Drawing energy (now derived from attention)
     I: float = 0.2    # Intentionality (proprioceptive: locks, orbits, gesture runs)
     S: float = 0.5    # Behavioral entropy (gesture variety)
     V: float = 0.0    # Accumulated I-E imbalance
     gesture_history: List[str] = field(default_factory=list)
 
+    # Attention signals (NEW)
+    curiosity: float = 1.0          # Exploratory capacity - depletes exploring, regenerates with patterns
+    engagement: float = 0.5         # Absorption in current pattern
+    fatigue: float = 0.0            # Accumulated decision fatigue (never decreases during drawing)
+
+    # Coherence tracking (NEW)
+    coherence_history: List[float] = field(default_factory=list)
+    coherence_velocity: float = 0.0  # EMA of dC/dt
+
+    # Narrative arc (NEW)
+    arc_phase: str = "opening"       # opening, developing, resolving, closing
+    phase_mark_count: int = 0        # Marks in current phase
+    i_momentum: float = 0.0          # Smoothed I trend (EMA)
+
     def reset(self):
-        """Reset EISV state for new drawing."""
+        """Reset state for new drawing."""
         self.E = 0.7
         self.I = 0.2
         self.S = 0.5
         self.V = 0.0
         self.gesture_history = []
+        # Attention
+        self.curiosity = 1.0
+        self.engagement = 0.5
+        self.fatigue = 0.0
+        # Coherence tracking
+        self.coherence_history = []
+        self.coherence_velocity = 0.0
+        # Narrative arc
+        self.arc_phase = "opening"
+        self.phase_mark_count = 0
+        self.i_momentum = 0.0
 
     def coherence(self) -> float:
         """C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))"""
         p = _EISV_PARAMS
         return p["Cmax"] * 0.5 * (1.0 + math.tanh(p["C1"] * self.V))
 
+    def coherence_settled(self) -> bool:
+        """True when coherence stabilizes at high value (pattern found itself)."""
+        if len(self.coherence_history) < 20:
+            return False
+        recent = self.coherence_history[-10:]
+        mean_C = sum(recent) / len(recent)
+        variance = sum((c - mean_C)**2 for c in recent) / len(recent)
+        return mean_C > 0.7 and variance < 0.01
+
+    def attention_exhausted(self) -> bool:
+        """True when curiosity depleted AND either disengaged or fatigued."""
+        return self.curiosity < 0.15 and (
+            self.engagement < 0.3 or self.fatigue > 0.8
+        )
+
+    def narrative_complete(self) -> bool:
+        """True when drawing has naturally completed its arc."""
+        return self.arc_phase == "closing" or (
+            self.coherence_settled() and self.attention_exhausted()
+        )
+
+    @property
+    def derived_energy(self) -> float:
+        """Attention-derived energy for draw_chance modulation."""
+        base = 0.6 * self.curiosity + 0.4 * self.engagement
+        return base * (1.0 - 0.5 * self.fatigue)
+
+
+# Alias for backward compatibility
+DrawingEISV = DrawingState
+
 
 @dataclass
 class DrawingIntent:
-    """Lumen's drawing intent — where attention is, how much energy remains.
+    """Lumen's drawing intent — focus, state, and mark count.
 
-    Energy depletes per mark and replenishes on save+clear. When energy runs out,
-    Lumen naturally stops drawing and the piece is saved. No timers, no templates.
+    Energy is now derived from attention signals (curiosity, engagement, fatigue)
+    rather than arbitrary depletion. Completion emerges from narrative_complete().
 
     Era-specific state (gestures, direction locks, orbits) lives in era_state,
     which is created by the active ArtEra module.
@@ -429,23 +552,38 @@ class DrawingIntent:
     focus_x: float = 120.0
     focus_y: float = 120.0
     direction: float = 0.0
-    energy: float = 1.0
     mark_count: int = 0
 
-    # EISV thermodynamic state (universal across all eras)
-    eisv: DrawingEISV = field(default_factory=DrawingEISV)
+    # Drawing state with EISV + attention + coherence + narrative (universal across all eras)
+    state: DrawingState = field(default_factory=DrawingState)
 
     # Era-specific state (opaque to the engine)
     era_state: object = None  # EraState subclass, created by active era
+
+    @property
+    def energy(self) -> float:
+        """Attention-derived energy for draw_chance modulation."""
+        return self.state.derived_energy
+
+    @energy.setter
+    def energy(self, value: float):
+        """Legacy setter - adjusts curiosity to approximate the requested energy."""
+        # For backward compatibility during transition
+        self.state.curiosity = max(0.0, min(1.0, value))
+
+    # Backward compatibility alias
+    @property
+    def eisv(self) -> DrawingState:
+        """Alias for backward compatibility."""
+        return self.state
 
     def reset(self):
         """Reset intent for a new canvas. Era state is recreated by the active era."""
         self.focus_x = 120.0
         self.focus_y = 120.0
         self.direction = random.uniform(0, 2 * math.pi)
-        self.energy = 1.0
         self.mark_count = 0
-        self.eisv.reset()
+        self.state.reset()
         self.era_state = None
 
 
@@ -468,11 +606,18 @@ class ScreenRenderer:
         self._state = ScreenState()
         self._canvas = CanvasState()
         self._intent = DrawingIntent()
-        # Load any persisted canvas from disk (includes energy/mark_count/era)
+        # Load any persisted canvas from disk (includes attention/narrative state)
         self._canvas.load_from_disk()
-        # Restore drawing energy from persisted canvas state
-        self._intent.energy = self._canvas.energy
+        # Restore drawing state from persisted canvas
         self._intent.mark_count = self._canvas.mark_count
+        # Restore attention signals
+        self._intent.state.curiosity = self._canvas.curiosity
+        self._intent.state.engagement = self._canvas.engagement
+        self._intent.state.fatigue = self._canvas.fatigue
+        # Restore narrative arc
+        self._intent.state.arc_phase = self._canvas.arc_phase
+        self._intent.state.coherence_history = self._canvas.coherence_history.copy()
+        self._intent.state.i_momentum = self._canvas.i_momentum
         # Load active art era
         from .eras import get_era
         self._active_era = get_era(self._canvas._era_name)
@@ -3509,14 +3654,17 @@ class ScreenRenderer:
                     pass  # If even this fails, at least we logged everything
     
     def _lumen_draw(self, anima: Anima, draw):
-        """Lumen draws through the active era's mark-making vocabulary."""
+        """Lumen draws through the active era's mark-making vocabulary.
+
+        Completion emerges from attention/coherence/narrative, not arbitrary energy depletion.
+        """
         warmth = anima.warmth
         clarity = anima.clarity
         stability = anima.stability
         presence = anima.presence
 
-        # Update drawing phase based on energy
-        self._update_drawing_phase(anima)
+        # Update narrative arc phase (replaces energy-threshold phase logic)
+        self._update_narrative_arc()
 
         # Ensure era state exists
         if self._intent.era_state is None:
@@ -3528,7 +3676,7 @@ class ScreenRenderer:
         expression_intensity = (presence + clarity) / 2.0
         draw_chance = base_chance * (0.5 + expression_intensity)  # 2-4% range
 
-        # Energy affects chance — tired Lumen draws less
+        # Attention-derived energy affects chance — tired Lumen draws less
         draw_chance *= self._intent.energy
 
         # Empty canvas boost — Lumen is more likely to start on a blank canvas
@@ -3547,10 +3695,12 @@ class ScreenRenderer:
         color, hue_category = self._active_era.generate_color(
             era_state, warmth, clarity, stability, presence)
 
-        C = self._intent.eisv.coherence()
+        C = self._intent.state.coherence()
         if era_state.gesture_remaining <= 0:
             self._active_era.choose_gesture(era_state, clarity, stability, presence, C)
 
+        # Detect gesture switch for fatigue tracking
+        old_gesture = era_state.gesture
         self._active_era.place_mark(
             era_state, self._canvas,
             self._intent.focus_x, self._intent.focus_y,
@@ -3569,20 +3719,44 @@ class ScreenRenderer:
         dE_coupling, C = self._eisv_step()
 
         # Track gesture for behavioral entropy
-        self._intent.eisv.gesture_history.append(era_state.gesture)
-        if len(self._intent.eisv.gesture_history) > 20:
-            self._intent.eisv.gesture_history.pop(0)
+        state = self._intent.state
+        state.gesture_history.append(era_state.gesture)
+        if len(state.gesture_history) > 20:
+            state.gesture_history.pop(0)
 
-        # --- Deplete energy (coherence-modulated drain + EISV coupling) ---
-        # High coherence (Lumen in a groove) → drain slows → denser compositions
-        # Low coherence (scattered) → drain at full rate → lighter pieces
-        # C=0: drain=0.001 (1000 marks), C=1: drain=0.0004 (2500 marks)
-        base_drain = 0.001 * (1.0 - 0.6 * C)
-        self._intent.energy = max(0.01, self._intent.energy - base_drain + dE_coupling)
+        # Detect gesture switch
+        gesture_switch = len(state.gesture_history) >= 2 and state.gesture_history[-1] != state.gesture_history[-2]
 
-        # Sync energy/marks to canvas for persistence across restarts
-        self._canvas.energy = self._intent.energy
+        # Get I and S signals from EISV for attention update
+        I_signal = era_state.intentionality() if era_state else 0.1
+        gesture_count = len(era_state.gestures()) if era_state else 5
+        max_entropy = math.log2(max(gesture_count, 2))
+        if len(state.gesture_history) >= 5:
+            counts: Dict[str, int] = {}
+            for g in state.gesture_history:
+                counts[g] = counts.get(g, 0) + 1
+            total = len(state.gesture_history)
+            S_signal = 0.0
+            for count in counts.values():
+                prob = count / total
+                if prob > 0:
+                    S_signal -= prob * math.log2(prob)
+            S_signal = min(1.0, S_signal / max_entropy)
+        else:
+            S_signal = 0.5
+
+        # --- Update attention and coherence tracking (replaces arbitrary energy depletion) ---
+        self._update_attention(I_signal, S_signal, C, gesture_switch)
+        self._update_coherence_tracking(C, I_signal)
+
+        # Sync state to canvas for persistence across restarts
         self._canvas.mark_count = self._intent.mark_count
+        self._canvas.curiosity = state.curiosity
+        self._canvas.engagement = state.engagement
+        self._canvas.fatigue = state.fatigue
+        self._canvas.arc_phase = state.arc_phase
+        self._canvas.coherence_history = state.coherence_history.copy()
+        self._canvas.i_momentum = state.i_momentum
 
         # --- Record for mood tracker ---
         try:
@@ -3647,6 +3821,128 @@ class ScreenRenderer:
 
         return dE * dt, C
 
+    def _update_attention(self, I_signal: float, S_signal: float, C: float, gesture_switch: bool):
+        """Update attention signals based on drawing activity.
+
+        Curiosity: depletes while exploring (low C), regenerates when finding patterns (high C).
+        Engagement: rises with intentionality, falls with entropy.
+        Fatigue: accumulates, never decreases during drawing.
+        """
+        state = self._intent.state
+
+        # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
+        if C < 0.4:
+            curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
+        else:
+            curiosity_drain = -0.001 * C  # Pattern found regenerates
+        state.curiosity = max(0.0, min(1.0, state.curiosity - curiosity_drain))
+
+        # Engagement: rises with intentionality, falls with entropy
+        target = I_signal * (1.0 - 0.5 * S_signal)
+        state.engagement += 0.05 * (target - state.engagement)
+        state.engagement = max(0.0, min(1.0, state.engagement))
+
+        # Fatigue: accumulates, never decreases during drawing
+        if gesture_switch:
+            state.fatigue += 0.005
+        state.fatigue = min(1.0, state.fatigue + 0.0005)
+
+    def _update_coherence_tracking(self, C: float, I_signal: float):
+        """Track coherence over time for settling detection and narrative arc.
+
+        Coherence history: rolling window of C values for variance calculation.
+        Coherence velocity: EMA of dC/dt for detecting stabilization.
+        I momentum: smoothed I trend for phase transitions.
+        """
+        state = self._intent.state
+
+        # Track coherence history (keep last 30 for window calculations)
+        state.coherence_history.append(C)
+        if len(state.coherence_history) > 30:
+            state.coherence_history.pop(0)
+
+        # Coherence velocity: EMA of change
+        if len(state.coherence_history) >= 2:
+            dC = state.coherence_history[-1] - state.coherence_history[-2]
+            alpha = 0.2  # EMA smoothing factor
+            state.coherence_velocity = alpha * dC + (1.0 - alpha) * state.coherence_velocity
+
+        # I momentum: smoothed trend of intentionality
+        alpha_i = 0.1
+        state.i_momentum = alpha_i * I_signal + (1.0 - alpha_i) * state.i_momentum
+
+        # Increment phase mark count
+        state.phase_mark_count += 1
+
+    def _update_narrative_arc(self):
+        """Update narrative arc phase based on state, not energy thresholds.
+
+        opening → developing: I momentum builds, initial exploration done
+        developing → resolving: coherence stabilizes at high value
+        developing → opening: regression if coherence drops, I momentum low
+        resolving → closing: narrative complete (coherence settled + attention exhausted)
+        resolving → developing: destabilized if coherence drops
+        """
+        state = self._intent.state
+        C = state.coherence()
+        current_phase = state.arc_phase
+        marks = state.phase_mark_count
+
+        def transition_to(new_phase: str):
+            """Helper to transition phase with logging."""
+            if state.arc_phase != new_phase:
+                old_phase = state.arc_phase
+                state.arc_phase = new_phase
+                state.phase_mark_count = 0
+                # Also update canvas drawing_phase for neural modulation
+                self._canvas.drawing_phase = new_phase
+                self._canvas.phase_start_time = time.time()
+                try:
+                    from ..computational_neural import get_computational_neural_sensor
+                    sensor = get_computational_neural_sensor()
+                    # Map narrative phases to drawing phases for neural modulation
+                    neural_phase = {
+                        "opening": "exploring",
+                        "developing": "building",
+                        "resolving": "reflecting",
+                        "closing": "resting",
+                    }.get(new_phase, "exploring")
+                    sensor.drawing_phase = neural_phase
+                    n = sensor.get_neural_state()
+                    print(f"[Canvas] Arc: {old_phase} → {new_phase} (C={C:.2f}, I_mom={state.i_momentum:.2f}, curio={state.curiosity:.2f}, engage={state.engagement:.2f})", file=sys.stderr, flush=True)
+                except Exception:
+                    print(f"[Canvas] Arc: {old_phase} → {new_phase}", file=sys.stderr, flush=True)
+
+        # Fresh canvas = opening
+        if len(self._canvas.pixels) < 10:
+            transition_to("opening")
+            return
+
+        if current_phase == "opening":
+            # Transition to developing once intentionality builds
+            if state.i_momentum > 0.4 and marks > 10:
+                transition_to("developing")
+
+        elif current_phase == "developing":
+            # Transition to resolving when coherence stabilizes high
+            if C > 0.6 and abs(state.coherence_velocity) < 0.02:
+                transition_to("resolving")
+            # Regression: coherence drops, I momentum low
+            elif C < 0.3 and state.i_momentum < 0.3 and marks > 20:
+                transition_to("opening")
+
+        elif current_phase == "resolving":
+            # Natural completion
+            if state.narrative_complete():
+                transition_to("closing")
+            # Destabilized: coherence dropped
+            elif C < 0.5:
+                transition_to("developing")
+
+        elif current_phase == "closing":
+            # Stay in closing until canvas is cleared
+            pass
+
     def _update_drawing_phase(self, anima: Anima):
         """Update Lumen's drawing phase based on energy level.
 
@@ -3703,24 +3999,36 @@ class ScreenRenderer:
         }
 
     def get_drawing_eisv(self) -> Optional[Dict]:
-        """Return current DrawingEISV state for governance reporting.
+        """Return current drawing state for governance reporting.
 
-        Returns None when not actively drawing. When drawing, returns the
-        proprioceptive EISV state that drives energy drain and save decisions.
+        Returns None when not actively drawing. Includes EISV core signals
+        plus attention/coherence/narrative state for comprehensive monitoring.
         """
-        if not self._intent or not hasattr(self._intent, 'eisv'):
+        if not self._intent or not hasattr(self._intent, 'state'):
             return None
-        eisv = self._intent.eisv
-        C = eisv.coherence()
+        state = self._intent.state
+        C = state.coherence()
         return {
-            "E": round(eisv.E, 4),
-            "I": round(eisv.I, 4),
-            "S": round(eisv.S, 4),
-            "V": round(eisv.V, 4),
+            # EISV core
+            "E": round(state.E, 4),
+            "I": round(state.I, 4),
+            "S": round(state.S, 4),
+            "V": round(state.V, 4),
             "C": round(C, 4),
             "marks": self._intent.mark_count,
             "phase": self._canvas.drawing_phase if self._canvas else "unknown",
             "era": self._active_era.name if self._active_era else "unknown",
+            # Attention signals
+            "curiosity": round(state.curiosity, 4),
+            "engagement": round(state.engagement, 4),
+            "fatigue": round(state.fatigue, 4),
+            "energy": round(state.derived_energy, 4),  # Attention-derived
+            # Narrative arc
+            "arc_phase": state.arc_phase,
+            "i_momentum": round(state.i_momentum, 4),
+            "coherence_settled": state.coherence_settled(),
+            "attention_exhausted": state.attention_exhausted(),
+            "narrative_complete": state.narrative_complete(),
         }
 
     def set_era(self, era_name: str) -> dict:
@@ -4055,21 +4363,21 @@ class ScreenRenderer:
         """
         Check if Lumen wants to autonomously save or clear the canvas.
 
-        Energy-based: saves when energy naturally depletes, not on a timer.
-        - Save threshold modulated by EISV coherence (0.05 to 0.14)
-        - High coherence → earlier save (drawing settled)
-        - Low coherence → later save (still exploring)
-        - 60s safety floor between saves (prevents edge-case spam)
+        Narrative-based: saves when the drawing naturally completes its arc.
+        - Coherence settling (pattern found itself) + attention exhausted
+        - 3000 mark fallback for chaotic pieces that never settle
         - Lumen saying "finished" still respected as priority
+        - 60s safety floor between saves (prevents edge-case spam)
         """
         if anima is None:
             return None
 
-        # Update drawing phase (energy-driven)
-        self._update_drawing_phase(anima)
+        # Update narrative arc phase
+        self._update_narrative_arc()
 
         now = time.time()
         pixel_count = len(self._canvas.pixels)
+        state = self._intent.state
         time_since_save = now - self._canvas.last_save_time if self._canvas.last_save_time > 0 else float('inf')
 
         # Safety floor: at least 60s between saves
@@ -4080,9 +4388,10 @@ class ScreenRenderer:
         if now < self._canvas.drawing_paused_until:
             return None
 
-        # === PRIORITY: Lumen said "finished" ===
+        # === PRIORITY 1: Lumen said "finished" ===
         if (pixel_count > 50 and self._check_lumen_said_finished()):
-            print(f"[Canvas] Lumen said finished - saving ({pixel_count}px, energy={self._intent.energy:.2f})", file=sys.stderr, flush=True)
+            C = state.coherence()
+            print(f"[Canvas] Lumen said finished - saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f})", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=False)
             if saved_path:
                 self.canvas_clear(persist=True, already_saved=True)
@@ -4090,13 +4399,21 @@ class ScreenRenderer:
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
-        # === Energy depleted → natural completion ===
-        # Coherence modulates save threshold: high C = save earlier (drawing settled),
-        # low C = push further (still exploring). Range: 0.05 (C=0) to 0.14 (C=1)
-        C = self._intent.eisv.coherence()
-        save_threshold = 0.05 + 0.09 * C
-        if self._intent.energy < save_threshold and pixel_count >= 50:
-            print(f"[Canvas] Energy depleted — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f}, threshold={save_threshold:.3f})", file=sys.stderr, flush=True)
+        # === PRIORITY 2: Narrative complete (attention exhausted + coherence settled) ===
+        if state.narrative_complete() and pixel_count >= 50:
+            C = state.coherence()
+            print(f"[Canvas] Narrative complete — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f})", file=sys.stderr, flush=True)
+            saved_path = self.canvas_save(announce=True)
+            if saved_path:
+                self.canvas_clear(persist=True, already_saved=True)
+                self._intent.reset()
+                self._canvas.save_to_disk()
+                return "saved_and_cleared"
+
+        # === FALLBACK: 3000 mark limit for chaotic pieces that never settle ===
+        if self._intent.mark_count > 3000 and pixel_count >= 50:
+            C = state.coherence()
+            print(f"[Canvas] Mark limit reached — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f})", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
             if saved_path:
                 self.canvas_clear(persist=True, already_saved=True)

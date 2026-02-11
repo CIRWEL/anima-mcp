@@ -19,7 +19,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
 import math
 
 
@@ -53,6 +53,10 @@ class ActivityManager:
         self._last_interaction_time: float = time.time()
         self._current_level: ActivityLevel = ActivityLevel.ACTIVE
         self._state_since: float = time.time()
+
+        # Sleep tracking
+        self._sleep_sessions: List[dict] = []  # {start, end, duration_hours}
+        self._last_sleep_start: Optional[datetime] = None
 
         # Thresholds (in seconds)
         self._drowsy_after_inactivity = 30 * 60  # 30 minutes no interaction -> drowsy
@@ -201,6 +205,24 @@ class ActivityManager:
     def _transition_to(self, new_level: ActivityLevel, reason: str):
         """Handle state transition."""
         old_level = self._current_level
+        now = datetime.now()
+
+        # Track sleep sessions
+        if new_level == ActivityLevel.RESTING and old_level != ActivityLevel.RESTING:
+            # Entering sleep
+            self._last_sleep_start = now
+        elif old_level == ActivityLevel.RESTING and new_level != ActivityLevel.RESTING:
+            # Waking up
+            if self._last_sleep_start:
+                duration = (now - self._last_sleep_start).total_seconds()
+                self._sleep_sessions.append({
+                    "start": self._last_sleep_start.isoformat(),
+                    "end": now.isoformat(),
+                    "duration_hours": round(duration / 3600, 2),
+                })
+                self._sleep_sessions = self._sleep_sessions[-50:]  # Keep last 50
+                self._last_sleep_start = None
+
         self._current_level = new_level
         self._state_since = time.time()
 
@@ -255,6 +277,22 @@ class ActivityManager:
             "duration_seconds": now - self._state_since,
             "last_interaction_seconds_ago": now - self._last_interaction_time,
             "settings": self._level_settings[self._current_level],
+        }
+
+    def get_sleep_summary(self) -> dict:
+        """Get summary of sleep/rest sessions."""
+        if not self._sleep_sessions:
+            return {"sessions": 0}
+
+        recent = self._sleep_sessions[-10:]
+        durations = [s["duration_hours"] for s in recent]
+        avg_duration = sum(durations) / len(durations) if durations else 0
+
+        return {
+            "sessions": len(self._sleep_sessions),
+            "recent_avg_hours": round(avg_duration, 2),
+            "last_sleep": recent[-1] if recent else None,
+            "currently_resting": self._current_level == ActivityLevel.RESTING,
         }
 
 

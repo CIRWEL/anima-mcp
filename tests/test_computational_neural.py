@@ -18,9 +18,10 @@ from anima_mcp.computational_neural import (
 # Mock types matching psutil's named tuples
 CpuStats = namedtuple("scpustats", ["ctx_switches", "interrupts", "soft_interrupts", "syscalls"])
 DiskIO = namedtuple("sdiskio", ["read_count", "write_count", "read_bytes", "write_bytes", "read_time", "write_time"])
+CpuTimes = namedtuple("scputimes", ["user", "nice", "system", "idle", "iowait"])
 
 
-def _mock_psutil(mock_ps, cpu_stats=None, disk_io=None):
+def _mock_psutil(mock_ps, cpu_stats=None, disk_io=None, iowait=0.0):
     """Configure psutil mock with proper return values."""
     if cpu_stats is None:
         mock_ps.cpu_stats.return_value = CpuStats(
@@ -34,6 +35,10 @@ def _mock_psutil(mock_ps, cpu_stats=None, disk_io=None):
         )
     else:
         mock_ps.disk_io_counters.return_value = disk_io
+    # Mock cpu_times_percent for theta/iowait calculation
+    mock_ps.cpu_times_percent.return_value = CpuTimes(
+        user=20.0, nice=0.0, system=10.0, idle=70.0 - iowait, iowait=iowait
+    )
 
 
 @pytest.fixture
@@ -134,29 +139,31 @@ class TestGammaBand:
 
 
 class TestThetaBand:
-    """Test Theta band: disk I/O throughput → background data movement."""
+    """Test Theta band: I/O wait time → integration/waiting-for-data."""
 
-    def test_first_sample_zero_theta(self, sensor):
-        """First sample has no previous disk I/O → theta = 0."""
+    def test_no_iowait_zero_theta(self, sensor):
+        """No I/O wait → theta = 0."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            _mock_psutil(mock_ps)
+            _mock_psutil(mock_ps, iowait=0.0)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
         assert state.theta == 0.0
 
-    def test_disk_activity_raises_theta(self, sensor):
-        """Disk I/O should raise theta."""
+    def test_iowait_raises_theta(self, sensor):
+        """I/O wait should raise theta."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            # First sample: baseline
-            _mock_psutil(mock_ps, disk_io=DiskIO(0, 0, 0, 0, 0, 0))
-            sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
-
-            # Second sample: 5MB written in 1 second
-            sensor._last_sample_time = time.time() - 1.0
-            _mock_psutil(mock_ps, disk_io=DiskIO(0, 0, 0, 5 * 1024 * 1024, 0, 0))
+            # iowait=50% → theta = 0.5 * 0.8 = 0.4
+            _mock_psutil(mock_ps, iowait=50.0)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+        # 50% iowait → theta ≈ 0.4 (scaled by 0.8)
+        assert state.theta == pytest.approx(0.4, abs=0.05)
 
-        # 5MB/s out of 10MB/s max → theta ≈ 0.5
-        assert state.theta == pytest.approx(0.5, abs=0.1)
+    def test_high_iowait_high_theta(self, sensor):
+        """High I/O wait → high theta."""
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            # iowait=100% → theta = 1.0 * 0.8 = 0.8
+            _mock_psutil(mock_ps, iowait=100.0)
+            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+        assert state.theta == pytest.approx(0.8, abs=0.05)
 
 
 class TestDeltaBand:
