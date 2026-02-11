@@ -671,12 +671,14 @@ class LEDDisplay:
             state.brightness *= activity_brightness
 
         # 4b. Apply manual dimmer (user joystick control, stacks with activity)
+        before_manual = state.brightness
         if self._manual_brightness_factor < 1.0:
             state.brightness *= self._manual_brightness_factor
+        after_manual = state.brightness
 
         # Debug: Log manual factor periodically
         if self._update_count % 10 == 1:
-            print(f"[LEDs] Manual factor: {self._manual_brightness_factor:.2f}, activity: {activity_brightness:.2f}", file=sys.stderr, flush=True)
+            print(f"[LEDs] Brightness: before_manual={before_manual:.3f} factor={self._manual_brightness_factor:.2f} after={after_manual:.3f}", file=sys.stderr, flush=True)
 
         # 4c. Enforce visible minimum — if Lumen is on, LEDs should be on.
         # The hardware floor in set_all() is a safety net; this is the intent.
