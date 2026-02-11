@@ -18,7 +18,7 @@ from datetime import datetime
 # Pi connection — using explicit credentials
 REMOTE_HOST = "lumen.local"
 REMOTE_USER = "unitares-anima"
-REMOTE_DB = "~/anima-mcp/anima.db"
+REMOTE_DB = "~/.anima/anima.db"
 
 # Mac backup location
 LOCAL_DIR = Path.home() / ".anima"

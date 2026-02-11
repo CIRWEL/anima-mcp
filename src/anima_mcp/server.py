@@ -992,8 +992,8 @@ async def _update_display_loop():
                     # 5. Observe sensor-anima correlations (for temp_clarity, light_warmth beliefs)
                     if readings:
                         sensor_vals = {}
-                        if readings.temperature is not None:
-                            sensor_vals["ambient_temp"] = readings.temperature
+                        if readings.ambient_temp_c is not None:
+                            sensor_vals["ambient_temp"] = readings.ambient_temp_c
                         if readings.light_lux is not None:
                             sensor_vals["light"] = readings.light_lux
                         if sensor_vals:
@@ -1903,8 +1903,8 @@ async def _update_display_loop():
                     # Prepare environment dict from sensor readings
                     environment = {
                         "light_lux": readings.light_lux,
-                        "temp_c": readings.temperature,
-                        "humidity": readings.humidity,
+                        "temp_c": readings.ambient_temp_c,
+                        "humidity": readings.humidity_pct,
                     }
 
                     # Observe for preference learning
@@ -2106,7 +2106,6 @@ async def _update_display_loop():
             # Delay until next render — screen-specific for performance
             # Heavy screens (notepad, learning) get slower refresh to save CPU
             # Event-driven: mode_change_event breaks out of wait immediately
-            from .display.screens import ScreenMode
             current_mode = _screen_renderer._state.mode if _screen_renderer else None
 
             # Screen-specific delays: notepad/learning are heavy, others are light
@@ -4553,13 +4552,21 @@ async def handle_query(arguments: dict) -> list[TextContent]:
             # Use current sensor readings
             readings, _ = _get_readings_and_anima()
             if readings:
-                temp = readings.temperature
-                light = readings.light
-                humidity = readings.humidity
+                temp = readings.ambient_temp_c
+                light = readings.light_lux
+                humidity = readings.humidity_pct
 
         predictions = []
         if temp is not None or light is not None:
-            predictions = anticipate_state(memory, temp, light, humidity)
+            sensors_dict = {
+                "ambient_temp_c": temp,
+                "light_lux": light,
+                "humidity_pct": humidity,
+            }
+            ant = anticipate_state(sensors_dict)
+            if ant:
+                import dataclasses
+                predictions = [dataclasses.asdict(ant)]
 
         return [TextContent(type="text", text=json.dumps({
             "type": "memory",

@@ -1,5 +1,7 @@
 # Restoring Lumen After Reflash
 
+> **See also:** `docs/operations/REFLASH_RECOVERY.md` for a full backup/restore walkthrough.
+
 ## What Happened
 WiFi dropped overnight during code changes (Feb 2, 2026). The ScreenMode enum changes left invalid references in server.py.
 
@@ -72,7 +74,7 @@ pip install -e .
 From your Mac:
 ```bash
 # Copy database
-scp ~/lumen-backups/2026-02-02_extracted/anima.db unitares-anima@lumen.local:~/.anima/anima_growth.db
+scp ~/lumen-backups/2026-02-02_extracted/anima.db unitares-anima@lumen.local:~/.anima/anima.db
 
 # Copy messages
 scp ~/lumen-backups/2026-02-02_extracted/lumen_messages.json unitares-anima@lumen.local:~/.anima/messages.json
@@ -111,7 +113,7 @@ sudo systemctl status anima
 journalctl -u anima -f
 
 # Verify identity
-sqlite3 ~/.anima/anima_growth.db "SELECT * FROM identity;"
+sqlite3 ~/.anima/anima.db "SELECT * FROM identity;"
 # Should show: Lumen, born 2026-01-11
 ```
 

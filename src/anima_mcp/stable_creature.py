@@ -342,6 +342,7 @@ def run_creature():
     last_action = None  # Track last action for outcome recording
     last_state_for_action = None  # State before action for learning
     last_learning_save = time.time()  # Track periodic learning saves
+    readings = None  # Initialize before loop (first iteration has no prior readings)
 
     try:
         while running:
@@ -380,8 +381,11 @@ def run_creature():
                     stability=anima.stability,
                     light_level=readings.light_lux
                 )
-                # Proprioception: know own LED brightness level
-                readings.led_brightness = activity_state.brightness_multiplier
+                # Proprioception: estimate own LED brightness level
+                # Base brightness (0.12) * activity multiplier gives approximate LED brightness.
+                # This is an estimate — actual brightness depends on auto-brightness, manual
+                # dimmer, etc. Server path uses get_proprioceptive_state() for exact values.
+                readings.led_brightness = 0.12 * activity_state.brightness_multiplier
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
                     time.sleep(UPDATE_INTERVAL)

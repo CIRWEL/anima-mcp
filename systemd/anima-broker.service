@@ -37,7 +37,7 @@ RestartSec=10
 StartLimitInterval=300
 StartLimitBurst=3
 # If 3 failures in 5 min, reboot Pi as last resort recovery
-StartLimitAction=reboot
+StartLimitAction=none
 
 # Resource limits
 LimitNOFILE=65536
