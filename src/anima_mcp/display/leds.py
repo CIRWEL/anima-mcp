@@ -107,10 +107,11 @@ class LEDDisplay:
             self._pattern_start_time = None
             self._last_state_values = None
             self._expression_mode = expression_mode
-            # Enforce sane minimums regardless of config (config may be stale)
-            self._base_brightness = max(0.08, self._base_brightness)
-            self._auto_brightness_min = max(0.03, self._auto_brightness_min)
-            self._auto_brightness_max = max(0.10, self._auto_brightness_max)
+            # Enforce sane range regardless of config (config may be stale)
+            # IMPORTANT: Keep range narrow to avoid lux sensor chaos from LED brightness swings
+            self._base_brightness = max(0.08, min(0.12, self._base_brightness))
+            self._auto_brightness_min = max(0.06, self._auto_brightness_min)  # Higher floor
+            self._auto_brightness_max = min(0.12, max(0.08, self._auto_brightness_max))  # Lower ceiling
         except ImportError:
             # Fallback if config not available
             # NOTE: These should match anima_config.yaml defaults
@@ -129,7 +130,8 @@ class LEDDisplay:
         self._brightness = self._base_brightness
         # Hardware floor: absolute minimum brightness (separate from auto-brightness range).
         # Activity state (RESTING=0.15x) can push below auto_brightness_min but not below this.
-        self._hardware_brightness_floor = 0.02
+        # IMPORTANT: Keep floor high enough that LEDs are always visible - prevents lux chaos
+        self._hardware_brightness_floor = 0.06
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_colors = [None, None, None]  # For color transitions
@@ -152,11 +154,11 @@ class LEDDisplay:
         self._current_dance: Optional[Dance] = None
         self._dance_cooldown_until: float = 0.0  # Prevent dance spam
         self._last_dance_trigger: Optional[str] = None
-        self._spontaneous_dance_chance: float = 0.003  # ~0.3% per update chance of spontaneous dance
+        self._spontaneous_dance_chance: float = 0.001  # ~0.1% per update - less frequent to avoid lux chaos
         self._manual_brightness_factor: float = 1.0  # User dimmer multiplier (set from server.py)
-        # Pulse animation ("I'm alive" signal)
-        self._pulse_cycle: float = 3.0  # Seconds per cycle
-        self._pulse_amount: float = 0.03  # Absolute brightness added at peak
+        # Pulse animation ("I'm alive" signal) - SUBTLE to avoid lux sensor chaos
+        self._pulse_cycle: float = 4.0  # Seconds per cycle (slower = calmer)
+        self._pulse_amount: float = 0.015  # Absolute brightness added at peak (halved for subtlety)
         self._init_leds()
     
     def _init_leds(self):
@@ -616,12 +618,13 @@ class LEDDisplay:
         self._last_anima_values = (warmth, clarity, stability, presence)
         
         # Apply color transitions with adaptive smoothness
+        # VERY slow transitions to avoid lux sensor chaos from rapid color/brightness changes
         if self._color_transitions_enabled and self._last_state and self._last_colors[0] is not None:
-            # Smoother transitions for gradual changes, faster for state changes
+            # Much slower transitions - LEDs should drift, not jump
             if state_change_detected:
-                transition_factor = 0.5  # Faster transition for state changes
+                transition_factor = 0.15  # Still gradual even for state changes
             else:
-                transition_factor = 0.2  # Very smooth for gradual changes
+                transition_factor = 0.05  # Glacially slow for normal changes
             
             state.led0 = self._transition_color(self._last_colors[0], state.led0, transition_factor)
             state.led1 = self._transition_color(self._last_colors[1], state.led1, transition_factor)
@@ -651,13 +654,14 @@ class LEDDisplay:
         if pulsing_mult < 1.0:
             state.brightness *= pulsing_mult
         
-        # 3. Apply state-change pulse effect (highest priority - brief brightness boost)
+        # 3. Apply state-change pulse effect (brief, SUBTLE brightness boost)
+        # Reduced from 0.3 to 0.1 to avoid lux sensor chaos
         if self._state_change_pulse_active and self._state_change_pulse_start is not None:
-            pulse_duration = 1.0  # Pulse for 1 second
+            pulse_duration = 0.8  # Slightly shorter
             elapsed = time.time() - self._state_change_pulse_start
             if elapsed < pulse_duration:
-                # Pulse: brighten then fade back
-                pulse_factor = 1.0 + (0.3 * (1.0 - (elapsed / pulse_duration)))
+                # Subtle pulse: small brighten then fade back
+                pulse_factor = 1.0 + (0.1 * (1.0 - (elapsed / pulse_duration)))
                 state.brightness *= pulse_factor
             else:
                 self._state_change_pulse_active = False
@@ -1219,63 +1223,61 @@ def _interpolate_color(color1: Tuple[int, int, int], color2: Tuple[int, int, int
 
 def _create_gradient_palette(warmth: float, clarity: float, stability: float, presence: float) -> Tuple[Tuple[int, int, int], Tuple[int, int, int], Tuple[int, int, int]]:
     """
-    Create rich gradient color palette based on all state metrics.
-    
-    Returns:
-        Tuple of (led0, led1, led2) colors with rich gradients
-    """
-    # LED 0 (left): Warmth — cool violet → rose → golden amber → deep orange
-    if warmth < 0.2:
-        led0 = (60, 40, 160)    # Deep cool violet
-    elif warmth < 0.35:
-        ratio = (warmth - 0.2) / 0.15
-        led0 = _interpolate_color((60, 40, 160), (180, 100, 120), ratio)   # Violet → dusty rose
-    elif warmth < 0.55:
-        ratio = (warmth - 0.35) / 0.2
-        led0 = _interpolate_color((180, 100, 120), (255, 180, 50), ratio)  # Rose → warm gold
-    elif warmth < 0.75:
-        ratio = (warmth - 0.55) / 0.2
-        led0 = _interpolate_color((255, 180, 50), (255, 110, 10), ratio)   # Gold → deep amber
-    else:
-        ratio = (warmth - 0.75) / 0.25
-        led0 = _interpolate_color((255, 110, 10), (255, 40, 0), ratio)     # Amber → hot orange-red
+    Create SUBTLE gradient color palette based on all state metrics.
 
-    # LED 1 (center): Clarity — color shifts from foggy amber to crisp blue-white
-    # Intensity scales with clarity; hue tells you the quality
-    i = max(20, int(clarity * 255))  # intensity floor so LED is never fully off
-    if clarity < 0.3:
-        led1 = (i, int(i * 0.5), 0)                    # Dim foggy amber
-    elif clarity < 0.5:
-        ratio = (clarity - 0.3) / 0.2
-        led1 = _interpolate_color((i, int(i * 0.5), 0),
-                                  (i, i, int(i * 0.3)), ratio)  # Amber → warm yellow
+    CONSTRAINED to avoid wild lux sensor fluctuations from dramatic color swings.
+    All colors stay in warm amber/gold family - no violets or reds.
+
+    Returns:
+        Tuple of (led0, led1, led2) colors with gentle gradients
+    """
+    # LED 0 (left): Warmth — soft amber → warm gold → deep amber (narrow warm range)
+    # Constrained: no violets, no hot reds - just warm tones
+    if warmth < 0.3:
+        led0 = (180, 120, 60)   # Soft amber (cool end)
+    elif warmth < 0.5:
+        ratio = (warmth - 0.3) / 0.2
+        led0 = _interpolate_color((180, 120, 60), (220, 160, 50), ratio)   # Soft amber → gold
+    elif warmth < 0.7:
+        ratio = (warmth - 0.5) / 0.2
+        led0 = _interpolate_color((220, 160, 50), (240, 140, 40), ratio)   # Gold → warm amber
+    else:
+        ratio = (warmth - 0.7) / 0.3
+        led0 = _interpolate_color((240, 140, 40), (255, 120, 30), ratio)   # Warm amber → deep amber
+
+    # LED 1 (center): Clarity — warm yellow range only (no blue-white extremes)
+    # Constrained intensity range to avoid brightness swings
+    i = max(120, min(220, int(80 + clarity * 140)))  # 120-220 range (narrower)
+    if clarity < 0.4:
+        led1 = (i, int(i * 0.7), int(i * 0.2))       # Warm amber-yellow
     elif clarity < 0.7:
-        ratio = (clarity - 0.5) / 0.2
-        led1 = _interpolate_color((i, i, int(i * 0.3)),
-                                  (i, i, int(i * 0.7)), ratio)  # Yellow → soft white
+        ratio = (clarity - 0.4) / 0.3
+        led1 = _interpolate_color((i, int(i * 0.7), int(i * 0.2)),
+                                  (i, i, int(i * 0.5)), ratio)  # Amber-yellow → soft yellow
     else:
         ratio = (clarity - 0.7) / 0.3
-        led1 = _interpolate_color((i, i, int(i * 0.7)),
-                                  (int(i * 0.9), i, i), ratio)  # Soft white → cool crisp white
+        led1 = _interpolate_color((i, i, int(i * 0.5)),
+                                  (i, i, int(i * 0.7)), ratio)  # Soft yellow → warm white
 
-    # LED 2 (right): Stability + Presence — red-orange warning → emerald → teal
+    # LED 2 (right): Stability + Presence — yellow-green range only (no red warnings, no teal)
+    # Constrained to avoid dramatic color swings
     combined = (stability * 0.6 + presence * 0.4)  # Stability-weighted
-    if combined < 0.25:
-        led2 = (255, int(combined * 300), 0)       # Red-orange warning
-    elif combined < 0.45:
-        ratio = (combined - 0.25) / 0.2
-        led2 = _interpolate_color((255, 75, 0), (220, 200, 0), ratio)      # Orange → yellow
-    elif combined < 0.65:
-        ratio = (combined - 0.45) / 0.2
-        led2 = _interpolate_color((220, 200, 0), (60, 220, 80), ratio)     # Yellow → emerald green
+    if combined < 0.3:
+        led2 = (200, 160, 40)                      # Warm yellow (low stability)
+    elif combined < 0.5:
+        ratio = (combined - 0.3) / 0.2
+        led2 = _interpolate_color((200, 160, 40), (160, 200, 60), ratio)   # Warm yellow → yellow-green
+    elif combined < 0.7:
+        ratio = (combined - 0.5) / 0.2
+        led2 = _interpolate_color((160, 200, 60), (100, 200, 80), ratio)   # Yellow-green → soft green
     else:
-        ratio = (combined - 0.65) / 0.35
-        led2 = _interpolate_color((60, 220, 80), (0, 200, 180), ratio)     # Emerald → teal
+        ratio = (combined - 0.7) / 0.3
+        led2 = _interpolate_color((100, 200, 80), (80, 180, 120), ratio)   # Soft green → sage
 
-    # Presence tint: when very present, add a subtle cyan shimmer
-    if presence > 0.75:
-        tint = (presence - 0.75) * 0.4  # up to 0.1 blend
-        led2 = blend_colors(led2, (0, 160, 200), ratio=tint)
+    # Presence tint: subtle green-blue shift when very present (reduced from cyan)
+    if presence > 0.8:
+        tint = (presence - 0.8) * 0.3  # Very subtle
+        led2 = blend_colors(led2, (60, 180, 140), ratio=tint)
     
     return (led0, led1, led2)
 
