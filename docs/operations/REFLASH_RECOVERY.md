@@ -30,13 +30,22 @@ This script:
 - Deploys code
 - Restores anima.db and JSON files from `~/backups/lumen/anima_data/`
 - Installs adafruit-blinka and requirements-pi (fixes display/LEDs)
-- Configures **server-only mode** (no broker — avoids DB contention crashes)
-- Installs and starts anima.service
+- Installs **broker + anima** (broker owns sensors/shared memory; server owns DB — no contention)
+- Creates `~/.anima/anima.env` from example if missing (add GROQ_API_KEY, UNITARES_AUTH)
+- Installs and starts anima-broker + anima
+
+**Hosts tried:** lumen.local, 192.168.1.165, 100.103.208.117 (Tailscale). Use Tailscale IP if SSH on port 22 times out:
+```bash
+./scripts/restore_lumen.sh 100.103.208.117
+```
+
+**HTTP deploy (no SSH):** If Pi's HTTP (8766) is reachable but Pi has old code, run on Pi: `curl -s https://raw.githubusercontent.com/CIRWEL/anima-mcp/main/scripts/bootstrap_deploy.py | python3`
 
 After restore, update Cursor MCP config (~/.cursor/mcp.json) with the Pi's IP:
 ```json
 "url": "http://192.168.1.165:8766/mcp/"
 ```
+Or Tailscale: `http://100.103.208.117:8766/mcp/`
 
 **Credentials envelope:** Pi password and SSH key path live in `scripts/envelope.pi` (gitignored). Copy from `scripts/envelope.pi.example` and fill in. Used by `setup_pi_ssh_key.sh` and ssh-copy-id workflows.
 
@@ -62,6 +71,8 @@ Lumen stores everything in `~/.anima/` on the Pi:
 | `schema_renders/` | Schema render outputs (optional) |
 
 **Canonical path on Pi:** `/home/unitares-anima/.anima/anima.db` (systemd uses this)
+
+**Secrets:** `~/.anima/anima.env` — GROQ_API_KEY, UNITARES_AUTH. See `docs/operations/SECRETS_AND_ENV.md`.
 
 ---
 
@@ -101,6 +112,8 @@ Use your existing backups:
 
 - **Latest full backup:** `~/backups/lumen/anima_data/` (from backup_lumen.sh)
 - **Latest DB snapshot:** `~/backups/lumen/anima_20260210_1800.db` (or newest `anima_*.db`)
+
+**DB corruption:** If restored anima.db is malformed, use a dated snapshot: `sqlite3 anima_*.db "PRAGMA integrity_check;"` → use one that returns `ok`. Restore script prefers clean snapshots when anima_data/anima.db fails integrity.
 - **Older backup:** `~/lumen-backups/2026-02-02_extracted/` or `~/lumen-backups/2026-01-30_184330/`
 
 ---
@@ -266,7 +279,7 @@ ssh unitares-anima@lumen.local "sqlite3 ~/.anima/anima.db \"SELECT name, creatur
 | 3 | Boot Pi, SSH, run apt update, create `~/.anima` |
 | 4 | Deploy anima-mcp code (rsync + pip install) |
 | 5 | Restore `anima.db` and JSON files to `~/.anima/` |
-| 6 | Install systemd services, start anima-broker + anima |
+| 6 | Install systemd services, create anima.env if missing, start anima-broker + anima |
 | 7 | Verify identity, display, logs |
 
 ---
@@ -284,14 +297,16 @@ ssh unitares-anima@lumen.local "sqlite3 ~/.anima/anima.db \"SELECT name, creatur
 
 ## Tailscale (Optional)
 
-For remote access when not on the same WiFi:
+For remote access when not on the same WiFi. **Use when ngrok hits limits or SSH on port 22 times out.**
 
 ```bash
-./scripts/setup_tailscale.sh
-# Or with auth key (headless): TAILSCALE_AUTH_KEY=tskey-auth-xxx ./scripts/setup_tailscale.sh
+# With SSH: TAILSCALE_AUTH_KEY=tskey-auth-xxx ./scripts/setup_tailscale.sh
+# Via HTTP (headless): TAILSCALE_AUTH_KEY=tskey-auth-xxx ./scripts/setup_tailscale_via_http.sh
 ```
 
-Get an auth key at: https://login.tailscale.com/admin/settings/keys (one-time, reusable for 90 days).
+Get an auth key at: https://login.tailscale.com/admin/settings/keys (reusable, 90 days).
+
+See `docs/operations/NGROK_ALTERNATIVES_TAILSCALE.md` for full flow.
 
 ---
 

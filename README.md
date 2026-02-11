@@ -158,8 +158,8 @@ Falls back to mock sensors on Mac for development.
 
 ```
 Anima MCP (Pi, port 8766)
-├── Tailscale: 100.83.45.66:8766     (direct)
-├── ngrok:     lumen-anima.ngrok.io   (public, no auth)
+├── Tailscale: 100.103.208.117:8766  (direct, no usage limits)
+├── ngrok:     lumen-anima.ngrok.io   (public, when not at limits)
 └── LAN:       192.168.1.165:8766     (local network)
 ```
 
