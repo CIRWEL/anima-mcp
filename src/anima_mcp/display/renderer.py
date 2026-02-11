@@ -97,6 +97,10 @@ class PilRenderer(DisplayRenderer):
         self._deferred: bool = False  # When True, _show() skips SPI push (caller must call flush())
         # Font cache (avoid loading from disk on every render)
         self._name_font: Optional[ImageFont.FreeTypeFont] = None
+        # Brightness cache (avoid re-dimming unchanged images)
+        self._cached_dimmed_image: Optional[Image.Image] = None
+        self._cached_source_id: Optional[int] = None  # id(image) when dimmed
+        self._cached_brightness: float = 1.0
         # Manual brightness control (user-adjustable via joystick on face screen)
         # Screen always stays full brightness — only LEDs dim.
         self._brightness_presets = [
@@ -148,6 +152,7 @@ class PilRenderer(DisplayRenderer):
         preset = self._brightness_presets[self._brightness_index]
         self._manual_brightness = preset["display"]
         self._manual_led_brightness = preset["leds"]
+        self._cached_dimmed_image = None  # Invalidate cache on brightness change
         self._save_brightness()
         print(f"[Display] Brightness: {preset['name']} (display={preset['display']}, leds={preset['leds']})", file=sys.stderr, flush=True)
         return preset["name"]
@@ -159,6 +164,7 @@ class PilRenderer(DisplayRenderer):
         preset = self._brightness_presets[self._brightness_index]
         self._manual_brightness = preset["display"]
         self._manual_led_brightness = preset["leds"]
+        self._cached_dimmed_image = None  # Invalidate cache on brightness change
         self._save_brightness()
         print(f"[Display] Brightness: {preset['name']} (display={preset['display']}, leds={preset['leds']})", file=sys.stderr, flush=True)
         return preset["name"]
@@ -617,9 +623,24 @@ class PilRenderer(DisplayRenderer):
         if self._display and self._image:
             try:
                 if self._manual_brightness < 1.0:
-                    dimmed = ImageEnhance.Brightness(self._image).enhance(self._manual_brightness)
-                    self._display.image(dimmed)
+                    # Use cached dimmed image if source and brightness unchanged
+                    source_id = id(self._image)
+                    if (self._cached_dimmed_image is not None and
+                        self._cached_source_id == source_id and
+                        self._cached_brightness == self._manual_brightness):
+                        # Cache hit - use cached dimmed image
+                        self._display.image(self._cached_dimmed_image)
+                    else:
+                        # Cache miss - compute and cache
+                        dimmed = ImageEnhance.Brightness(self._image).enhance(self._manual_brightness)
+                        self._cached_dimmed_image = dimmed
+                        self._cached_source_id = source_id
+                        self._cached_brightness = self._manual_brightness
+                        self._display.image(dimmed)
                 else:
+                    # Full brightness - clear cache (not needed)
+                    self._cached_dimmed_image = None
+                    self._cached_source_id = None
                     self._display.image(self._image)
             except Exception as e:
                 print(f"[Display] Hardware error during show: {e}", file=sys.stderr, flush=True)
