@@ -3363,6 +3363,84 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_setup_tailscale(arguments: dict) -> list[TextContent]:
+    """
+    Install and activate Tailscale on Pi (ngrok alternative — no usage limits).
+    Call via HTTP when SSH unavailable. Requires auth_key for headless.
+    Get key: https://login.tailscale.com/admin/settings/keys
+    """
+    import subprocess
+
+    auth_key = arguments.get("auth_key", "").strip()
+    if not auth_key:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "auth_key required for headless setup",
+            "hint": "Get at https://login.tailscale.com/admin/settings/keys (reusable, 90 days)",
+            "usage": "Call with auth_key=tskey-auth-xxx"
+        }))]
+
+    if not auth_key.startswith("tskey-"):
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Invalid auth_key format (should start with tskey-)"
+        }))]
+
+    try:
+        # Install Tailscale
+        install = subprocess.run(
+            ["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
+            capture_output=True,
+            text=True,
+            timeout=120
+        )
+        if install.returncode != 0:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "error": f"Install failed: {install.stderr or install.stdout}"
+            }))]
+
+        # Activate with auth key
+        up = subprocess.run(
+            ["sudo", "tailscale", "up", "--authkey=" + auth_key],
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+
+        if up.returncode != 0:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "error": up.stderr.strip() or up.stdout.strip() or "tailscale up failed",
+                "hint": "Auth key may be expired or invalid"
+            }))]
+
+        # Get Tailscale IP
+        ip_result = subprocess.run(
+            ["tailscale", "ip", "-4"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        ts_ip = ip_result.stdout.strip().split("\n")[0] if ip_result.stdout else None
+
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "message": "Tailscale active. Use 100.x.x.x for MCP/SSH.",
+            "tailscale_ip": ts_ip,
+            "mcp_url": f"http://{ts_ip}:8766/mcp/" if ts_ip else None,
+            "connect": f"ssh -i ~/.ssh/id_ed25519_pi unitares-anima@{ts_ip}" if ts_ip else None,
+        }))]
+    except subprocess.TimeoutExpired:
+        return [TextContent(type="text", text=json.dumps({
+            "success": False,
+            "error": "Command timed out"
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "success": False,
+            "error": str(e)
+        }))]
+
+
 async def handle_system_power(arguments: dict) -> list[TextContent]:
     """
     Reboot or shutdown the Pi remotely.
@@ -3953,6 +4031,20 @@ TOOLS_STANDARD = [
                 },
             },
             "required": ["service"],
+        },
+    ),
+    Tool(
+        name="setup_tailscale",
+        description="Install and activate Tailscale on Pi (ngrok alternative, no usage limits). Call via HTTP. Requires auth_key.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "auth_key": {
+                    "type": "string",
+                    "description": "Tailscale auth key from login.tailscale.com/admin/settings/keys (required for headless)",
+                },
+            },
+            "required": ["auth_key"],
         },
     ),
     Tool(
@@ -4930,6 +5022,7 @@ HANDLERS = {
     "git_pull": handle_git_pull,
     "system_service": handle_system_service,
     "fix_ssh_port": handle_fix_ssh_port,
+    "setup_tailscale": handle_setup_tailscale,
     "system_power": handle_system_power,
     "primitive_feedback": handle_primitive_feedback,
 }

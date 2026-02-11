@@ -16,6 +16,32 @@ When Lumen (anima-mcp on Pi) gets mangled and needs a full reflash:
 
 ---
 
+## Quick Restore (One Command)
+
+When the Pi is on the network:
+
+```bash
+cd /Users/cirwel/projects/anima-mcp
+./scripts/restore_lumen.sh
+# Or with specific host: ./scripts/restore_lumen.sh 192.168.1.165
+```
+
+This script:
+- Deploys code
+- Restores anima.db and JSON files from `~/backups/lumen/anima_data/`
+- Installs adafruit-blinka and requirements-pi (fixes display/LEDs)
+- Configures **server-only mode** (no broker — avoids DB contention crashes)
+- Installs and starts anima.service
+
+After restore, update Cursor MCP config (~/.cursor/mcp.json) with the Pi's IP:
+```json
+"url": "http://192.168.1.165:8766/mcp/"
+```
+
+**Credentials envelope:** Pi password and SSH key path live in `scripts/envelope.pi` (gitignored). Copy from `scripts/envelope.pi.example` and fill in. Used by `setup_pi_ssh_key.sh` and ssh-copy-id workflows.
+
+---
+
 ## What Gets Backed Up / Restored
 
 Lumen stores everything in `~/.anima/` on the Pi:
@@ -87,7 +113,7 @@ Use your existing backups:
    - Hostname: `lumen`
    - Enable SSH (password auth)
    - Username: `unitares-anima`
-   - Password: (your choice)
+   - Password: see `scripts/envelope.pi` (copy from `envelope.pi.example`)
    - WiFi: SSID and password for your network
    - Set locale/timezone
 
@@ -258,12 +284,14 @@ ssh unitares-anima@lumen.local "sqlite3 ~/.anima/anima.db \"SELECT name, creatur
 
 ## Tailscale (Optional)
 
-If you use Tailscale for remote access:
+For remote access when not on the same WiFi:
 
 ```bash
-curl -fsSL https://tailscale.com/install.sh | sh
-sudo tailscale up
+./scripts/setup_tailscale.sh
+# Or with auth key (headless): TAILSCALE_AUTH_KEY=tskey-auth-xxx ./scripts/setup_tailscale.sh
 ```
+
+Get an auth key at: https://login.tailscale.com/admin/settings/keys (one-time, reusable for 90 days).
 
 ---
 

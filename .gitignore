@@ -46,3 +46,6 @@ drawing_analysis.json
 # Additional ignores
 message_server.pid
 .agent-coordination
+
+# Credential envelopes (never commit)
+scripts/envelope.pi
