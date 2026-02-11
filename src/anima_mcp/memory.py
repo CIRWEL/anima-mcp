@@ -214,7 +214,7 @@ class AssociativeMemory:
         from datetime import datetime as dt
 
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = sqlite3.connect(self.db_path, timeout=10.0)
             cursor = conn.cursor()
 
             # Get recent state history with sensors AND timestamp for temporal patterns

@@ -14,19 +14,22 @@ WorkingDirectory=/home/unitares-anima/anima-mcp
 Environment="ANIMA_ID=49e14444-b59e-48f1-83b8-b36a988c9975"
 Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
 Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
-Environment="UNITARES_URL=http://100.96.201.46:8767/mcp/"
+Environment="UNITARES_URL=https://unitares.ngrok.io/mcp/"
 Environment="UNITARES_AUTH=unitares:8QF6L8Ui0pZFiHGQ"
 Environment="GROQ_API_KEY=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"
 Environment="PYTHONUNBUFFERED=1"
 
+# Kill any zombie process holding the port before starting
+ExecStartPre=/bin/sh -c 'fuser -k 8766/tcp 2>/dev/null || true; sleep 2'
+
 # Executable
 ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/anima --sse --host 0.0.0.0 --port 8766
 
-# Restart policy - prevent rapid restarts that cause port conflicts
+# Restart policy - allow more retries for undervoltage recovery
 Restart=on-failure
-RestartSec=15
-StartLimitInterval=300
-StartLimitBurst=3
+RestartSec=20
+StartLimitInterval=600
+StartLimitBurst=5
 # If 3 failures in 5 min, reboot Pi as last resort recovery
 StartLimitAction=none
 

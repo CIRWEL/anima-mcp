@@ -17,7 +17,7 @@ WorkingDirectory=/home/unitares-anima/anima-mcp
 Environment="ANIMA_ID=49e14444-b59e-48f1-83b8-b36a988c9975"
 Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
 Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
-Environment="UNITARES_URL=http://100.96.201.46:8767/mcp/"
+Environment="UNITARES_URL=https://unitares.ngrok.io/mcp/"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONIOENCODING=utf-8"
 Environment="LC_ALL=C.UTF-8"
@@ -34,9 +34,8 @@ Restart=on-failure
 RestartSec=10
 # Increase delay between restarts to prevent loops
 # After 3 failures in 5 minutes, wait 5 minutes before allowing restart
-StartLimitInterval=300
-StartLimitBurst=3
-# If 3 failures in 5 min, reboot Pi as last resort recovery
+StartLimitInterval=600
+StartLimitBurst=5
 StartLimitAction=none
 
 # Resource limits
