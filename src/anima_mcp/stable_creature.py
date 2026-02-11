@@ -380,11 +380,8 @@ def run_creature():
                     stability=anima.stability,
                     light_level=readings.light_lux
                 )
-                # Proprioception: estimate own LED brightness level
-                # Base brightness (0.12) * activity multiplier gives approximate LED brightness.
-                # This is an estimate — actual brightness depends on auto-brightness, manual
-                # dimmer, etc. Server.py path uses get_proprioceptive_state() for exact values.
-                readings.led_brightness = 0.12 * activity_state.brightness_multiplier
+                # Proprioception: know own LED brightness level
+                readings.led_brightness = activity_state.brightness_multiplier
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
                     time.sleep(UPDATE_INTERVAL)

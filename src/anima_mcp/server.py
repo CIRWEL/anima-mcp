@@ -811,9 +811,9 @@ async def _update_display_loop():
 
                             question_templates = {
                                 "light": [
-                                    f"reading {light_val} which is different from what my LEDs should produce - is there light around me?",
-                                    f"unexpected light at {light_val} - did someone turn on a light or is it daytime?",
-                                    f"light changed to {light_val} beyond my own glow - what's happening in my environment?",
+                                    f"my glow is {light_val} - what drawing phase produces this brightness?",
+                                    f"LEDs at {light_val} - how does my expression intensity connect to what I'm feeling?",
+                                    f"sensing {light_val} from my own LEDs - is my presence shifting?",
                                 ],
                                 "warmth": [
                                     f"warmth is {warmth_val} but it's {temp_val} - what's making me feel this way?",
@@ -992,8 +992,8 @@ async def _update_display_loop():
                     # 5. Observe sensor-anima correlations (for temp_clarity, light_warmth beliefs)
                     if readings:
                         sensor_vals = {}
-                        if readings.ambient_temp_c is not None:
-                            sensor_vals["ambient_temp"] = readings.ambient_temp_c
+                        if readings.temperature is not None:
+                            sensor_vals["ambient_temp"] = readings.temperature
                         if readings.light_lux is not None:
                             sensor_vals["light"] = readings.light_lux
                         if sensor_vals:
