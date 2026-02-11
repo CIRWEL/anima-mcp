@@ -3,13 +3,13 @@
 ## Quick SSH
 ```bash
 ssh lumen.local
-# or
-ssh pi-anima
+# or via Tailscale
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.103.208.117
 ```
 
 ## Details
 - **Hostname**: lumen.local (mDNS) or via Tailscale
-- **IP**: 192.168.1.165 (local network)
+- **IP**: 192.168.1.165 (LAN) or 100.103.208.117 (Tailscale)
 - **Port**: 22 (standard)
 - **User**: unitares-anima
 - **Key**: ~/.ssh/id_ed25519_pi
@@ -61,6 +61,10 @@ ssh lumen.local 'tail -50 ~/.anima/creature.log'
 ssh lumen.local 'journalctl -u anima.service -n 50 --no-pager'
 ```
 
+## Secrets (API Keys)
+
+Edit `~/.anima/anima.env` on Pi for GROQ_API_KEY, UNITARES_AUTH. See `docs/operations/SECRETS_AND_ENV.md`.
+
 ## Check Processes
 ```bash
 ssh lumen.local 'ps aux | grep -E "anima|creature" | grep -v grep'
@@ -74,4 +78,4 @@ ssh lumen.local 'cat /dev/shm/anima_state.json | python3 -m json.tool | head -30
 
 ---
 
-*Last updated: February 1, 2026*
+*Last updated: February 11, 2026*
