@@ -3,7 +3,7 @@ Gestural Era — Lumen's second art period.
 Feb 7, 2026 – present.
 
 5 micro-primitives (dot, stroke, curve, cluster, drag).
-Focus drift with direction locks and orbits.
+Focus drift with direction locks (no forced orbits — circles emerge organically or not at all).
 Full-palette HSV color generation.
 Granular mark-making: small deliberate acts that accumulate into forms.
 """
@@ -24,26 +24,16 @@ class GesturalState(EraState):
     direction_locked: bool = False
     direction_lock_remaining: int = 0
 
-    # Orbit — when active, focus curves around an anchor point (circular forms)
-    orbit_active: bool = False
-    orbit_anchor_x: float = 120.0
-    orbit_anchor_y: float = 120.0
-    orbit_radius: float = 30.0
-    orbit_remaining: int = 0
-
     def intentionality(self) -> float:
         """Proprioceptive I_signal for EISV.
 
-        Direction locks (+0.3), orbits (+0.3), and gesture runs (+0.3)
-        all contribute to intentionality.
+        Direction locks (+0.4) and gesture runs (+0.4) contribute to intentionality.
         """
-        I = 0.1
+        I = 0.2
         if self.direction_locked:
-            I += 0.3
-        if self.orbit_active:
-            I += 0.3
+            I += 0.4
         if self.gesture_remaining > 0:
-            I += min(0.3, self.gesture_remaining / 20.0 * 0.3)
+            I += min(0.4, self.gesture_remaining / 20.0 * 0.4)
         return min(1.0, I)
 
     def gestures(self) -> List[str]:
@@ -171,7 +161,7 @@ class GesturalEra:
             state.direction_lock_remaining -= 1
             if state.direction_lock_remaining <= 0:
                 state.direction_locked = False
-        elif not state.orbit_active:
+        else:
             # Wobble modulated by clarity: high clarity = steadier hand
             wobble = 0.1 + (1.0 - clarity) * 0.2  # 0.1 at clarity=1, 0.3 at clarity=0
             direction += random.gauss(0, wobble)
@@ -182,31 +172,10 @@ class GesturalEra:
                 state.direction_locked = True
                 state.direction_lock_remaining = random.randint(15, 40)
 
-        # --- Orbit: focus curves around anchor point ---
-        if state.orbit_active:
-            # Calculate angle from anchor to current focus
-            dx = focus_x - state.orbit_anchor_x
-            dy = focus_y - state.orbit_anchor_y
-            current_angle = math.atan2(dy, dx)
-
-            # Advance angle (orbit speed varies with radius)
-            angle_step = random.gauss(0.15, 0.03)
-            new_angle = current_angle + angle_step
-
-            # Wobble the radius slightly for organic circles
-            r = state.orbit_radius + random.gauss(0, 2.0)
-            focus_x = state.orbit_anchor_x + math.cos(new_angle) * r
-            focus_y = state.orbit_anchor_y + math.sin(new_angle) * r
-            direction = new_angle + math.pi / 2  # tangent
-
-            state.orbit_remaining -= 1
-            if state.orbit_remaining <= 0:
-                state.orbit_active = False
-        else:
-            # Step in current direction
-            step = 3 + random.random() * 5
-            focus_x += math.cos(direction) * step
-            focus_y += math.sin(direction) * step
+        # Step in current direction — organic meandering
+        step = 3 + random.random() * 5
+        focus_x += math.cos(direction) * step
+        focus_y += math.sin(direction) * step
 
         # Soft bounce off edges
         margin = 20
@@ -225,25 +194,12 @@ class GesturalEra:
 
         # Focus jump — coherence and clarity reduce jumps
         jump_prob = 0.03 * (1.0 - 0.4 * C) * (1.0 - 0.4 * clarity)
-        if not state.orbit_active and random.random() < jump_prob:
+        if random.random() < jump_prob:
             focus_x = random.uniform(40, 200)
             focus_y = random.uniform(40, 200)
             direction = random.uniform(0, 2 * math.pi)
             state.direction_locked = False
             state.direction_lock_remaining = 0
-
-        # Orbit start — increased by coherence (high C = more circular forms)
-        orbit_prob = 0.02 * (0.5 + C)
-        if (
-            not state.orbit_active
-            and not state.direction_locked
-            and random.random() < orbit_prob
-        ):
-            state.orbit_active = True
-            state.orbit_anchor_x = focus_x + random.gauss(0, 20)
-            state.orbit_anchor_y = focus_y + random.gauss(0, 20)
-            state.orbit_radius = random.uniform(10, 50)
-            state.orbit_remaining = random.randint(20, 60)
 
         return focus_x, focus_y, direction
 
