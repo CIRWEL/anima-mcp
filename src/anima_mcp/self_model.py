@@ -161,6 +161,14 @@ class SelfModel:
                 confidence=0.5,
                 value=0.7,
             ),
+
+            # Proprioceptive beliefs
+            "my_leds_affect_lux": SelfBelief(
+                belief_id="my_leds_affect_lux",
+                description="My own LEDs affect my light sensor readings",
+                confidence=0.5,
+                value=0.5,  # 1 = strong effect, 0 = no effect
+            ),
         }
 
         # Tracking data for belief testing
@@ -168,8 +176,10 @@ class SelfModel:
         self._correlation_data: Dict[str, deque] = {
             "temp_clarity": deque(maxlen=50),  # (temp, clarity) pairs
             "light_warmth": deque(maxlen=50),  # (light, warmth) pairs
+            "led_lux": deque(maxlen=50),  # (led_brightness, light_lux) pairs
         }
         self._surprise_data: deque = deque(maxlen=50)  # (source, surprise_level)
+        self._prev_led_brightness: Optional[float] = None  # Track LED changes
 
         # Load persisted model
         self._load()
@@ -285,6 +295,55 @@ class SelfModel:
                 "timestamp": now,
             })
             self._test_correlation_belief("light_warmth_correlation", "light_warmth")
+
+    def observe_led_lux(self, led_brightness: Optional[float], light_lux: Optional[float]):
+        """Track correlation between own LED brightness and lux readings.
+
+        This is proprioceptive learning: discovering that one's own outputs
+        affect one's own sensor inputs.
+        """
+        if led_brightness is None or light_lux is None:
+            return
+
+        now = datetime.now()
+
+        # Record the data point
+        self._correlation_data["led_lux"].append({
+            "led": led_brightness,
+            "lux": light_lux,
+            "timestamp": now,
+        })
+
+        # Check for LED brightness change
+        if self._prev_led_brightness is not None:
+            led_change = led_brightness - self._prev_led_brightness
+
+            if abs(led_change) > 0.1:  # Significant brightness change
+                # Look at recent lux data to see if lux changed similarly
+                led_lux_data = list(self._correlation_data["led_lux"])
+                if len(led_lux_data) >= 3:
+                    # Compare lux before and after the LED change
+                    recent_lux = [d["lux"] for d in led_lux_data[-3:]]
+                    older_lux = [d["lux"] for d in led_lux_data[-6:-3]] if len(led_lux_data) >= 6 else recent_lux
+
+                    avg_recent = sum(recent_lux) / len(recent_lux)
+                    avg_older = sum(older_lux) / len(older_lux)
+                    lux_change = avg_recent - avg_older
+
+                    # Did lux change in the same direction as LEDs?
+                    same_direction = (led_change > 0 and lux_change > 0) or (led_change < 0 and lux_change < 0)
+
+                    # Update belief
+                    self._beliefs["my_leds_affect_lux"].update_from_evidence(
+                        supports=same_direction,
+                        strength=min(1.0, abs(lux_change) / 10.0),  # Normalize by typical lux swing
+                    )
+
+        self._prev_led_brightness = led_brightness
+
+        # Also test via correlation approach periodically
+        if len(self._correlation_data["led_lux"]) >= 10:
+            self._test_correlation_belief("my_leds_affect_lux", "led_lux")
 
     def _test_correlation_belief(self, belief_id: str, data_key: str):
         """Test a correlation belief against accumulated data."""
@@ -448,6 +507,12 @@ class SelfModel:
 
             elif belief_id == "interaction_clarity_boost" and belief.value > 0.6:
                 descriptions.append(f"I am {strength} that interactions help my clarity")
+
+            elif belief_id == "my_leds_affect_lux":
+                if belief.value > 0.6:
+                    descriptions.append(f"I am {strength} that my own LEDs affect my light readings")
+                elif belief.value < 0.4:
+                    descriptions.append(f"I am {strength} that my light readings are from the environment, not my LEDs")
 
         if not descriptions:
             return "I am still learning about myself."

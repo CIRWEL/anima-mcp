@@ -378,6 +378,8 @@ def run_creature():
                     stability=anima.stability,
                     light_level=readings.light_lux
                 )
+                # Proprioception: know own LED brightness level
+                readings.led_brightness = activity_state.brightness_multiplier
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
                     time.sleep(UPDATE_INTERVAL)
@@ -478,6 +480,9 @@ def run_creature():
                         "stability": anima.stability,
                     }
                     self_model.observe_correlation(sensor_vals, anima_vals)
+
+                    # Track LED-lux proprioception (own outputs affecting inputs)
+                    self_model.observe_led_lux(readings.led_brightness, readings.light_lux)
 
                     # Track time patterns
                     hour = datetime.now().hour
