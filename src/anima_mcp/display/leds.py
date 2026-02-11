@@ -108,10 +108,10 @@ class LEDDisplay:
             self._last_state_values = None
             self._expression_mode = expression_mode
             # Enforce sane range regardless of config (config may be stale)
-            # IMPORTANT: Keep range narrow to avoid lux sensor chaos from LED brightness swings
-            self._base_brightness = max(0.08, min(0.12, self._base_brightness))
-            self._auto_brightness_min = max(0.06, self._auto_brightness_min)  # Higher floor
-            self._auto_brightness_max = min(0.12, max(0.08, self._auto_brightness_max))  # Lower ceiling
+            # Wider range to make manual dimmer noticeable, but still constrained
+            self._base_brightness = max(0.08, min(0.15, self._base_brightness))
+            self._auto_brightness_min = max(0.04, self._auto_brightness_min)
+            self._auto_brightness_max = min(0.18, max(0.10, self._auto_brightness_max))
         except ImportError:
             # Fallback if config not available
             # NOTE: These should match anima_config.yaml defaults
@@ -130,8 +130,8 @@ class LEDDisplay:
         self._brightness = self._base_brightness
         # Hardware floor: absolute minimum brightness (separate from auto-brightness range).
         # Activity state (RESTING=0.15x) can push below auto_brightness_min but not below this.
-        # IMPORTANT: Keep floor high enough that LEDs are always visible - prevents lux chaos
-        self._hardware_brightness_floor = 0.06
+        # Low enough for dimmer to work, high enough to stay visible
+        self._hardware_brightness_floor = 0.025
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_colors = [None, None, None]  # For color transitions
