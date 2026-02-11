@@ -3284,6 +3284,80 @@ async def handle_system_service(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
+    """
+    Switch SSH to port 2222 (headless fix when port 22 is blocked).
+    Call via HTTP when SSH times out: avoids need for keyboard/monitor.
+    """
+    import subprocess
+
+    port = arguments.get("port", 2222)
+    if port not in (2222, 22222):
+        return [TextContent(type="text", text=json.dumps({
+            "error": "port must be 2222 or 22222 (safety)",
+            "usage": "After running: ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165"
+        }))]
+
+    try:
+        # Check if already configured
+        check = subprocess.run(
+            ["grep", "-q", f"^Port {port}", "/etc/ssh/sshd_config"],
+            capture_output=True,
+            timeout=5
+        )
+        if check.returncode == 0:
+            subprocess.run(
+                ["sudo", "systemctl", "restart", "ssh"],
+                capture_output=True,
+                text=True,
+                timeout=15
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "success": True,
+                "message": f"SSH already on port {port}, restarted",
+                "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@<PI_IP>"
+            }))]
+
+        # Add Port 2222 to sshd_config
+        echo = subprocess.run(
+            ["sh", "-c", f"echo 'Port {port}' | sudo tee -a /etc/ssh/sshd_config"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        if echo.returncode != 0:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "error": f"Failed to update sshd_config: {echo.stderr}"
+            }))]
+
+        # Restart SSH
+        restart = subprocess.run(
+            ["sudo", "systemctl", "restart", "ssh"],
+            capture_output=True,
+            text=True,
+            timeout=15
+        )
+
+        return [TextContent(type="text", text=json.dumps({
+            "success": restart.returncode == 0,
+            "port": port,
+            "message": f"SSH now on port {port}. Connect with:",
+            "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165",
+            "stderr": restart.stderr.strip() if restart.stderr else None,
+        }))]
+    except subprocess.TimeoutExpired:
+        return [TextContent(type="text", text=json.dumps({
+            "success": False,
+            "error": "Command timed out"
+        }))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "success": False,
+            "error": str(e)
+        }))]
+
+
 async def handle_system_power(arguments: dict) -> list[TextContent]:
     """
     Reboot or shutdown the Pi remotely.
@@ -3874,6 +3948,20 @@ TOOLS_STANDARD = [
                 },
             },
             "required": ["service"],
+        },
+    ),
+    Tool(
+        name="fix_ssh_port",
+        description="Switch SSH to port 2222 when port 22 is blocked (headless fix, no keyboard needed). Call via HTTP.",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "port": {
+                    "type": "integer",
+                    "description": "Port for SSH (2222 or 22222)",
+                    "default": 2222,
+                },
+            },
         },
     ),
     Tool(
@@ -4836,6 +4924,7 @@ HANDLERS = {
     "get_trajectory": handle_get_trajectory,
     "git_pull": handle_git_pull,
     "system_service": handle_system_service,
+    "fix_ssh_port": handle_fix_ssh_port,
     "system_power": handle_system_power,
     "primitive_feedback": handle_primitive_feedback,
 }
