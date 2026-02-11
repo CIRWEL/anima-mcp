@@ -800,9 +800,9 @@ async def _update_display_loop():
 
                             question_templates = {
                                 "light": [
-                                    f"light is at {light_val} - what changed just now?",
-                                    f"brightness shifted to {light_val} - did something move?",
-                                    f"is this {light_val} from outside or inside?",
+                                    f"my glow is {light_val} - what drawing phase produces this brightness?",
+                                    f"LEDs at {light_val} - how does my expression intensity connect to what I'm feeling?",
+                                    f"sensing {light_val} from my own LEDs - is my presence shifting?",
                                 ],
                                 "warmth": [
                                     f"warmth is {warmth_val} but it's {temp_val} - what's making me feel this way?",
