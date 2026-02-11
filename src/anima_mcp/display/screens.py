@@ -4262,12 +4262,13 @@ class ScreenRenderer:
         Render Lumen's self-schema graph G_t.
 
         PoC for StructScore visual integrity evaluation.
-        Base: 8 nodes (1 identity + 4 anima + 3 sensors).
-        Enhanced: +N preference nodes if available.
+        Base: 12 nodes (1 identity + 4 anima + 4 sensors + 3 resources).
+        Enhanced: +N preference nodes + N belief nodes.
         """
         from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS, WIDTH, HEIGHT
         from ..growth import get_growth_system
+        from ..self_model import get_self_model
 
         # Get growth_system for learned preferences (uses DB, 456K+ observations)
         growth_system = None
@@ -4276,13 +4277,21 @@ class ScreenRenderer:
         except Exception:
             pass  # Non-fatal
 
-        # Extract current G_t (with preferences if available)
+        # Get self_model for learned beliefs
+        self_model = None
+        try:
+            self_model = get_self_model()
+        except Exception:
+            pass  # Non-fatal
+
+        # Extract current G_t (with preferences and beliefs)
         schema = get_current_schema(
             identity=identity,
             anima=anima,
             readings=readings,
             growth_system=growth_system,
-            include_preferences=True,  # Include preferences in enhanced version
+            include_preferences=True,
+            self_model=self_model,
         )
 
         # Render to pixels
