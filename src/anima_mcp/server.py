@@ -1146,23 +1146,28 @@ async def _update_display_loop():
                 # Get light level for auto-brightness
                 light_level = readings.light_lux if readings else None
 
-                # Get activity brightness from ActivityManager (circadian/interaction dimming)
+                # Get activity brightness from shared memory (broker computes this)
                 # - ACTIVE (day/interaction): 1.0
-                # - DROWSY (dusk/dawn/30min idle): 0.5
-                # - RESTING (night/60min idle): 0.15
+                # - DROWSY (dusk/dawn/30min idle): 0.6
+                # - RESTING (night/60min idle): 0.35
                 activity_brightness = 1.0
                 try:
-                    global _activity
-                    if _activity is None:
-                        _activity = get_activity_manager()
-                    activity_state = _activity.get_state(
-                        presence=anima.presence,
-                        stability=anima.stability,
-                        light_level=light_level,
-                    )
-                    activity_brightness = activity_state.brightness_multiplier
+                    # Primary: read from broker's shared memory (single source of truth)
+                    if _last_shm_data and "activity" in _last_shm_data:
+                        activity_brightness = _last_shm_data["activity"].get("brightness_multiplier", 1.0)
+                    else:
+                        # Fallback: compute locally if broker not running
+                        global _activity
+                        if _activity is None:
+                            _activity = get_activity_manager()
+                        activity_state = _activity.get_state(
+                            presence=anima.presence,
+                            stability=anima.stability,
+                            light_level=light_level,
+                        )
+                        activity_brightness = activity_state.brightness_multiplier
                 except Exception:
-                    pass  # Default to 1.0 if activity manager unavailable
+                    pass  # Default to 1.0 if both fail
 
                 # Sync manual brightness dimmer to LED controller
                 if _screen_renderer and hasattr(_screen_renderer._display, '_manual_led_brightness'):
