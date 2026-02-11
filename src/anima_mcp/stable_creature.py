@@ -346,7 +346,9 @@ def run_creature():
     try:
         while running:
             # 0. Metacognition: Generate prediction BEFORE sensing
-            prediction = metacog.predict()
+            # Pass LED brightness for proprioceptive light prediction if available
+            _led_br = readings.led_brightness if readings and readings.led_brightness is not None else None
+            prediction = metacog.predict(led_brightness=_led_br)
             
             # 1. Robust Sensor Read
             readings = None

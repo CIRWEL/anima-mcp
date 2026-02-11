@@ -1133,6 +1133,37 @@ class LEDDisplay:
 
         return None
 
+    def get_proprioceptive_state(self) -> dict:
+        """Get LED state for Lumen's internal self-awareness.
+
+        Unlike get_diagnostics() which is for external MCP tools, this returns
+        a compact proprioceptive snapshot that internal systems (metacognition,
+        self-model) can use to understand what Lumen's body is doing.
+
+        Returns:
+            dict with:
+                brightness: float (0-1) — the actual computed brightness after
+                    the full pipeline (auto, pulsing, activity, manual dimmer)
+                expression_mode: str — current expression intensity mode
+                is_dancing: bool — whether an emotional dance is active
+                dance_type: str|None — which dance, if any
+                manual_dimmed: bool — whether user has manually dimmed
+                colors: list of 3 RGB tuples — current LED colors
+        """
+        brightness = self._cached_pipeline_brightness or self._base_brightness
+        return {
+            "brightness": brightness,
+            "expression_mode": self._expression_mode,
+            "is_dancing": self._current_dance is not None and not self._current_dance.is_complete,
+            "dance_type": self._current_dance.dance_type.value if self._current_dance and not self._current_dance.is_complete else None,
+            "manual_dimmed": self._manual_brightness_factor < 1.0,
+            "colors": [
+                self._last_state.led0 if self._last_state else (0, 0, 0),
+                self._last_state.led1 if self._last_state else (0, 0, 0),
+                self._last_state.led2 if self._last_state else (0, 0, 0),
+            ],
+        }
+
     def get_diagnostics(self) -> dict:
         """Get diagnostic info about LED state."""
         dance_info = None
