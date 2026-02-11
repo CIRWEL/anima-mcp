@@ -423,7 +423,7 @@ async def _update_display_loop():
     mode_change_event = asyncio.Event()
     
     # Global variables for screen switching and governance
-    global _screen_renderer, _joystick_enabled, _last_governance_decision
+    global _screen_renderer, _joystick_enabled, _last_governance_decision, _led_proprioception
     
     # Start fast input polling task (runs every 100ms for responsive button detection)
     async def fast_input_poll():
@@ -1215,7 +1215,6 @@ async def _update_display_loop():
                 # This feeds forward into next iteration's metacognition prediction.
                 # Lumen now knows its own brightness — the light sensor becomes
                 # genuinely proprioceptive rather than confusingly self-referential.
-                global _led_proprioception
                 try:
                     _led_proprioception = _leds.get_proprioceptive_state()
                     # Also populate readings.led_brightness with ACTUAL computed brightness
