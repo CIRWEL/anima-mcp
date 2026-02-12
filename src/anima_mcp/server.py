@@ -294,7 +294,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             broker_running = subprocess.run(
                 ['pgrep', '-f', 'stable_creature.py'],
                 capture_output=True,
-                text=True
+                text=True,
+                timeout=5
             ).returncode == 0
         except Exception:
             pass  # If check fails, assume broker not running
@@ -360,7 +361,8 @@ async def _update_display_loop():
         is_broker_running = subprocess.run(
             ['pgrep', '-f', 'stable_creature.py'],
             capture_output=True,
-            text=True
+            text=True,
+            timeout=5
         ).returncode == 0
     except Exception:
         pass
@@ -450,11 +452,13 @@ async def _update_display_loop():
         
         while True:
             try:
-                if _joystick_enabled and _screen_renderer:
+                # Capture renderer locally to avoid race if it's being initialized
+                renderer = _screen_renderer
+                if _joystick_enabled and renderer:
                     input_state = brainhat.read()
                     if input_state:
                         prev_state = brainhat.get_prev_state()
-                        current_mode = _screen_renderer.get_mode()
+                        current_mode = renderer.get_mode()
                         import time
                         
                         # Check button presses (edge detection)
@@ -468,30 +472,30 @@ async def _update_display_loop():
                             # Only trigger on transition TO left/right (edge detection)
                             # Q&A screen needs left/right for focus switching ONLY when expanded
                             # When collapsed, LEFT/RIGHT should switch screens like normal
-                            qa_expanded = _screen_renderer._state.qa_expanded if _screen_renderer else False
+                            qa_expanded = renderer._state.qa_expanded if renderer else False
                             qa_needs_lr = (current_mode == ScreenMode.QUESTIONS and qa_expanded)
 
                             if not qa_needs_lr:
                                 if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
                                     # Visual + LED feedback for left navigation
-                                    _screen_renderer.trigger_input_feedback("left")
+                                    renderer.trigger_input_feedback("left")
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)  # Subtle blue flash
-                                    old_mode = _screen_renderer.get_mode()
-                                    _screen_renderer.previous_mode()
-                                    new_mode = _screen_renderer.get_mode()
-                                    _screen_renderer._state.last_user_action_time = time.time()
+                                    old_mode = renderer.get_mode()
+                                    renderer.previous_mode()
+                                    new_mode = renderer.get_mode()
+                                    renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()  # Trigger immediate re-render
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (left)", file=sys.stderr, flush=True)
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
                                     # Visual + LED feedback for right navigation
-                                    _screen_renderer.trigger_input_feedback("right")
+                                    renderer.trigger_input_feedback("right")
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)  # Subtle blue flash
-                                    old_mode = _screen_renderer.get_mode()
-                                    _screen_renderer.next_mode()
-                                    new_mode = _screen_renderer.get_mode()
-                                    _screen_renderer._state.last_user_action_time = time.time()
+                                    old_mode = renderer.get_mode()
+                                    renderer.next_mode()
+                                    new_mode = renderer.get_mode()
+                                    renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()  # Trigger immediate re-render
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
                         
@@ -503,20 +507,18 @@ async def _update_display_loop():
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                    _screen_renderer.trigger_input_feedback("up")
-                                    preset_name = _screen_renderer._display.brightness_up()
-                                    preset = _screen_renderer._display.get_brightness_preset()
-                                    # Scale absolute LED brightness (0-0.15) to display level (0-1)
+                                    renderer.trigger_input_feedback("up")
+                                    preset_name = renderer._display.brightness_up()
+                                    preset = renderer._display.get_brightness_preset()
                                     display_level = min(1.0, preset["leds"] / 0.15)
-                                    _screen_renderer.trigger_brightness_overlay(preset_name, display_level)
+                                    renderer.trigger_brightness_overlay(preset_name, display_level)
                                     mode_change_event.set()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                    _screen_renderer.trigger_input_feedback("down")
-                                    preset_name = _screen_renderer._display.brightness_down()
-                                    preset = _screen_renderer._display.get_brightness_preset()
-                                    # Scale absolute LED brightness (0-0.15) to display level (0-1)
+                                    renderer.trigger_input_feedback("down")
+                                    preset_name = renderer._display.brightness_down()
+                                    preset = renderer._display.get_brightness_preset()
                                     display_level = min(1.0, preset["leds"] / 0.15)
-                                    _screen_renderer.trigger_brightness_overlay(preset_name, display_level)
+                                    renderer.trigger_brightness_overlay(preset_name, display_level)
                                     mode_change_event.set()
 
                         # Joystick navigation in message board (UP/DOWN scrolls messages)
@@ -549,28 +551,28 @@ async def _update_display_loop():
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                    _screen_renderer.trigger_input_feedback("up")
-                                    _screen_renderer.message_scroll_up()
+                                    renderer.trigger_input_feedback("up")
+                                    renderer.message_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                    _screen_renderer.trigger_input_feedback("down")
-                                    _screen_renderer.message_scroll_down()
+                                    renderer.trigger_input_feedback("down")
+                                    renderer.message_scroll_down()
                         
                         # Joystick navigation in Questions screen (Q&A specific)
                         if current_mode == ScreenMode.QUESTIONS:
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                    _screen_renderer.trigger_input_feedback("up")
-                                    _screen_renderer.qa_scroll_up()
+                                    renderer.trigger_input_feedback("up")
+                                    renderer.qa_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                    _screen_renderer.trigger_input_feedback("down")
-                                    _screen_renderer.qa_scroll_down()
+                                    renderer.trigger_input_feedback("down")
+                                    renderer.qa_scroll_down()
                                 elif current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
-                                    _screen_renderer.trigger_input_feedback("left")
-                                    _screen_renderer.qa_focus_next()
+                                    renderer.trigger_input_feedback("left")
+                                    renderer.qa_focus_next()
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
-                                    _screen_renderer.trigger_input_feedback("right")
-                                    _screen_renderer.qa_focus_next()
+                                    renderer.trigger_input_feedback("right")
+                                    renderer.qa_focus_next()
                         
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
@@ -590,7 +592,7 @@ async def _update_display_loop():
                                 try:
                                     # Lumen saves autonomously, but ensure canvas is saved on shutdown
                                     if current_mode == ScreenMode.NOTEPAD:
-                                        saved_path = _screen_renderer.canvas_save()
+                                        saved_path = renderer.canvas_save()
                                         if saved_path:
                                             print(f"[Shutdown] Saved drawing to {saved_path}", file=sys.stderr, flush=True)
                                     
@@ -614,39 +616,32 @@ async def _update_display_loop():
                                 # Short press (< 3 seconds) = context-dependent action
                                 if was_short_press:
                                     # Visual + LED feedback for separate button
-                                    _screen_renderer.trigger_input_feedback("press")
+                                    renderer.trigger_input_feedback("press")
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((80, 100, 60), 80)  # Soft green flash
                                     if current_mode == ScreenMode.MESSAGES:
-                                        # In messages: toggle expansion of selected message
-                                        _screen_renderer.message_toggle_expand()
+                                        renderer.message_toggle_expand()
                                         print(f"[Messages] Toggled message expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.VISITORS:
-                                        # In Visitors: toggle expansion of selected message
-                                        _screen_renderer.message_toggle_expand()
+                                        renderer.message_toggle_expand()
                                         print(f"[Visitors] Toggled message expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.QUESTIONS:
-                                        # In Questions: toggle Q&A expansion
-                                        _screen_renderer.qa_toggle_expand()
+                                        renderer.qa_toggle_expand()
                                         print(f"[Questions] Toggled Q&A expansion", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.NOTEPAD:
-                                        # In notepad: button behavior depends on era
-                                        # Gestural era: no manual saves — drawing completes naturally
-                                        # Other eras: manual snapshot save (Lumen keeps drawing)
-                                        era_name = getattr(_screen_renderer, '_active_era', None)
+                                        era_name = getattr(renderer, '_active_era', None)
                                         era_name = getattr(era_name, 'name', '') if era_name else ''
                                         if era_name == 'gestural':
                                             print(f"[Notepad] Gestural era — no manual save", file=sys.stderr, flush=True)
                                         else:
-                                            saved = _screen_renderer.canvas_save(manual=True)
+                                            saved = renderer.canvas_save(manual=True)
                                             if saved:
                                                 print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
                                             else:
                                                 print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
                                     elif current_mode == ScreenMode.ART_ERAS:
-                                        # In art eras: select highlighted era or toggle auto-rotate
-                                        result = _screen_renderer.era_select_current()
-                                        _screen_renderer._state.last_user_action_time = time.time()
+                                        result = renderer.era_select_current()
+                                        renderer._state.last_user_action_time = time.time()
                                         mode_change_event.set()
                                         print(f"[ArtEras] Button press: {result}", file=sys.stderr, flush=True)
                                     # No catch-all: button only acts on screens with specific use
@@ -1396,9 +1391,9 @@ async def _update_display_loop():
                         ])
                         
                         # Add specific sensor realizations
-                        if readings.lux < 10:
+                        if readings.light_lux is not None and readings.light_lux < 10:
                             realizations.append("Darkness allows me to focus on internal states.")
-                        elif readings.lux > 100:
+                        elif readings.light_lux is not None and readings.light_lux > 100:
                             realizations.append("High light levels correlate with higher signal variance.")
 
                     # 2. Confusion/Novelty -> Questions (Curiosity)

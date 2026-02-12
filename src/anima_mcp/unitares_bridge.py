@@ -62,6 +62,11 @@ class UnitaresBridge:
         self._available = None  # None = not checked, True/False = checked
         self._last_availability_check = None  # Timestamp of last check
         self._availability_check_interval = 60.0  # Recheck every 60 seconds if unavailable
+        # Circuit breaker: after N consecutive failures, skip UNITARES for T seconds
+        self._circuit_failures = 0
+        self._circuit_open_until = 0.0  # Timestamp when circuit closes (half-open)
+        self._circuit_threshold = 3
+        self._circuit_open_seconds = 90.0
         self._http_session = None  # Reusable aiohttp session
         self._session_timeout = None  # Timeout config for session
         # Previous check-in state for computing deltas (ethical_drift, confidence)
@@ -136,9 +141,14 @@ class UnitaresBridge:
             self._available = False
             return False
 
-        # Recheck periodically if previously unavailable (allows recovery)
         import time
         current_time = time.time()
+
+        # Circuit breaker: skip checks while open
+        if current_time < self._circuit_open_until:
+            return False
+
+        # Recheck periodically if previously unavailable (allows recovery)
         if self._available is False and self._last_availability_check is not None:
             time_since_check = current_time - self._last_availability_check
             if time_since_check < self._availability_check_interval:
@@ -162,15 +172,18 @@ class UnitaresBridge:
                 async with session.get(health_url, timeout=aiohttp.ClientTimeout(total=self._timeout)) as response:
                     if response.status == 200:
                         self._available = True
+                        self._circuit_failures = 0
                         self._last_availability_check = current_time
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
                         logger.warning("UNITARES requires authentication (401) - using local governance")
                         self._available = False
+                        self._circuit_failures += 1
                         self._last_availability_check = current_time
+                        self._maybe_open_circuit(current_time)
                         return False
-            except Exception as e:
+            except Exception:
                 # Network/timeout errors - will retry later
                 pass
 
@@ -189,21 +202,26 @@ class UnitaresBridge:
                 ) as response:
                     if response.status == 200:
                         self._available = True
+                        self._circuit_failures = 0
                         self._last_availability_check = current_time
                         return True
                     elif response.status == 401:
                         # OAuth/auth required - not accessible from this client
                         logger.warning("UNITARES requires authentication (401) - using local governance")
                         self._available = False
+                        self._circuit_failures += 1
                         self._last_availability_check = current_time
+                        self._maybe_open_circuit(current_time)
                         return False
-            except Exception as e:
+            except Exception:
                 # Network/timeout errors - will retry later
                 pass
 
             # Both checks failed - mark unavailable but allow retry
             self._available = False
+            self._circuit_failures += 1
             self._last_availability_check = current_time
+            self._maybe_open_circuit(current_time)
             return False
 
         except ImportError:
@@ -212,7 +230,18 @@ class UnitaresBridge:
             return False
         except Exception:
             self._available = False
+            self._circuit_failures += 1
+            self._maybe_open_circuit(time.time())
             return False
+
+    def _maybe_open_circuit(self, current_time: float) -> None:
+        """Open circuit breaker if failure threshold reached."""
+        if self._circuit_failures >= self._circuit_threshold:
+            self._circuit_open_until = current_time + self._circuit_open_seconds
+            logger.info(
+                "UNITARES circuit breaker open for %.0fs (%d consecutive failures)",
+                self._circuit_open_seconds, self._circuit_failures
+            )
     
     async def check_in(
         self,
@@ -269,10 +298,14 @@ class UnitaresBridge:
                 logger.info("Calling UNITARES (agent_id=%s)", self._agent_id[:8] if self._agent_id else 'None')
                 result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv)
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
+                self._circuit_failures = 0  # Success resets circuit
                 return result
             except Exception as e:
                 # Fallback to local governance on error
                 logger.warning("UNITARES error, falling back to local: %s", e)
+                import time
+                self._circuit_failures += 1
+                self._maybe_open_circuit(time.time())
                 return self._local_governance(anima, readings, eisv, error=str(e))
         else:
             # Use local governance

@@ -200,6 +200,15 @@ class SelfModel:
             except Exception as e:
                 print(f"[SelfModel] Could not load: {e}")
 
+    def _maybe_save(self, min_interval_seconds: float = 10.0) -> None:
+        """Save if enough time has passed since last save (throttle for high-value updates)."""
+        if not hasattr(self, "_last_save_time"):
+            self._last_save_time = 0.0
+        now = datetime.now().timestamp()
+        if now - self._last_save_time >= min_interval_seconds:
+            self._save()
+            self._last_save_time = now
+
     def _save(self):
         """Save self-model to disk."""
         try:
@@ -272,6 +281,7 @@ class SelfModel:
                             supports=is_fast,
                             strength=recovery_amount,
                         )
+                        self._maybe_save()
                     break
 
     def observe_correlation(self, sensor_values: Dict[str, float], anima_values: Dict[str, float]):
@@ -338,6 +348,7 @@ class SelfModel:
                         supports=same_direction,
                         strength=min(1.0, abs(lux_change) / 10.0),  # Normalize by typical lux swing
                     )
+                    self._maybe_save()
 
         self._prev_led_brightness = led_brightness
 
@@ -398,6 +409,7 @@ class SelfModel:
         else:
             # Weak correlation contradicts
             belief.update_from_evidence(supports=False, strength=1 - abs(correlation))
+        self._maybe_save()
 
     def observe_interaction(self, clarity_before: float, clarity_after: float):
         """Record interaction for testing interaction-clarity belief."""

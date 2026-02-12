@@ -642,8 +642,10 @@ class ScreenRenderer:
         # Message screen image cache (text rendering is slow - ~500ms)
         self._messages_cache_image: Optional[Any] = None
         self._messages_cache_hash: str = ""  # Hash of messages + scroll state
-        # Generic screen image cache: {screen_name: (hash_str, PIL.Image)}
+        # Generic screen image cache: {screen_name: (hash_str, PIL.Image)}, max 12 entries
         self._screen_cache: Dict[str, tuple] = {}
+        self._screen_cache_max_size = 12
+        self._screen_cache_order: List[str] = []  # LRU order
         # UNITARES agent_id (for display on identity screen)
         self._unitares_agent_id: Optional[str] = None
 
@@ -665,12 +667,23 @@ class ScreenRenderer:
                 self._display._image = entry[1].copy()
             if hasattr(self._display, '_show'):
                 self._display._show()
+            # Bump to end of LRU order (recently used)
+            if screen_name in self._screen_cache_order:
+                self._screen_cache_order.remove(screen_name)
+            self._screen_cache_order.append(screen_name)
             return True
         return False
 
     def _store_screen_cache(self, screen_name: str, cache_key: str, image):
-        """Store rendered image in screen cache."""
+        """Store rendered image in screen cache. Evict oldest when over max size."""
+        if screen_name in self._screen_cache:
+            self._screen_cache_order.remove(screen_name)
         self._screen_cache[screen_name] = (cache_key, image.copy())
+        self._screen_cache_order.append(screen_name)
+        while len(self._screen_cache) > self._screen_cache_max_size and self._screen_cache_order:
+            evict = self._screen_cache_order.pop(0)
+            if evict in self._screen_cache:
+                del self._screen_cache[evict]
 
     def _get_measure_draw(self):
         """Get cached draw context for text measurement."""
@@ -1246,6 +1259,17 @@ class ScreenRenderer:
                     # Unknown mode - show default to prevent blank screen
                     print(f"[Screen] Unknown mode: {mode}, showing default", file=sys.stderr, flush=True)
                     self._display.show_default()
+
+                # Background drawing: Lumen draws even when notepad isn't displayed.
+                # Throttled to every 5th frame (~every 10s at 2s/loop) to limit CPU when on other screens.
+                if (mode != ScreenMode.NOTEPAD and anima and hasattr(self._display, '_create_canvas')
+                        and self._state._frame_count % 5 == 0
+                        and time.time() >= self._canvas.drawing_paused_until
+                        and len(self._canvas.pixels) < 15000):
+                    try:
+                        self._lumen_draw(anima, draw=None)
+                    except Exception as e:
+                        pass  # Don't let background draw break display
             except Exception as e:
                 # Any render error - show default to prevent blank screen
                 print(f"[Screen] Render error for {mode.value}: {e}", file=sys.stderr, flush=True)
@@ -3553,7 +3577,10 @@ class ScreenRenderer:
             pass
 
     def _render_notepad(self, anima: Optional[Anima] = None):
-        """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave."""
+        """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave.
+
+        Lumen also draws in the background when other screens are displayed (throttled to ~every 10s).
+        """
         try:
             if not hasattr(self._display, '_create_canvas'):
                 self._display.render_text("NOTEPAD\n\nLumen's\ncreative\nspace", (10, 10))
@@ -3707,10 +3734,11 @@ class ScreenRenderer:
                 except Exception:
                     pass  # If even this fails, at least we logged everything
     
-    def _lumen_draw(self, anima: Anima, draw):
+    def _lumen_draw(self, anima: Anima, draw=None):
         """Lumen draws through the active era's mark-making vocabulary.
 
         Completion emerges from attention/coherence/narrative, not arbitrary energy depletion.
+        draw: PIL ImageDraw for rendering new pixels (optional when drawing in background).
         """
         warmth = anima.warmth
         clarity = anima.clarity

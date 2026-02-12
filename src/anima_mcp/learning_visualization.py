@@ -275,21 +275,17 @@ class LearningVisualizer:
             return []
         
         insights = []
-        
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            
-            cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-            
-            # Get recent observations
-            rows = conn.execute(
-                """SELECT timestamp, sensors FROM state_history 
-                   WHERE timestamp > ? 
-                   ORDER BY timestamp DESC 
-                   LIMIT 1000""",
-                (cutoff,)
-            ).fetchall()
+            with sqlite3.connect(self.db_path) as conn:
+                conn.row_factory = sqlite3.Row
+                cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+                rows = conn.execute(
+                    """SELECT timestamp, sensors FROM state_history 
+                       WHERE timestamp > ? 
+                       ORDER BY timestamp DESC 
+                       LIMIT 1000""",
+                    (cutoff,)
+                ).fetchall()
             
             if len(rows) < 50:
                 return insights  # Not enough data
@@ -337,9 +333,7 @@ class LearningVisualizer:
                         }
                     ))
             
-            conn.close()
-            
-        except Exception as e:
+        except Exception:
             # Non-fatal - return what we have
             pass
         

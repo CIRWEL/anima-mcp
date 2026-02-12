@@ -622,29 +622,43 @@ class PilRenderer(DisplayRenderer):
         self._push_to_display()
 
     def _push_to_display(self):
-        """Actually push self._image to SPI display hardware, applying brightness."""
+        """Actually push self._image to SPI display hardware, applying brightness.
+
+        Uses 0.3s timeout (like LEDs) to prevent SPI hangs from blocking render thread.
+        """
         if self._display and self._image:
             try:
+                from ..error_recovery import safe_call_with_timeout
+                img_to_show = None
                 if self._manual_brightness < 1.0:
                     # Use cached dimmed image if source and brightness unchanged
                     source_id = id(self._image)
                     if (self._cached_dimmed_image is not None and
                         self._cached_source_id == source_id and
                         self._cached_brightness == self._manual_brightness):
-                        # Cache hit - use cached dimmed image
-                        self._display.image(self._cached_dimmed_image)
+                        img_to_show = self._cached_dimmed_image
                     else:
                         # Cache miss - compute and cache
                         dimmed = ImageEnhance.Brightness(self._image).enhance(self._manual_brightness)
                         self._cached_dimmed_image = dimmed
                         self._cached_source_id = source_id
                         self._cached_brightness = self._manual_brightness
-                        self._display.image(dimmed)
+                        img_to_show = dimmed
                 else:
                     # Full brightness - clear cache (not needed)
                     self._cached_dimmed_image = None
                     self._cached_source_id = None
-                    self._display.image(self._image)
+                    img_to_show = self._image
+                if img_to_show is not None:
+                    # Wrap to return True on success (image() returns None)
+                    result = safe_call_with_timeout(
+                        lambda: (self._display.image(img_to_show), True)[1],
+                        timeout_seconds=0.3,
+                        default=False,
+                        log_error=True
+                    )
+                    if result is False:
+                        self._display = None
             except Exception as e:
                 print(f"[Display] Hardware error during show: {e}", file=sys.stderr, flush=True)
                 print("[Display] Marking display as unavailable", file=sys.stderr, flush=True)
