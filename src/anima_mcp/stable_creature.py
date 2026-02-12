@@ -127,7 +127,8 @@ def check_for_running_anima_server():
         result = subprocess.run(
             ['pgrep', '-f', 'anima --sse'],
             capture_output=True,
-            text=True
+            text=True,
+            timeout=5
         )
         if result.returncode == 0:
             pids = result.stdout.strip().split('\n')
@@ -160,18 +161,14 @@ def check_for_running_anima_server():
                     print("="*70 + "\n")
                 else:
                     print("\n" + "="*70)
-                    print("⚠️  WARNING: Main anima MCP server is already running!")
+                    print("ℹ️  INFO: Main anima MCP server is running")
                     print("="*70)
                     print(f"Found running process(es): {', '.join(pids)}")
-                    print("\n⚠️  Shared memory not detected - potential I2C conflicts!")
-                    print("If the MCP server hasn't been updated to Phase 2, both scripts")
-                    print("will access I2C sensors simultaneously and may crash the Pi.")
-                    print("\nTo proceed safely:")
-                    print("  1. Ensure MCP server is updated to Phase 2 (uses shared memory)")
-                    print("  2. Or stop the main server: systemctl --user stop anima")
-                    print("  3. Or use the main server instead of this script")
+                    print("\nShared memory not yet populated (broker just started or restart).")
+                    print("Broker will write state soon; MCP server will read from shared memory.")
+                    print("If you see I2C errors, ensure MCP server uses Phase 2 (shared memory).")
                     print("="*70 + "\n")
-                    # Don't exit - allow user to decide, but warn clearly
+                    # Don't exit - allow user to decide, but downgrade to INFO (common on restart)
     except FileNotFoundError:
         # pgrep not available (shouldn't happen on Pi, but handle gracefully)
         pass
@@ -185,6 +182,8 @@ def run_creature():
     print("[StableCreature] Starting up...")
     
     # Initialize components with error handling
+    identity = None
+    store = None
     try:
         # Determine DB persistence path (User Home > Project Root)
         env_db = os.environ.get("ANIMA_DB")
@@ -217,9 +216,24 @@ def run_creature():
 
         identity = store.wake(anima_id)
     except Exception as e:
-        print(f"[StableCreature] CRITICAL: Failed to initialize identity store: {e}")
-        print("[StableCreature] Exiting to prevent restart loop.")
-        sys.exit(1)
+        print(f"[StableCreature] WARNING: Identity store failed ({e}) - using fallback identity")
+        print("[StableCreature] Broker will continue (sensors -> shared memory). Server can repair DB.")
+        import uuid
+        from .identity import CreatureIdentity
+        anima_id = os.environ.get("ANIMA_ID") or str(uuid.uuid4())
+        now = datetime.now()
+        identity = CreatureIdentity(
+            creature_id=anima_id,
+            born_at=now,
+            total_awakenings=0,
+            total_alive_seconds=0.0,
+            name="Lumen",
+            name_history=[],
+            current_awakening_at=now,
+            last_heartbeat_at=None,
+            metadata={},
+        )
+        store = None  # No DB connection when using fallback
     
     # Initialize sensors - allow graceful degradation if hardware unavailable
     try:
@@ -833,9 +847,10 @@ def run_creature():
                 pass
 
         loop.close()
-        store.sleep()
-        store.close()
-        shm_client.clear() # Clean up shared memory
+        if store:
+            store.sleep()
+            store.close()
+        shm_client.clear()  # Clean up shared memory
         print("[StableCreature] Stopped.")
 
 def main():

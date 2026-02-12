@@ -110,6 +110,19 @@ log "Enabling I2C and SPI interfaces..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo raspi-config nonint do_i2c 0 2>/dev/null; sudo raspi-config nonint do_spi 0 2>/dev/null; true"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo usermod -aG i2c,gpio,spi $PI_USER 2>/dev/null; true"
 
+# 4b. Verify DB integrity on Pi (replace with snapshot if corrupted)
+if ssh $SSH_OPTS "$PI_USER@$PI_HOST" "test -f ~/.anima/anima.db" 2>/dev/null; then
+    if ! ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sqlite3 ~/.anima/anima.db 'PRAGMA integrity_check;' 2>/dev/null" | grep -q "^ok$"; then
+        log "  anima.db on Pi failed integrity check - replacing with snapshot"
+        if [ -n "$DB_TO_RESTORE" ]; then
+            scp $SSH_OPTS "$DB_TO_RESTORE" "$PI_USER@$PI_HOST:~/.anima/anima.db"
+        else
+            LATEST_SNAP=$(ls -t "$(dirname "$BACKUP")"/anima_*.db 2>/dev/null | head -1)
+            [ -n "$LATEST_SNAP" ] && scp $SSH_OPTS "$LATEST_SNAP" "$PI_USER@$PI_HOST:~/.anima/anima.db"
+        fi
+    fi
+fi
+
 # 5. Install and enable broker (sensors) + anima (MCP server)
 # Broker owns sensors, writes to shared memory; server owns DB (Option 1 - no contention)
 log "Installing systemd services (broker + anima)..."
