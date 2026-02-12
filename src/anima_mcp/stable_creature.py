@@ -204,15 +204,18 @@ def run_creature():
         if not anima_id:
             # Check if identity already exists in database
             conn = store._connect()
-            existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
-            if existing:
-                anima_id = existing[0]
-                print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
-            else:
-                # Only generate new UUID if truly first boot
-                import uuid
-                anima_id = str(uuid.uuid4())
-                print(f"[StableCreature] Creating new identity: {anima_id[:8]}...")
+            try:
+                existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
+                if existing:
+                    anima_id = existing[0]
+                    print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
+                else:
+                    # Only generate new UUID if truly first boot
+                    import uuid
+                    anima_id = str(uuid.uuid4())
+                    print(f"[StableCreature] Creating new identity: {anima_id[:8]}...")
+            finally:
+                conn.close()
 
         identity = store.wake(anima_id)
     except Exception as e:
