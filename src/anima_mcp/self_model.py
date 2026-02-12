@@ -386,7 +386,7 @@ class SelfModel:
         numerator = sum((x[i] - mean_x) * (y[i] - mean_y) for i in range(n))
 
         # Use epsilon to prevent division by near-zero values
-        EPSILON = 1e-10
+        EPSILON = 1e-8
         sum_sq_x = sum((xi - mean_x) ** 2 for xi in x)
         sum_sq_y = sum((yi - mean_y) ** 2 for yi in y)
 
