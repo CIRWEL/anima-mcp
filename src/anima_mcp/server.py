@@ -3108,6 +3108,16 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_get_eisv_trajectory_state(arguments: dict) -> list[TextContent]:
+    """Get current EISV trajectory awareness state."""
+    try:
+        _traj = get_trajectory_awareness()
+        state = _traj.get_state()
+        return [TextContent(type="text", text=json.dumps(state, indent=2, default=str))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+
 async def handle_git_pull(arguments: dict) -> list[TextContent]:
     """
     Pull latest code from git and optionally restart.
@@ -4121,6 +4131,14 @@ TOOLS_STANDARD = [
                     "default": False,
                 },
             },
+        },
+    ),
+    Tool(
+        name="get_eisv_trajectory_state",
+        description="Get current EISV trajectory awareness state - shapes, buffer, cache, events, feedback stats",
+        inputSchema={
+            "type": "object",
+            "properties": {},
         },
     ),
     Tool(
@@ -5168,6 +5186,7 @@ HANDLERS = {
     "get_self_knowledge": handle_get_self_knowledge,
     "get_growth": handle_get_growth,
     "get_trajectory": handle_get_trajectory,
+    "get_eisv_trajectory_state": handle_get_eisv_trajectory_state,
     "git_pull": handle_git_pull,
     "system_service": handle_system_service,
     "fix_ssh_port": handle_fix_ssh_port,
@@ -5420,7 +5439,9 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
             # Bootstrap trajectory awareness from state history
             try:
-                _traj = get_trajectory_awareness()
+                import os as _os
+                _db_path = _os.path.join(_os.path.expanduser("~"), ".anima", "anima.db")
+                _traj = get_trajectory_awareness(db_path=_db_path)
                 history = _store.get_recent_state_history(limit=30)
                 if history:
                     n = _traj.bootstrap_from_history(history)
