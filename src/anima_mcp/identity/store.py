@@ -13,7 +13,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import json
 
 
@@ -389,6 +389,32 @@ class IdentityStore:
             (now.isoformat(), warmth, clarity, stability, presence, json.dumps(sensors))
         )
         conn.commit()
+
+    def get_recent_state_history(self, limit: int = 30) -> List[Dict]:
+        """Get recent state_history entries for trajectory bootstrap.
+
+        Returns list of dicts with keys: timestamp, warmth, clarity,
+        stability, presence. Ordered by timestamp ascending (oldest first).
+        """
+        conn = self._connect()
+        rows = conn.execute(
+            """SELECT timestamp, warmth, clarity, stability, presence
+               FROM state_history
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (limit,)
+        ).fetchall()
+
+        result = []
+        for row in reversed(rows):  # Reverse to get ascending order
+            result.append({
+                "timestamp": row["timestamp"],
+                "warmth": row["warmth"],
+                "clarity": row["clarity"],
+                "stability": row["stability"],
+                "presence": row["presence"],
+            })
+        return result
 
     def get_identity(self) -> Optional[CreatureIdentity]:
         """Get current identity (must have called wake() first)."""
