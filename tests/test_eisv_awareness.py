@@ -14,7 +14,7 @@ from anima_mcp.eisv.expression import (
     ExpressionGenerator, translate_expression, generate_lumen_expression,
     TOKEN_MAP, ALL_TOKENS, SHAPE_TOKEN_AFFINITY, LUMEN_TOKENS,
 )
-from anima_mcp.eisv.awareness import TrajectoryAwareness
+from anima_mcp.eisv.awareness import TrajectoryAwareness, compute_expression_coherence
 
 
 class TestMapping:
@@ -355,3 +355,20 @@ class TestGetState:
 
         state = ta.get_state()
         assert state["buffer"]["window_seconds"] == 60.0
+
+
+class TestCoherence:
+    def test_full_overlap(self):
+        assert compute_expression_coherence(["warm", "feel"], ["warm", "feel"]) == 1.0
+
+    def test_no_overlap(self):
+        assert compute_expression_coherence(["warm", "feel"], ["cold", "dim"]) == 0.0
+
+    def test_partial_overlap(self):
+        assert compute_expression_coherence(["warm", "feel"], ["warm", "cold"]) == 0.5
+
+    def test_none_suggested(self):
+        assert compute_expression_coherence(None, ["warm"]) is None
+
+    def test_empty_suggested(self):
+        assert compute_expression_coherence([], ["warm"]) is None

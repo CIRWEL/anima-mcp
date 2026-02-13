@@ -1054,6 +1054,33 @@ async def _update_display_loop():
                         print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason}){_shape_info}", file=sys.stderr, flush=True)
                         print(f"[PrimitiveLang] Pattern: {utterance.category_pattern()}", file=sys.stderr, flush=True)
 
+                        # Compute and log trajectory coherence
+                        if _suggestion and utterance:
+                            try:
+                                from .eisv.awareness import compute_expression_coherence
+                                _coherence = compute_expression_coherence(
+                                    _suggestion.get("suggested_tokens"),
+                                    utterance.tokens,
+                                )
+                                if _coherence is not None:
+                                    _traj = get_trajectory_awareness()
+                                    _traj._log_event(
+                                        event_type="suggestion",
+                                        shape=_suggestion.get("shape"),
+                                        suggested_tokens=_suggestion.get("suggested_tokens"),
+                                        expression_tokens=utterance.tokens,
+                                        coherence_score=_coherence,
+                                        buffer_size=_traj.buffer_size,
+                                    )
+                                    # Feed coherence to trajectory weight learning
+                                    _traj.record_feedback(
+                                        _suggestion.get("eisv_tokens", []),
+                                        _coherence,
+                                    )
+                                    print(f"[PrimitiveLang] Trajectory coherence: {_coherence:.2f}", file=sys.stderr, flush=True)
+                            except Exception:
+                                pass
+
                         from .messages import add_observation
                         add_observation(
                             f"[expression] {utterance.text()} ({utterance.category_pattern()})",

@@ -380,6 +380,17 @@ class TrajectoryAwareness:
 _awareness: Optional[TrajectoryAwareness] = None
 
 
+def compute_expression_coherence(
+    suggested_tokens: Optional[List[str]],
+    actual_tokens: List[str],
+) -> Optional[float]:
+    """Compute coherence between trajectory-suggested and actually-generated tokens."""
+    if not suggested_tokens:
+        return None
+    overlap = set(suggested_tokens) & set(actual_tokens)
+    return len(overlap) / max(len(suggested_tokens), 1)
+
+
 def get_trajectory_awareness(**kwargs) -> TrajectoryAwareness:
     """Get or create the singleton TrajectoryAwareness instance."""
     global _awareness
