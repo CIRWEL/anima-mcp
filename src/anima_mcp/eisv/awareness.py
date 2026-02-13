@@ -7,12 +7,16 @@ suggested tokens for the primitive language system.
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import time
 from collections import deque
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .mapping import (
     anima_to_eisv,
+    compute_derivatives,
     compute_trajectory_window,
     classify_trajectory,
 )
@@ -41,6 +45,7 @@ class TrajectoryAwareness:
         buffer_size: int = 30,
         cache_seconds: float = 60.0,
         seed: Optional[int] = None,
+        db_path: Optional[str] = None,
     ):
         self._buffer: deque = deque(maxlen=buffer_size)
         self._cache_seconds = cache_seconds
@@ -54,6 +59,81 @@ class TrajectoryAwareness:
         # Tracking
         self._last_record_time: float = 0.0
         self._current_shape: Optional[str] = None
+
+        # Observability counters
+        self._total_generations: int = 0
+        self._total_feedback: int = 0
+        self._coherence_sum: float = 0.0
+
+        # Persistence
+        self._db_path = db_path
+        self._db_conn: Optional[sqlite3.Connection] = None
+        if db_path is not None:
+            self._init_db()
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+
+    def _init_db(self) -> None:
+        """Create the trajectory_events table if it doesn't exist."""
+        try:
+            self._db_conn = sqlite3.connect(self._db_path)
+            self._db_conn.execute(
+                """CREATE TABLE IF NOT EXISTS trajectory_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    shape TEXT,
+                    eisv_state TEXT,
+                    derivatives TEXT,
+                    suggested_tokens TEXT,
+                    expression_tokens TEXT,
+                    coherence_score REAL,
+                    cache_hit INTEGER DEFAULT 0,
+                    buffer_size INTEGER
+                )"""
+            )
+            self._db_conn.commit()
+        except Exception:
+            self._db_conn = None
+
+    def _log_event(self, **kwargs: Any) -> None:
+        """Write a row to the trajectory_events table.
+
+        Best-effort: never raises.  All dict values are JSON-serialized.
+        """
+        if self._db_conn is None:
+            return
+        try:
+            def _ser(v: Any) -> Any:
+                if isinstance(v, dict) or isinstance(v, list):
+                    return json.dumps(v)
+                return v
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            self._db_conn.execute(
+                """INSERT INTO trajectory_events
+                   (timestamp, event_type, shape, eisv_state, derivatives,
+                    suggested_tokens, expression_tokens, coherence_score,
+                    cache_hit, buffer_size)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    now_iso,
+                    kwargs.get("event_type", "unknown"),
+                    kwargs.get("shape"),
+                    _ser(kwargs.get("eisv_state")),
+                    _ser(kwargs.get("derivatives")),
+                    _ser(kwargs.get("suggested_tokens")),
+                    _ser(kwargs.get("expression_tokens")),
+                    kwargs.get("coherence_score"),
+                    1 if kwargs.get("cache_hit") else 0,
+                    kwargs.get("buffer_size", len(self._buffer)),
+                ),
+            )
+            self._db_conn.commit()
+        except Exception:
+            pass
 
     def record_state(
         self,
@@ -157,6 +237,23 @@ class TrajectoryAwareness:
             self._cache_time = now
             self._cache_buffer_len = len(self._buffer)
 
+            # Observability: count and log fresh classification
+            self._total_generations += 1
+            last_state = states[-1] if states else None
+            eisv_snapshot = (
+                {k: last_state[k] for k in ("E", "I", "S", "V")}
+                if last_state
+                else None
+            )
+            self._log_event(
+                event_type="classification",
+                shape=shape.value,
+                eisv_state=eisv_snapshot,
+                suggested_tokens=lumen_tokens,
+                expression_tokens=eisv_tokens,
+                buffer_size=len(self._buffer),
+            )
+
             return result
 
         except Exception:
@@ -167,8 +264,106 @@ class TrajectoryAwareness:
         if self._current_shape is not None:
             try:
                 self._generator.update_weights(self._current_shape, tokens, score)
+                self._total_feedback += 1
+                self._coherence_sum += score
+                self._log_event(
+                    event_type="feedback",
+                    shape=self._current_shape,
+                    expression_tokens=tokens,
+                    coherence_score=score,
+                    buffer_size=len(self._buffer),
+                )
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Observability
+    # ------------------------------------------------------------------
+
+    def get_state(self) -> Dict[str, Any]:
+        """Return a comprehensive snapshot of the awareness subsystem."""
+        buf = list(self._buffer)
+        buf_size = len(buf)
+        buf_capacity = self._buffer.maxlen or 0
+
+        # Current EISV from last buffer entry
+        current_eisv: Optional[Dict[str, float]] = None
+        if buf:
+            last = buf[-1]
+            current_eisv = {k: last[k] for k in ("E", "I", "S", "V")}
+
+        # Derivatives from buffer
+        derivatives: Optional[Dict[str, float]] = None
+        if len(buf) >= 2:
+            derivs = compute_derivatives(buf)
+            if derivs:
+                last_d = derivs[-1]
+                derivatives = {k: last_d[k] for k in ("dE", "dI", "dS", "dV")}
+
+        # Window seconds
+        window_seconds: float = 0.0
+        if len(buf) >= 2:
+            window_seconds = buf[-1]["t"] - buf[0]["t"]
+
+        # Cache info
+        cache_shape: Optional[str] = None
+        cache_age: float = 0.0
+        if self._cached_result is not None:
+            cache_shape = self._cached_result.get("shape")
+            cache_age = time.time() - self._cache_time
+
+        # Expression generator stats
+        mean_coherence: Optional[float] = None
+        if self._total_feedback > 0:
+            mean_coherence = self._coherence_sum / self._total_feedback
+
+        # Recent events from DB
+        recent_events: List[Dict[str, Any]] = []
+        shape_distribution: Dict[str, int] = {}
+        if self._db_conn is not None:
+            try:
+                cursor = self._db_conn.execute(
+                    "SELECT id, timestamp, event_type, shape, eisv_state, "
+                    "derivatives, suggested_tokens, expression_tokens, "
+                    "coherence_score, cache_hit, buffer_size "
+                    "FROM trajectory_events ORDER BY id DESC LIMIT 10"
+                )
+                cols = [d[0] for d in cursor.description]
+                for row in cursor.fetchall():
+                    recent_events.append(dict(zip(cols, row)))
+                recent_events.reverse()  # chronological order
+
+                dist_cursor = self._db_conn.execute(
+                    "SELECT shape, COUNT(*) FROM trajectory_events "
+                    "WHERE shape IS NOT NULL GROUP BY shape"
+                )
+                for shape_name, count in dist_cursor.fetchall():
+                    shape_distribution[shape_name] = count
+            except Exception:
+                pass
+
+        return {
+            "current_shape": self._current_shape,
+            "current_eisv": current_eisv,
+            "derivatives": derivatives,
+            "buffer": {
+                "size": buf_size,
+                "capacity": buf_capacity,
+                "window_seconds": window_seconds,
+            },
+            "cache": {
+                "shape": cache_shape,
+                "age_seconds": cache_age,
+                "ttl_seconds": self._cache_seconds,
+            },
+            "expression_generator": {
+                "total_generations": self._total_generations,
+                "feedback_count": self._total_feedback,
+                "mean_coherence": mean_coherence,
+            },
+            "recent_events": recent_events,
+            "shape_distribution": shape_distribution,
+        }
 
     @property
     def current_shape(self) -> Optional[str]:
