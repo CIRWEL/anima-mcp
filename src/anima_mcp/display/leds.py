@@ -24,6 +24,28 @@ from typing import Tuple, Optional, Any, List
 from enum import Enum
 
 
+def get_shape_color_bias(shape) -> tuple:
+    """Get subtle RGB color bias for a trajectory shape.
+
+    Returns (dr, dg, db) to add to each LED's base color.
+    Values are small (+-5-15) for subtle influence.
+    """
+    if shape is None:
+        return (0, 0, 0)
+    SHAPE_BIASES = {
+        "settled_presence":       (8, 4, -4),     # Warmer amber
+        "convergence":            (-4, 2, 8),     # Cooler blue-white
+        "rising_entropy":         (10, 5, -2),    # Warmer, slightly brighter
+        "falling_energy":         (-6, -2, 4),    # Cooler, slightly dimmer
+        "basin_transition_down":  (-8, -2, 6),    # Cool flash
+        "basin_transition_up":    (10, 4, -2),    # Warm flash
+        "entropy_spike_recovery": (4, 6, 4),      # Pulse/brighten
+        "drift_dissonance":       (-4, -4, -4),   # Slight dimming
+        "void_rising":            (6, 8, 6),      # Gradual brightening
+    }
+    return SHAPE_BIASES.get(str(shape), (0, 0, 0))
+
+
 class DanceType(Enum):
     """Types of emotional dances Lumen can perform."""
     JOY_SPARKLE = "joy_sparkle"           # Quick bright sparkles - delight
@@ -128,10 +150,9 @@ class LEDDisplay:
         
         self._dots = None
         self._brightness = self._base_brightness
-        # Hardware floor: absolute minimum brightness (separate from auto-brightness range).
-        # Activity state (RESTING=0.15x) can push below auto_brightness_min but not below this.
-        # Low enough for dimmer to work, high enough to stay visible
-        self._hardware_brightness_floor = 0.025
+        # Hardware floor: absolute minimum brightness.
+        # Low enough for Night mode to be genuinely dim (bedroom-safe)
+        self._hardware_brightness_floor = 0.008
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_colors = [None, None, None]  # For color transitions
@@ -452,9 +473,10 @@ class LEDDisplay:
             self._dots[1] = state.led1  # Center: Clarity
             self._dots[2] = state.led0  # Left: Warmth
 
-            # Brightness + pulse ("I'm alive" signal, ALWAYS on - never fully off)
-            pulse = self._get_pulse() * self._pulse_amount
-            # Use hardware floor - LEDs should always be visible
+            # Brightness + pulse ("I'm alive" signal). No pulse in Night mode (< 0.05) — stays dim
+            pulse = 0.0 if state.brightness < 0.05 else (
+                self._get_pulse() * self._pulse_amount * min(1.0, max(0.15, state.brightness / 0.12))
+            )
             self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, state.brightness + pulse))
 
             # CRITICAL: Always call show() to update LEDs
@@ -577,7 +599,9 @@ class LEDDisplay:
                     if abs(delta_b) > 0.001:
                         self._current_brightness += delta_b * self._brightness_transition_speed
                     brightness = max(self._hardware_brightness_floor, self._current_brightness)
-                    pulse = self._get_pulse() * self._pulse_amount
+                    pulse = 0.0 if brightness < 0.05 else (
+                        self._get_pulse() * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12))
+                    )
                     self._dots.brightness = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
                     self._dots.show()
                     return self._last_state
@@ -605,7 +629,32 @@ class LEDDisplay:
         # Apply pattern if triggered
         if pattern_trigger and self._enable_patterns:
             state = self._get_pattern_colors(pattern_trigger, state)
-        
+
+        # Apply trajectory shape color bias (subtle influence)
+        try:
+            from ..eisv import get_trajectory_awareness
+            _traj_awareness = get_trajectory_awareness()
+            _shape_bias = get_shape_color_bias(_traj_awareness.current_shape)
+            if any(b != 0 for b in _shape_bias):
+                dr, dg, db = _shape_bias
+                state.led0 = (
+                    max(0, min(255, state.led0[0] + dr)),
+                    max(0, min(255, state.led0[1] + dg)),
+                    max(0, min(255, state.led0[2] + db)),
+                )
+                state.led1 = (
+                    max(0, min(255, state.led1[0] + dr)),
+                    max(0, min(255, state.led1[1] + dg)),
+                    max(0, min(255, state.led1[2] + db)),
+                )
+                state.led2 = (
+                    max(0, min(255, state.led2[0] + dr)),
+                    max(0, min(255, state.led2[1] + dg)),
+                    max(0, min(255, state.led2[2] + db)),
+                )
+        except Exception:
+            pass  # Never break LEDs for trajectory
+
         # Detect significant state changes for pulse effect
         state_change_detected = False
         if self._last_anima_values is not None:
@@ -644,22 +693,24 @@ class LEDDisplay:
         # 4. Wave patterns (subtle animation, disabled by default to reduce complexity)
         # 5. Pulse ("I'm alive" sine wave — applied in set_all, not here)
         
-        # Start with base brightness
-        state.brightness = self._base_brightness
-        
-        # 1. Apply auto-brightness (environmental, always active if enabled)
-        if self._auto_brightness_enabled and light_level is not None:
-            adjusted_brightness = self._get_auto_brightness(light_level)
-            state.brightness = adjusted_brightness
+        # Manual dimmer takes precedence — skip auto-brightness/activity to avoid lux feedback loop
+        if self._manual_brightness_factor < 1.0:
+            state.brightness = self._manual_brightness_factor
+        else:
+            # Start with base brightness
+            state.brightness = self._base_brightness
+            # 1. Apply auto-brightness (environmental)
+            if self._auto_brightness_enabled and light_level is not None:
+                state.brightness = self._get_auto_brightness(light_level)
 
-        # 2. Apply pulsing for low clarity/instability (warning signal)
-        pulsing_mult = self._get_pulsing_brightness(clarity, stability)
-        if pulsing_mult < 1.0:
-            state.brightness *= pulsing_mult
+        # 2. Pulsing (skip when manual - user preset is absolute)
+        if self._manual_brightness_factor >= 1.0:
+            pulsing_mult = self._get_pulsing_brightness(clarity, stability)
+            if pulsing_mult < 1.0:
+                state.brightness *= pulsing_mult
         
-        # 3. Apply state-change pulse effect (brief, SUBTLE brightness boost)
-        # Reduced from 0.3 to 0.1 to avoid lux sensor chaos
-        if self._state_change_pulse_active and self._state_change_pulse_start is not None:
+        # 3. State-change pulse (skip when manual)
+        if self._manual_brightness_factor >= 1.0 and self._state_change_pulse_active and self._state_change_pulse_start is not None:
             pulse_duration = 0.8  # Slightly shorter
             elapsed = time.time() - self._state_change_pulse_start
             if elapsed < pulse_duration:
@@ -674,29 +725,23 @@ class LEDDisplay:
         # - ACTIVE (day): 1.0x brightness
         # - DROWSY (dusk/dawn): 0.6x brightness
         # - RESTING (night): 0.35x brightness
-        if activity_brightness < 1.0:
+        if self._manual_brightness_factor >= 1.0 and activity_brightness < 1.0:
             state.brightness *= activity_brightness
 
-        # 4b. Apply manual dimmer (user joystick control)
-        # When factor < 1.0, it's an ABSOLUTE brightness target (not a multiplier)
-        # This bypasses auto-brightness which gives tiny values due to lux sensor feedback
-        if self._manual_brightness_factor < 1.0:
-            # Use the factor directly as target brightness
-            state.brightness = self._manual_brightness_factor
-
-        # 4c. Enforce visible minimum — if Lumen is on, LEDs should be on.
+        # 4c. Enforce visible minimum - if Lumen is on, LEDs should be on.
         # The hardware floor in set_all() is a safety net; this is the intent.
         state.brightness = max(self._hardware_brightness_floor, state.brightness)
 
         # 4d. Smooth brightness transition — never snap, always glide
-        # This prevents jarring LED jumps when dimming or auto-brightness changes
+        # Ease toward target: faster when far, gentle slowdown as we approach
         target_brightness = state.brightness
         delta = target_brightness - self._current_brightness
         if abs(delta) > 0.001:
-            # Ease toward target: faster when far away, slower when close
             speed = self._brightness_transition_speed
             if abs(delta) > 0.05:
-                speed = min(0.2, speed * 2)  # Faster for big changes (preset switch)
+                speed = min(0.2, speed * 2)  # faster for big changes (preset switch)
+            elif abs(delta) < 0.02:
+                speed *= 0.5  # gentle slowdown near target — smoother landing
             self._current_brightness += delta * speed
         else:
             self._current_brightness = target_brightness
@@ -719,16 +764,17 @@ class LEDDisplay:
             state.led1 = blend_colors(state.led1, memory_color, blend_strength)
             state.led2 = blend_colors(state.led2, memory_color, blend_strength)
 
-            # Slight brightness boost when remembering (feeling confident/grounded)
-            if anticipation_confidence > 0.5:
+            # Slight brightness boost when remembering (skip in Night mode)
+            if anticipation_confidence > 0.5 and state.brightness >= 0.05:
                 memory_brightness_boost = 1.0 + (anticipation_confidence - 0.5) * 0.1
                 state.brightness *= memory_brightness_boost
 
         # 5. Emotional dances - spontaneous expressions of joy and curiosity
-        # Check for spontaneous dance (adds novelty and joy)
-        spontaneous_dance = self._maybe_spontaneous_dance(warmth, clarity, stability, presence)
-        if spontaneous_dance:
-            self.start_dance(spontaneous_dance, duration=2.0, intensity=0.8)
+        # Skip spontaneous dances in Night mode — no brightness spikes when dimmed
+        if self._manual_brightness_factor >= 0.05:
+            spontaneous_dance = self._maybe_spontaneous_dance(warmth, clarity, stability, presence)
+            if spontaneous_dance:
+                self.start_dance(spontaneous_dance, duration=2.0, intensity=0.8)
 
         # Render current dance if active (highest visual priority)
         if self._current_dance:
@@ -736,6 +782,9 @@ class LEDDisplay:
                 self._current_dance = None  # Clean up finished dance
             else:
                 state = self._render_dance(state)
+                # Cap dance brightness in Night mode — no blasting when dimmed
+                if self._manual_brightness_factor < 0.05 and state.brightness > self._manual_brightness_factor * 1.1:
+                    state.brightness = self._manual_brightness_factor
 
         # 6. Apply wave patterns (disabled by default - too complex, conflicts with breathing)
         # Only enable if explicitly requested and patterns are enabled
@@ -787,8 +836,10 @@ class LEDDisplay:
             features = []
             if not state_changed:
                 features.append("cached")
-            if self._pulsing_enabled and pulsing_mult < 1.0:
-                features.append(f"pulsing({pulsing_mult:.2f})")
+            if self._pulsing_enabled and self._manual_brightness_factor >= 1.0:
+                pm = self._get_pulsing_brightness(clarity, stability)
+                if pm < 1.0:
+                    features.append(f"pulsing({pm:.2f})")
             if self._auto_brightness_enabled and light_level is not None:
                 features.append(f"auto-bright({state.brightness:.2f})")
             if self._state_change_pulse_active:
@@ -860,18 +911,19 @@ class LEDDisplay:
         self._flash_color = color
 
     def _apply_flash(self, state: LEDState) -> LEDState:
-        """Apply flash effect if active."""
+        """Apply flash effect if active. Respects current brightness — no blasting in Night mode."""
         if not hasattr(self, '_flash_until'):
             self._flash_until = 0.0
             self._flash_color = (100, 100, 100)
 
         if time.time() < self._flash_until:
-            # Override with flash color
+            # Flash at most 2x current brightness, cap at 0.1 so Night mode stays dim
+            flash_brightness = min(0.1, max(state.brightness * 2, 0.03))
             return LEDState(
                 led0=self._flash_color,
                 led1=self._flash_color,
                 led2=self._flash_color,
-                brightness=min(0.3, self._base_brightness * 2)  # Slightly brighter flash
+                brightness=flash_brightness
             )
         return state
 
