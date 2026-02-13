@@ -21,7 +21,7 @@ import math
 import random
 
 from .face import FaceState
-from .design import COLORS, SPACING
+from .design import COLORS, SPACING, Timing, ease_smooth
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity
@@ -68,7 +68,7 @@ class ScreenState:
     # Screen transition state (fade effect)
     transition_progress: float = 1.0  # 0.0 = start, 1.0 = complete
     transition_start_time: float = 0.0
-    transition_duration: float = 0.10  # 100ms fade
+    transition_duration: float = Timing.SCREEN_TRANSITION_MS / 1000.0
     previous_image: Optional[Any] = None  # PIL Image of previous screen
 
     # Loading state (spinner during LLM calls)
@@ -91,6 +91,9 @@ class ScreenState:
     brightness_changed_at: float = 0.0  # When brightness last changed
     brightness_overlay_name: str = ""  # Preset name to display
     brightness_overlay_level: float = 1.0  # Display brightness level for bar
+
+    # Governance verdict enforcement: pause drawing when governance says pause/halt
+    governance_paused: bool = False  # True when action in ("pause", "halt")
 
 
 def _get_canvas_path() -> Path:
@@ -1029,9 +1032,10 @@ class ScreenRenderer:
             self._state.transition_progress = 1.0
             return new_image
 
-        # Calculate transition progress
+        # Calculate transition progress with ease-in-out
         elapsed = time.time() - self._state.transition_start_time
-        progress = min(1.0, elapsed / self._state.transition_duration)
+        linear = min(1.0, elapsed / self._state.transition_duration)
+        progress = ease_smooth(linear)  # Gentle start and end
         self._state.transition_progress = progress
 
         if progress >= 1.0:
@@ -1044,7 +1048,7 @@ class ScreenRenderer:
             old_img = self._state.previous_image
             if old_img.size != new_image.size:
                 old_img = old_img.resize(new_image.size)
-            # Cross-fade: old * (1-progress) + new * progress
+            # Cross-fade with eased progress — smoother feel
             blended = Image.blend(old_img.convert('RGB'), new_image.convert('RGB'), progress)
             return blended
         except Exception:
@@ -1203,6 +1207,14 @@ class ScreenRenderer:
             if governance and governance.get("unitares_agent_id"):
                 self._unitares_agent_id = governance.get("unitares_agent_id")
 
+            # Enforce governance verdicts: pause drawing when governance says pause/halt
+            if governance:
+                action = governance.get("action", "proceed")
+                if action in ("pause", "halt", "reject"):
+                    self._state.governance_paused = True
+                elif action == "proceed":
+                    self._state.governance_paused = False
+
             # Check Lumen's canvas autonomy (can save/clear regardless of screen)
             # Throttle to every 10th frame — save/energy checks don't need 3Hz
             try:
@@ -1262,9 +1274,11 @@ class ScreenRenderer:
 
                 # Background drawing: Lumen draws even when notepad isn't displayed.
                 # Throttled to every 5th frame (~every 10s at 2s/loop) to limit CPU when on other screens.
+                # Skips when governance says pause/halt (enforces verdict).
                 if (mode != ScreenMode.NOTEPAD and anima and hasattr(self._display, '_create_canvas')
                         and self._state._frame_count % 5 == 0
                         and time.time() >= self._canvas.drawing_paused_until
+                        and not getattr(self._state, 'governance_paused', False)
                         and len(self._canvas.pixels) < 15000):
                     try:
                         self._lumen_draw(anima, draw=None)
@@ -1678,9 +1692,14 @@ class ScreenRenderer:
 
         # Cache: anima values + governance state rounded to display precision
         gov_state = governance.get("unitares_agent_id", "")[:8] if governance else ""
+        try:
+            from ..eisv import get_trajectory_awareness
+            _traj_shape = get_trajectory_awareness().current_shape or ""
+        except Exception:
+            _traj_shape = ""
         diag_key = (
             f"{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|"
-            f"{anima.presence:.2f}|{gov_state}"
+            f"{anima.presence:.2f}|{gov_state}|{_traj_shape}"
         )
         if self._check_screen_cache("diagnostics", diag_key):
             return
@@ -1859,6 +1878,23 @@ class ScreenRenderer:
                     # No governance - show waiting
                     draw.text((bar_x, y_offset + 16), "waiting...", fill=LIGHT_CYAN, font=font)
 
+            # Trajectory awareness shape
+            if y_offset < 225:
+                try:
+                    from ..eisv import get_trajectory_awareness
+                    _traj = get_trajectory_awareness()
+                    _shape = _traj.current_shape or "..."
+                    _buf_size = _traj.buffer_size
+                    _buf_cap = _traj._buffer.maxlen
+                    import time as _time
+                    _cache_age = int(_time.time() - _traj._cache_time) if _traj._cache_time > 0 else -1
+                    _cache_str = f"{_cache_age}s" if _cache_age >= 0 else "n/a"
+                    _traj_text = f"traj: {_shape} ({_buf_size}/{_buf_cap}, {_cache_str})"
+                    draw.text((bar_x, y_offset), _traj_text, fill=LIGHT_CYAN, font=font_small)
+                    y_offset += 14
+                except Exception:
+                    pass
+
             # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.DIAGNOSTICS)
 
@@ -1896,6 +1932,14 @@ class ScreenRenderer:
             eisv = governance.get('eisv')
             if eisv:
                 lines.append(f"EISV: E={eisv.get('E', 0):.0%} I={eisv.get('I', 0):.0%} S={eisv.get('S', 0):.0%} V={eisv.get('V', 0):.0%}")
+        # Trajectory
+        try:
+            from ..eisv import get_trajectory_awareness
+            _traj = get_trajectory_awareness()
+            if _traj.current_shape:
+                lines.append(f"traj: {_traj.current_shape}")
+        except Exception:
+            pass
         self._display.render_text("\n".join(lines), (10, 10))
 
     def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
@@ -3605,6 +3649,19 @@ class ScreenRenderer:
                     self._display._show()
                 return
 
+            # Governance verdict: pause drawing when governance says pause/halt/reject
+            if getattr(self._state, 'governance_paused', False):
+                image, draw = self._display._create_canvas((0, 0, 0))
+                fonts = self._get_fonts()
+                font = fonts['giant']
+                draw.text((20, 80), "Governance\nPaused", fill=(200, 150, 50), font=font)
+                draw.text((20, 160), "Waiting for\nproceed", fill=(120, 120, 120), font=fonts.get('small', font))
+                if hasattr(self._display, '_image'):
+                    self._display._image = image
+                if hasattr(self._display, '_show'):
+                    self._display._show()
+                return
+
             # === Cached rendering: avoid redrawing all pixels every frame ===
             if not self._canvas._dirty and self._canvas._cached_image is not None:
                 # Cache hit: copy cached image (~1ms vs ~3.5s full redraw)
@@ -4382,9 +4439,15 @@ class ScreenRenderer:
                 CYAN = (0, 255, 255)
                 draw.text((5, 2), "self-schema G_t", fill=CYAN, font=font_small)
 
-                # Add node count at bottom left
+                # Add node count at bottom left — breakdown so count matches what's visible
                 GRAY = (120, 120, 120)
-                draw.text((5, 225), f"{len(schema.nodes)} nodes, {len(schema.edges)} edges", fill=GRAY, font=font_small)
+                core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+                learned_count = len(schema.nodes) - core_count
+                if learned_count > 0:
+                    count_str = f"{core_count} core + {learned_count} learned, {len(schema.edges)} edges"
+                else:
+                    count_str = f"{core_count} nodes, {len(schema.edges)} edges"
+                draw.text((5, 225), count_str, fill=GRAY, font=font_small)
 
                 # Nav dots
                 self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
@@ -4401,7 +4464,12 @@ class ScreenRenderer:
                 traceback.print_exc(file=sys.stderr)
 
         # Fallback to text rendering
-        text = f"SELF GRAPH\n\n{len(schema.nodes)} nodes\n{len(schema.edges)} edges"
+        core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+        learned_count = len(schema.nodes) - core_count
+        if learned_count > 0:
+            text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
+        else:
+            text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
         self._display.render_text(text, (10, 10))
 
     def _check_lumen_said_finished(self) -> bool:
@@ -4477,6 +4545,10 @@ class ScreenRenderer:
 
         # Don't act during pause period
         if now < self._canvas.drawing_paused_until:
+            return None
+
+        # Don't act when governance says pause/halt/reject
+        if getattr(self._state, 'governance_paused', False):
             return None
 
         # === PRIORITY 1: Lumen said "finished" ===
