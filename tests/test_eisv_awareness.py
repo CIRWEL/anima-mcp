@@ -1,5 +1,9 @@
 """Tests for EISV trajectory awareness integration."""
 
+import json
+import os
+import sqlite3
+import tempfile
 import time
 import pytest
 from anima_mcp.eisv.mapping import (
@@ -204,3 +208,150 @@ class TestTrajectoryAwareness:
             ta._buffer.append({"t": float(i)})  # Missing E, I, S, V
         # Should return None, not raise
         assert ta.get_trajectory_suggestion() is None
+
+
+def _make_settled_buffer(ta, n=10):
+    """Helper: fill buffer with settled_presence data."""
+    for i in range(n):
+        ta._buffer.append({"t": float(i), "E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1})
+
+
+class TestPersistence:
+    def setup_method(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.db_path = self._tmp.name
+
+    def teardown_method(self):
+        try:
+            os.unlink(self.db_path)
+        except OSError:
+            pass
+
+    def test_init_db_creates_table(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path)
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='trajectory_events'"
+        )
+        assert cursor.fetchone() is not None
+        conn.close()
+
+    def test_log_event_writes_row(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
+        ta._log_event(
+            event_type="test",
+            shape="settled_presence",
+            eisv_state={"E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1},
+        )
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute("SELECT * FROM trajectory_events").fetchall()
+        conn.close()
+        assert len(rows) == 1
+
+    def test_log_event_no_db_path_is_noop(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        # Should not raise even without db_path
+        ta._log_event(event_type="test", shape="settled_presence")
+
+    def test_suggestion_logs_event(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
+        _make_settled_buffer(ta)
+        result = ta.get_trajectory_suggestion()
+        assert result is not None
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT event_type, shape FROM trajectory_events"
+        ).fetchall()
+        conn.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "classification"
+        assert rows[0][1] == "settled_presence"
+
+    def test_feedback_logs_event(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()
+
+        ta.record_feedback(["~stillness~"], 0.9)
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute(
+            "SELECT event_type FROM trajectory_events ORDER BY id"
+        ).fetchall()
+        conn.close()
+        event_types = [r[0] for r in rows]
+        assert "feedback" in event_types
+
+    def test_cache_hit_does_not_log_again(self):
+        ta = TrajectoryAwareness(
+            buffer_size=30, db_path=self.db_path, cache_seconds=60.0, seed=42
+        )
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()  # Fresh classification -> logs
+        ta.get_trajectory_suggestion()  # Cache hit -> should NOT log
+
+        conn = sqlite3.connect(self.db_path)
+        rows = conn.execute("SELECT * FROM trajectory_events").fetchall()
+        conn.close()
+        assert len(rows) == 1  # Only the first classification
+
+
+class TestGetState:
+    def setup_method(self):
+        self._tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self._tmp.close()
+        self.db_path = self._tmp.name
+
+    def teardown_method(self):
+        try:
+            os.unlink(self.db_path)
+        except OSError:
+            pass
+
+    def test_get_state_empty_buffer(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        state = ta.get_state()
+        assert state["current_shape"] is None
+        assert state["current_eisv"] is None
+        assert state["derivatives"] is None
+        assert state["buffer"]["size"] == 0
+        assert state["buffer"]["capacity"] == 30
+
+    def test_get_state_with_data(self):
+        ta = TrajectoryAwareness(
+            buffer_size=30, cache_seconds=60.0, db_path=self.db_path, seed=42
+        )
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()
+
+        state = ta.get_state()
+        assert state["current_shape"] == "settled_presence"
+        assert state["current_eisv"] is not None
+        assert state["current_eisv"]["E"] == 0.7
+        assert state["buffer"]["size"] == 10
+        assert state["cache"]["shape"] == "settled_presence"
+        assert state["expression_generator"]["total_generations"] == 1
+        assert state["expression_generator"]["feedback_count"] == 0
+
+    def test_get_state_with_recent_events(self):
+        ta = TrajectoryAwareness(
+            buffer_size=30, db_path=self.db_path, seed=42
+        )
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()
+
+        state = ta.get_state()
+        assert len(state["recent_events"]) == 1
+        assert state["recent_events"][0]["event_type"] == "classification"
+        assert state["shape_distribution"]["settled_presence"] >= 1
+
+    def test_get_state_window_seconds(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        # Two states 60 seconds apart
+        ta._buffer.append({"t": 1000.0, "E": 0.5, "I": 0.5, "S": 0.3, "V": 0.1})
+        ta._buffer.append({"t": 1060.0, "E": 0.5, "I": 0.5, "S": 0.3, "V": 0.1})
+
+        state = ta.get_state()
+        assert state["buffer"]["window_seconds"] == 60.0
