@@ -24,6 +24,11 @@ A mathematical framework for AI agent identity based on trajectory signatures. K
 - Self-belief signature as epistemic identity
 - Genesis signature for drift detection
 
+### [lumen_eisv_art_paper.md](./lumen_eisv_art_paper.md)
+**Status:** Outline (February 2026)
+
+Conceptual + empirical paper on embodied, self-governed, art-producing agents. Lumen as central case. EISV metrics tied to generative art. Complements the trajectory-identity math paper.
+
 ### Supporting Documents
 
 | Document | Description |

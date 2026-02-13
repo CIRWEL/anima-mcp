@@ -3810,18 +3810,22 @@ class ScreenRenderer:
             self._intent.era_state = self._active_era.create_state()
         era_state = self._intent.era_state
 
-        # Draw frequency: higher base than before, but each mark is tiny (1-15 pixels)
-        base_chance = 0.04  # 4% base — marks happen often, they're just small
+        # Draw frequency: balanced flow — not constipated, not diarrhea
+        base_chance = 0.07  # 7% base — ~1 mark every 10-25s when populated
         expression_intensity = (presence + clarity) / 2.0
-        draw_chance = base_chance * (0.5 + expression_intensity)  # 2-4% range
+        draw_chance = base_chance * (0.5 + expression_intensity)  # 3.5-7% range
 
         # Attention-derived energy affects chance — tired Lumen draws less
         draw_chance *= self._intent.energy
 
-        # Empty canvas boost — Lumen is more likely to start on a blank canvas
-        if len(self._canvas.pixels) == 0:
+        # Empty canvas: strong boost. Early canvas (1-150 px): gradual ramp down — no harsh cliff
+        pixel_count = len(self._canvas.pixels)
+        if pixel_count == 0:
             empty_boost = 0.3 + (expression_intensity * 0.7)
             draw_chance = max(draw_chance, empty_boost)
+        elif pixel_count < 150:
+            ramp = 0.12 + 0.18 * (1.0 - pixel_count / 150.0)
+            draw_chance = max(draw_chance, ramp)
 
         if random.random() > draw_chance:
             return
@@ -3981,10 +3985,10 @@ class ScreenRenderer:
         state.engagement += 0.05 * (target - state.engagement)
         state.engagement = max(0.0, min(1.0, state.engagement))
 
-        # Fatigue: accumulates, never decreases during drawing
+        # Fatigue: accumulates, never decreases during drawing (gentler per-mark)
         if gesture_switch:
             state.fatigue += 0.005
-        state.fatigue = min(1.0, state.fatigue + 0.0005)
+        state.fatigue = min(1.0, state.fatigue + 0.0004)
 
     def _update_coherence_tracking(self, C: float, I_signal: float):
         """Track coherence over time for settling detection and narrative arc.
