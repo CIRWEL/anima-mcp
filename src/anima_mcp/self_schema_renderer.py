@@ -41,6 +41,7 @@ RING_1_RADIUS = 50   # Anima nodes
 RING_2_RADIUS = 82   # Physical sensor nodes (tighter to fit more)
 RING_2B_RADIUS = 102  # System resource nodes
 RING_3_RADIUS = 112  # Preference nodes (outer ring)
+RING_4_RADIUS = 118  # Belief nodes (outermost)
 
 # Node sizes (radius)
 IDENTITY_RADIUS = 14
@@ -48,6 +49,7 @@ ANIMA_RADIUS = 11
 SENSOR_RADIUS = 9
 RESOURCE_RADIUS = 8
 PREFERENCE_RADIUS = 7
+BELIEF_RADIUS = 6
 
 # Colors (RGB)
 COLORS = {
@@ -58,6 +60,7 @@ COLORS = {
     "sensor": (100, 200, 100),        # Green
     "resource": (80, 180, 180),       # Teal for system resources
     "preference": (255, 150, 0),      # Orange for preferences
+    "belief": (180, 180, 255),        # Lavender for beliefs
     "edge_positive": (100, 150, 100), # Green-gray for positive edges
     "edge_negative": (150, 100, 100), # Red-gray for negative edges
     "background": (20, 20, 30),       # Dark background
@@ -216,21 +219,31 @@ def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int)
         y = cy + int(RING_3_RADIUS * math.sin(angle_rad))
         return x, y
 
+    elif node.node_type == "belief":
+        # Ring 4: beliefs evenly spaced around outermost ring
+        angle_step = 360.0 / total_in_ring if total_in_ring > 0 else 0
+        angle = angle_step * index_in_ring
+        angle_rad = math.radians(angle)
+        x = cx + int(RING_4_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_4_RADIUS * math.sin(angle_rad))
+        return x, y
+
     return cx, cy
 
 
 def _build_node_positions(schema: SelfSchema) -> Dict[str, Tuple[int, int]]:
     """Build position lookup for all nodes in the schema."""
     node_positions: Dict[str, Tuple[int, int]] = {}
-    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0}
+    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0, "belief": 0}
     preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
+    belief_count = sum(1 for n in schema.nodes if n.node_type == "belief")
 
     for node in schema.nodes:
         if node.node_type == "identity":
             pos = _get_node_position(node, 0, 1)
         elif node.node_type in type_indices:
             idx = type_indices[node.node_type]
-            total = preference_count if node.node_type == "preference" else 0
+            total = preference_count if node.node_type == "preference" else belief_count if node.node_type == "belief" else 0
             pos = _get_node_position(node, idx, total)
             type_indices[node.node_type] += 1
         else:
@@ -375,6 +388,10 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
         elif node.node_type == "resource":
             color = _get_resource_color(node.value)
             _draw_glow(pixels, x, y, RESOURCE_RADIUS, color, node.value)
+        elif node.node_type == "preference":
+            _draw_glow(pixels, x, y, PREFERENCE_RADIUS, COLORS["preference"], 0.6)
+        elif node.node_type == "belief":
+            _draw_glow(pixels, x, y, BELIEF_RADIUS, COLORS["belief"], 0.5)
 
     # Draw nodes
     for node in schema.nodes:
@@ -396,6 +413,8 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             _draw_filled_circle(pixels, x, y, RESOURCE_RADIUS, color)
         elif node.node_type == "preference":
             _draw_filled_circle(pixels, x, y, PREFERENCE_RADIUS, COLORS["preference"])
+        elif node.node_type == "belief":
+            _draw_filled_circle(pixels, x, y, BELIEF_RADIUS, COLORS["belief"])
 
     return pixels
 

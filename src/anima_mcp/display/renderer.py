@@ -22,7 +22,7 @@ except ImportError:
     HAS_PIL = False
 
 from .face import FaceState, EyeState, MouthState
-from .design import COLORS, radial_gradient_color, blend_color
+from .design import COLORS, Timing, radial_gradient_color, blend_color
 
 
 # Display dimensions (BrainCraft HAT)
@@ -103,24 +103,24 @@ class PilRenderer(DisplayRenderer):
         self._cached_brightness: float = 1.0
         # Manual brightness control (user-adjustable via joystick on face screen)
         # Screen always stays full brightness — only LEDs dim.
-        # LED brightness presets - ABSOLUTE values, not multipliers
-        # "leds" value is now the target brightness directly (0-1 scale, 0.15 = typical max)
-        # This bypasses auto-brightness which was giving tiny values due to lux sensor feedback
+        # LED brightness presets - wider spread for noticeable difference between modes
+        # Perceived brightness is logarithmic; Night must be genuinely dim (bedroom-safe)
         self._brightness_presets = [
-            {"name": "Full",   "display": 1.0,  "leds": 0.15, "absolute": True},   # Bright
-            {"name": "Medium", "display": 1.0,  "leds": 0.08, "absolute": True},   # Moderate
-            {"name": "Dim",    "display": 1.0,  "leds": 0.04, "absolute": True},   # Dim
-            {"name": "Night",  "display": 1.0,  "leds": 0.02, "absolute": True},   # Minimal
+            {"name": "Full",   "display": 1.0,  "leds": 0.28, "absolute": True},   # Bright
+            {"name": "Medium", "display": 1.0,  "leds": 0.12, "absolute": True},   # Moderate
+            {"name": "Dim",    "display": 1.0,  "leds": 0.06, "absolute": True},   # Dim
+            {"name": "Night",  "display": 1.0,  "leds": 0.008, "absolute": True},  # Minimal - barely visible, bedroom-safe
         ]
         self._brightness_index: int = 0  # Index into presets
         self._manual_brightness: float = 1.0  # Display multiplier
-        self._manual_led_brightness: float = 1.0  # LED multiplier
+        # Default Medium (0.12) - never 1.0, which would bypass manual and trigger auto-brightness feedback loop
+        self._manual_led_brightness: float = 0.12
         self._brightness_config_path = Path.home() / ".anima" / "display_brightness.json"
         self._load_brightness()
         self._init_display()
 
     def _load_brightness(self):
-        """Load saved brightness preset from disk."""
+        """Load saved brightness preset from disk. Defaults to Medium if missing."""
         try:
             if self._brightness_config_path.exists():
                 data = json.loads(self._brightness_config_path.read_text())
@@ -132,6 +132,10 @@ class PilRenderer(DisplayRenderer):
                         self._manual_led_brightness = preset["leds"]
                         print(f"[Display] Loaded brightness: {name}", file=sys.stderr, flush=True)
                         return
+            # No config or not found — use Medium (index 1) so we never fall through to auto-brightness chaos
+            self._brightness_index = 1
+            self._manual_brightness = self._brightness_presets[1]["display"]
+            self._manual_led_brightness = self._brightness_presets[1]["leds"]
         except Exception as e:
             print(f"[Display] Could not load brightness: {e}", file=sys.stderr, flush=True)
 
@@ -287,8 +291,8 @@ class PilRenderer(DisplayRenderer):
 
             # Smooth color transition for tint
             if self._last_face_state:
-                # Transition tint smoothly
-                transition_factor = 0.2
+                # Transition tint smoothly — gentle drift, not snap
+                transition_factor = Timing.FACE_TINT_FACTOR
                 current_tint = state.tint
                 last_tint = self._last_face_state.tint
                 smooth_tint = tuple(

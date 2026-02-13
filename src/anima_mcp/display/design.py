@@ -1,12 +1,31 @@
 """
 Design System - Lumen's visual language.
 
-Consistent colors, spacing, and typography for all screens.
+Consistent colors, spacing, typography, and motion for all screens.
 Warm, alive, elegant - matching the care in the backend.
 """
 
+import math
 from dataclasses import dataclass
 from typing import Tuple
+
+
+def ease_smooth(t: float) -> float:
+    """
+    Ease-in-out curve for smooth transitions.
+    t in [0, 1] -> eased value in [0, 1].
+    Cosine-based: starts and ends gently, accelerates in the middle.
+    """
+    t = max(0.0, min(1.0, t))
+    return 0.5 - 0.5 * math.cos(t * math.pi)
+
+
+@dataclass(frozen=True)
+class Timing:
+    """Display and animation timing — unified feel."""
+
+    SCREEN_TRANSITION_MS: float = 180  # Screen fade duration
+    FACE_TINT_FACTOR: float = 0.18  # Per-frame lerp for face tint (gentle drift)
 
 # === Color Palette ===
 # Warm, organic colors that feel alive

@@ -59,6 +59,7 @@
 |-----|------------------|
 | `theory/README.md` | **Index:** Overview + implementation status |
 | `theory/TRAJECTORY_IDENTITY_PAPER.md` | **Core Paper v0.8:** Identity as trajectory signature (publication ready) |
+| `theory/lumen_eisv_art_paper.md` | **Outline:** Embodied, self-governed art-producing agents (Lumen + EISV) |
 | `theory/CODE_THEORY_MAP.md` | How existing code maps to trajectory framework |
 | `theory/IMPLEMENTATION_COMPLETE.md` | Implementation completion notes |
 

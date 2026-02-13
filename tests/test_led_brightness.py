@@ -10,13 +10,13 @@ using mock DotStar objects.
 
 import pytest
 from unittest.mock import MagicMock, patch
-from anima_mcp.display.leds import LEDDisplay, LEDState, derive_led_state
+from anima_mcp.display.leds import LEDDisplay, LEDState, derive_led_state, transition_color
 
 
 @pytest.fixture
 def mock_leds():
     """Create LEDDisplay with mocked hardware."""
-    with patch("anima_mcp.display.leds.HAS_DOTSTAR", False):
+    with patch("anima_mcp.display.leds.display.HAS_DOTSTAR", False):
         led = LEDDisplay(brightness=0.12)
         # No hardware, so _dots is None — mock it for set_all tests
         led._dots = MagicMock()
@@ -70,7 +70,7 @@ class TestManualBrightness:
 
     def test_hardware_floor_enforced(self, mock_leds):
         """Brightness never goes below hardware floor."""
-        assert mock_leds._hardware_brightness_floor == 0.025
+        assert mock_leds._hardware_brightness_floor == 0.008
         mock_leds._manual_brightness_factor = 0.001  # Below floor
         mock_leds._auto_brightness_enabled = False
         mock_leds._color_transitions_enabled = False
@@ -114,9 +114,8 @@ class TestColorTransitions:
     """Test smooth color interpolation."""
 
     def test_transition_color_interpolates(self, mock_leds):
-        """_transition_color should blend between colors."""
-        mock_leds._color_transitions_enabled = True
-        result = mock_leds._transition_color((0, 0, 0), (255, 255, 255), 0.5)
+        """transition_color should blend between colors."""
+        result = transition_color((0, 0, 0), (255, 255, 255), 0.5, enabled=True)
         # Should be roughly halfway
         assert 100 < result[0] < 200
         assert 100 < result[1] < 200
@@ -124,19 +123,16 @@ class TestColorTransitions:
 
     def test_transition_color_same_returns_same(self, mock_leds):
         """Transitioning to same color returns same color."""
-        mock_leds._color_transitions_enabled = True
-        result = mock_leds._transition_color((128, 64, 32), (128, 64, 32), 0.5)
+        result = transition_color((128, 64, 32), (128, 64, 32), 0.5, enabled=True)
         assert result == (128, 64, 32)
 
     def test_transition_color_clamped(self, mock_leds):
         """RGB values should be clamped to 0-255."""
-        mock_leds._color_transitions_enabled = True
-        result = mock_leds._transition_color((250, 250, 250), (300, 300, 300), 0.5)
+        result = transition_color((250, 250, 250), (300, 300, 300), 0.5, enabled=True)
         for channel in result:
             assert 0 <= channel <= 255
 
     def test_transitions_disabled_returns_target(self, mock_leds):
         """When transitions disabled, return target directly."""
-        mock_leds._color_transitions_enabled = False
-        result = mock_leds._transition_color((0, 0, 0), (255, 128, 64), 0.5)
+        result = transition_color((0, 0, 0), (255, 128, 64), 0.5, enabled=False)
         assert result == (255, 128, 64)
