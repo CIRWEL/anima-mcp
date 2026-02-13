@@ -372,3 +372,34 @@ class TestCoherence:
 
     def test_empty_suggested(self):
         assert compute_expression_coherence([], ["warm"]) is None
+
+
+class TestLEDShapeBias:
+    def test_settled_presence_warm(self):
+        from anima_mcp.display.leds import get_shape_color_bias
+        bias = get_shape_color_bias("settled_presence")
+        assert bias[0] > 0  # Warmer red
+        assert bias[2] <= 0  # Less blue
+
+    def test_convergence_cool(self):
+        from anima_mcp.display.leds import get_shape_color_bias
+        bias = get_shape_color_bias("convergence")
+        assert bias[2] > 0  # More blue
+
+    def test_unknown_shape_zero(self):
+        from anima_mcp.display.leds import get_shape_color_bias
+        bias = get_shape_color_bias("not_a_shape")
+        assert bias == (0, 0, 0)
+
+    def test_none_shape_zero(self):
+        from anima_mcp.display.leds import get_shape_color_bias
+        bias = get_shape_color_bias(None)
+        assert bias == (0, 0, 0)
+
+    def test_all_shapes_small_magnitude(self):
+        """All biases should be subtle (<=15 per channel)."""
+        from anima_mcp.display.leds import get_shape_color_bias
+        from anima_mcp.eisv.mapping import TrajectoryShape
+        for shape in TrajectoryShape:
+            bias = get_shape_color_bias(shape.value)
+            assert all(abs(c) <= 15 for c in bias), f"{shape.value}: {bias} too large"
