@@ -55,6 +55,7 @@ from .growth import get_growth_system, GrowthSystem
 from .activity_state import get_activity_manager, ActivityManager
 from .agency import get_action_selector, ActionType, Action, ActionOutcome
 from .primitive_language import get_language_system, Utterance
+from .eisv import get_trajectory_awareness
 
 
 # Global state
@@ -510,14 +511,14 @@ async def _update_display_loop():
                                     renderer.trigger_input_feedback("up")
                                     preset_name = renderer._display.brightness_up()
                                     preset = renderer._display.get_brightness_preset()
-                                    display_level = min(1.0, preset["leds"] / 0.15)
+                                    display_level = min(1.0, preset["leds"] / 0.28)
                                     renderer.trigger_brightness_overlay(preset_name, display_level)
                                     mode_change_event.set()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     renderer.trigger_input_feedback("down")
                                     preset_name = renderer._display.brightness_down()
                                     preset = renderer._display.get_brightness_preset()
-                                    display_level = min(1.0, preset["leds"] / 0.15)
+                                    display_level = min(1.0, preset["leds"] / 0.28)
                                     renderer.trigger_brightness_overlay(preset_name, display_level)
                                     mode_change_event.set()
 
@@ -687,6 +688,18 @@ async def _update_display_loop():
                 continue
             
             consecutive_errors = 0  # Reset on success
+
+            # Feed EISV trajectory awareness buffer
+            try:
+                _traj = get_trajectory_awareness()
+                _traj.record_state(
+                    warmth=anima.warmth,
+                    clarity=anima.clarity,
+                    stability=anima.stability,
+                    presence=anima.presence,
+                )
+            except Exception:
+                pass  # Trajectory awareness is optional
 
             # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
             # Metacognition, agency, self-model, primitive language are enhancement layers.
@@ -1025,10 +1038,20 @@ async def _update_display_loop():
 
                     should_speak, reason = lang.should_generate(lang_state)
                     if should_speak:
-                        utterance = lang.generate_utterance(lang_state)
+                        # Get trajectory-aware token suggestions
+                        _suggestion = None
+                        try:
+                            _traj = get_trajectory_awareness()
+                            _suggestion = _traj.get_trajectory_suggestion(lang_state)
+                        except Exception:
+                            pass
+
+                        _suggested = _suggestion.get("suggested_tokens") if _suggestion else None
+                        utterance = lang.generate_utterance(lang_state, suggested_tokens=_suggested)
                         _last_primitive_utterance = utterance
 
-                        print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason})", file=sys.stderr, flush=True)
+                        _shape_info = f" [shape={_suggestion['shape']}]" if _suggestion else ""
+                        print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason}){_shape_info}", file=sys.stderr, flush=True)
                         print(f"[PrimitiveLang] Pattern: {utterance.category_pattern()}", file=sys.stderr, flush=True)
 
                         from .messages import add_observation
@@ -1036,6 +1059,24 @@ async def _update_display_loop():
                             f"[expression] {utterance.text()} ({utterance.category_pattern()})",
                             author="lumen"
                         )
+
+                    # Self-feedback: when no human around, score past utterance by coherence + stability
+                    if _last_primitive_utterance and _last_primitive_utterance.score is None:
+                        from datetime import timedelta
+                        elapsed = datetime.now() - _last_primitive_utterance.timestamp
+                        if elapsed >= timedelta(seconds=75):  # ~1.25 min after utterance
+                            result = lang.record_self_feedback(_last_primitive_utterance, lang_state)
+                            if result:
+                                print(f"[PrimitiveLang] Self-feedback: score={result['score']:.2f} signals={result['signals']}", file=sys.stderr, flush=True)
+                                # Forward to EISV trajectory weight learning
+                                try:
+                                    _traj = get_trajectory_awareness()
+                                    _traj.record_feedback(
+                                        _last_primitive_utterance.tokens,
+                                        result['score'],
+                                    )
+                                except Exception:
+                                    pass
 
                     if loop_count % 300 == 0:
                         stats = lang.get_stats()
@@ -1180,8 +1221,10 @@ async def _update_display_loop():
                     pass  # Default to 1.0 if both fail
 
                 # Sync manual brightness dimmer to LED controller
-                if _screen_renderer and hasattr(_screen_renderer._display, '_manual_led_brightness'):
-                    _leds._manual_brightness_factor = _screen_renderer._display._manual_led_brightness
+                # Use _screen_renderer._display when available; fallback to _display (e.g. before ScreenRenderer init)
+                display_with_brightness = _screen_renderer._display if _screen_renderer else _display
+                if display_with_brightness and getattr(display_with_brightness, '_manual_led_brightness', None) is not None:
+                    _leds._manual_brightness_factor = display_with_brightness._manual_led_brightness
 
                 def update_leds():
                     # LEDs derive their own state directly from anima - no face influence
@@ -5374,6 +5417,17 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             except Exception as ge:
                 print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
                 _growth = None
+
+            # Bootstrap trajectory awareness from state history
+            try:
+                _traj = get_trajectory_awareness()
+                history = _store.get_recent_state_history(limit=30)
+                if history:
+                    n = _traj.bootstrap_from_history(history)
+                    print(f"[EISV] Bootstrapped trajectory buffer with {n} historical states", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[EISV] Bootstrap failed (non-fatal): {e}", file=sys.stderr, flush=True)
+
             return  # Success
         except Exception as e:
             is_lock_error = "database is locked" in str(e) or "database is locked" in repr(e)

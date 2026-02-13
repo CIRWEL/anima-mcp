@@ -126,6 +126,9 @@ class Utterance:
     score: Optional[float] = None
     feedback_signals: List[str] = field(default_factory=list)
 
+    # Trajectory awareness suggestion (what EISV system suggested)
+    suggested_tokens: Optional[List[str]] = None
+
     def text(self) -> str:
         """Render as text."""
         return " ".join(self.tokens)
@@ -291,23 +294,22 @@ class PrimitiveLanguageSystem:
         conn.commit()
 
     def _save_utterance(self, utterance: Utterance):
-        """Save utterance to history."""
+        """Save utterance to history. Updates score/feedback_signals if row exists."""
         conn = self._connect()
+        ts = utterance.timestamp.isoformat()
+        tokens_str = " ".join(utterance.tokens)
+        pattern = utterance.category_pattern()
+        score = utterance.score
+        signals = ",".join(utterance.feedback_signals) if utterance.feedback_signals else None
         conn.execute("""
-            INSERT OR IGNORE INTO primitive_history
+            INSERT INTO primitive_history
             (timestamp, tokens, category_pattern, warmth, brightness, stability, presence, score, feedback_signals)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            utterance.timestamp.isoformat(),
-            " ".join(utterance.tokens),
-            utterance.category_pattern(),
-            utterance.warmth,
-            utterance.brightness,
-            utterance.stability,
-            utterance.presence,
-            utterance.score,
-            ",".join(utterance.feedback_signals) if utterance.feedback_signals else None,
-        ))
+            ON CONFLICT(timestamp, tokens) DO UPDATE SET
+                score = excluded.score,
+                feedback_signals = excluded.feedback_signals
+        """, (ts, tokens_str, pattern, utterance.warmth, utterance.brightness,
+              utterance.stability, utterance.presence, score, signals))
         conn.commit()
 
     def _apply_weight_decay(self):
@@ -383,6 +385,7 @@ class PrimitiveLanguageSystem:
         self,
         state: Dict[str, float],
         count: int = None,
+        suggested_tokens: Optional[List[str]] = None,
     ) -> List[str]:
         """
         Select tokens probabilistically based on current state.
@@ -403,6 +406,13 @@ class PrimitiveLanguageSystem:
         weights = {}
         for name in PRIMITIVES:
             weights[name] = self.compute_token_weight(name, state)
+
+        # Boost trajectory-suggested tokens (gentle influence, not override)
+        if suggested_tokens:
+            suggested_set = set(suggested_tokens)
+            for name in PRIMITIVES:
+                if name in suggested_set:
+                    weights[name] *= 2.0
 
         selected = []
         available = list(PRIMITIVES.keys())
@@ -455,9 +465,10 @@ class PrimitiveLanguageSystem:
     def generate_utterance(
         self,
         state: Dict[str, float],
+        suggested_tokens: Optional[List[str]] = None,
     ) -> Utterance:
         """Generate a primitive utterance based on current state."""
-        tokens = self.select_tokens(state)
+        tokens = self.select_tokens(state, suggested_tokens=suggested_tokens)
 
         utterance = Utterance(
             tokens=tokens,
@@ -465,6 +476,7 @@ class PrimitiveLanguageSystem:
             brightness=state.get("clarity", 0.5),
             stability=state.get("stability", 0.5),
             presence=state.get("presence", 0.0),
+            suggested_tokens=suggested_tokens,
         )
 
         self._recent.append(utterance)
@@ -516,6 +528,119 @@ class PrimitiveLanguageSystem:
                     return True, "state_change"
 
         return False, "waiting"
+
+    def record_self_feedback(
+        self,
+        utterance: Utterance,
+        current_state: Dict[str, float],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Record automatic self-feedback when no human is around.
+
+        1. State coherence: did my expression match my experience at generation time?
+           - Tokens like "warm" when warmth was high = aligned
+           - Tokens like "cold" when warmth was high = misaligned
+
+        2. Stability: did saying it make things worse?
+           - If stability/clarity/presence stayed same or improved since generation = soft positive
+           - If they dropped significantly = soft negative
+        """
+        signals = []
+        score = 0.5  # Neutral baseline
+
+        # 1. State coherence (at generation time - we have it in utterance)
+        gen_state = {
+            "warmth": utterance.warmth,
+            "brightness": utterance.brightness,
+            "stability": utterance.stability,
+            "presence": utterance.presence,
+        }
+        coherence_scores = []
+        for token_name in utterance.tokens:
+            if token_name not in PRIMITIVES:
+                continue
+            token = PRIMITIVES[token_name]
+            aligned = 0.5  # Neutral for tokens without strong affinity
+            if token.warmth_affinity != 0:
+                warmth_norm = (gen_state["warmth"] - 0.5) * 2  # -1 to 1
+                aligned = 1.0 if (token.warmth_affinity * warmth_norm > 0) else 0.0
+            elif token.brightness_affinity != 0:
+                bright_norm = (gen_state["brightness"] - 0.5) * 2
+                aligned = 1.0 if (token.brightness_affinity * bright_norm > 0) else 0.0
+            elif token.stability_affinity != 0:
+                stab_norm = (gen_state["stability"] - 0.5) * 2
+                aligned = 1.0 if (token.stability_affinity * stab_norm > 0) else 0.0
+            elif token.presence_affinity != 0:
+                aligned = 1.0 if (token.presence_affinity * gen_state["presence"] > 0) else 0.0
+            coherence_scores.append(aligned)
+        if coherence_scores:
+            coherence = sum(coherence_scores) / len(coherence_scores)
+            score += 0.12 * (coherence - 0.5) * 2  # Map 0-1 to roughly -0.12 to +0.12
+            signals.append("state_coherence")
+
+        # 2. Stability: did state stay same or improve?
+        stab_delta = current_state.get("stability", 0.5) - gen_state["stability"]
+        clarity_delta = current_state.get("clarity", gen_state["brightness"]) - gen_state["brightness"]
+        presence_delta = current_state.get("presence", 0.0) - gen_state["presence"]
+        if stab_delta >= -0.05 and clarity_delta >= -0.05:
+            score += 0.08
+            signals.append("stability_maintained")
+        if stab_delta >= 0 and clarity_delta >= 0 and presence_delta >= -0.05:
+            score += 0.05
+            signals.append("state_improved")
+
+        score = max(0.0, min(1.0, score))
+        return self._record_direct_feedback(utterance, score, signals)
+
+    def _record_direct_feedback(
+        self,
+        utterance: Utterance,
+        score: float,
+        signals: List[str],
+        learning_rate: float = 0.08,
+    ) -> Dict[str, Any]:
+        """Apply feedback with a direct score (used by self-feedback and explicit feedback)."""
+        utterance.score = score
+        utterance.feedback_signals = signals
+        self._save_utterance(utterance)
+        self._apply_weight_decay()
+
+        success = score > 0.55
+
+        for token in utterance.tokens:
+            old_weight = self._token_weights.get(token, 1.0)
+            reward = (score - 0.5) * 2
+            new_weight = old_weight + learning_rate * reward
+            new_weight = max(0.3, min(2.5, new_weight))
+            self._token_weights[token] = new_weight
+            self._save_token_weight(token, new_weight, success)
+
+        pattern = utterance.category_pattern()
+        old_combo = self._combo_weights.get(pattern, 1.0)
+        new_combo = old_combo + learning_rate * (score - 0.5) * 2
+        new_combo = max(0.3, min(2.5, new_combo))
+        self._combo_weights[pattern] = new_combo
+        self._save_combo_weight(pattern, new_combo, score)
+
+        if success:
+            self._successful_utterances += 1
+            self._current_interval = max(
+                self._min_interval,
+                self._current_interval - timedelta(minutes=1),
+            )
+        else:
+            self._current_interval = min(
+                self._max_interval,
+                self._current_interval + timedelta(minutes=2),
+            )
+
+        return {
+            "score": score,
+            "signals": signals,
+            "success": success,
+            "token_updates": {t: self._token_weights[t] for t in utterance.tokens},
+            "combo_pattern": pattern,
+        }
 
     def record_feedback(
         self,
@@ -569,59 +694,21 @@ class PrimitiveLanguageSystem:
         # Clamp score
         score = max(0.0, min(1.0, score))
 
-        # Update utterance
-        utterance.score = score
-        utterance.feedback_signals = signals
-
-        # Save updated utterance
-        self._save_utterance(utterance)
-
-        # Apply mild decay so weights do not drift permanently
-        self._apply_weight_decay()
-
-        # Update token weights based on feedback
-        success = score > 0.55
-        learning_rate = 0.12
-
-        for token in utterance.tokens:
-            old_weight = self._token_weights.get(token, 1.0)
-            reward = (score - 0.5) * 2  # Map to -1 to 1
-            new_weight = old_weight + learning_rate * reward
-            new_weight = max(0.3, min(2.5, new_weight))  # Clamp
-            self._token_weights[token] = new_weight
-            self._save_token_weight(token, new_weight, success)
-
-        # Update combo pattern weight
-        pattern = utterance.category_pattern()
-        old_combo = self._combo_weights.get(pattern, 1.0)
-        new_combo = old_combo + learning_rate * (score - 0.5) * 2
-        new_combo = max(0.3, min(2.5, new_combo))
-        self._combo_weights[pattern] = new_combo
-        self._save_combo_weight(pattern, new_combo, score)
-
-        # Adjust generation interval based on feedback
+        result = self._record_direct_feedback(utterance, score, signals, learning_rate=0.12)
+        # Override interval adjustment for human feedback (stronger effect)
+        success = result["success"]
         if success:
-            self._successful_utterances += 1
-            # Success - slightly shorter interval (more talkative)
             self._current_interval = max(
                 self._min_interval,
-                self._current_interval - timedelta(minutes=2)
+                self._current_interval - timedelta(minutes=2),
             )
         else:
-            # Failure - longer interval (less spam)
             self._current_interval = min(
                 self._max_interval,
-                self._current_interval + timedelta(minutes=5)
+                self._current_interval + timedelta(minutes=5),
             )
-
-        return {
-            "score": score,
-            "signals": signals,
-            "success": success,
-            "token_updates": {t: self._token_weights[t] for t in utterance.tokens},
-            "combo_pattern": pattern,
-            "new_interval_minutes": self._current_interval.total_seconds() / 60,
-        }
+        result["new_interval_minutes"] = self._current_interval.total_seconds() / 60
+        return result
 
     def record_explicit_feedback(self, positive: bool):
         """
