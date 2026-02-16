@@ -3968,13 +3968,17 @@ class ScreenRenderer:
         """Update attention signals based on drawing activity.
 
         Curiosity: depletes while exploring (low C), regenerates when finding patterns (high C).
+        In resolving phase: stop regenerating so the arc can complete (avoids stuck-at-high-C).
         Engagement: rises with intentionality, falls with entropy.
         Fatigue: accumulates, never decreases during drawing.
         """
         state = self._intent.state
 
         # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
-        if C < 0.4:
+        # In resolving phase, don't regenerate — otherwise curiosity never exhausts and drawing stays stuck
+        if state.arc_phase == "resolving":
+            curiosity_drain = 0.002  # Gentle drain so arc can complete
+        elif C < 0.4:
             curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
         else:
             curiosity_drain = -0.001 * C  # Pattern found regenerates
