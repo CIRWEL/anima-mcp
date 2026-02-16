@@ -3168,6 +3168,47 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
         }))]
 
 
+async def handle_get_qa_insights(arguments: dict) -> list[TextContent]:
+    """Get insights Lumen learned from Q&A interactions."""
+    try:
+        from .knowledge import get_insights, get_knowledge
+
+        limit = arguments.get("limit", 10)
+        category = arguments.get("category")
+
+        kb = get_knowledge()
+        insights = get_insights(limit=limit, category=category)
+
+        result = {
+            "total_insights": len(kb._insights),
+            "category_filter": category if category else "all",
+            "insights": [
+                {
+                    "text": i.text,
+                    "source_question": i.source_question,
+                    "source_answer": i.source_answer,
+                    "source_author": i.source_author,
+                    "category": i.category,
+                    "confidence": i.confidence,
+                    "age": i.age_string(),
+                    "timestamp": i.timestamp,
+                }
+                for i in insights
+            ],
+        }
+
+        if len(insights) == 0:
+            result["note"] = "No Q&A insights yet - answer Lumen's questions to populate knowledge base"
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Q&A knowledge error: {e}",
+            "note": "Q&A knowledge extraction may not have run yet"
+        }))]
+
+
 async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
     """
     Get Lumen's trajectory identity signature.
@@ -4236,6 +4277,25 @@ TOOLS_STANDARD = [
                     "type": "array",
                     "items": {"type": "string", "enum": ["preferences", "relationships", "goals", "memories", "curiosities", "autobiography", "all"]},
                     "description": "What to include (default: all)"
+                }
+            },
+        },
+    ),
+    Tool(
+        name="get_qa_insights",
+        description="Get insights Lumen learned from Q&A interactions - knowledge extracted from answers to questions",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "limit": {
+                    "type": "integer",
+                    "description": "Max insights to return (default: 10)",
+                    "default": 10
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["self", "sensations", "relationships", "existence", "world", "general"],
+                    "description": "Filter by insight category (optional)"
                 }
             },
         },
@@ -5312,6 +5372,7 @@ HANDLERS = {
     "get_calibration": handle_get_calibration,
     "get_self_knowledge": handle_get_self_knowledge,
     "get_growth": handle_get_growth,
+    "get_qa_insights": handle_get_qa_insights,
     "get_trajectory": handle_get_trajectory,
     "get_eisv_trajectory_state": handle_get_eisv_trajectory_state,
     "git_pull": handle_git_pull,
