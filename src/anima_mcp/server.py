@@ -2761,6 +2761,74 @@ async def handle_read_sensors(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+async def handle_capture_screen(arguments: dict) -> list[TextContent]:
+    """
+    Capture current display screen as base64-encoded PNG image.
+
+    Returns the actual visual output on Lumen's 240×240 LCD display,
+    allowing remote viewing of what Lumen is drawing, showing, or expressing.
+    """
+    global _screen_renderer
+
+    if _screen_renderer is None:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "Screen renderer not initialized"
+        }))]
+
+    try:
+        # Access the renderer's display object to get the current image
+        renderer_display = _screen_renderer._display
+        if renderer_display is None or not hasattr(renderer_display, '_image'):
+            return [TextContent(type="text", text=json.dumps({
+                "error": "Display not available or no image cached"
+            }))]
+
+        # Get the current image from the PIL renderer
+        current_image = renderer_display._image
+        if current_image is None:
+            return [TextContent(type="text", text=json.dumps({
+                "error": "No image currently displayed"
+            }))]
+
+        # Convert PIL Image to base64-encoded PNG
+        import base64
+        from io import BytesIO
+
+        buffer = BytesIO()
+        current_image.save(buffer, format="PNG")
+        img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+        # Get current screen/era context
+        screen_mode = _screen_renderer.get_mode().value
+        era_info = {}
+        if screen_mode == "art_eras":
+            from .display.art_era_canvas import get_current_era_info
+            try:
+                era_info = get_current_era_info() or {}
+            except Exception:
+                pass
+
+        result = {
+            "success": True,
+            "image_base64": img_base64,
+            "width": current_image.width,
+            "height": current_image.height,
+            "screen": screen_mode,
+            "era": era_info.get("name") if era_info else None,
+            "format": "PNG",
+            "note": "Display as: <img src='data:image/png;base64,{image_base64}' />"
+        }
+
+        return [TextContent(type="text", text=json.dumps(result))]
+
+    except Exception as e:
+        import traceback
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Failed to capture screen: {str(e)}",
+            "traceback": traceback.format_exc()
+        }))]
+
+
 async def handle_show_face(arguments: dict) -> list[TextContent]:
     """Show face on display (or return ASCII art if no display). Safe, never crashes."""
     store = _get_store()
@@ -4094,6 +4162,11 @@ TOOLS_STANDARD = [
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
+        name="capture_screen",
+        description="Capture current display screen as base64-encoded PNG image. See what Lumen is actually drawing/showing on the 240×240 LCD.",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
         name="unified_workflow",
         description="Execute workflows across anima-mcp and unitares-governance. Omit workflow to list options.",
         inputSchema={
@@ -5202,12 +5275,13 @@ HANDLERS = {
     "next_steps": handle_next_steps,
     "lumen_qa": handle_lumen_qa,
     "post_message": handle_post_message,
-    # Standard tools (14)
+    # Standard tools (15)
     "get_lumen_context": handle_get_lumen_context,
     "manage_display": handle_manage_display,
     "configure_voice": handle_configure_voice,
     "say": handle_say,
     "diagnostics": handle_diagnostics,
+    "capture_screen": handle_capture_screen,
     "unified_workflow": handle_unified_workflow,
     "get_calibration": handle_get_calibration,
     "get_self_knowledge": handle_get_self_knowledge,
