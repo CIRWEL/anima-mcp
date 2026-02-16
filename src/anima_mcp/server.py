@@ -2586,6 +2586,32 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         # Add answer via add_agent_message (handles responds_to linking)
         result = add_agent_message(answer, agent_name=agent_name, responds_to=validated_question_id)
 
+        # Extract insight from Q&A (async, fire-and-forget)
+        # This populates Lumen's knowledge base with learnings from answers
+        try:
+            from .knowledge import extract_insight_from_answer
+            import asyncio
+
+            async def extract_and_log():
+                try:
+                    insight = await extract_insight_from_answer(
+                        question=question.text,
+                        answer=answer,
+                        author=agent_name
+                    )
+                    if insight:
+                        print(f"[Q&A] Extracted insight: {insight.text[:80]}...", file=sys.stderr, flush=True)
+                    else:
+                        print(f"[Q&A] No insight extracted (answer too short or acknowledgment)", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[Q&A] Insight extraction failed: {e}", file=sys.stderr, flush=True)
+
+            # Fire and forget - don't block response
+            asyncio.create_task(extract_and_log())
+        except Exception as e:
+            # Non-fatal - insight extraction is optional
+            print(f"[Q&A] Could not start insight extraction: {e}", file=sys.stderr, flush=True)
+
         return [TextContent(type="text", text=json.dumps({
             "success": True,
             "action": "answered",
