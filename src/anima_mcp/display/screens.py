@@ -139,6 +139,7 @@ class CanvasState:
 
     # Art era (persisted so drawings continue in the same era after restart)
     _era_name: str = "gestural"
+    pending_era_switch: Optional[str] = None  # Queue era switch until current drawing completes
 
     # Render caching - avoid redrawing all pixels every frame
     _dirty: bool = True  # Set by draw_pixel(), cleared after render
@@ -179,6 +180,8 @@ class CanvasState:
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
+        # Clear pending era switch (will be applied by canvas_clear caller)
+        self.pending_era_switch = None
         # Pause drawing for 5 seconds after manual clear so user sees empty canvas
         self.drawing_paused_until = time.time() + 5.0
 
@@ -254,6 +257,7 @@ class CanvasState:
                 "energy": self.energy,
                 "mark_count": self.mark_count,
                 "era": self._era_name,
+                "pending_era_switch": self.pending_era_switch,
                 # Attention/coherence/narrative state
                 "curiosity": self.curiosity,
                 "engagement": self.engagement,
@@ -428,6 +432,14 @@ class CanvasState:
             era = data.get("era", "gestural")
             if isinstance(era, str) and era:
                 self._era_name = era
+        except Exception:
+            pass
+
+        # Restore pending era switch
+        try:
+            pending = data.get("pending_era_switch")
+            if pending is None or (isinstance(pending, str) and pending):
+                self.pending_era_switch = pending
         except Exception:
             pass
 
@@ -4251,22 +4263,48 @@ class ScreenRenderer:
             "compositional_satisfaction": round(self._canvas.compositional_satisfaction(), 3),
         }
 
-    def set_era(self, era_name: str) -> dict:
-        """Switch to a different art era immediately."""
+    def set_era(self, era_name: str, force_immediate: bool = False) -> dict:
+        """Switch to a different art era (queues if drawing in progress).
+
+        Args:
+            era_name: Name of the era to switch to
+            force_immediate: If True, switch immediately even if drawing in progress
+
+        Returns:
+            dict with success, era, queued status
+        """
         from .eras import get_era
         era = get_era(era_name)
         if era is None or era.name != era_name:
             # get_era falls back to gestural — check if we got what we asked for
             return {"success": False, "error": f"Unknown era: {era_name}"}
 
+        # Check if a drawing is in progress (50+ pixels, not just noise)
+        drawing_in_progress = len(self._canvas.pixels) >= 50
+
+        if drawing_in_progress and not force_immediate:
+            # Queue the era switch for after current drawing completes
+            self._canvas.pending_era_switch = era_name
+            self._canvas.save_to_disk()
+            print(f"[Canvas] Era switch queued: {era_name} (will apply after drawing completes)", file=sys.stderr, flush=True)
+            return {
+                "success": True,
+                "era": era_name,
+                "queued": True,
+                "description": era.description,
+            }
+
+        # Apply immediately (either no drawing in progress or forced)
         self._active_era = era
         self._canvas._era_name = era_name
         self._intent.era_state = era.create_state()
+        self._canvas.pending_era_switch = None  # Clear any pending
         self._canvas.save_to_disk()
         print(f"[Canvas] Era switched to: {era_name}", file=sys.stderr, flush=True)
         return {
             "success": True,
             "era": era_name,
+            "queued": False,
             "description": era.description,
         }
 
@@ -4323,15 +4361,20 @@ class ScreenRenderer:
             if saved_path:
                 print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
 
+        # Apply pending era switch if queued, otherwise auto-rotate
+        from .eras import choose_next_era, get_era
+        if self._canvas.pending_era_switch:
+            new_era_name = self._canvas.pending_era_switch
+            print(f"[Canvas] Applying queued era switch: {new_era_name}", file=sys.stderr, flush=True)
+        else:
+            new_era_name = choose_next_era(self._active_era.name, self._canvas.drawings_saved)
+            print(f"[Canvas] Auto-rotating to new era: {new_era_name}", file=sys.stderr, flush=True)
+
         self._canvas.clear()
         self._intent.reset()
-        # Rotate art era for next drawing
-        from .eras import choose_next_era, get_era
-        new_era_name = choose_next_era(self._active_era.name, self._canvas.drawings_saved)
         self._active_era = get_era(new_era_name)
         self._canvas._era_name = new_era_name
         self._intent.era_state = self._active_era.create_state()
-        print(f"[Canvas] New era: {new_era_name}", file=sys.stderr, flush=True)
         if persist:
             self._canvas.save_to_disk()
         print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
