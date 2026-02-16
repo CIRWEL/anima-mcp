@@ -182,6 +182,53 @@ class CanvasState:
         # Pause drawing for 5 seconds after manual clear so user sees empty canvas
         self.drawing_paused_until = time.time() + 5.0
 
+    def compositional_satisfaction(self) -> float:
+        """Evaluate compositional satisfaction: coverage, balance, coherence.
+
+        Returns 0.0-1.0 score based on:
+        - Coverage: reasonable pixel density (not too sparse, not too dense)
+        - Balance: spatial distribution across canvas quadrants
+        - Visual coherence: derived from recent coherence history if available
+
+        This provides an alternative completion path to attention exhaustion.
+        """
+        if len(self.pixels) < 50:
+            return 0.0  # Too sparse to evaluate
+
+        # Coverage score: ideal density is 5-25% of canvas (2880-14400 pixels)
+        max_pixels = self.width * self.height
+        density = len(self.pixels) / max_pixels
+        if density < 0.05:
+            coverage = density / 0.05  # Ramp up from 0 to 1 as we approach 5%
+        elif density > 0.25:
+            coverage = max(0.0, 1.0 - (density - 0.25) / 0.5)  # Ramp down if too dense
+        else:
+            coverage = 1.0  # Sweet spot: 5-25%
+
+        # Balance score: spatial distribution across quadrants
+        # Divide canvas into 4 quadrants and check for reasonable distribution
+        quadrants = [0, 0, 0, 0]
+        mid_x, mid_y = self.width // 2, self.height // 2
+        for (x, y) in self.pixels.keys():
+            quad = (0 if x < mid_x else 1) + (0 if y < mid_y else 2)
+            quadrants[quad] += 1
+
+        total = len(self.pixels)
+        quadrant_ratios = [q / total for q in quadrants]
+        # Good balance: each quadrant has 10-50% of pixels (not all in one corner)
+        balance_scores = [1.0 if 0.1 <= r <= 0.5 else min(r / 0.1, (1.0 - r) / 0.5) for r in quadrant_ratios]
+        balance = sum(balance_scores) / 4.0
+
+        # Coherence score: use recent coherence history if available
+        coherence = 0.5  # Default neutral
+        if len(self.coherence_history) >= 5:
+            recent = self.coherence_history[-10:]
+            coherence = sum(recent) / len(recent)
+
+        # Weighted combination: coverage 40%, balance 30%, coherence 30%
+        satisfaction = 0.4 * coverage + 0.3 * balance + 0.3 * coherence
+        return min(1.0, max(0.0, satisfaction))
+
     def mark_satisfied(self):
         """Mark that Lumen feels satisfied with current drawing."""
         if not self.is_satisfied:
@@ -525,11 +572,36 @@ class DrawingState:
             self.engagement < 0.3 or self.fatigue > 0.8
         )
 
-    def narrative_complete(self) -> bool:
-        """True when drawing has naturally completed its arc."""
-        return self.arc_phase == "closing" or (
-            self.coherence_settled() and self.attention_exhausted()
-        )
+    def narrative_complete(self, canvas=None) -> bool:
+        """True when drawing has naturally completed its arc.
+
+        Multiple completion paths (OR logic):
+        1. Already in closing phase (manual/explicit completion)
+        2. Coherence settled AND attention exhausted (pattern found + no energy)
+        3. High compositional satisfaction AND curiosity depleted (good composition + explored)
+        4. Extreme fatigue (emergency exit if stuck)
+
+        This gives Lumen multiple ways to complete drawings naturally.
+        """
+        # Path 1: Already closing
+        if self.arc_phase == "closing":
+            return True
+
+        # Path 2: Pattern found AND attention exhausted (original strict path)
+        if self.coherence_settled() and self.attention_exhausted():
+            return True
+
+        # Path 3: Good composition AND curiosity depleted (new compositional path)
+        if canvas is not None:
+            satisfaction = canvas.compositional_satisfaction()
+            if satisfaction > 0.7 and self.curiosity < 0.2:
+                return True
+
+        # Path 4: Emergency exit - too fatigued to continue
+        if self.fatigue > 0.85:
+            return True
+
+        return False
 
     @property
     def derived_energy(self) -> float:
@@ -4080,7 +4152,7 @@ class ScreenRenderer:
 
         elif current_phase == "resolving":
             # Natural completion
-            if state.narrative_complete():
+            if state.narrative_complete(self._canvas):
                 transition_to("closing")
             # Destabilized: coherence dropped
             elif C < 0.5:
@@ -4175,7 +4247,8 @@ class ScreenRenderer:
             "i_momentum": round(state.i_momentum, 4),
             "coherence_settled": state.coherence_settled(),
             "attention_exhausted": state.attention_exhausted(),
-            "narrative_complete": state.narrative_complete(),
+            "narrative_complete": state.narrative_complete(self._canvas),
+            "compositional_satisfaction": round(self._canvas.compositional_satisfaction(), 3),
         }
 
     def set_era(self, era_name: str) -> dict:
@@ -4570,10 +4643,11 @@ class ScreenRenderer:
                 self._canvas.save_to_disk()
                 return "saved_and_cleared"
 
-        # === PRIORITY 2: Narrative complete (attention exhausted + coherence settled) ===
-        if state.narrative_complete() and pixel_count >= 50:
+        # === PRIORITY 2: Narrative complete (multiple paths: coherence+attention, composition+curiosity, or fatigue) ===
+        if state.narrative_complete(self._canvas) and pixel_count >= 50:
             C = state.coherence()
-            print(f"[Canvas] Narrative complete — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f})", file=sys.stderr, flush=True)
+            satisfaction = self._canvas.compositional_satisfaction()
+            print(f"[Canvas] Narrative complete — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f}, sat={satisfaction:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f}, fatigue={state.fatigue:.2f})", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
             if saved_path:
                 self.canvas_clear(persist=True, already_saved=True)
