@@ -22,6 +22,7 @@ from .mapping import (
 )
 from .expression import (
     ExpressionGenerator,
+    StudentExpressionGenerator,
     translate_expression,
     shape_to_lumen_trigger,
 )
@@ -46,10 +47,20 @@ class TrajectoryAwareness:
         cache_seconds: float = 60.0,
         seed: Optional[int] = None,
         db_path: Optional[str] = None,
+        student_model_dir: Optional[str] = None,
     ):
         self._buffer: deque = deque(maxlen=buffer_size)
         self._cache_seconds = cache_seconds
-        self._generator = ExpressionGenerator(seed=seed)
+
+        # Use student model if available, fall back to rule-based
+        if student_model_dir is not None:
+            self._generator = StudentExpressionGenerator(
+                model_dir=student_model_dir,
+                fallback_seed=seed,
+            )
+        else:
+            self._generator = ExpressionGenerator(seed=seed)
+        self._use_student = isinstance(self._generator, StudentExpressionGenerator)
 
         # Cache
         self._cached_result: Optional[Dict[str, Any]] = None
@@ -222,7 +233,10 @@ class TrajectoryAwareness:
             shape = classify_trajectory(window)
             self._current_shape = shape.value
 
-            eisv_tokens = self._generator.generate(shape.value)
+            if self._use_student:
+                eisv_tokens = self._generator.generate(shape.value, window=window)
+            else:
+                eisv_tokens = self._generator.generate(shape.value)
             lumen_tokens = translate_expression(eisv_tokens)
             trigger = shape_to_lumen_trigger(shape.value)
 
