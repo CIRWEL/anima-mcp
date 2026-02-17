@@ -90,7 +90,6 @@ class PilRenderer(DisplayRenderer):
         self._display = None
         self._cs_pin = None
         self._dc_pin = None
-        self._reset_pin = None
         self._backlight = None
         self._image: Optional[Image.Image] = None
         self._last_face_state: Optional[FaceState] = None
@@ -196,7 +195,7 @@ class PilRenderer(DisplayRenderer):
 
     def _cleanup_display(self):
         """Release display GPIO pins so _init_display() can re-acquire them."""
-        for pin_attr in ("_cs_pin", "_dc_pin", "_reset_pin", "_backlight"):
+        for pin_attr in ("_cs_pin", "_dc_pin", "_backlight"):
             pin = getattr(self, pin_attr, None)
             if pin is not None:
                 try:
@@ -217,10 +216,10 @@ class PilRenderer(DisplayRenderer):
             from adafruit_rgb_display import st7789
 
             # BrainCraft HAT pin configuration — store refs for cleanup
-            # CE0=CS, D25=DC, D24=RST, D22=backlight per BrainCraft HAT wiring
+            # Per Adafruit docs: CE0=CS, D25=DC, D26=backlight
+            # D22/D24 are joystick left/right — must NOT be used for display
             self._cs_pin = digitalio.DigitalInOut(board.CE0)
             self._dc_pin = digitalio.DigitalInOut(board.D25)
-            self._reset_pin = digitalio.DigitalInOut(board.D24)
 
             # SPI setup - use high speed for fast display updates
             spi = board.SPI()
@@ -233,12 +232,12 @@ class PilRenderer(DisplayRenderer):
                 rotation=self.config.rotation,
                 cs=self._cs_pin,
                 dc=self._dc_pin,
-                rst=self._reset_pin,
+                rst=None,  # No hardware reset pin on BrainCraft HAT
                 baudrate=24000000,  # 24 MHz - max SPI speed for ST7789
             )
 
-            # Enable backlight on D22 (BrainCraft HAT)
-            self._backlight = digitalio.DigitalInOut(board.D22)
+            # Enable backlight on D26 (per Adafruit BrainCraft HAT pinout)
+            self._backlight = digitalio.DigitalInOut(board.D26)
             self._backlight.direction = digitalio.Direction.OUTPUT
             self._backlight.value = True
 
