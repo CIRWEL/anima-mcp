@@ -191,17 +191,32 @@ class PilRenderer(DisplayRenderer):
                 self._name_font = ImageFont.load_default()
         return self._name_font
 
+    def _cleanup_display(self):
+        """Release display GPIO pins so _init_display() can re-acquire them."""
+        for pin_attr in ("_cs_pin", "_dc_pin", "_reset_pin", "_backlight"):
+            pin = getattr(self, pin_attr, None)
+            if pin is not None:
+                try:
+                    pin.deinit()
+                except Exception:
+                    pass
+                setattr(self, pin_attr, None)
+        self._display = None
+
     def _init_display(self):
         """Initialize display hardware if available."""
+        # Release any previously held pins before re-init
+        self._cleanup_display()
+
         try:
             import board
             import digitalio
             from adafruit_rgb_display import st7789
 
-            # BrainCraft HAT pin configuration
-            cs_pin = digitalio.DigitalInOut(board.CE0)
-            dc_pin = digitalio.DigitalInOut(board.D25)
-            reset_pin = digitalio.DigitalInOut(board.D24)
+            # BrainCraft HAT pin configuration — store refs for cleanup
+            self._cs_pin = digitalio.DigitalInOut(board.CE0)
+            self._dc_pin = digitalio.DigitalInOut(board.D25)
+            self._reset_pin = digitalio.DigitalInOut(board.D24)
 
             # SPI setup - use high speed for fast display updates
             spi = board.SPI()
@@ -212,9 +227,9 @@ class PilRenderer(DisplayRenderer):
                 width=self.config.width,
                 y_offset=80,
                 rotation=self.config.rotation,
-                cs=cs_pin,
-                dc=dc_pin,
-                rst=reset_pin,
+                cs=self._cs_pin,
+                dc=self._dc_pin,
+                rst=self._reset_pin,
                 baudrate=24000000,  # 24 MHz - max SPI speed for ST7789
             )
 
@@ -278,8 +293,10 @@ class PilRenderer(DisplayRenderer):
     def render_face(self, state: FaceState, name: Optional[str] = None) -> None:
         """Render face to display with micro-expressions and transitions. Safe, never crashes."""
         if not self._display:
-            print("[Display] render_face called but display hardware not available", file=sys.stderr, flush=True)
-            return  # Display not available, skip silently
+            # Attempt recovery via _push_to_display (which has reinit logic)
+            self._push_to_display()
+            if not self._display:
+                return  # Still unavailable after recovery attempt
 
         try:
             import time
