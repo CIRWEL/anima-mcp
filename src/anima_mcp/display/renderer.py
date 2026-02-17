@@ -248,7 +248,9 @@ class PilRenderer(DisplayRenderer):
                 print(f"Warning: Could not show waking face: {e}", file=sys.stderr, flush=True)
                 # Continue - display initialized but waking face failed
         except Exception as e:
+            import traceback
             print(f"No display hardware: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
             self._display = None
             self._backlight = None
 
