@@ -218,10 +218,18 @@ class PilRenderer(DisplayRenderer):
 
             # BrainCraft HAT pin configuration — store refs for cleanup
             # CE0=CS, D25=DC per Adafruit docs
-            # Backlight is hardware-pulled HIGH on BrainCraft HAT — no software control needed
-            # D22/D24 are shared with joystick left/right — do NOT claim them here
+            # D22 = backlight (shared with joystick left)
+            # D24 = joystick right — do NOT use as display reset
             self._cs_pin = digitalio.DigitalInOut(board.CE0)
             self._dc_pin = digitalio.DigitalInOut(board.D25)
+
+            # Enable backlight on D22 — set HIGH then release pin
+            # so joystick can later claim D22 as INPUT with PULL_UP
+            # (PULL_UP keeps D22 HIGH = backlight stays on)
+            _bl = digitalio.DigitalInOut(board.D22)
+            _bl.direction = digitalio.Direction.OUTPUT
+            _bl.value = True
+            _bl.deinit()  # Release pin for joystick to reclaim
 
             # SPI setup - use high speed for fast display updates
             spi = board.SPI()
@@ -237,10 +245,6 @@ class PilRenderer(DisplayRenderer):
                 rst=None,  # No reset pin — avoids D24 joystick conflict
                 baudrate=24000000,  # 24 MHz - max SPI speed for ST7789
             )
-
-            # Backlight: BrainCraft HAT pulls backlight HIGH by default.
-            # No need to claim a GPIO pin — the backlight is always on.
-            # (Claiming D22 would block joystick left, D26 doesn't work on this HAT)
 
             print("BrainCraft HAT display initialized", file=sys.stderr, flush=True)
 
