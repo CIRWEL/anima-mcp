@@ -466,93 +466,88 @@ async def _update_display_loop():
                         joy_btn_pressed = input_state.joystick_button and (not prev_state or not prev_state.joystick_button)
                         sep_btn_pressed = input_state.separate_button and (not prev_state or not prev_state.separate_button)
                         
-                        # Joystick UP/DOWN = screen switching (D22/D24 left/right held by display)
-                        # Separate button = brightness cycle on face screen
+                        # Joystick direction - LEFT/RIGHT cycles through all screens (including notepad)
                         current_dir = input_state.joystick_direction
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
 
-                            # Screen-specific UP/DOWN handling first
-                            screen_handled_updown = False
+                        # Joystick center = next screen (D22/D24 held by display, no left/right)
+                        if joy_btn_pressed:
+                            renderer.trigger_input_feedback("press")
+                            if _leds and _leds.is_available():
+                                _leds.quick_flash((60, 60, 120), 50)
+                            old_mode = renderer.get_mode()
+                            renderer.next_mode()
+                            new_mode = renderer.get_mode()
+                            renderer._state.last_user_action_time = time.time()
+                            mode_change_event.set()
+                            print(f"[Input] {old_mode.value} -> {new_mode.value} (joystick)", file=sys.stderr, flush=True)
+                        
+                        # Joystick UP/DOWN on FACE screen = brightness control
+                        if current_mode == ScreenMode.FACE:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    renderer.trigger_input_feedback("up")
+                                    preset_name = renderer._display.brightness_up()
+                                    preset = renderer._display.get_brightness_preset()
+                                    display_level = min(1.0, preset["leds"] / 0.28)
+                                    renderer.trigger_brightness_overlay(preset_name, display_level)
+                                    mode_change_event.set()
+                                elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    renderer.trigger_input_feedback("down")
+                                    preset_name = renderer._display.brightness_down()
+                                    preset = renderer._display.get_brightness_preset()
+                                    display_level = min(1.0, preset["leds"] / 0.28)
+                                    renderer.trigger_brightness_overlay(preset_name, display_level)
+                                    mode_change_event.set()
 
-                            # Message board: UP/DOWN scrolls messages
-                            if current_mode == ScreenMode.MESSAGES:
+                        # Joystick navigation in message board (UP/DOWN scrolls messages)
+                        if current_mode == ScreenMode.MESSAGES:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                # Only trigger on transition TO up/down (edge detection)
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
                                     _screen_renderer.trigger_input_feedback("up")
                                     _screen_renderer.message_scroll_up()
-                                    screen_handled_updown = True
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.message_scroll_down()
-                                    screen_handled_updown = True
 
-                            # Art eras: UP/DOWN moves cursor
-                            elif current_mode == ScreenMode.ART_ERAS:
+                        # Joystick navigation in Art Eras screen (UP/DOWN moves cursor)
+                        if current_mode == ScreenMode.ART_ERAS:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
                                     _screen_renderer.trigger_input_feedback("up")
                                     _screen_renderer.era_cursor_up()
-                                    screen_handled_updown = True
+                                    mode_change_event.set()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     _screen_renderer.trigger_input_feedback("down")
                                     _screen_renderer.era_cursor_down()
-                                    screen_handled_updown = True
+                                    mode_change_event.set()
 
-                            # Visitors: UP/DOWN scrolls (same as messages)
-                            elif current_mode == ScreenMode.VISITORS:
+                        # Joystick navigation in Visitors screen (same as messages)
+                        if current_mode == ScreenMode.VISITORS:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
                                     renderer.trigger_input_feedback("up")
                                     renderer.message_scroll_up()
-                                    screen_handled_updown = True
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     renderer.trigger_input_feedback("down")
                                     renderer.message_scroll_down()
-                                    screen_handled_updown = True
-
-                            # Q&A: UP/DOWN scrolls when expanded
-                            elif current_mode == ScreenMode.QUESTIONS:
-                                qa_expanded = renderer._state.qa_expanded if renderer else False
-                                if qa_expanded:
-                                    if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                        renderer.trigger_input_feedback("up")
-                                        renderer.qa_scroll_up()
-                                        screen_handled_updown = True
-                                    elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                        renderer.trigger_input_feedback("down")
-                                        renderer.qa_scroll_down()
-                                        screen_handled_updown = True
-
-                            # Default: UP/DOWN = switch screens (global navigation)
-                            if not screen_handled_updown:
+                        
+                        # Joystick navigation in Questions screen (Q&A specific)
+                        if current_mode == ScreenMode.QUESTIONS:
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
                                     renderer.trigger_input_feedback("up")
-                                    if _leds and _leds.is_available():
-                                        _leds.quick_flash((60, 60, 120), 50)
-                                    old_mode = renderer.get_mode()
-                                    renderer.previous_mode()
-                                    new_mode = renderer.get_mode()
-                                    renderer._state.last_user_action_time = time.time()
-                                    mode_change_event.set()
-                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (up)", file=sys.stderr, flush=True)
+                                    renderer.qa_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     renderer.trigger_input_feedback("down")
-                                    if _leds and _leds.is_available():
-                                        _leds.quick_flash((60, 60, 120), 50)
-                                    old_mode = renderer.get_mode()
-                                    renderer.next_mode()
-                                    new_mode = renderer.get_mode()
-                                    renderer._state.last_user_action_time = time.time()
-                                    mode_change_event.set()
-                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (down)", file=sys.stderr, flush=True)
-
-                        # Separate button on FACE screen = cycle brightness
-                        if current_mode == ScreenMode.FACE and sep_btn_pressed:
-                            renderer.trigger_input_feedback("up")
-                            preset_name = renderer._display.brightness_up()
-                            preset = renderer._display.get_brightness_preset()
-                            display_level = min(1.0, preset["leds"] / 0.28)
-                            renderer.trigger_brightness_overlay(preset_name, display_level)
-                            mode_change_event.set()
-
+                                    renderer.qa_scroll_down()
+                                # LEFT/RIGHT unavailable (D22/D24 held by display)
+                        
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
                         # Long press (3+ seconds): graceful shutdown
