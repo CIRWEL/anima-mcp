@@ -5624,7 +5624,10 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             try:
                 import os as _os
                 _db_path = _os.path.join(_os.path.expanduser("~"), ".anima", "anima.db")
-                _traj = get_trajectory_awareness(db_path=_db_path)
+                _student_dir = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))), "data", "student_model")
+                if not _os.path.isdir(_student_dir):
+                    _student_dir = None
+                _traj = get_trajectory_awareness(db_path=_db_path, student_model_dir=_student_dir)
                 history = _store.get_recent_state_history(limit=30)
                 if history:
                     n = _traj.bootstrap_from_history(history)
