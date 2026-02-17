@@ -1,0 +1,69 @@
+{
+  "shapes": [
+    "basin_transition_down",
+    "basin_transition_up",
+    "convergence",
+    "drift_dissonance",
+    "entropy_spike_recovery",
+    "falling_energy",
+    "rising_entropy",
+    "settled_presence",
+    "void_rising"
+  ],
+  "patterns": [
+    "PAIR",
+    "QUESTION",
+    "REPETITION",
+    "SINGLE",
+    "TRIPLE"
+  ],
+  "tokens": [
+    "~boundary~",
+    "~curiosity~",
+    "~deep_listening~",
+    "~emergence~",
+    "~holding~",
+    "~questioning~",
+    "~reaching~",
+    "~reflection~",
+    "~releasing~",
+    "~resonance~",
+    "~return~",
+    "~ripple~",
+    "~stillness~",
+    "~threshold~",
+    "~warmth~"
+  ],
+  "tokens_with_none": [
+    "none",
+    "~boundary~",
+    "~curiosity~",
+    "~deep_listening~",
+    "~emergence~",
+    "~holding~",
+    "~questioning~",
+    "~reaching~",
+    "~reflection~",
+    "~releasing~",
+    "~resonance~",
+    "~return~",
+    "~ripple~",
+    "~stillness~",
+    "~threshold~",
+    "~warmth~"
+  ],
+  "numeric_features": [
+    "mean_E",
+    "mean_I",
+    "mean_S",
+    "mean_V",
+    "dE",
+    "dI",
+    "dS",
+    "dV",
+    "d2E",
+    "d2I",
+    "d2S",
+    "d2V"
+  ]
+}
