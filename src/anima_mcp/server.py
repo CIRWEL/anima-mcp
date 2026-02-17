@@ -2918,6 +2918,8 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
         "available": _display.is_available() if _display else False,
         "initialized": _display is not None,
     }
+    if _display and hasattr(_display, '_init_error') and _display._init_error:
+        display_info["init_error"] = _display._init_error
     
     # Update loop status
     loop_info = {

@@ -91,6 +91,7 @@ class PilRenderer(DisplayRenderer):
         self._cs_pin = None
         self._dc_pin = None
         self._backlight = None
+        self._init_error: Optional[str] = None  # Last init failure reason
         self._image: Optional[Image.Image] = None
         self._last_face_state: Optional[FaceState] = None
         self._last_blink_time: float = 0.0
@@ -252,6 +253,7 @@ class PilRenderer(DisplayRenderer):
                 # Continue - display initialized but waking face failed
         except Exception as e:
             import traceback
+            self._init_error = f"{type(e).__name__}: {e}"
             print(f"No display hardware: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
             self._display = None
