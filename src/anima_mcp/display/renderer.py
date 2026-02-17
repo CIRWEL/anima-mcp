@@ -218,7 +218,7 @@ class PilRenderer(DisplayRenderer):
 
             # BrainCraft HAT pin configuration — store refs for cleanup
             # CE0=CS, D25=DC, D22=backlight (must stay HIGH)
-            # D22 is shared with joystick left, D24 with joystick right
+            # D22 shared with joystick left, D24 with joystick right
             # We hold D22 HIGH for backlight; joystick skips left/right
             self._cs_pin = digitalio.DigitalInOut(board.CE0)
             self._dc_pin = digitalio.DigitalInOut(board.D25)
@@ -227,6 +227,19 @@ class PilRenderer(DisplayRenderer):
             self._backlight = digitalio.DigitalInOut(board.D22)
             self._backlight.direction = digitalio.Direction.OUTPUT
             self._backlight.value = True
+
+            # Manual hardware reset via D24 — pulse LOW then release pin
+            # ST7789 needs a reset pulse to enter a known state
+            _rst = digitalio.DigitalInOut(board.D24)
+            _rst.direction = digitalio.Direction.OUTPUT
+            _rst.value = True
+            import time as _time
+            _time.sleep(0.05)
+            _rst.value = False
+            _time.sleep(0.05)
+            _rst.value = True
+            _time.sleep(0.15)  # Wait for ST7789 to boot after reset
+            _rst.deinit()  # Release D24 (not needed after reset pulse)
 
             # SPI setup - use high speed for fast display updates
             spi = board.SPI()
@@ -239,7 +252,7 @@ class PilRenderer(DisplayRenderer):
                 rotation=self.config.rotation,
                 cs=self._cs_pin,
                 dc=self._dc_pin,
-                rst=None,  # No reset pin — avoids D24 joystick conflict
+                rst=None,  # Already reset manually above
                 baudrate=24000000,  # 24 MHz - max SPI speed for ST7789
             )
 
@@ -695,25 +708,25 @@ class PilRenderer(DisplayRenderer):
                     img_to_show = self._image
                 if img_to_show is not None:
                     # Wrap to return True on success (image() returns None)
-                    # Use 1.0s timeout — first render after boot can be slow
+                    # Use 3.0s timeout — first render after boot can be very slow
                     result = safe_call_with_timeout(
                         lambda: (self._display.image(img_to_show), True)[1],
-                        timeout_seconds=1.0,
+                        timeout_seconds=3.0,
                         default=False,
                         log_error=True
                     )
                     if result is False:
                         self._display_fail_count += 1
                         print(f"[Display] SPI timeout (fail #{self._display_fail_count})", file=sys.stderr, flush=True)
-                        if self._display_fail_count >= 3:
-                            print("[Display] 3 consecutive failures — marking unavailable for reinit", file=sys.stderr, flush=True)
+                        if self._display_fail_count >= 10:
+                            print("[Display] 10 consecutive failures — marking unavailable for reinit", file=sys.stderr, flush=True)
                             self._display = None
                     else:
                         self._display_fail_count = 0
             except Exception as e:
                 self._display_fail_count += 1
                 print(f"[Display] Hardware error during show: {e} (fail #{self._display_fail_count})", file=sys.stderr, flush=True)
-                if self._display_fail_count >= 3:
+                if self._display_fail_count >= 10:
                     print("[Display] Marking display as unavailable for reinit", file=sys.stderr, flush=True)
                     self._display = None
 
