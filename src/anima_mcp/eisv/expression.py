@@ -138,6 +138,147 @@ class ExpressionGenerator:
 
 
 # ---------------------------------------------------------------------------
+# Student Expression Generator (distilled from V6 teacher)
+# ---------------------------------------------------------------------------
+
+class StudentExpressionGenerator:
+    """Distilled student model inference — zero external dependencies.
+
+    Loads JSON-exported RandomForest classifiers and runs inference
+    using only Python stdlib. Falls back to rule-based generation
+    if model files are missing.
+    """
+
+    def __init__(self, model_dir: str, fallback_seed: Optional[int] = None):
+        self._model_dir = model_dir
+        self._loaded = False
+        self._fallback = ExpressionGenerator(seed=fallback_seed)
+        self._load_models()
+
+    def _load_models(self) -> None:
+        import json as _json
+        import os as _os
+
+        try:
+            def _load(name: str):
+                path = _os.path.join(self._model_dir, name)
+                with open(path) as f:
+                    return _json.load(f)
+
+            self._pattern_forest = _load("pattern_forest.json")
+            self._token1_forest = _load("token1_forest.json")
+            self._token2_forest = _load("token2_forest.json")
+            self._scaler = _load("scaler.json")
+            self._mappings = _load("mappings.json")
+            self._loaded = True
+        except (FileNotFoundError, KeyError, ValueError):
+            self._loaded = False
+
+    @property
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+    def _scale_features(self, numeric: List[float]) -> List[float]:
+        mean = self._scaler["mean"]
+        scale = self._scaler["scale"]
+        return [(v - m) / s for v, m, s in zip(numeric, mean, scale)]
+
+    def _build_features(self, shape: str, window: Dict[str, Any]) -> List[float]:
+        states = window["states"]
+        derivs = window.get("derivatives", [])
+        second = window.get("second_derivatives", [])
+
+        def _mean(vals: List[float]) -> float:
+            return sum(vals) / len(vals) if vals else 0.0
+
+        numeric_features = self._mappings["numeric_features"]
+        raw = {
+            "mean_E": _mean([s["E"] for s in states]),
+            "mean_I": _mean([s["I"] for s in states]),
+            "mean_S": _mean([s["S"] for s in states]),
+            "mean_V": _mean([s["V"] for s in states]),
+            "dE": _mean([d["dE"] for d in derivs]) if derivs else 0.0,
+            "dI": _mean([d["dI"] for d in derivs]) if derivs else 0.0,
+            "dS": _mean([d["dS"] for d in derivs]) if derivs else 0.0,
+            "dV": _mean([d["dV"] for d in derivs]) if derivs else 0.0,
+            "d2E": _mean([d["d2E"] for d in second]) if second else 0.0,
+            "d2I": _mean([d["d2I"] for d in second]) if second else 0.0,
+            "d2S": _mean([d["d2S"] for d in second]) if second else 0.0,
+            "d2V": _mean([d["d2V"] for d in second]) if second else 0.0,
+        }
+        numeric = [raw.get(f, 0.0) for f in numeric_features]
+        scaled = self._scale_features(numeric)
+
+        shapes = self._mappings["shapes"]
+        shape_onehot = [1.0 if s == shape else 0.0 for s in shapes]
+        return scaled + shape_onehot
+
+    def _predict_tree(self, tree: Dict, features: List[float]) -> List[float]:
+        node = tree
+        while not node.get("leaf", False):
+            if features[node["feature"]] <= node["threshold"]:
+                node = node["left"]
+            else:
+                node = node["right"]
+        return node["probs"]
+
+    def _predict_forest(self, forest: List[Dict], features: List[float]) -> int:
+        all_probs = [self._predict_tree(tree, features) for tree in forest]
+        n_classes = len(all_probs[0])
+        avg = [0.0] * n_classes
+        for probs in all_probs:
+            for i in range(n_classes):
+                avg[i] += probs[i]
+        best_idx = 0
+        best_val = avg[0]
+        for i in range(1, n_classes):
+            if avg[i] > best_val:
+                best_val = avg[i]
+                best_idx = i
+        return best_idx
+
+    def generate(self, shape: str, window: Optional[Dict[str, Any]] = None) -> List[str]:
+        """Generate expression tokens using distilled student model.
+
+        Falls back to rule-based generator if model not loaded or window missing.
+        """
+        if not self._loaded or window is None:
+            return self._fallback.generate(shape)
+
+        try:
+            X = self._build_features(shape, window)
+
+            pattern_idx = self._predict_forest(self._pattern_forest, X)
+            pattern = self._mappings["patterns"][pattern_idx]
+
+            token1_idx = self._predict_forest(self._token1_forest, X)
+            token_1 = self._mappings["tokens"][token1_idx]
+
+            X_t2 = X + [float(token1_idx)]
+            token2_idx = self._predict_forest(self._token2_forest, X_t2)
+            token_2 = self._mappings["tokens_with_none"][token2_idx]
+
+            if pattern == "SINGLE":
+                return [token_1]
+            elif pattern == "REPETITION":
+                return [token_1, token_1]
+            elif pattern in ("PAIR", "QUESTION"):
+                return [token_1, token_2] if token_2 != "none" else [token_1]
+            elif pattern == "TRIPLE":
+                return [token_1, token_2] if token_2 != "none" else [token_1]
+            else:
+                return [token_1]
+        except Exception:
+            return self._fallback.generate(shape)
+
+    def update_weights(self, shape: str, tokens: List[str], score: float) -> None:
+        self._fallback.update_weights(shape, tokens, score)
+
+    def get_weights(self, shape: str) -> Dict[str, float]:
+        return self._fallback.get_weights(shape)
+
+
+# ---------------------------------------------------------------------------
 # Lumen Bridge (from eisv_lumen/bridge/lumen_bridge.py)
 # ---------------------------------------------------------------------------
 
