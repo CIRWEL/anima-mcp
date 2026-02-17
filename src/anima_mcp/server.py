@@ -3658,7 +3658,10 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
             async def _delayed_restart():
                 await asyncio.sleep(1)
                 try:
-                    subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False)
+                    result = subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False, capture_output=True)
+                    if result.returncode != 0:
+                        import os
+                        os._exit(1)
                 except Exception:
                     import os
                     os._exit(1)
