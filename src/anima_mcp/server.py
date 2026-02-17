@@ -3328,7 +3328,11 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 async def _delayed_restart():
                     await asyncio.sleep(1)
                     try:
-                        subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False)
+                        result = subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False, capture_output=True)
+                        if result.returncode != 0:
+                            # sudo failed (NoNewPrivileges) — self-exit so systemd restarts us
+                            import os
+                            os._exit(1)
                     except Exception:
                         import os
                         os._exit(1)
@@ -3402,17 +3406,20 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 import asyncio
                 async def delayed_restart():
                     await asyncio.sleep(1)
-                    # Use systemctl to properly restart (os._exit(0) doesn't trigger Restart=on-failure)
                     try:
-                        subprocess.run(
+                        result = subprocess.run(
                             ["sudo", "systemctl", "restart", "anima"],
                             timeout=30,
-                            check=False
+                            check=False,
+                            capture_output=True
                         )
+                        if result.returncode != 0:
+                            # sudo failed (NoNewPrivileges) — self-exit so systemd restarts us
+                            import os
+                            os._exit(1)
                     except Exception:
-                        # Fallback to exit if systemctl fails
                         import os
-                        os._exit(1)  # Use non-zero exit to trigger Restart=on-failure
+                        os._exit(1)
                 asyncio.create_task(delayed_restart())
             else:
                 output["note"] = "Changes pulled. Use restart=true to apply, or manually restart."
