@@ -466,20 +466,32 @@ async def _update_display_loop():
                         joy_btn_pressed = input_state.joystick_button and (not prev_state or not prev_state.joystick_button)
                         sep_btn_pressed = input_state.separate_button and (not prev_state or not prev_state.separate_button)
                         
-                        # Joystick direction - LEFT/RIGHT cycles through all screens (including notepad)
+                        # RIGHT = next screen (D24 reclaimed after display reset)
+                        # LEFT unavailable (D22 = backlight). Joystick center = prev screen.
                         current_dir = input_state.joystick_direction
+                        if prev_state:
+                            prev_dir = prev_state.joystick_direction
+                            if current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+                                renderer.trigger_input_feedback("right")
+                                if _leds and _leds.is_available():
+                                    _leds.quick_flash((60, 60, 120), 50)
+                                old_mode = renderer.get_mode()
+                                renderer.next_mode()
+                                new_mode = renderer.get_mode()
+                                renderer._state.last_user_action_time = time.time()
+                                mode_change_event.set()
+                                print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
 
-                        # Joystick center = next screen (D22/D24 held by display, no left/right)
                         if joy_btn_pressed:
                             renderer.trigger_input_feedback("press")
                             if _leds and _leds.is_available():
                                 _leds.quick_flash((60, 60, 120), 50)
                             old_mode = renderer.get_mode()
-                            renderer.next_mode()
+                            renderer.previous_mode()
                             new_mode = renderer.get_mode()
                             renderer._state.last_user_action_time = time.time()
                             mode_change_event.set()
-                            print(f"[Input] {old_mode.value} -> {new_mode.value} (joystick)", file=sys.stderr, flush=True)
+                            print(f"[Input] {old_mode.value} -> {new_mode.value} (center=prev)", file=sys.stderr, flush=True)
                         
                         # Joystick UP/DOWN on FACE screen = brightness control
                         if current_mode == ScreenMode.FACE:

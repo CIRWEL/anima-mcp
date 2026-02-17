@@ -112,22 +112,26 @@ class BrainHatInput:
         BrainCraft HAT GPIO pin configuration:
         - Button: GPIO #17 (D17)
         - Joystick Select (Center Press): GPIO #16 (D16)
-        - Joystick Left: GPIO #22 (D22) — SHARED with display backlight, skip
+        - Joystick Left: GPIO #22 (D22) — held by display backlight, skip
         - Joystick Up: GPIO #23 (D23)
-        - Joystick Right: GPIO #24 (D24) — reserved for display reset, skip
+        - Joystick Right: GPIO #24 (D24) — released after display reset, reclaimed
         - Joystick Down: GPIO #27 (D27)
 
-        D22 and D24 are claimed by the display renderer. We skip left/right
-        and use up/down/center/button for navigation.
+        D22 is permanently held HIGH by display backlight — skip left.
+        D24 is released after display reset pulse — reclaim for right.
         """
         if not HAS_GPIO:
             print("[BrainHatInput] GPIO library not available", file=sys.stderr, flush=True)
             return
 
         try:
-            # D22 (left) and D24 (right) are held by display — skip them
+            # D22 (left) permanently held by display backlight — skip
             # self._joy_left stays None — left reads as False
-            # self._joy_right stays None — right reads as False
+
+            # D24 (right) released after display reset pulse — reclaim it
+            self._joy_right = digitalio.DigitalInOut(board.D24)
+            self._joy_right.direction = digitalio.Direction.INPUT
+            self._joy_right.pull = digitalio.Pull.UP
 
             self._joy_up = digitalio.DigitalInOut(board.D23)
             self._joy_up.direction = digitalio.Direction.INPUT
@@ -148,7 +152,7 @@ class BrainHatInput:
             self._separate_button_pin.pull = digitalio.Pull.UP
 
             self._available = True
-            print(f"[BrainHatInput] Initialized (GPIO, no left/right - display owns D22/D24) - debounce={self.DEBOUNCE_TIME*1000:.0f}ms btn={self.BUTTON_DEBOUNCE_TIME*1000:.0f}ms", file=sys.stderr, flush=True)
+            print(f"[BrainHatInput] Initialized (GPIO, no left - D22=backlight, D24=right reclaimed) - debounce={self.DEBOUNCE_TIME*1000:.0f}ms btn={self.BUTTON_DEBOUNCE_TIME*1000:.0f}ms", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[BrainHatInput] Failed to initialize GPIO pins: {e}", file=sys.stderr, flush=True)
             self._available = False
