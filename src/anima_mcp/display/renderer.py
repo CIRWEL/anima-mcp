@@ -117,6 +117,8 @@ class PilRenderer(DisplayRenderer):
         self._manual_led_brightness: float = 0.12
         self._brightness_config_path = Path.home() / ".anima" / "display_brightness.json"
         self._load_brightness()
+        self._display_fail_count: int = 0
+        self._last_reinit_attempt: float = 0.0
         self._init_display()
 
     def _load_brightness(self):
@@ -628,8 +630,21 @@ class PilRenderer(DisplayRenderer):
     def _push_to_display(self):
         """Actually push self._image to SPI display hardware, applying brightness.
 
-        Uses 0.3s timeout (like LEDs) to prevent SPI hangs from blocking render thread.
+        Uses 1.0s timeout to prevent SPI hangs from blocking render thread.
+        On failure, attempts reinit after a cooldown rather than permanently giving up.
         """
+        if not self._display and self._image:
+            # Try to recover display if enough time has passed (30s cooldown)
+            import time as _time
+            now = _time.time()
+            if now - self._last_reinit_attempt > 30.0:
+                self._last_reinit_attempt = now
+                print("[Display] Attempting display reinit ...", file=sys.stderr, flush=True)
+                self._init_display()
+                if self._display:
+                    print("[Display] Reinit succeeded!", file=sys.stderr, flush=True)
+                    self._display_fail_count = 0
+
         if self._display and self._image:
             try:
                 from ..error_recovery import safe_call_with_timeout
@@ -655,22 +670,27 @@ class PilRenderer(DisplayRenderer):
                     img_to_show = self._image
                 if img_to_show is not None:
                     # Wrap to return True on success (image() returns None)
+                    # Use 1.0s timeout — first render after boot can be slow
                     result = safe_call_with_timeout(
                         lambda: (self._display.image(img_to_show), True)[1],
-                        timeout_seconds=0.3,
+                        timeout_seconds=1.0,
                         default=False,
                         log_error=True
                     )
                     if result is False:
-                        self._display = None
+                        self._display_fail_count += 1
+                        print(f"[Display] SPI timeout (fail #{self._display_fail_count})", file=sys.stderr, flush=True)
+                        if self._display_fail_count >= 3:
+                            print("[Display] 3 consecutive failures — marking unavailable for reinit", file=sys.stderr, flush=True)
+                            self._display = None
+                    else:
+                        self._display_fail_count = 0
             except Exception as e:
-                print(f"[Display] Hardware error during show: {e}", file=sys.stderr, flush=True)
-                print("[Display] Marking display as unavailable", file=sys.stderr, flush=True)
-                self._display = None
-        elif not self._display:
-            print("[Display] _show called but display hardware not available", file=sys.stderr, flush=True)
-        elif not self._image:
-            print("[Display] _show called but no image to display", file=sys.stderr, flush=True)
+                self._display_fail_count += 1
+                print(f"[Display] Hardware error during show: {e} (fail #{self._display_fail_count})", file=sys.stderr, flush=True)
+                if self._display_fail_count >= 3:
+                    print("[Display] Marking display as unavailable for reinit", file=sys.stderr, flush=True)
+                    self._display = None
 
     def flush(self):
         """Push the current image to display. Call after deferred rendering is complete."""
