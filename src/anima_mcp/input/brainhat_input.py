@@ -108,49 +108,47 @@ class BrainHatInput:
     
     def _init_hardware(self):
         """Initialize joystick and button hardware.
-        
+
         BrainCraft HAT GPIO pin configuration:
         - Button: GPIO #17 (D17)
         - Joystick Select (Center Press): GPIO #16 (D16)
-        - Joystick Left: GPIO #22 (D22)
+        - Joystick Left: GPIO #22 (D22) — SHARED with display backlight, skip
         - Joystick Up: GPIO #23 (D23)
-        - Joystick Right: GPIO #24 (D24)
+        - Joystick Right: GPIO #24 (D24) — reserved for display reset, skip
         - Joystick Down: GPIO #27 (D27)
+
+        D22 and D24 are claimed by the display renderer. We skip left/right
+        and use up/down/center/button for navigation.
         """
         if not HAS_GPIO:
             print("[BrainHatInput] GPIO library not available", file=sys.stderr, flush=True)
             return
-        
+
         try:
-            # Initialize joystick direction pins (digital GPIO)
-            self._joy_left = digitalio.DigitalInOut(board.D22)
-            self._joy_left.direction = digitalio.Direction.INPUT
-            self._joy_left.pull = digitalio.Pull.UP
-            
-            self._joy_right = digitalio.DigitalInOut(board.D24)
-            self._joy_right.direction = digitalio.Direction.INPUT
-            self._joy_right.pull = digitalio.Pull.UP
-            
+            # D22 (left) and D24 (right) are held by display — skip them
+            # self._joy_left stays None — left reads as False
+            # self._joy_right stays None — right reads as False
+
             self._joy_up = digitalio.DigitalInOut(board.D23)
             self._joy_up.direction = digitalio.Direction.INPUT
             self._joy_up.pull = digitalio.Pull.UP
-            
+
             self._joy_down = digitalio.DigitalInOut(board.D27)
             self._joy_down.direction = digitalio.Direction.INPUT
             self._joy_down.pull = digitalio.Pull.UP
-            
+
             # Joystick button (center press)
             self._joy_button = digitalio.DigitalInOut(board.D16)
             self._joy_button.direction = digitalio.Direction.INPUT
             self._joy_button.pull = digitalio.Pull.UP
-            
+
             # Separate button
             self._separate_button_pin = digitalio.DigitalInOut(board.D17)
             self._separate_button_pin.direction = digitalio.Direction.INPUT
             self._separate_button_pin.pull = digitalio.Pull.UP
-            
+
             self._available = True
-            print(f"[BrainHatInput] Initialized (GPIO) - debounce={self.DEBOUNCE_TIME*1000:.0f}ms btn={self.BUTTON_DEBOUNCE_TIME*1000:.0f}ms", file=sys.stderr, flush=True)
+            print(f"[BrainHatInput] Initialized (GPIO, no left/right - display owns D22/D24) - debounce={self.DEBOUNCE_TIME*1000:.0f}ms btn={self.BUTTON_DEBOUNCE_TIME*1000:.0f}ms", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[BrainHatInput] Failed to initialize GPIO pins: {e}", file=sys.stderr, flush=True)
             self._available = False
@@ -158,7 +156,7 @@ class BrainHatInput:
     def is_available(self) -> bool:
         """Check if input hardware is available."""
         return self._enabled and self._available and (
-            self._joy_left is not None or self._separate_button_pin is not None
+            self._joy_up is not None or self._separate_button_pin is not None
         )
     
     def read(self) -> Optional[InputState]:
@@ -170,8 +168,9 @@ class BrainHatInput:
             now = time.time()
 
             # Read raw GPIO states (pull-up: pressed = LOW = False)
-            raw_left = not self._joy_left.value
-            raw_right = not self._joy_right.value
+            # D22 (left) and D24 (right) may be None if display holds them
+            raw_left = not self._joy_left.value if self._joy_left else False
+            raw_right = not self._joy_right.value if self._joy_right else False
             raw_up = not self._joy_up.value
             raw_down = not self._joy_down.value
             raw_joy_btn = not self._joy_button.value

@@ -217,19 +217,16 @@ class PilRenderer(DisplayRenderer):
             from adafruit_rgb_display import st7789
 
             # BrainCraft HAT pin configuration — store refs for cleanup
-            # CE0=CS, D25=DC per Adafruit docs
-            # D22 = backlight (shared with joystick left)
-            # D24 = joystick right — do NOT use as display reset
+            # CE0=CS, D25=DC, D22=backlight (must stay HIGH)
+            # D22 is shared with joystick left, D24 with joystick right
+            # We hold D22 HIGH for backlight; joystick skips left/right
             self._cs_pin = digitalio.DigitalInOut(board.CE0)
             self._dc_pin = digitalio.DigitalInOut(board.D25)
 
-            # Enable backlight on D22 — set HIGH then release pin
-            # so joystick can later claim D22 as INPUT with PULL_UP
-            # (PULL_UP keeps D22 HIGH = backlight stays on)
-            _bl = digitalio.DigitalInOut(board.D22)
-            _bl.direction = digitalio.Direction.OUTPUT
-            _bl.value = True
-            _bl.deinit()  # Release pin for joystick to reclaim
+            # Backlight on D22 — must be held HIGH for display to work
+            self._backlight = digitalio.DigitalInOut(board.D22)
+            self._backlight.direction = digitalio.Direction.OUTPUT
+            self._backlight.value = True
 
             # SPI setup - use high speed for fast display updates
             spi = board.SPI()
