@@ -1919,8 +1919,13 @@ async def _update_display_loop():
                         "presence": anima.presence,
                     }
                     # Prepare environment dict from sensor readings
+                    # Use world_light (ambient minus LED glow) so preferences
+                    # reflect actual environment, not Lumen's own LEDs
+                    led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
+                    my_glow = led_b * 4000.0 + 8.0
+                    world_light = max(0.0, (readings.light_lux or 0.0) - my_glow)
                     environment = {
-                        "light_lux": readings.light_lux,
+                        "light_lux": world_light,
                         "temp_c": readings.ambient_temp_c,
                         "humidity": readings.humidity_pct,
                     }
