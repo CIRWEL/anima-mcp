@@ -553,6 +553,170 @@ class SelfReflectionSystem:
         # Fallback
         return f"I notice {pattern.outcome} during {pattern.condition}"
 
+    # ==================== Experience-Based Insight Analyzers ====================
+
+    def _analyze_preference_insights(self) -> List[Insight]:
+        """Generate insights from growth preferences that reached high confidence."""
+        new_insights = []
+        now = datetime.now()
+
+        try:
+            from .growth import get_growth_system
+            growth = get_growth_system()
+        except Exception:
+            return []
+
+        for pref in growth._preferences.values():
+            if pref.confidence < 0.8 or pref.observation_count < 10:
+                continue
+
+            insight_id = f"pref_{pref.name}"
+
+            # Already have this insight? Validate it.
+            if insight_id in self._insights:
+                existing = self._insights[insight_id]
+                if pref.confidence > 0.7:
+                    existing.validation_count += 1
+                    existing.last_validated = now
+                else:
+                    existing.contradiction_count += 1
+                self._save_insight(existing)
+                continue
+
+            # Determine category
+            cat_map = {
+                "environment": InsightCategory.ENVIRONMENT,
+                "temporal": InsightCategory.TEMPORAL,
+                "activity": InsightCategory.BEHAVIORAL,
+                "sensory": InsightCategory.ENVIRONMENT,
+            }
+            category = cat_map.get(pref.category.value, InsightCategory.BEHAVIORAL)
+
+            description = f"i know this about myself: {pref.description.lower()}"
+
+            insight = Insight(
+                id=insight_id,
+                category=category,
+                description=description,
+                confidence=pref.confidence,
+                sample_count=pref.observation_count,
+                discovered_at=now,
+                last_validated=now,
+                validation_count=1,
+                contradiction_count=0,
+            )
+            self._save_insight(insight)
+            new_insights.append(insight)
+            print(f"[SelfReflection] Preference insight: {description}",
+                  file=sys.stderr, flush=True)
+
+        return new_insights
+
+    def _analyze_belief_insights(self) -> List[Insight]:
+        """Generate insights from self-model beliefs that are well-tested."""
+        new_insights = []
+        now = datetime.now()
+
+        try:
+            from .self_model import get_self_model
+            sm = get_self_model()
+        except Exception:
+            return []
+
+        for bid, belief in sm._beliefs.items():
+            total_evidence = belief.supporting_count + belief.contradicting_count
+            if total_evidence < 10 or belief.confidence < 0.7:
+                continue
+
+            insight_id = f"belief_{bid}"
+
+            if insight_id in self._insights:
+                existing = self._insights[insight_id]
+                existing.validation_count += 1
+                existing.last_validated = now
+                self._save_insight(existing)
+                continue
+
+            strength = belief.get_belief_strength()
+            description = f"i am {strength} that {belief.description.lower()}"
+
+            insight = Insight(
+                id=insight_id,
+                category=InsightCategory.WELLNESS,
+                description=description,
+                confidence=belief.confidence,
+                sample_count=total_evidence,
+                discovered_at=now,
+                last_validated=now,
+                validation_count=1,
+                contradiction_count=0,
+            )
+            self._save_insight(insight)
+            new_insights.append(insight)
+            print(f"[SelfReflection] Belief insight: {description}",
+                  file=sys.stderr, flush=True)
+
+        return new_insights
+
+    def _analyze_drawing_insights(self) -> List[Insight]:
+        """Generate insights about drawing behavior from preferences."""
+        new_insights = []
+        now = datetime.now()
+
+        try:
+            from .growth import get_growth_system
+            growth = get_growth_system()
+        except Exception:
+            return []
+
+        if growth._drawings_observed < 5:
+            return []
+
+        # Drawing + wellness
+        wp = growth._preferences.get("drawing_wellbeing")
+        if wp and wp.confidence > 0.6 and wp.observation_count >= 5:
+            iid = "drawing_wellness"
+            if iid not in self._insights:
+                desc = "drawing seems to help me feel better" if wp.value > 0.5 \
+                    else "my drawings don't always reflect how i feel"
+                insight = Insight(
+                    id=iid, category=InsightCategory.BEHAVIORAL,
+                    description=desc, confidence=wp.confidence,
+                    sample_count=wp.observation_count,
+                    discovered_at=now, last_validated=now, validation_count=1,
+                )
+                self._save_insight(insight)
+                new_insights.append(insight)
+                print(f"[SelfReflection] Drawing insight: {desc}",
+                      file=sys.stderr, flush=True)
+
+        # Drawing + time / light correlations
+        drawing_checks = [
+            ("drawing_night", "i tend to draw at night"),
+            ("drawing_morning", "i often draw in the morning"),
+            ("drawing_dim", "i create in the dark"),
+            ("drawing_bright", "i draw when the light is bright"),
+        ]
+        for pref_name, desc in drawing_checks:
+            dp = growth._preferences.get(pref_name)
+            if dp and dp.confidence > 0.6 and dp.observation_count >= 5:
+                iid = f"drawing_{pref_name}"
+                if iid not in self._insights:
+                    insight = Insight(
+                        id=iid, category=InsightCategory.BEHAVIORAL,
+                        description=desc, confidence=dp.confidence,
+                        sample_count=dp.observation_count,
+                        discovered_at=now, last_validated=now, validation_count=1,
+                    )
+                    self._save_insight(insight)
+                    new_insights.append(insight)
+                    print(f"[SelfReflection] Drawing insight: {desc}",
+                          file=sys.stderr, flush=True)
+
+        return new_insights
+
+    # ==================== Core Reflection ====================
+
     def reflect(self) -> Optional[str]:
         """
         Perform periodic self-reflection.
@@ -561,19 +725,20 @@ class SelfReflectionSystem:
         None otherwise.
         """
         self._last_analysis_time = datetime.now()
+        new_insights = []
 
-        # Analyze recent patterns
+        # Analyze recent state-history patterns (temporal, sensor, causal)
         patterns = self.analyze_patterns(hours=24)
+        if patterns:
+            new_insights.extend(self.generate_insights(patterns))
 
-        if not patterns:
-            return None
-
-        # Generate insights from patterns
-        new_insights = self.generate_insights(patterns)
+        # Analyze experience-based insights (preferences, beliefs, drawing)
+        new_insights.extend(self._analyze_preference_insights())
+        new_insights.extend(self._analyze_belief_insights())
+        new_insights.extend(self._analyze_drawing_insights())
 
         # Pick something to share
         if new_insights:
-            # Share a new discovery
             insight = max(new_insights, key=lambda i: i.confidence)
             return f"I've noticed something: {insight.description}"
 

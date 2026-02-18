@@ -39,6 +39,8 @@ SCHEMA_EXTRACTION_INTERVAL = 600
 REFLECTION_INTERVAL = 720
 EXPRESSION_INTERVAL = 900
 SELF_ANSWER_INTERVAL = 1800
+GOAL_SUGGEST_INTERVAL = 3600   # ~2 hours — suggest new goals
+GOAL_CHECK_INTERVAL = 300      # ~10 minutes — check goal progress
 MESSAGE_RESPONSE_INTERVAL = 90
 
 # === Error/status logging throttle intervals ===
