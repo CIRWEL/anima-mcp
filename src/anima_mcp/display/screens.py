@@ -43,6 +43,7 @@ class ScreenMode(Enum):
     QUESTIONS = "questions"          # Q&A - Lumen's questions and answers
     VISITORS = "visitors"            # Messages from agents and humans
     ART_ERAS = "art_eras"            # Art era history and current era
+    HEALTH = "health"                # Subsystem health monitoring
 
 
 @dataclass
@@ -994,7 +995,7 @@ class ScreenRenderer:
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""
         # Cycle through all screens including notepad, questions, and visitors
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -1006,7 +1007,7 @@ class ScreenRenderer:
     def previous_mode(self):
         """Cycle to previous screen mode (including notepad)."""
         # Cycle through all screens including notepad, questions, and visitors
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -1317,6 +1318,12 @@ class ScreenRenderer:
                 self._state._frame_count += 1
                 if self._state._frame_count % 10 == 0:
                     self.canvas_check_autonomy(anima)
+                    # Heartbeat: drawing subsystem is alive
+                    try:
+                        from ..health import get_health_registry
+                        get_health_registry().heartbeat("drawing")
+                    except Exception:
+                        pass
             except Exception as e:
                 # Don't let autonomy errors break rendering, but log them
                 if self._state._frame_count % 100 == 0:
@@ -1362,6 +1369,8 @@ class ScreenRenderer:
                             pass
                 elif mode == ScreenMode.ART_ERAS:
                     self._render_art_eras(anima)
+                elif mode == ScreenMode.HEALTH:
+                    self._render_health()
                 else:
                     # Unknown mode - show default to prevent blank screen
                     print(f"[Screen] Unknown mode: {mode}, showing default", file=sys.stderr, flush=True)
@@ -2037,6 +2046,117 @@ class ScreenRenderer:
         except Exception:
             pass
         self._display.render_text("\n".join(lines), (10, 10))
+
+    def _render_health(self):
+        """Render subsystem health monitoring screen.
+
+        One row per subsystem with colored status dot (green/yellow/red).
+        Status: ok=green, stale=yellow, degraded=orange, missing=red.
+        """
+        try:
+            from ..health import get_health_registry
+            registry = get_health_registry()
+        except Exception:
+            self._display.render_text("HEALTH\n\nNo registry", (10, 10))
+            return
+
+        status_data = registry.status()
+        overall = registry.overall()
+
+        # Cache key: status values
+        health_key = "|".join(f"{n}:{d.get('status', '?')}" for n, d in sorted(status_data.items()))
+        if self._check_screen_cache("health", health_key):
+            return
+
+        try:
+            if hasattr(self._display, '_create_canvas'):
+                image, draw = self._display._create_canvas(COLORS.BG_DARK)
+            else:
+                # Text fallback
+                lines = ["HEALTH", f"overall: {overall}", ""]
+                for name, info in sorted(status_data.items()):
+                    s = info.get("status", "?")
+                    hb = info.get("last_heartbeat_ago_s")
+                    hb_str = f" {hb:.0f}s" if hb is not None else ""
+                    lines.append(f"  {s[0].upper()} {name}{hb_str}")
+                self._display.render_text("\n".join(lines), (10, 10))
+                return
+
+            fonts = self._get_fonts()
+            font_small = fonts['small']
+            font_tiny = fonts['tiny']
+            font_med = fonts['medium']
+
+            # Status color mapping
+            STATUS_COLORS = {
+                "ok": COLORS.SOFT_GREEN,
+                "stale": COLORS.SOFT_YELLOW,
+                "degraded": COLORS.SOFT_ORANGE,
+                "missing": COLORS.SOFT_CORAL,
+                "unknown": COLORS.TEXT_DIM,
+            }
+
+            # Overall status color
+            OVERALL_COLORS = {
+                "ok": COLORS.SOFT_GREEN,
+                "degraded": COLORS.SOFT_YELLOW,
+                "unhealthy": COLORS.SOFT_CORAL,
+                "unknown": COLORS.TEXT_DIM,
+            }
+
+            # Header
+            y = 6
+            draw.text((10, y), "HEALTH", fill=COLORS.TEXT_PRIMARY, font=font_med)
+            overall_color = OVERALL_COLORS.get(overall, COLORS.TEXT_DIM)
+            draw.text((90, y), overall, fill=overall_color, font=font_med)
+            y += 20
+
+            # Thin separator line
+            draw.line([(10, y), (230, y)], fill=COLORS.BG_SUBTLE, width=1)
+            y += 4
+
+            # One row per subsystem
+            dot_radius = 4
+            subsystems = sorted(status_data.items())
+            row_height = 22 if len(subsystems) <= 9 else 19
+
+            for name, info in subsystems:
+                status = info.get("status", "unknown")
+                color = STATUS_COLORS.get(status, COLORS.TEXT_DIM)
+                hb_ago = info.get("last_heartbeat_ago_s")
+                probe = info.get("probe")
+
+                # Status dot
+                cx, cy = 18, y + row_height // 2
+                draw.ellipse(
+                    [(cx - dot_radius, cy - dot_radius), (cx + dot_radius, cy + dot_radius)],
+                    fill=color
+                )
+
+                # Subsystem name
+                draw.text((28, y + 2), name, fill=COLORS.TEXT_PRIMARY, font=font_small)
+
+                # Heartbeat age (right-aligned)
+                if hb_ago is not None:
+                    if hb_ago < 60:
+                        age_str = f"{hb_ago:.0f}s"
+                    else:
+                        age_str = f"{hb_ago / 60:.0f}m"
+                    draw.text((160, y + 2), age_str, fill=COLORS.TEXT_DIM, font=font_tiny)
+
+                # Probe status (far right)
+                if probe is not None:
+                    probe_color = COLORS.SOFT_GREEN if probe == "ok" else COLORS.SOFT_CORAL
+                    draw.text((195, y + 2), probe[:12], fill=probe_color, font=font_tiny)
+
+                y += row_height
+
+            self._display.show(image)
+            self._store_screen_cache("health", health_key, image)
+
+        except Exception as e:
+            print(f"[Screen] Health render error: {e}", file=sys.stderr, flush=True)
+            self._display.render_text(f"HEALTH\n\n{overall}\n\nError:\n{str(e)[:40]}", (10, 10))
 
     def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
         """Render neural activity screen - EEG frequency band visualization."""
