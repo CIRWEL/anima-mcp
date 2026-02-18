@@ -2151,7 +2151,7 @@ class ScreenRenderer:
 
                 y += row_height
 
-            self._display.show(image)
+            self._display.render_image(image)
             self._store_screen_cache("health", health_key, image)
 
         except Exception as e:
