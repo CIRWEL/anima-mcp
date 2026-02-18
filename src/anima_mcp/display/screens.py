@@ -4627,8 +4627,14 @@ class ScreenRenderer:
                         "stability": anima.stability,
                         "presence": anima.presence,
                     }
+                    # Correct for LED self-glow: growth preferences should
+                    # reflect actual environment, not Lumen's own LEDs
+                    from ..config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+                    _raw_lux = readings.light_lux or 0.0
+                    _led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
+                    _world_light = max(0.0, _raw_lux - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
                     environment = {
-                        "light_lux": readings.light_lux or 0,
+                        "light_lux": _world_light,
                         "temp_c": readings.ambient_temp_c or 22,
                         "humidity": readings.humidity_pct or 50,
                     }
