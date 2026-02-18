@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import signal
+import subprocess
 import sys
 import uuid
 from datetime import datetime
@@ -65,6 +66,46 @@ _state_lock = threading.Lock()  # Thread safety for singleton initialization
 # Configuration constants
 SHM_STALE_THRESHOLD_SECONDS = 5.0  # Shared memory data older than this is considered stale
 INPUT_ERROR_LOG_INTERVAL = 5.0     # Minimum seconds between input error log messages
+
+# === Loop timing constants ===
+LOOP_BASE_DELAY_SECONDS = 0.2
+LOOP_MAX_DELAY_SECONDS = 30.0
+INPUT_POLL_INTERVAL_SECONDS = 0.016
+SHUTDOWN_LONG_PRESS_SECONDS = 3.0
+
+# === Subsystem intervals (loop iterations, ~2s each) ===
+METACOG_INTERVAL = 3
+AGENCY_INTERVAL = 5
+SELF_MODEL_INTERVAL = 5
+PRIMITIVE_LANG_INTERVAL = 10
+VOICE_INTERVAL = 10
+GROWTH_INTERVAL = 30
+TRAJECTORY_INTERVAL = 5
+GOVERNANCE_INTERVAL = 30
+LEARNING_INTERVAL = 100
+SELF_MODEL_SAVE_INTERVAL = 300
+SCHEMA_EXTRACTION_INTERVAL = 600
+REFLECTION_INTERVAL = 720
+EXPRESSION_INTERVAL = 900
+SELF_ANSWER_INTERVAL = 1800
+MESSAGE_RESPONSE_INTERVAL = 90
+
+# === Error/status logging throttle intervals ===
+ERROR_LOG_THROTTLE = 300       # ~10 minutes between repeated error logs
+STATUS_LOG_THROTTLE = 100      # ~3.3 minutes between status logs
+DISPLAY_LOG_THROTTLE = 20      # ~40 seconds between display status logs
+WARN_LOG_THROTTLE = 60         # ~2 minutes between warning logs
+SCHEMA_LOG_THROTTLE = 120     # ~4 minutes between schema status logs
+SELF_DIALOGUE_LOG_THROTTLE = 150  # ~5 minutes between self-dialogue status logs
+
+# === Thresholds ===
+METACOG_SURPRISE_THRESHOLD = 0.2
+PRIMITIVE_SELF_FEEDBACK_DELAY_SECONDS = 75.0
+SELF_ANSWER_MIN_QUESTION_AGE_SECONDS = 600
+DISPLAY_UPDATE_TIMEOUT_SECONDS = 2.0
+MODE_CHANGE_SETTLE_SECONDS = 0.015
+HEAVY_SCREEN_DELAY_SECONDS = 1.0
+NEURAL_SCREEN_DELAY_SECONDS = 0.5
 
 _store: IdentityStore | None = None
 _sensors: SensorBackend | None = None
@@ -171,6 +212,44 @@ async def _close_unitares_bridge():
         print("[Server] UnitaresBridge closed", file=sys.stderr, flush=True)
 
 
+def _is_broker_running() -> bool:
+    """Check if the stable_creature broker process is running."""
+    try:
+        result = subprocess.run(
+            ['pgrep', '-f', 'stable_creature.py'],
+            capture_output=True, timeout=2
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+async def _delayed_restart():
+    """Restart anima service after a brief delay."""
+    await asyncio.sleep(1)
+    try:
+        result = subprocess.run(
+            ["sudo", "systemctl", "restart", "anima"],
+            timeout=30, check=False, capture_output=True
+        )
+        if result.returncode != 0:
+            import os
+            os._exit(1)
+    except Exception:
+        import os
+        os._exit(1)
+
+
+def _extract_neural_bands(readings) -> dict:
+    """Extract neural band powers from sensor readings."""
+    if not readings:
+        return {}
+    raw = readings.to_dict() if hasattr(readings, 'to_dict') else (readings if isinstance(readings, dict) else {})
+    return {
+        k.replace("eeg_", "").replace("_power", ""): round(v, 3)
+        for k, v in raw.items()
+        if k.startswith("eeg_") and k.endswith("_power") and v is not None
+    }
 
 
 def _readings_from_dict(data: dict) -> SensorReadings:
@@ -289,18 +368,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     # 2. fallback_to_sensors is True (always allow fallback)
     if fallback_to_sensors or not shm_valid:
         # Check if broker is running (for logging purposes)
-        import subprocess
-        broker_running = False
-        try:
-            broker_running = subprocess.run(
-                ['pgrep', '-f', 'stable_creature.py'],
-                capture_output=True,
-                text=True,
-                timeout=5
-            ).returncode == 0
-        except Exception:
-            pass  # If check fails, assume broker not running
-        
+        broker_running = _is_broker_running()
+
         # Log why we're falling back
         if broker_running and not shm_valid:
             print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'invalid/empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
@@ -356,17 +425,7 @@ async def _update_display_loop():
     # Check if we are in "Reader Mode" (Broker running)
     # If so, we should NOT initialize hardware sensors or display directly
     # The broker handles the hardware; we just read the state.
-    is_broker_running = False
-    try:
-        import subprocess
-        is_broker_running = subprocess.run(
-            ['pgrep', '-f', 'stable_creature.py'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        ).returncode == 0
-    except Exception:
-        pass
+    is_broker_running = _is_broker_running()
 
     if is_broker_running:
         print("[Loop] Broker detected - READER MODE (sensors from shared memory, display/LEDs active)", file=sys.stderr, flush=True)
@@ -418,8 +477,8 @@ async def _update_display_loop():
     loop_count = 0
     consecutive_errors = 0
     max_consecutive_errors = 10
-    base_delay = 0.2  # 200ms = 5Hz refresh for all screens
-    max_delay = 30.0
+    base_delay = LOOP_BASE_DELAY_SECONDS  # 200ms = 5Hz refresh for all screens
+    max_delay = LOOP_MAX_DELAY_SECONDS
     quick_render = False  # Set when mode_change_event fires — skip heavy subsystems
 
     # Event for immediate re-render when screen mode changes
@@ -581,7 +640,7 @@ async def _update_display_loop():
                             hold_duration = time.time() - _sep_btn_press_start
                             
                             # Long press (3+ seconds) = graceful shutdown
-                            if hold_duration >= 3.0:
+                            if hold_duration >= SHUTDOWN_LONG_PRESS_SECONDS:
                                 print(f"[Shutdown] Long press detected ({hold_duration:.1f}s) - initiating graceful shutdown...", file=sys.stderr, flush=True)
                                 try:
                                     # Lumen saves autonomously, but ensure canvas is saved on shutdown
@@ -604,7 +663,7 @@ async def _update_display_loop():
                             # Button released - check if it was a short press
                             if _sep_btn_press_start is not None:
                                 hold_duration = time.time() - _sep_btn_press_start
-                                was_short_press = hold_duration < 3.0
+                                was_short_press = hold_duration < SHUTDOWN_LONG_PRESS_SECONDS
                                 _sep_btn_press_start = None
                                 
                                 # Short press (< 3 seconds) = context-dependent action
@@ -649,7 +708,7 @@ async def _update_display_loop():
                     import traceback
                     traceback.print_exc(file=sys.stderr)
                     _last_input_error_log = current_time
-            await asyncio.sleep(0.016)  # Poll every 16ms (~60fps) for snappy input
+            await asyncio.sleep(INPUT_POLL_INTERVAL_SECONDS)  # Poll every 16ms (~60fps) for snappy input
     
     # Start fast input polling task
     input_task = None
@@ -691,8 +750,8 @@ async def _update_display_loop():
                     stability=anima.stability,
                     presence=anima.presence,
                 )
-            except Exception:
-                pass  # Trajectory awareness is optional
+            except Exception as e:
+                if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
 
             # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
             # Metacognition, agency, self-model, primitive language are enhancement layers.
@@ -702,7 +761,7 @@ async def _update_display_loop():
             if quick_render:
                 quick_render = False  # Reset for next iteration
 
-            if not _skip_subsystems and loop_count % 3 == 0:
+            if not _skip_subsystems and loop_count % METACOG_INTERVAL == 0:
                 try:
                     metacog = _get_metacog_monitor()
 
@@ -710,11 +769,11 @@ async def _update_display_loop():
                     prediction_error = metacog.observe(readings, anima)
 
                     # Log surprise level periodically (every 60 loops = ~2 min)
-                    if prediction_error and loop_count % 60 == 0:
-                        print(f"[Metacog] Surprise level: {prediction_error.surprise:.3f} (threshold: 0.2)", file=sys.stderr, flush=True)
+                    if prediction_error and loop_count % WARN_LOG_THROTTLE == 0:
+                        print(f"[Metacog] Surprise level: {prediction_error.surprise:.3f} (threshold: {METACOG_SURPRISE_THRESHOLD})", file=sys.stderr, flush=True)
 
                     # Check if surprise warrants reflection
-                    if prediction_error and prediction_error.surprise > 0.2:
+                    if prediction_error and prediction_error.surprise > METACOG_SURPRISE_THRESHOLD:
                         should_reflect, reason = metacog.should_reflect(prediction_error)
 
                         if should_reflect:
@@ -750,14 +809,14 @@ async def _update_display_loop():
                     metacog.predict(led_brightness=_led_brightness_for_pred)
 
                 except Exception as e:
-                    if loop_count % 100 == 1:
+                    if loop_count % STATUS_LOG_THROTTLE == 1:
                         print(f"[Metacog] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # === AGENCY: Action selection and learning ===
             # Throttled: runs every 5th iteration (enhancement, not critical path)
             # Skipped on quick_render for responsive screen transitions
             global _last_action, _last_state_before
-            if not _skip_subsystems and loop_count % 5 == 0:
+            if not _skip_subsystems and loop_count % AGENCY_INTERVAL == 0:
                 try:
                     action_selector = get_action_selector(db_path=str(_store.db_path) if _store else "anima.db")
 
@@ -890,7 +949,7 @@ async def _update_display_loop():
                             _leds.set_brightness(new_brightness)
                             print(f"[Agency] LED brightness: {current_brightness:.2f} → {new_brightness:.2f} ({direction})", file=sys.stderr, flush=True)
 
-                    if loop_count % 120 == 0:
+                    if loop_count % SCHEMA_LOG_THROTTLE == 0:
                         stats = action_selector.get_action_stats()
                         print(f"[Agency] Stats: {stats.get('action_counts', {})} explore_rate={action_selector._exploration_rate:.2f}", file=sys.stderr, flush=True)
 
@@ -898,12 +957,12 @@ async def _update_display_loop():
                     _last_state_before = current_state.copy()
 
                 except Exception as e:
-                    if loop_count % 100 == 1:
+                    if loop_count % STATUS_LOG_THROTTLE == 1:
                         print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # === SELF-MODEL: Belief updates from experience ===
             # Throttled: runs every 5th iteration (aligned with agency)
-            if not _skip_subsystems and loop_count % 5 == 0 and anima:
+            if not _skip_subsystems and loop_count % SELF_MODEL_INTERVAL == 0 and anima:
                 try:
                     from .self_model import get_self_model
                     sm = get_self_model()
@@ -973,7 +1032,7 @@ async def _update_display_loop():
                     _sm_prev_stability = anima.stability
 
                     # 3. Observe time-of-day patterns (every ~5 min)
-                    if loop_count % 150 == 0:
+                    if loop_count % SELF_DIALOGUE_LOG_THROTTLE == 0:
                         from datetime import datetime
                         sm.observe_time_pattern(
                             hour=datetime.now().hour,
@@ -1008,17 +1067,17 @@ async def _update_display_loop():
                         sm.observe_led_lux(readings.led_brightness, readings.light_lux)
 
                     # Save periodically (every ~10 min)
-                    if loop_count % 300 == 0:
+                    if loop_count % ERROR_LOG_THROTTLE == 0:
                         sm.save()
 
                 except Exception as e:
-                    if loop_count % 100 == 1:
+                    if loop_count % STATUS_LOG_THROTTLE == 1:
                         print(f"[SelfModel] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # === PRIMITIVE LANGUAGE: Emergent expression through learned tokens ===
             # Throttled: runs every 10th iteration (has internal cooldown timer too)
             global _last_primitive_utterance
-            if not _skip_subsystems and loop_count % 10 == 0:
+            if not _skip_subsystems and loop_count % PRIMITIVE_LANG_INTERVAL == 0:
                 try:
                     lang = get_language_system(str(_store.db_path) if _store else "anima.db")
 
@@ -1036,8 +1095,8 @@ async def _update_display_loop():
                         try:
                             _traj = get_trajectory_awareness()
                             _suggestion = _traj.get_trajectory_suggestion(lang_state)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectorySuggestion] Error: {e}", file=sys.stderr, flush=True)
 
                         _suggested = _suggestion.get("suggested_tokens") if _suggestion else None
                         utterance = lang.generate_utterance(lang_state, suggested_tokens=_suggested)
@@ -1071,8 +1130,8 @@ async def _update_display_loop():
                                         _coherence,
                                     )
                                     print(f"[PrimitiveLang] Trajectory coherence: {_coherence:.2f}", file=sys.stderr, flush=True)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryCoherence] Error: {e}", file=sys.stderr, flush=True)
 
                         from .messages import add_observation
                         add_observation(
@@ -1095,16 +1154,16 @@ async def _update_display_loop():
                                         _last_primitive_utterance.tokens,
                                         result['score'],
                                     )
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryFeedback] Error: {e}", file=sys.stderr, flush=True)
 
-                    if loop_count % 300 == 0:
+                    if loop_count % SELF_MODEL_SAVE_INTERVAL == 0:
                         stats = lang.get_stats()
                         if stats.get("total_utterances", 0) > 0:
                             print(f"[PrimitiveLang] Stats: {stats.get('total_utterances')} utterances, avg_score={stats.get('average_score')}, interval={stats.get('current_interval_minutes'):.1f}m", file=sys.stderr, flush=True)
 
                 except Exception as e:
-                    if loop_count % 100 == 1:
+                    if loop_count % STATUS_LOG_THROTTLE == 1:
                         print(f"[PrimitiveLang] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # Identity is fundamental - should always be available if wake() succeeded
@@ -1158,8 +1217,8 @@ async def _update_display_loop():
                             if _screen_renderer:
                                 try:
                                     _screen_renderer._display.show_default()
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    print(f"[Error] show_default failed: {e}", file=sys.stderr, flush=True)
                             return False
                         face_state = derive_face_state(anima)
 
@@ -1192,7 +1251,7 @@ async def _update_display_loop():
                         )
                     except asyncio.TimeoutError:
                         display_result = False
-                        if loop_count % 20 == 0:
+                        if loop_count % DISPLAY_LOG_THROTTLE == 0:
                             print("[Loop] Display update timed out (2s)", file=sys.stderr, flush=True)
                     display_updated = display_result is True
 
@@ -1237,8 +1296,8 @@ async def _update_display_loop():
                             light_level=light_level,
                         )
                         activity_brightness = activity_state.brightness_multiplier
-                except Exception:
-                    pass  # Default to 1.0 if both fail
+                except Exception as e:
+                    if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[ActivityBrightness] Error: {e}", file=sys.stderr, flush=True)
 
                 # Sync manual brightness dimmer to LED controller
                 # Use _screen_renderer._display when available; fallback to _display (e.g. before ScreenRenderer init)
@@ -1279,14 +1338,14 @@ async def _update_display_loop():
                     # (not just activity multiplier like stable_creature.py does)
                     if readings is not None:
                         readings.led_brightness = _led_proprioception.get("brightness", 0.0)
-                except Exception:
-                    pass  # Non-fatal — proprioception is enhancement, not critical path
+                except Exception as e:
+                    if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[LEDProprioception] Error: {e}", file=sys.stderr, flush=True)
             elif _leds:
                 if loop_count == 1:
                     print(f"[Loop] LEDs not available (hardware issue?)", file=sys.stderr, flush=True)
 
             # Update voice system with anima state (for listening and text expression)
-            if loop_count % 10 == 0:
+            if loop_count % VOICE_INTERVAL == 0:
                 try:
                     voice = _get_voice()
                     if voice and voice.is_running:
@@ -1317,11 +1376,11 @@ async def _update_display_loop():
                                 light_level=readings.light_lux or 500.0
                             )
                 except Exception as e:
-                    if loop_count % 100 == 0:
+                    if loop_count % STATUS_LOG_THROTTLE == 0:
                         print(f"[Voice] State update error: {e}", file=sys.stderr, flush=True)
 
             # Log update status every 20th iteration
-            if loop_count % 20 == 1 and (display_updated or led_updated):
+            if loop_count % DISPLAY_LOG_THROTTLE == 1 and (display_updated or led_updated):
                 update_duration = time.time() - update_start
                 update_status = []
                 if display_updated:
@@ -1331,12 +1390,12 @@ async def _update_display_loop():
                 print(f"[Loop] Display/LED updates ({', '.join(update_status)}): {update_duration*1000:.1f}ms", file=sys.stderr, flush=True)
             
             # Log every 5th iteration with LED status and key metrics
-            if loop_count % 5 == 1:
+            if loop_count % TRAJECTORY_INTERVAL == 1:
                 led_status = "available" if (_leds and _leds.is_available()) else "unavailable"
             
             # Adaptive learning: Every 100 iterations (~3.3 minutes), check if calibration should adapt
             # Respects cooldown to avoid redundant adaptations during continuous operation
-            if loop_count % 100 == 0 and _store:
+            if loop_count % LEARNING_INTERVAL == 0 and _store:
                 def try_learning():
                     learner = get_learner(str(_store.db_path))
                     adapted, new_cal = learner.adapt_calibration(respect_cooldown=True)
@@ -1344,15 +1403,15 @@ async def _update_display_loop():
                         print(f"[Learning] Calibration adapted after {loop_count} observations", file=sys.stderr, flush=True)
                         print(f"[Learning] Pressure: {new_cal.pressure_ideal:.1f} hPa, Ambient: {new_cal.ambient_temp_min:.1f}-{new_cal.ambient_temp_max:.1f}°C", file=sys.stderr, flush=True)
                 
-                safe_call(try_learning, default=None, log_error=False)
+                safe_call(try_learning, default=None, log_error=True)
             
             # Lumen's voice: Every 900 iterations (~30 minutes), let Lumen express what it wants
             # Uses next_steps advocate to generate observations based on how Lumen feels
             # (Increased from 300 to favor learning over performative text)
-            if loop_count % 900 == 0 and readings and anima and identity:
+            if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
                 from .messages import add_observation
                 from .eisv_mapper import anima_to_eisv
-                
+
                 def lumen_speak():
                     """Let Lumen express what it wants based on how it feels."""
                     try:
@@ -1410,7 +1469,7 @@ async def _update_display_loop():
                                     pass
                             else:
                                 # Message was deduplicated - log occasionally
-                                if loop_count % 300 == 0:  # Every 10 minutes
+                                if loop_count % ERROR_LOG_THROTTLE == 0:  # Every 10 minutes
                                     print(f"[Lumen] Same feeling persists (deduplicated): {observation[:60]}...", file=sys.stderr, flush=True)
                         else:
                             # No steps generated - state is balanced
@@ -1421,12 +1480,12 @@ async def _update_display_loop():
                         # Don't crash if message board fails
                         print(f"[Lumen Voice] Error: {e}", file=sys.stderr, flush=True)
                 
-                safe_call(lumen_speak, default=None, log_error=False)
+                safe_call(lumen_speak, default=None, log_error=True)
 
             # Lumen's wonder: Every 900 iterations (~30 minutes), let Lumen ask questions or share realizations
             # Questions emerge from novelty/confusion. Realizations emerge from clarity.
             # (Increased from 450 to favor learning over performative text)
-            if loop_count % 900 == 0 and readings and anima and identity:
+            if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
                 from .messages import add_question, add_observation, get_unanswered_questions, get_recent_messages
 
                 def lumen_wonder():
@@ -1627,11 +1686,11 @@ async def _update_display_loop():
                             if result:
                                 print(f"[Lumen] Asked: {question}", file=sys.stderr, flush=True)
 
-                safe_call(lumen_wonder, default=None, log_error=False)
+                safe_call(lumen_wonder, default=None, log_error=True)
 
             # Lumen's generative reflection: Every 720 iterations (~24 minutes)
             # Tries LLM first for novel reflections, falls back to templates if unavailable
-            if loop_count % 720 == 0 and readings and anima and identity:
+            if loop_count % REFLECTION_INTERVAL == 0 and readings and anima and identity:
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
                 from .messages import get_unanswered_questions, add_question, add_observation
 
@@ -1783,7 +1842,7 @@ async def _update_display_loop():
                                 print(f"[Lumen/{source}] Reflected: {reflection}", file=sys.stderr, flush=True)
 
                 try:
-                    await safe_call_async(lumen_reflect, default=None, log_error=False)
+                    await safe_call_async(lumen_reflect, default=None, log_error=True)
                 except Exception as e:
                     # Non-fatal - reflection is optional enhancement
                     pass
@@ -1791,7 +1850,7 @@ async def _update_display_loop():
             # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions via LLM
             # Questions must be at least 10 minutes old (external answers get priority)
             # (Increased from 600 to reduce LLM inference noise)
-            if loop_count % 1800 == 0 and readings and anima and identity:
+            if loop_count % SELF_ANSWER_INTERVAL == 0 and readings and anima and identity:
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
                 from .messages import get_unanswered_questions, add_agent_message
 
@@ -1852,7 +1911,7 @@ async def _update_display_loop():
                                 print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
 
                     try:
-                        await safe_call_async(lumen_self_answer, default=None, log_error=False)
+                        await safe_call_async(lumen_self_answer, default=None, log_error=True)
                     except Exception:
                         # Non-fatal - self-answering is optional enhancement
                         pass
@@ -1864,7 +1923,7 @@ async def _update_display_loop():
                 # Initialize to 5 minutes ago so we catch recent messages on startup
                 _update_display_loop._last_seen_msg_time = time.time() - 300
 
-            if loop_count % 90 == 0 and readings and anima and identity:
+            if loop_count % MESSAGE_RESPONSE_INTERVAL == 0 and readings and anima and identity:
                 from .messages import get_messages_for_lumen, add_observation
 
                 def lumen_respond():
@@ -1944,11 +2003,11 @@ async def _update_display_loop():
                         if result:
                             print(f"[Lumen] Responded to {author}: {response}", file=sys.stderr, flush=True)
 
-                safe_call(lumen_respond, default=None, log_error=False)
+                safe_call(lumen_respond, default=None, log_error=True)
 
             # Growth system: Observe state for preference learning and check milestones
             # Every 30 iterations (~1 minute) - learns from anima state + environment
-            if loop_count % 30 == 0 and readings and anima and identity and _growth:
+            if loop_count % GROWTH_INTERVAL == 0 and readings and anima and identity and _growth:
                 def growth_observe():
                     """Observe environment and check milestones."""
                     # Prepare anima state dict
@@ -1980,12 +2039,12 @@ async def _update_display_loop():
                         from .messages import add_observation
                         add_observation(milestone, author="lumen")
 
-                safe_call(growth_observe, default=None, log_error=False)
+                safe_call(growth_observe, default=None, log_error=True)
 
             # Trajectory: Record anima history for trajectory signature computation
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
             # See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
-            if loop_count % 5 == 0 and anima:
+            if loop_count % TRAJECTORY_INTERVAL == 0 and anima:
                 from .anima_history import get_anima_history
 
                 def record_history():
@@ -1993,13 +2052,13 @@ async def _update_display_loop():
                     history = get_anima_history()
                     history.record_from_anima(anima)
 
-                safe_call(record_history, default=None, log_error=False)
+                safe_call(record_history, default=None, log_error=True)
 
             # UNITARES governance check-in: Every 30 iterations (~1 minute)
             # Provides continuous governance feedback for self-regulation
             # Uses Lumen's actual identity (creature_id) for proper binding
             # Syncs identity metadata on first check-in
-            if loop_count % 30 == 0 and readings and anima and identity:
+            if loop_count % GOVERNANCE_INTERVAL == 0 and readings and anima and identity:
                 import os
                 unitares_url = os.environ.get("UNITARES_URL")
                 if unitares_url:
@@ -2027,7 +2086,7 @@ async def _update_display_loop():
                         return decision
                     
                     try:
-                        decision = await safe_call_async(check_in_governance, default=None, log_error=False)
+                        decision = await safe_call_async(check_in_governance, default=None, log_error=True)
                         if decision:
                             # Store governance decision for potential expression feedback and diagnostics screen
                             # Future: Could influence face/LED expression based on governance state
@@ -2041,7 +2100,7 @@ async def _update_display_loop():
                             action = decision.get("action", "unknown")
                             margin = decision.get("margin", "unknown")
                             source = decision.get("source", "unknown")
-                            if loop_count % 60 == 0 or action != "proceed":
+                            if loop_count % WARN_LOG_THROTTLE == 0 or action != "proceed":
                                 de = f" drawing={drawing_eisv}" if drawing_eisv else ""
                                 print(f"[Governance] {action} ({margin}) from {source}{de}", file=sys.stderr, flush=True)
                         else:
@@ -2069,16 +2128,16 @@ async def _update_display_loop():
                         # Only log network errors occasionally (they're expected when WiFi is down)
                         # Log other errors more frequently (they might indicate real issues)
                         if is_network_error:
-                            if loop_count % 300 == 0:  # Log every 10 minutes for network errors
+                            if loop_count % ERROR_LOG_THROTTLE == 0:  # Log every 10 minutes for network errors
                                 print(f"[Governance] Network unavailable - Lumen operating autonomously (WiFi down?)", file=sys.stderr, flush=True)
                         else:
-                            if loop_count % 60 == 0:  # Log every 2 minutes for other errors
+                            if loop_count % WARN_LOG_THROTTLE == 0:  # Log every 2 minutes for other errors
                                 print(f"[Governance] Check-in skipped: {e}", file=sys.stderr, flush=True)
 
             # === SLOW CLOCK: Self-Schema G_t extraction (every 5 minutes) ===
             # PoC for StructScore visual integrity evaluation
             # Extracts Lumen's self-representation graph and optionally saves for offline analysis
-            if loop_count % 600 == 0 and readings and anima and identity:
+            if loop_count % SCHEMA_EXTRACTION_INTERVAL == 0 and readings and anima and identity:
                 async def extract_and_validate_schema():
                     """Extract G_t, save, and optionally run real VQA validation."""
                     try:
@@ -2128,13 +2187,13 @@ async def _update_display_loop():
                         print(f"[G_t] Extraction error (non-fatal): {e}", file=sys.stderr, flush=True)
 
                 try:
-                    await safe_call_async(extract_and_validate_schema, default=None, log_error=False)
+                    await safe_call_async(extract_and_validate_schema, default=None, log_error=True)
                 except Exception:
                     pass  # Non-fatal
 
             # === SLOW CLOCK: Self-Reflection (every 15 minutes) ===
             # Analyze state history, discover patterns, generate insights about self
-            if loop_count % 900 == 0 and readings and anima and identity:
+            if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
                 async def self_reflect():
                     """Lumen reflects on accumulated experience to learn about itself."""
                     try:
@@ -2157,7 +2216,7 @@ async def _update_display_loop():
                         print(f"[SelfReflection] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
                 try:
-                    await safe_call_async(self_reflect, default=None, log_error=False)
+                    await safe_call_async(self_reflect, default=None, log_error=True)
                 except Exception:
                     pass  # Non-fatal
 
@@ -2289,10 +2348,7 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
         if raw_sensors.get(k) is not None:
             sensors_clean["system"][k] = raw_sensors[k]
     # Neural (computational proprioception) - only the power bands
-    for k in ["eeg_delta_power", "eeg_theta_power", "eeg_alpha_power", "eeg_beta_power", "eeg_gamma_power"]:
-        if raw_sensors.get(k) is not None:
-            short_key = k.replace("eeg_", "").replace("_power", "")
-            sensors_clean["neural"][short_key] = round(raw_sensors[k], 3)
+    sensors_clean["neural"] = _extract_neural_bands(raw_sensors)
 
     result = {
         "anima": {
@@ -2355,152 +2411,12 @@ async def handle_get_identity(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-async def handle_switch_screen(arguments: dict) -> list[TextContent]:
-    """Switch display screen mode. Safe, never crashes."""
-    global _screen_renderer
-    
-    if not _screen_renderer:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Screen renderer not initialized"
-        }))]
-    
-    mode_str = arguments.get("mode", "").lower()
-    
-    # Map string to ScreenMode
-    mode_map = {
-        "face": ScreenMode.FACE,
-        "sensors": ScreenMode.SENSORS,
-        "identity": ScreenMode.IDENTITY,
-        "diagnostics": ScreenMode.DIAGNOSTICS,
-        "notepad": ScreenMode.NOTEPAD,
-        "learning": ScreenMode.LEARNING,
-        "messages": ScreenMode.MESSAGES,
-        "questions": ScreenMode.QUESTIONS,
-        "visitors": ScreenMode.VISITORS,
-    }
-    
-    if mode_str in mode_map:
-        _screen_renderer.set_mode(mode_map[mode_str])
-        return [TextContent(type="text", text=json.dumps({
-            "success": True,
-            "mode": mode_str,
-            "message": f"Switched to {mode_str} screen"
-        }))]
-    elif mode_str == "next":
-        _screen_renderer.next_mode()
-        return [TextContent(type="text", text=json.dumps({
-            "success": True,
-            "mode": _screen_renderer.get_mode().value,
-            "message": f"Switched to {_screen_renderer.get_mode().value} screen"
-        }))]
-    elif mode_str == "previous" or mode_str == "prev":
-        _screen_renderer.previous_mode()
-        return [TextContent(type="text", text=json.dumps({
-            "success": True,
-            "mode": _screen_renderer.get_mode().value,
-            "message": f"Switched to {_screen_renderer.get_mode().value} screen"
-        }))]
-    else:
-        return [TextContent(type="text", text=json.dumps({
-            "error": f"Invalid mode: {mode_str}",
-            "valid_modes": ["face", "sensors", "identity", "diagnostics", "learning", "messages", "notepad", "qa", "self_graph", "next", "previous"]
-        }))]
 
 
-async def handle_leave_message(arguments: dict) -> list[TextContent]:
-    """Leave a message for Lumen on the message board."""
-    message = arguments.get("message", "").strip()
-
-    if not message:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "message parameter required"
-        }))]
-
-    # Add the message
-    msg = add_user_message(message)
-
-    return [TextContent(type="text", text=json.dumps({
-        "success": True,
-        "message": message,
-        "timestamp": msg.timestamp,
-        "note": "Message added to Lumen's message board"
-    }))]
 
 
-async def handle_leave_agent_note(arguments: dict) -> list[TextContent]:
-    """Leave a note from an AI agent on Lumen's message board, optionally answering a question."""
-    message = arguments.get("message", "").strip()
-    agent_name = arguments.get("agent_name", "agent").strip()
-    responds_to = arguments.get("responds_to")  # Optional: question ID to answer
-
-    if not message:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "message parameter required"
-        }))]
-
-    # Add the agent message (will mark question as answered if responds_to is provided)
-    msg = add_agent_message(message, agent_name, responds_to=responds_to)
-
-    result = {
-        "success": True,
-        "message": message,
-        "agent_name": agent_name,
-        "timestamp": msg.timestamp,
-        "note": "Agent note added to Lumen's message board"
-    }
-    if responds_to:
-        result["answered_question"] = responds_to
-
-    return [TextContent(type="text", text=json.dumps(result))]
 
 
-async def handle_get_questions(arguments: dict) -> list[TextContent]:
-    """Get Lumen's unanswered questions - things Lumen is wondering about."""
-    from .messages import get_unanswered_questions, get_board, MESSAGE_TYPE_QUESTION
-
-    limit = arguments.get("limit", 5)
-    # Convert limit to int if it's a string (MCP sometimes passes strings)
-    if isinstance(limit, str):
-        try:
-            limit = int(limit)
-        except ValueError:
-            limit = 5
-    elif limit is None:
-        limit = 5
-    
-    # Force reload to get latest questions
-    board = get_board()
-    board._load(force=True)
-    
-    # Get ALL questions first to see what's there
-    all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
-    unanswered_questions = [m for m in all_questions if not m.answered]
-    
-    # Use unanswered questions, but if user wants more, show some answered ones too
-    questions = unanswered_questions[-limit:] if len(unanswered_questions) > 0 else []
-    
-    # If no unanswered but user asked for questions, include recent answered ones
-    if len(questions) == 0 and limit > 0:
-        questions = all_questions[-limit:]
-
-    return [TextContent(type="text", text=json.dumps({
-        "questions": [
-            {
-                "id": q.message_id,
-                "text": q.text,
-                "context": q.context,  # What triggered this question
-                "timestamp": q.timestamp,
-                "age": q.age_str(),
-                "answered": q.answered,  # Include answered status
-            }
-            for q in questions
-        ],
-        "count": len(questions),
-        "unanswered_count": len(unanswered_questions),
-        "total_questions": len(all_questions),
-        "how_to_answer": "To answer a question: call leave_agent_note (or post_message) with responds_to='<id>' where <id> is the question's id field above. This links your answer to the question.",
-        "note": "Questions auto-expire after 4 hours if unanswered."
-    }))]
 
 
 async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
@@ -2934,26 +2850,6 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-async def handle_test_leds(arguments: dict) -> list[TextContent]:
-    """Run LED test sequence."""
-    global _leds
-    
-    if _leds is None:
-        _leds = get_led_display()
-    
-    if not _leds.is_available():
-        return [TextContent(type="text", text=json.dumps({
-            "success": False,
-            "error": "LEDs not available",
-            "diagnostics": _leds.get_diagnostics() if _leds else None,
-        }))]
-    
-    success = _leds.test_sequence()
-    
-    return [TextContent(type="text", text=json.dumps({
-        "success": success,
-        "message": "Test sequence complete - check LEDs",
-    }))]
 
 
 async def handle_get_calibration(arguments: dict) -> list[TextContent]:
@@ -3319,18 +3215,6 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
             output = {"success": True, "bootstrap": "Deployed from GitHub zip", "repo": str(repo_root)}
             if restart:
                 output["restart"] = "Restarting server..."
-                import asyncio
-                async def _delayed_restart():
-                    await asyncio.sleep(1)
-                    try:
-                        result = subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False, capture_output=True)
-                        if result.returncode != 0:
-                            # sudo failed (NoNewPrivileges) — self-exit so systemd restarts us
-                            import os
-                            os._exit(1)
-                    except Exception:
-                        import os
-                        os._exit(1)
                 asyncio.create_task(_delayed_restart())
             return [TextContent(type="text", text=json.dumps(output, indent=2))]
         except Exception as e:
@@ -3397,25 +3281,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
 
             if restart:
                 output["restart"] = "Restarting server..."
-                # Schedule restart after response is sent
-                import asyncio
-                async def delayed_restart():
-                    await asyncio.sleep(1)
-                    try:
-                        result = subprocess.run(
-                            ["sudo", "systemctl", "restart", "anima"],
-                            timeout=30,
-                            check=False,
-                            capture_output=True
-                        )
-                        if result.returncode != 0:
-                            # sudo failed (NoNewPrivileges) — self-exit so systemd restarts us
-                            import os
-                            os._exit(1)
-                    except Exception:
-                        import os
-                        os._exit(1)
-                asyncio.create_task(delayed_restart())
+                asyncio.create_task(_delayed_restart())
             else:
                 output["note"] = "Changes pulled. Use restart=true to apply, or manually restart."
 
@@ -3648,18 +3514,6 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
         output = {"success": True, "message": "Deployed from GitHub", "repo": str(repo_root)}
         if restart:
             output["restart"] = "Restarting server..."
-            import subprocess
-            import asyncio
-            async def _delayed_restart():
-                await asyncio.sleep(1)
-                try:
-                    result = subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False, capture_output=True)
-                    if result.returncode != 0:
-                        import os
-                        os._exit(1)
-                except Exception:
-                    import os
-                    os._exit(1)
             asyncio.create_task(_delayed_restart())
         return [TextContent(type="text", text=json.dumps(output, indent=2))]
     except Exception as e:
@@ -3846,18 +3700,6 @@ async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(summary, indent=2))]
 
 
-async def handle_get_expression_mood(arguments: dict) -> list[TextContent]:
-    """Get Lumen's current expression mood - persistent drawing style preferences."""
-    store = _get_store()
-    if store is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Server not initialized - wake() failed"
-        }))]
-    
-    mood_tracker = ExpressionMoodTracker(identity_store=store)
-    mood_info = mood_tracker.get_mood_info()
-    
-    return [TextContent(type="text", text=json.dumps(mood_info, indent=2))]
 
 
 async def handle_set_calibration(arguments: dict) -> list[TextContent]:
@@ -4564,278 +4406,21 @@ async def handle_say(arguments: dict) -> list[TextContent]:
     }))]
 
 
-async def handle_voice_status(arguments: dict) -> list[TextContent]:
-    """Get voice system status."""
-    voice = _get_voice()
-    if voice is None:
-        return [TextContent(type="text", text=json.dumps({
-            "available": False,
-            "mode": VOICE_MODE,
-            "error": "Voice system not available"
-        }))]
-
-    state = voice.state if hasattr(voice, 'state') else None
-    return [TextContent(type="text", text=json.dumps({
-        "available": True,
-        "mode": VOICE_MODE,
-        "running": voice.is_running,
-        "is_listening": state.is_listening if state else False,
-        "last_heard": state.last_heard.text if state and state.last_heard else None,
-        "chattiness": voice.chattiness,
-    }))]
 
 
-async def handle_set_voice_mode(arguments: dict) -> list[TextContent]:
-    """Configure voice behavior."""
-    voice = _get_voice()
-    if voice is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Voice system not available"
-        }))]
-
-    changes = {}
-
-    if "always_listening" in arguments:
-        voice._voice.set_always_listening(arguments["always_listening"])
-        changes["always_listening"] = arguments["always_listening"]
-
-    if "chattiness" in arguments:
-        voice.chattiness = float(arguments["chattiness"])
-        changes["chattiness"] = voice.chattiness
-
-    if "wake_word" in arguments:
-        voice._voice._config.wake_word = arguments["wake_word"]
-        changes["wake_word"] = arguments["wake_word"]
-
-    return [TextContent(type="text", text=json.dumps({
-        "success": True,
-        "changes": changes
-    }))]
 
 
-async def handle_query_knowledge(arguments: dict) -> list[TextContent]:
-    """Query Lumen's learned knowledge from Q&A interactions."""
-    from .knowledge import get_knowledge, get_insights
-
-    kb = get_knowledge()
-    category = arguments.get("category")
-    limit = arguments.get("limit", 10)
-
-    insights = get_insights(limit=limit, category=category)
-
-    result = {
-        "total_insights": kb.count(),
-        "insights": [
-            {
-                "id": i.insight_id,
-                "text": i.text,
-                "category": i.category,
-                "source_question": i.source_question,
-                "source_author": i.source_author,
-                "learned": i.age_str(),
-                "confidence": i.confidence,
-                "references": i.references,
-            }
-            for i in insights
-        ],
-        "summary": kb.get_insight_summary(),
-    }
-
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-async def handle_query_memory(arguments: dict) -> list[TextContent]:
-    """Query Lumen's associative memory - what does Lumen remember about conditions?"""
-    memory = get_memory()
-
-    # Get optional condition parameters for specific lookup
-    temp = arguments.get("temperature")
-    light = arguments.get("light")
-    humidity = arguments.get("humidity")
-
-    result = {
-        "memory_stats": memory.get_stats(),
-    }
-
-    # If specific conditions provided, get anticipation for those
-    if temp is not None and light is not None and humidity is not None:
-        anticipation = memory.anticipate(float(temp), float(light), float(humidity))
-        if anticipation:
-            result["anticipation"] = {
-                "warmth": anticipation.warmth,
-                "clarity": anticipation.clarity,
-                "stability": anticipation.stability,
-                "presence": anticipation.presence,
-                "confidence": anticipation.confidence,
-                "sample_count": anticipation.sample_count,
-                "conditions": anticipation.bucket_description,
-            }
-            result["insight"] = memory.get_memory_insight()
-        else:
-            result["anticipation"] = None
-            result["insight"] = "No memory of these exact conditions yet"
-    else:
-        # Get insight about current/last conditions
-        result["insight"] = memory.get_memory_insight()
-
-    return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
-# ============================================================
-# Cognitive Inference Handlers
-# ============================================================
-
-async def handle_dialectic_synthesis(arguments: dict) -> list[TextContent]:
-    """Perform dialectic synthesis on a proposition."""
-    try:
-        from .cognitive_inference import get_cognitive_inference
-        cognitive = get_cognitive_inference()
-
-        thesis = arguments.get("thesis", "")
-        antithesis = arguments.get("antithesis")
-        context = arguments.get("context")
-
-        if not thesis:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "thesis is required"
-            }))]
-
-        result = await cognitive.dialectic_synthesis(thesis, antithesis, context)
-
-        if result:
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-        else:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "Inference failed - check API keys",
-                "enabled": cognitive.enabled
-            }))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": str(e)
-        }))]
 
 
-async def handle_extract_knowledge(arguments: dict) -> list[TextContent]:
-    """Extract structured knowledge from text."""
-    try:
-        from .cognitive_inference import get_cognitive_inference
-        cognitive = get_cognitive_inference()
-
-        text = arguments.get("text", "")
-        domain = arguments.get("domain")
-
-        if not text:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "text is required"
-            }))]
-
-        result = await cognitive.extract_knowledge(text, domain)
-
-        if result:
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-        else:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "Extraction failed - check API keys"
-            }))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": str(e)
-        }))]
 
 
-async def handle_search_knowledge_graph(arguments: dict) -> list[TextContent]:
-    """Search both local and UNITARES knowledge graphs."""
-    try:
-        from .unitares_cognitive import search_shared_knowledge
-
-        query = arguments.get("query", "")
-        include_local = arguments.get("include_local", True)
-
-        if not query:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "query is required"
-            }))]
-
-        results = await search_shared_knowledge(query, include_local)
-
-        return [TextContent(type="text", text=json.dumps({
-            "query": query,
-            "results": results,
-            "count": len(results)
-        }, indent=2))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": str(e)
-        }))]
 
 
-async def handle_cognitive_query(arguments: dict) -> list[TextContent]:
-    """Answer a query using retrieved knowledge context."""
-    try:
-        from .cognitive_inference import get_cognitive_inference
-        from .unitares_cognitive import search_shared_knowledge
 
-        cognitive = get_cognitive_inference()
-
-        query = arguments.get("query", "")
-
-        if not query:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "query is required"
-            }))]
-
-        # Search for relevant context
-        knowledge = await search_shared_knowledge(query, include_local=True)
-
-        if knowledge:
-            context = [k.get("summary", str(k)) for k in knowledge[:5]]
-            result = await cognitive.query_with_context(query, context)
-        else:
-            result = {"answer": "No relevant knowledge found", "relevance": 0.0}
-
-        if result:
-            result["knowledge_sources"] = len(knowledge)
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-        else:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "Query failed - check API keys"
-            }))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": str(e)
-        }))]
-
-
-async def handle_merge_insights(arguments: dict) -> list[TextContent]:
-    """Merge multiple insights into a coherent summary."""
-    try:
-        from .cognitive_inference import get_cognitive_inference
-        cognitive = get_cognitive_inference()
-
-        insights = arguments.get("insights", [])
-
-        if not insights or len(insights) < 2:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "At least 2 insights required for merging"
-            }))]
-
-        result = await cognitive.merge_insights(insights)
-
-        if result:
-            return [TextContent(type="text", text=json.dumps(result, indent=2))]
-        else:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "Merge failed - check API keys"
-            }))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": str(e)
-        }))]
-
-
-# ============================================================
-# Consolidated Tool Handlers (reduces 27 → 18 tools)
-# ============================================================
 
 async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
     """
@@ -5057,143 +4642,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
         }))]
 
 
-async def handle_query(arguments: dict) -> list[TextContent]:
-    """
-    Unified query across Lumen's knowledge systems.
-    Consolidates: query_knowledge + query_memory + search_knowledge_graph + cognitive_query
-    """
-    text = arguments.get("text", "")
-    query_type = arguments.get("type", "cognitive")
-
-    if query_type == "learned":
-        # Query Q&A learned knowledge
-        from .knowledge import get_knowledge, get_insights
-        kb = get_knowledge()
-        category = arguments.get("category")
-        limit = arguments.get("limit", 10)
-        insights = get_insights(limit=limit, category=category)
-        return [TextContent(type="text", text=json.dumps({
-            "type": "learned",
-            "total_insights": kb.count(),
-            "insights": [{"id": i.insight_id, "text": i.text, "category": i.category} for i in insights]
-        }, indent=2))]
-
-    elif query_type == "memory":
-        # Query associative memory
-        memory = get_memory()
-        conditions = arguments.get("conditions", {})
-        temp = conditions.get("temperature") or arguments.get("temperature")
-        light = conditions.get("light") or arguments.get("light")
-        humidity = conditions.get("humidity") or arguments.get("humidity")
-
-        if temp is None and light is None and humidity is None:
-            # Use current sensor readings
-            readings, _ = _get_readings_and_anima()
-            if readings:
-                temp = readings.ambient_temp_c
-                light = readings.light_lux
-                humidity = readings.humidity_pct
-
-        predictions = []
-        if temp is not None or light is not None:
-            sensors_dict = {
-                "ambient_temp_c": temp,
-                "light_lux": light,
-                "humidity_pct": humidity,
-            }
-            ant = anticipate_state(sensors_dict)
-            if ant:
-                import dataclasses
-                predictions = [dataclasses.asdict(ant)]
-
-        return [TextContent(type="text", text=json.dumps({
-            "type": "memory",
-            "query_conditions": {"temperature": temp, "light": light, "humidity": humidity},
-            "predictions": predictions[:arguments.get("limit", 5)]
-        }, indent=2))]
-
-    elif query_type == "graph":
-        # Search knowledge graph
-        try:
-            from .cognitive_inference import get_cognitive_inference
-            cog = get_cognitive_inference()
-            results = await cog.search_knowledge(text, limit=arguments.get("limit", 10))
-            return [TextContent(type="text", text=json.dumps({
-                "type": "graph",
-                "query": text,
-                "results": results
-            }, indent=2))]
-        except Exception as e:
-            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
-
-    else:  # cognitive (RAG)
-        try:
-            from .cognitive_inference import get_cognitive_inference
-            cog = get_cognitive_inference()
-            answer = await cog.query(text)
-            return [TextContent(type="text", text=json.dumps({
-                "type": "cognitive",
-                "query": text,
-                "answer": answer
-            }, indent=2))]
-        except Exception as e:
-            return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
-async def handle_cognitive_process(arguments: dict) -> list[TextContent]:
-    """
-    Perform cognitive operations.
-    Consolidates: dialectic_synthesis + extract_knowledge + merge_insights
-    """
-    operation = arguments.get("operation")
-
-    if not operation:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "operation parameter required (synthesize, extract, or merge)"
-        }))]
-
-    try:
-        from .cognitive_inference import get_cognitive_inference
-        cog = get_cognitive_inference()
-
-        if operation == "synthesize":
-            thesis = arguments.get("thesis", "")
-            antithesis = arguments.get("antithesis", "")
-            context = arguments.get("context", "")
-            result = await cog.dialectic_synthesis(thesis, antithesis, context)
-            return [TextContent(type="text", text=json.dumps({
-                "operation": "synthesize",
-                "thesis": thesis,
-                "antithesis": antithesis,
-                "synthesis": result
-            }, indent=2))]
-
-        elif operation == "extract":
-            text = arguments.get("text", "")
-            domain = arguments.get("domain", "general")
-            result = await cog.extract_knowledge(text, domain)
-            return [TextContent(type="text", text=json.dumps({
-                "operation": "extract",
-                "domain": domain,
-                "knowledge": result
-            }, indent=2))]
-
-        elif operation == "merge":
-            insights = arguments.get("insights", [])
-            result = await cog.merge_insights(insights)
-            return [TextContent(type="text", text=json.dumps({
-                "operation": "merge",
-                "input_count": len(insights),
-                "merged": result
-            }, indent=2))]
-
-        else:
-            return [TextContent(type="text", text=json.dumps({
-                "error": f"Unknown operation: {operation}",
-                "valid_operations": ["synthesize", "extract", "merge"]
-            }))]
-    except Exception as e:
-        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
 async def handle_configure_voice(arguments: dict) -> list[TextContent]:
@@ -5929,11 +5379,7 @@ def run_http_server(host: str, port: int):
                     identity = store.get_identity() if store else None
 
                     # Build neural bands from raw sensor data
-                    raw = readings.to_dict()
-                    neural = {}
-                    for k in ["eeg_delta_power", "eeg_theta_power", "eeg_alpha_power", "eeg_beta_power", "eeg_gamma_power"]:
-                        if raw.get(k) is not None:
-                            neural[k.replace("eeg_", "").replace("_power", "")] = round(raw[k], 3)
+                    neural = _extract_neural_bands(readings)
 
                     # EISV
                     from .eisv_mapper import anima_to_eisv
@@ -6306,11 +5752,7 @@ def run_http_server(host: str, port: int):
                     }
 
                     # Neural bands
-                    raw = readings.to_dict()
-                    neural = {}
-                    for k in ["eeg_delta_power", "eeg_theta_power", "eeg_alpha_power", "eeg_beta_power", "eeg_gamma_power"]:
-                        if raw.get(k) is not None:
-                            neural[k.replace("eeg_", "").replace("_power", "")] = round(raw[k], 3)
+                    neural = _extract_neural_bands(readings)
 
                     # Anima
                     anima_data = {
