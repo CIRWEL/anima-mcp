@@ -56,6 +56,8 @@ Handler modules use late imports from `server.py` for global state access (e.g.,
 
 Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth, governance) use 90s.
 
+**Governance health** checks both the server's own check-in result AND the broker's shared memory governance data (matching diagnostics screen behavior). The broker checks in every 10s; the server every ~60s.
+
 ### Learning Systems (run in broker only)
 
 These modules run in `stable_creature.py`, not in `server.py`:
@@ -85,6 +87,37 @@ Lumen uses **computational proprioception** - no real EEG hardware. Neural bands
 | Gamma | High CPU activity | Intense focus |
 
 Source: `computational_neural.py` (used by both `pi.py` and `mock.py` sensors)
+
+### Light Sensor & World Light
+
+The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCraft HAT. At typical brightness (0.12), the LEDs contribute ~488 lux to the sensor — far more than typical indoor ambient light. **Raw lux is LED-dominated.**
+
+**World light** = raw lux minus estimated LED self-glow:
+```python
+from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+estimated_glow = led_brightness * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
+world_light = max(0.0, raw_lux - estimated_glow)
+```
+
+Constants in `config.py`: `LED_LUX_PER_BRIGHTNESS = 4000.0`, `LED_LUX_AMBIENT_FLOOR = 8.0`
+
+**Where raw vs corrected lux is used:**
+
+| Consumer | Uses | Why |
+|----------|------|-----|
+| Clarity (anima.py) | World light | Environmental perception, no feedback loop |
+| Activity state | World light | Sense darkness for drowsy/resting |
+| Growth preferences | World light | Learn light preferences honestly |
+| Drawing light_regime | World light | "dark"/"dim"/"bright" for art eras |
+| Ethical drift | World light | Avoid spurious drift from LED dimming |
+| Self-model correlations | World light | Learn env light → warmth, not LED → warmth |
+| LED auto-brightness | Raw lux | Does its own internal correction |
+| Self-model proprioception (`observe_led_lux`) | Raw lux | Learning "my LEDs affect my sensor" |
+| Metacognition predictions | Raw lux | Predicts total sensor reading including LEDs |
+
+**Growth light thresholds** (for corrected world light):
+- `< 100 lux` → dim/dark (nighttime indoor)
+- `> 300 lux` → bright (well-lit room, daylight)
 
 ### Activity States
 
@@ -202,7 +235,11 @@ ssh unitares-anima@100.83.45.66 'cd ~/anima-mcp && git pull && sudo systemctl re
 
 ## UNITARES Integration
 
-Lumen checks in with UNITARES governance every ~60 seconds via Tailscale:
+Lumen checks in with UNITARES governance via Tailscale from **two processes**:
+- **Broker** (`stable_creature.py`): every 10s, writes decision to shared memory
+- **Server** (`server.py`): every ~60s, stores in `_last_governance_decision`
+
+Both use the same bridge:
 
 ```
 UNITARES_URL=http://100.96.201.46:8767/mcp/
