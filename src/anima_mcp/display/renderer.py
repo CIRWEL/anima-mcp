@@ -90,7 +90,7 @@ class PilRenderer(DisplayRenderer):
         self._display = None
         self._cs_pin = None
         self._dc_pin = None
-        self._backlight = None
+        # D22 backlight released after init — no longer held
         self._init_error: Optional[str] = None  # Last init failure reason
         self._image: Optional[Image.Image] = None
         self._last_face_state: Optional[FaceState] = None
@@ -196,7 +196,7 @@ class PilRenderer(DisplayRenderer):
 
     def _cleanup_display(self):
         """Release display GPIO pins so _init_display() can re-acquire them."""
-        for pin_attr in ("_cs_pin", "_dc_pin", "_backlight"):
+        for pin_attr in ("_cs_pin", "_dc_pin"):
             pin = getattr(self, pin_attr, None)
             if pin is not None:
                 try:
@@ -217,29 +217,31 @@ class PilRenderer(DisplayRenderer):
             from adafruit_rgb_display import st7789
 
             # BrainCraft HAT pin configuration — store refs for cleanup
-            # CE0=CS, D25=DC, D22=backlight (must stay HIGH)
-            # D22 shared with joystick left, D24 with joystick right
-            # We hold D22 HIGH for backlight; joystick skips left/right
+            # CE0=CS, D25=DC
+            # D22=backlight, D24=reset — both set HIGH then released for joystick
             self._cs_pin = digitalio.DigitalInOut(board.CE0)
             self._dc_pin = digitalio.DigitalInOut(board.D25)
 
-            # Backlight on D22 — must be held HIGH for display to work
-            self._backlight = digitalio.DigitalInOut(board.D22)
-            self._backlight.direction = digitalio.Direction.OUTPUT
-            self._backlight.value = True
+            # Backlight on D22 — set HIGH then release
+            # BrainCraft HAT has hardware pull-up on backlight, keeps it HIGH
+            _bl = digitalio.DigitalInOut(board.D22)
+            _bl.direction = digitalio.Direction.OUTPUT
+            _bl.value = True
+            import time as _time
+            _time.sleep(0.05)
+            _bl.deinit()  # Release D22 — hardware pull-up holds it HIGH
 
             # Manual hardware reset via D24 — pulse LOW then release pin
             # ST7789 needs a reset pulse to enter a known state
             _rst = digitalio.DigitalInOut(board.D24)
             _rst.direction = digitalio.Direction.OUTPUT
             _rst.value = True
-            import time as _time
             _time.sleep(0.05)
             _rst.value = False
             _time.sleep(0.05)
             _rst.value = True
             _time.sleep(0.15)  # Wait for ST7789 to boot after reset
-            _rst.deinit()  # Release D24 (not needed after reset pulse)
+            _rst.deinit()  # Release D24 — not needed after reset pulse
 
             # SPI setup - use high speed for fast display updates
             spi = board.SPI()
@@ -271,7 +273,7 @@ class PilRenderer(DisplayRenderer):
             print(f"No display hardware: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
             self._display = None
-            self._backlight = None
+            # D22 backlight released after init — no longer held
 
     def _show_waking_face(self):
         """Show minimal default screen - subtle border, non-distracting. Safe, never crashes."""

@@ -466,32 +466,35 @@ async def _update_display_loop():
                         joy_btn_pressed = input_state.joystick_button and (not prev_state or not prev_state.joystick_button)
                         sep_btn_pressed = input_state.separate_button and (not prev_state or not prev_state.separate_button)
                         
-                        # RIGHT = next screen (D24 reclaimed after display reset)
-                        # LEFT unavailable (D22 = backlight). Joystick center = prev screen.
+                        # LEFT/RIGHT = screen switching (D22/D24 both reclaimed after display init)
                         current_dir = input_state.joystick_direction
                         if prev_state:
                             prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
-                                renderer.trigger_input_feedback("right")
-                                if _leds and _leds.is_available():
-                                    _leds.quick_flash((60, 60, 120), 50)
-                                old_mode = renderer.get_mode()
-                                renderer.next_mode()
-                                new_mode = renderer.get_mode()
-                                renderer._state.last_user_action_time = time.time()
-                                mode_change_event.set()
-                                print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
+                            # Q&A expanded needs LEFT/RIGHT for focus switching
+                            qa_expanded = renderer._state.qa_expanded if renderer else False
+                            qa_needs_lr = (current_mode == ScreenMode.QUESTIONS and qa_expanded)
 
-                        if joy_btn_pressed:
-                            renderer.trigger_input_feedback("press")
-                            if _leds and _leds.is_available():
-                                _leds.quick_flash((60, 60, 120), 50)
-                            old_mode = renderer.get_mode()
-                            renderer.previous_mode()
-                            new_mode = renderer.get_mode()
-                            renderer._state.last_user_action_time = time.time()
-                            mode_change_event.set()
-                            print(f"[Input] {old_mode.value} -> {new_mode.value} (center=prev)", file=sys.stderr, flush=True)
+                            if not qa_needs_lr:
+                                if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
+                                    renderer.trigger_input_feedback("left")
+                                    if _leds and _leds.is_available():
+                                        _leds.quick_flash((60, 60, 120), 50)
+                                    old_mode = renderer.get_mode()
+                                    renderer.previous_mode()
+                                    new_mode = renderer.get_mode()
+                                    renderer._state.last_user_action_time = time.time()
+                                    mode_change_event.set()
+                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (left)", file=sys.stderr, flush=True)
+                                elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+                                    renderer.trigger_input_feedback("right")
+                                    if _leds and _leds.is_available():
+                                        _leds.quick_flash((60, 60, 120), 50)
+                                    old_mode = renderer.get_mode()
+                                    renderer.next_mode()
+                                    new_mode = renderer.get_mode()
+                                    renderer._state.last_user_action_time = time.time()
+                                    mode_change_event.set()
+                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
                         
                         # Joystick UP/DOWN on FACE screen = brightness control
                         if current_mode == ScreenMode.FACE:
@@ -558,7 +561,12 @@ async def _update_display_loop():
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
                                     renderer.trigger_input_feedback("down")
                                     renderer.qa_scroll_down()
-                                # LEFT/RIGHT unavailable (D22/D24 held by display)
+                                elif current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
+                                    renderer.trigger_input_feedback("left")
+                                    renderer.qa_focus_next()
+                                elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+                                    renderer.trigger_input_feedback("right")
+                                    renderer.qa_focus_next()
                         
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
