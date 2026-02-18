@@ -393,10 +393,17 @@ def run_creature():
             # 2a-ii. Activity State: Determine wakefulness level
             activity_state = None
             if activity_manager:
+                # Correct for LED self-glow: activity_state needs world light,
+                # not raw lux dominated by Lumen's own LEDs.
+                # Note: readings.led_brightness holds previous cycle's value (set at
+                # line ~405 below), or None on first iteration → default to base 0.12.
+                from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+                _led_b = readings.led_brightness if readings.led_brightness is not None else 0.12
+                _world_light = max(0.0, (readings.light_lux or 0.0) - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
                 activity_state = activity_manager.get_state(
                     presence=anima.presence,
                     stability=anima.stability,
-                    light_level=readings.light_lux
+                    light_level=_world_light,
                 )
                 # Proprioception: estimate own LED brightness level
                 # Base brightness (0.12) * activity multiplier gives approximate LED brightness.

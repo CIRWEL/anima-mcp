@@ -44,7 +44,7 @@ from .display.screens import ScreenRenderer, ScreenMode
 from .input.brainhat_input import get_brainhat_input, JoystickDirection as InputDirection
 from .next_steps_advocate import get_advocate
 from .eisv_mapper import anima_to_eisv
-from .config import get_calibration
+from .config import get_calibration, LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
 from .learning import get_learner
 from .messages import add_observation, add_agent_message, add_question, get_unanswered_questions
 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
@@ -1183,10 +1183,14 @@ async def _update_display_loop():
                         global _activity
                         if _activity is None:
                             _activity = get_activity_manager()
+                        # Correct for LED self-glow: activity_state needs world light,
+                        # not raw lux dominated by Lumen's own LEDs
+                        _led_b = readings.led_brightness if readings and readings.led_brightness is not None else 0.12
+                        _world_light = max(0.0, (light_level or 0.0) - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR)) if light_level is not None else None
                         activity_state = _activity.get_state(
                             presence=anima.presence,
                             stability=anima.stability,
-                            light_level=light_level,
+                            light_level=_world_light,
                         )
                         activity_brightness = activity_state.brightness_multiplier
                 except Exception as e:
@@ -1922,7 +1926,7 @@ async def _update_display_loop():
                     # Use world_light (ambient minus LED glow) so preferences
                     # reflect actual environment, not Lumen's own LEDs
                     led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
-                    my_glow = led_b * 4000.0 + 8.0
+                    my_glow = led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
                     world_light = max(0.0, (readings.light_lux or 0.0) - my_glow)
                     environment = {
                         "light_lux": world_light,
