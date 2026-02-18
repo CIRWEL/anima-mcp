@@ -4019,14 +4019,18 @@ class ScreenRenderer:
         presence = anima.presence
 
         # Light regime: dark / dim / bright
-        # Uses raw lux (not corrected) — we want the total visual environment
-        # including Lumen's own glow. A creature painting in its own warm light
-        # naturally uses different colors than one painting in darkness.
+        # Uses corrected lux (self-glow subtracted) — raw lux is dominated by
+        # LED self-illumination (168-728 lux depending on brightness), so raw
+        # would never reach "dark" and would flip regimes from LED changes alone.
         light_lux = anima.readings.light_lux if anima.readings else None
         if light_lux is not None:
-            if light_lux < 20:
+            from ..config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+            led_b = anima.readings.led_brightness if anima.readings.led_brightness is not None else 0.0
+            estimated_glow = led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
+            env_lux = max(0.0, light_lux - estimated_glow)
+            if env_lux < 20:
                 light_regime = "dark"
-            elif light_lux < 200:
+            elif env_lux < 200:
                 light_regime = "dim"
             else:
                 light_regime = "bright"
