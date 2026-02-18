@@ -18,6 +18,7 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 from .error_recovery import RetryConfig, retry_with_backoff_async
+from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
 
 
 # Status codes that should trigger retry
@@ -396,7 +397,7 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
 
         # Add LED proprioception: decompose light into my-glow vs world
         if context.led_brightness is not None and context.light_lux is not None:
-            my_glow = context.led_brightness * 4000.0 + 8.0
+            my_glow = context.led_brightness * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
             world_light = max(0.0, context.light_lux - my_glow)
             state_desc += f"""
 - my LED glow: {my_glow:.0f} lux (from my own lights at {context.led_brightness:.0%} brightness)

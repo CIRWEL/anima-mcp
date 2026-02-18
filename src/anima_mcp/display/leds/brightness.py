@@ -4,6 +4,8 @@ import math
 import time
 from typing import Optional
 
+from ...config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+
 def get_pulse(pulse_cycle: float = 4.0) -> float:
     """Primary + secondary breath wave. Returns 0-1."""
     t = time.time()
@@ -23,7 +25,7 @@ def get_auto_brightness(
     """Auto-adjust brightness from ambient light. Compensates for LED self-illumination."""
     if not enabled or light_level is None:
         return base_brightness
-    estimated_led_lux = current_brightness * 400
+    estimated_led_lux = current_brightness * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
     corrected = max(0, light_level - estimated_led_lux)
     if corrected < 10:
         return max_brightness

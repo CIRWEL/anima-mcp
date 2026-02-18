@@ -4018,6 +4018,21 @@ class ScreenRenderer:
         stability = anima.stability
         presence = anima.presence
 
+        # Light regime: dark / dim / bright
+        # Uses raw lux (not corrected) — we want the total visual environment
+        # including Lumen's own glow. A creature painting in its own warm light
+        # naturally uses different colors than one painting in darkness.
+        light_lux = anima.readings.light_lux if anima.readings else None
+        if light_lux is not None:
+            if light_lux < 20:
+                light_regime = "dark"
+            elif light_lux < 200:
+                light_regime = "dim"
+            else:
+                light_regime = "bright"
+        else:
+            light_regime = "dim"  # default assumption
+
         # Update narrative arc phase (replaces energy-threshold phase logic)
         self._update_narrative_arc()
 
@@ -4052,7 +4067,7 @@ class ScreenRenderer:
 
         # --- Delegate to active era ---
         color, hue_category = self._active_era.generate_color(
-            era_state, warmth, clarity, stability, presence)
+            era_state, warmth, clarity, stability, presence, light_regime=light_regime)
 
         C = self._intent.state.coherence()
         if era_state.gesture_remaining <= 0:
