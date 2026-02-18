@@ -741,6 +741,15 @@ async def _update_display_loop():
             
             consecutive_errors = 0  # Reset on success
 
+            # Health heartbeats for core subsystems (always-running)
+            try:
+                from .health import get_health_registry
+                _health = get_health_registry()
+                _health.heartbeat("sensors")
+                _health.heartbeat("anima")
+            except Exception:
+                pass
+
             # Feed EISV trajectory awareness buffer
             try:
                 _traj = get_trajectory_awareness()
@@ -750,6 +759,7 @@ async def _update_display_loop():
                     stability=anima.stability,
                     presence=anima.presence,
                 )
+                _health.heartbeat("trajectory")
             except Exception as e:
                 if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
 
@@ -1254,6 +1264,8 @@ async def _update_display_loop():
                         if loop_count % DISPLAY_LOG_THROTTLE == 0:
                             print("[Loop] Display update timed out (2s)", file=sys.stderr, flush=True)
                     display_updated = display_result is True
+                    if display_updated:
+                        _health.heartbeat("display")
 
                     if display_updated:
                         display_duration = time.time() - update_start
@@ -1322,6 +1334,8 @@ async def _update_display_loop():
 
                 led_state = safe_call(update_leds, default=None, log_error=True)
                 led_updated = led_state is not None
+                if led_updated:
+                    _health.heartbeat("leds")
                 if led_updated and loop_count == 1:
                     total_duration = time.time() - update_start
                     print(f"[Loop] LED update took {total_duration*1000:.1f}ms", file=sys.stderr, flush=True)
@@ -1368,6 +1382,7 @@ async def _update_display_loop():
                             presence=anima.presence,
                             mood=mood
                         )
+                        _health.heartbeat("voice")
 
                         if readings:
                             voice.update_environment(
@@ -2040,6 +2055,7 @@ async def _update_display_loop():
                         add_observation(milestone, author="lumen")
 
                 safe_call(growth_observe, default=None, log_error=True)
+                _health.heartbeat("growth")
 
             # Trajectory: Record anima history for trajectory signature computation
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
@@ -2091,6 +2107,7 @@ async def _update_display_loop():
                             # Store governance decision for potential expression feedback and diagnostics screen
                             # Future: Could influence face/LED expression based on governance state
                             _last_governance_decision = decision
+                            _health.heartbeat("governance")
 
                             # Update screen renderer connection status (for status bar)
                             if _screen_renderer:
@@ -2850,6 +2867,21 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 
+
+
+async def handle_get_health(arguments: dict) -> list[TextContent]:
+    """Get subsystem health status with heartbeat liveness and functional probes."""
+    try:
+        from .health import get_health_registry
+        registry = get_health_registry()
+        result = {
+            "overall": registry.overall(),
+            "subsystems": registry.status(),
+            "summary": registry.summary_line(),
+        }
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
 
 
 async def handle_get_calibration(arguments: dict) -> list[TextContent]:
@@ -4071,6 +4103,11 @@ TOOLS_STANDARD = [
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
+        name="get_health",
+        description="Get subsystem health status. Shows heartbeat liveness and functional probes for all subsystems (sensors, display, leds, growth, governance, drawing, trajectory, voice, anima).",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
         name="capture_screen",
         description="Capture current display screen as base64-encoded PNG image. See what Lumen is actually drawing/showing on the 240×240 LCD.",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
@@ -4733,6 +4770,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "questions": ScreenMode.QUESTIONS,
             "visitors": ScreenMode.VISITORS,
             "art_eras": ScreenMode.ART_ERAS,
+            "health": ScreenMode.HEALTH,
         }
         if screen in mode_map:
             _screen_renderer.set_mode(mode_map[screen])
@@ -4817,6 +4855,7 @@ HANDLERS = {
     "configure_voice": handle_configure_voice,
     "say": handle_say,
     "diagnostics": handle_diagnostics,
+    "get_health": handle_get_health,
     "capture_screen": handle_capture_screen,
     "unified_workflow": handle_unified_workflow,
     "get_calibration": handle_get_calibration,
@@ -5076,6 +5115,23 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
                 traceback.print_exc(file=sys.stderr)
                 _growth = None
+
+            # Register subsystems with health monitoring
+            try:
+                from .health import get_health_registry
+                _health = get_health_registry()
+                _health.register("sensors", probe=lambda: _sensors is not None)
+                _health.register("display", probe=lambda: _display is not None and _display.is_available())
+                _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
+                _health.register("growth", probe=lambda: _growth is not None)
+                _health.register("governance", probe=lambda: _last_governance_decision is not None)
+                _health.register("drawing", probe=lambda: _screen_renderer is not None and hasattr(_screen_renderer, '_canvas'))
+                _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
+                _health.register("voice", probe=lambda: _voice_instance is not None)
+                _health.register("anima", probe=lambda: _screen_renderer is not None and _screen_renderer._state.last_anima is not None)
+                print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
+            except Exception as he:
+                print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
 
             # Bootstrap trajectory awareness from state history
             try:
@@ -5713,6 +5769,19 @@ def run_http_server(host: str, port: int):
             app.routes.append(Route("/messages", rest_messages, methods=["GET"]))
             app.routes.append(Route("/learning", rest_learning, methods=["GET"]))
             app.routes.append(Route("/voice", rest_voice, methods=["GET"]))
+
+            async def rest_health(request):
+                """GET /health - Get subsystem health status."""
+                try:
+                    result = await handle_get_health({})
+                    if result and len(result) > 0:
+                        data = json.loads(result[0].text)
+                        return JSONResponse(data)
+                except Exception as e:
+                    return JSONResponse({"error": str(e)}, status_code=500)
+                return JSONResponse({"error": "no data"}, status_code=500)
+            app.routes.append(Route("/health", rest_health, methods=["GET"]))
+
             app.routes.append(Route("/gallery", rest_gallery, methods=["GET"]))
             app.routes.append(Route("/gallery/{filename}", rest_gallery_image, methods=["GET"]))
 
