@@ -2328,7 +2328,12 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _health.register("display", probe=lambda: _display is not None and _display.is_available())
                 _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
                 _health.register("growth", probe=lambda: _growth is not None, stale_threshold=90.0)
-                _health.register("governance", probe=lambda: _last_governance_decision is not None, stale_threshold=90.0)
+                _health.register("governance", probe=lambda: (
+                    _last_governance_decision is not None or (
+                        _last_shm_data and "governance" in _last_shm_data
+                        and isinstance(_last_shm_data["governance"], dict)
+                    )
+                ), stale_threshold=90.0)
                 _health.register("drawing", probe=lambda: _screen_renderer is not None and hasattr(_screen_renderer, '_canvas'))
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
                 _health.register("voice", probe=lambda: _voice_instance is not None)
