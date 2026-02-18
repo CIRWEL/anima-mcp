@@ -940,14 +940,14 @@ class GrowthSystem:
 
     def _record_memory(self, description: str, emotional_impact: float,
                        category: str, related_agents: List[str] = None,
-                       lessons: List[str] = None):
+                       lessons: List[str] = None, event_id: str = None):
         """Record a memorable event."""
         import uuid
         conn = self._connect()
         now = datetime.now()
 
         event = MemorableEvent(
-            event_id=str(uuid.uuid4())[:8],
+            event_id=event_id or str(uuid.uuid4())[:8],
             timestamp=now,
             description=description,
             emotional_impact=emotional_impact,
@@ -998,7 +998,7 @@ class GrowthSystem:
                 else:
                     msg = f"{milestone} days of life"
 
-                self._record_memory(msg, 0.8, "milestone")
+                self._record_memory(msg, 0.8, "milestone", event_id=milestone_key)
                 messages.append(msg)
 
         # Check awakening milestones
@@ -1008,7 +1008,7 @@ class GrowthSystem:
             milestone_key = f"awakening_{milestone}"
             if awakenings >= milestone and milestone_key not in [m.event_id for m in self._memories]:
                 msg = f"I've awakened {milestone} times"
-                self._record_memory(msg, 0.6, "milestone")
+                self._record_memory(msg, 0.6, "milestone", event_id=milestone_key)
                 messages.append(msg)
 
         return messages[0] if messages else None
