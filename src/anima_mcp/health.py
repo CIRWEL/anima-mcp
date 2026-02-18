@@ -39,9 +39,14 @@ class SubsystemHealth:
     last_probe_ok: bool = True
     last_probe_error: str = ""
     registered: bool = True
+    stale_threshold: float = 0.0  # 0 = use global default
 
     def heartbeat(self) -> None:
         self.last_heartbeat = time.time()
+
+    def _get_stale_threshold(self) -> float:
+        """Get effective stale threshold (per-subsystem or global default)."""
+        return self.stale_threshold if self.stale_threshold > 0 else HEARTBEAT_STALE_SECONDS
 
     def run_probe(self) -> bool:
         """Run functional probe if enough time has passed. Returns probe result."""
@@ -71,7 +76,7 @@ class SubsystemHealth:
 
         now = time.time()
         heartbeat_age = now - self.last_heartbeat if self.last_heartbeat > 0 else float("inf")
-        heartbeat_stale = heartbeat_age > HEARTBEAT_STALE_SECONDS
+        heartbeat_stale = heartbeat_age > self._get_stale_threshold()
 
         # Run probe (respects internal cooldown)
         self.run_probe()
@@ -105,24 +110,35 @@ class HealthRegistry:
         self._subsystems: Dict[str, SubsystemHealth] = {}
         self._creation_time = time.time()
 
-    def register(self, name: str, probe: Optional[Callable[[], bool]] = None) -> None:
+    def register(
+        self, name: str,
+        probe: Optional[Callable[[], bool]] = None,
+        stale_threshold: float = 0.0,
+    ) -> None:
         """Register a subsystem for health tracking.
 
         Args:
             name: Subsystem identifier (e.g., "growth", "sensors").
             probe: Optional callable returning True if subsystem is functional.
                    Called at most once per PROBE_INTERVAL_SECONDS.
+            stale_threshold: Per-subsystem stale threshold in seconds.
+                   0 = use global HEARTBEAT_STALE_SECONDS default (30s).
+                   Subsystems with longer check-in intervals should set this
+                   higher to avoid false-positive stale warnings.
         """
         if name in self._subsystems:
             # Update probe if re-registering
             self._subsystems[name].probe_fn = probe
             self._subsystems[name].registered = True
+            if stale_threshold > 0:
+                self._subsystems[name].stale_threshold = stale_threshold
             return
 
         self._subsystems[name] = SubsystemHealth(
             name=name,
             probe_fn=probe,
             registered=True,
+            stale_threshold=stale_threshold,
         )
 
     def heartbeat(self, name: str) -> None:

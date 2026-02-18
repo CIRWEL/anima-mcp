@@ -1956,6 +1956,10 @@ async def _update_display_loop():
             # Uses Lumen's actual identity (creature_id) for proper binding
             # Syncs identity metadata on first check-in
             if loop_count % GOVERNANCE_INTERVAL == 0 and readings and anima and identity:
+                # Heartbeat fires when governance block runs (liveness),
+                # regardless of check-in success. Probe tracks connectivity.
+                _health.heartbeat("governance")
+
                 import os
                 unitares_url = os.environ.get("UNITARES_URL")
                 if unitares_url:
@@ -1981,14 +1985,13 @@ async def _update_display_loop():
                             drawing_eisv=drawing_eisv
                         )
                         return decision
-                    
+
                     try:
                         decision = await safe_call_async(check_in_governance, default=None, log_error=True)
                         if decision:
                             # Store governance decision for potential expression feedback and diagnostics screen
                             # Future: Could influence face/LED expression based on governance state
                             _last_governance_decision = decision
-                            _health.heartbeat("governance")
 
                             # Update screen renderer connection status (for status bar)
                             if _screen_renderer:
@@ -2310,8 +2313,8 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _health.register("sensors", probe=lambda: _sensors is not None)
                 _health.register("display", probe=lambda: _display is not None and _display.is_available())
                 _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
-                _health.register("growth", probe=lambda: _growth is not None)
-                _health.register("governance", probe=lambda: True)  # Heartbeat-only: fires on successful check-in
+                _health.register("growth", probe=lambda: _growth is not None, stale_threshold=90.0)
+                _health.register("governance", probe=lambda: _last_governance_decision is not None, stale_threshold=90.0)
                 _health.register("drawing", probe=lambda: _screen_renderer is not None and hasattr(_screen_renderer, '_canvas'))
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
                 _health.register("voice", probe=lambda: _voice_instance is not None)
