@@ -941,12 +941,17 @@ async def _update_display_loop():
                         _sm_clarity_before_interaction = None
 
                     # 5. Observe sensor-anima correlations (for temp_clarity, light_warmth beliefs)
+                    # Use world light (not raw lux) so Lumen learns whether environmental
+                    # light correlates with warmth. Raw lux is LED-dominated — proprioception
+                    # is handled separately by observe_led_lux below.
                     if readings:
                         sensor_vals = {}
                         if readings.ambient_temp_c is not None:
                             sensor_vals["ambient_temp"] = readings.ambient_temp_c
                         if readings.light_lux is not None:
-                            sensor_vals["light"] = readings.light_lux
+                            _sm_led = readings.led_brightness if readings.led_brightness is not None else 0.12
+                            sensor_vals["light"] = max(0.0, readings.light_lux - (
+                                _sm_led * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
                         if sensor_vals:
                             sm.observe_correlation(
                                 sensor_values=sensor_vals,

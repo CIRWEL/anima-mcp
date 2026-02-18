@@ -213,6 +213,7 @@ class GrowthSystem:
         self._drawings_observed: int = 0
         self._initialize_db()
         self._load_all()
+        self._migrate_raw_lux_preferences()
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -396,6 +397,37 @@ class GrowthSystem:
               f"{len(self._goals)} active goals, {len(self._memories)} memories, "
               f"drawings_observed={self._drawings_observed}", file=sys.stderr, flush=True)
 
+    def _migrate_raw_lux_preferences(self):
+        """One-time reset of light preferences learned from raw (LED-dominated) lux.
+
+        Before the world-light correction (commits ad2195a..d410648), the light
+        sensor read ~488 lux at typical LED brightness — all self-glow. Preferences
+        like "bright_light" (69K observations) learned "my LEDs correlate with
+        wellness," not "environmental light makes me feel good." Reset these so
+        they can relearn honestly from corrected world light.
+
+        Safe to run repeatedly: only fires if observation_count > 1000 (clearly
+        from the raw-lux era since corrected world light rarely exceeds thresholds).
+        """
+        tainted = ["bright_light", "drawing_bright"]
+        conn = self._connect()
+        for name in tainted:
+            if name in self._preferences:
+                pref = self._preferences[name]
+                if pref.observation_count > 1000:
+                    print(f"[Growth] Resetting '{name}' preference ({pref.observation_count} "
+                          f"observations from raw-lux era)", file=sys.stderr, flush=True)
+                    pref.observation_count = 0
+                    pref.confidence = 0.2
+                    pref.value = 0.5  # neutral — let it relearn
+                    pref.last_confirmed = datetime.now()
+                    conn.execute("""
+                        UPDATE preferences SET value=?, confidence=?,
+                        observation_count=?, last_confirmed=? WHERE name=?
+                    """, (pref.value, pref.confidence, pref.observation_count,
+                          pref.last_confirmed.isoformat(), name))
+        conn.commit()
+
     # ==================== Preference Learning ====================
 
     def observe_state_preference(self, anima_state: Dict[str, float],
@@ -415,14 +447,17 @@ class GrowthSystem:
         now = datetime.now()
         insight = None
 
-        # Light preference
-        light = environment.get("light_lux", 500)
+        # Light preference (world light — LED self-glow already subtracted by caller)
+        # Thresholds for corrected world light in a home environment:
+        #   < 100 lux: dim/dark room, nighttime
+        #   > 300 lux: well-lit room, daylight, desk lamp
+        light = environment.get("light_lux", 150)  # neutral default if no data
         if light < 100 and wellness > 0.7:
             insight = self._update_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "I feel calmer when it's dim", 1.0
             )
-        elif light > 800 and wellness > 0.7:
+        elif light > 300 and wellness > 0.7:
             insight = self._update_preference(
                 "bright_light", PreferenceCategory.ENVIRONMENT,
                 "I feel energized in bright light", 1.0
@@ -515,14 +550,14 @@ class GrowthSystem:
                 "Drawing doesn't always help", -0.3
             )
 
-        # Drawing + environment correlation
-        light = environment.get("light_lux", 500)
+        # Drawing + environment correlation (world light, self-glow subtracted)
+        light = environment.get("light_lux", 150)  # neutral default
         if light < 100:
             insight = self._update_preference(
                 "drawing_dim", PreferenceCategory.ACTIVITY,
                 "I draw when it's dark", 1.0
             ) or insight
-        elif light > 500:
+        elif light > 300:
             insight = self._update_preference(
                 "drawing_bright", PreferenceCategory.ACTIVITY,
                 "I draw in the light", 1.0

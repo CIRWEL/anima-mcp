@@ -53,6 +53,7 @@ if sys.stdout.encoding != 'utf-8':
 
 from .sensors import get_sensors
 from .anima import sense_self
+from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
 from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from .identity import IdentityStore
@@ -397,7 +398,6 @@ def run_creature():
                 # not raw lux dominated by Lumen's own LEDs.
                 # Note: readings.led_brightness holds previous cycle's value (set at
                 # line ~405 below), or None on first iteration → default to base 0.12.
-                from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
                 _led_b = readings.led_brightness if readings.led_brightness is not None else 0.12
                 _world_light = max(0.0, (readings.light_lux or 0.0) - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
                 activity_state = activity_manager.get_state(
@@ -499,10 +499,15 @@ def run_creature():
                         prev_stability = last_state_for_action.get("stability", anima.stability)
                         self_model.observe_stability_change(prev_stability, anima.stability, UPDATE_INTERVAL)
 
-                    # Track correlations
+                    # Track correlations (use world light, not raw lux —
+                    # raw lux is LED-dominated and would learn "my LEDs correlate
+                    # with warmth" which is tautological. Proprioception is separate.)
+                    _corr_led = readings.led_brightness if readings.led_brightness is not None else 0.12
+                    _corr_world = max(0.0, (readings.light_lux or 0.0) - (
+                        _corr_led * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
                     sensor_vals = {
                         "ambient_temp": readings.ambient_temp_c,
-                        "light": readings.light_lux,
+                        "light": _corr_world,
                     }
                     anima_vals = {
                         "warmth": anima.warmth,
