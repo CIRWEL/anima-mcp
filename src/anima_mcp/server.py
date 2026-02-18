@@ -4049,11 +4049,11 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _health.register("display", probe=lambda: _display is not None and _display.is_available())
                 _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
                 _health.register("growth", probe=lambda: _growth is not None)
-                _health.register("governance", probe=lambda: _last_governance_decision is not None)
+                _health.register("governance", probe=lambda: True)  # Heartbeat-only: fires on successful check-in
                 _health.register("drawing", probe=lambda: _screen_renderer is not None and hasattr(_screen_renderer, '_canvas'))
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
                 _health.register("voice", probe=lambda: _voice_instance is not None)
-                _health.register("anima", probe=lambda: _screen_renderer is not None and _screen_renderer._state.last_anima is not None)
+                _health.register("anima", probe=lambda: _screen_renderer is not None and getattr(_screen_renderer, '_last_anima', None) is not None)
                 print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
             except Exception as he:
                 print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
