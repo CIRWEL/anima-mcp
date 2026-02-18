@@ -48,24 +48,45 @@ read_sensors()
 
 ---
 
-## All Tools (11 total)
+## Tools (26 total)
 
-**Essential (3):**
-- `get_state` - Current state
+**Essential (5):**
+- `get_state` - Current anima + mood + identity
+- `get_lumen_context` - Full context in one call
 - `next_steps` - Proactive suggestions
-- `read_sensors` - Raw sensors
+- `read_sensors` - Raw sensor values
+- `say` - Have Lumen express something
 
-**Useful (3):**
-- `get_identity` - Identity history
+**Communication (3):**
+- `lumen_qa` - List or answer Lumen's questions
+- `post_message` - Leave a message for Lumen
+- `configure_voice` - Voice system status/config
+
+**Display & Feedback (4):**
 - `show_face` - Display face
-- `diagnostics` - System health
+- `manage_display` - Switch screens, set art era
+- `diagnostics` - System diagnostics
+- `primitive_feedback` - Feedback on Lumen's expressions
 
-**Advanced (5):**
-- `set_name` - Change name
-- `get_calibration` - View calibration
-- `set_calibration` - Update calibration
-- `test_leds` - LED test
+**Knowledge (4):**
+- `get_self_knowledge` - Self-discoveries
+- `get_growth` - Preferences, relationships, goals
+- `get_trajectory` - Trajectory identity signature
+- `get_calibration` - Nervous system calibration
+
+**System (6):**
+- `git_pull` - Deploy code from GitHub
+- `system_service` - Manage systemd services
+- `deploy_from_github` - Deploy via zip
+- `setup_tailscale` - Install Tailscale
+- `fix_ssh_port` - Switch SSH port
+- `system_power` - Reboot/shutdown Pi
+
+**Workflows (4):**
 - `unified_workflow` - Cross-server workflows
+- `set_calibration` - Update calibration
+- `get_health` - Subsystem health status
+- `learning_visualization` - Why Lumen feels what it feels
 
 ---
 

@@ -9,10 +9,12 @@ Growth system was silently broken for weeks. Silent failures are the highest-ris
 Singleton that tracks subsystem liveness and functional health.
 
 **Two signals per subsystem:**
-1. **Heartbeat** — subsystem calls `registry.heartbeat("name")` each loop iteration. Stale after 30s.
+1. **Heartbeat** — subsystem calls `registry.heartbeat("name")` each loop iteration. Stale after threshold (default 30s, per-subsystem override supported).
 2. **Functional probe** — registry periodically calls a check function (~60s). Returns ok/failed with reason.
 
-**Statuses:** `ok` | `stale` (heartbeat timeout) | `degraded` (probe failed) | `missing` (never registered)
+**Per-subsystem stale thresholds:** Fast subsystems (sensors, anima, display) use the 30s default. Slow subsystems (growth, governance) use 90s to avoid false-positive stale warnings on heavy screens where loop iterations are 1s each.
+
+**Statuses:** `ok` | `stale` (heartbeat timeout) | `degraded` (probe failed) | `missing` (both failed)
 
 ### Subsystems
 
@@ -22,7 +24,7 @@ Singleton that tracks subsystem liveness and functional health.
 | display | render loop | display.is_available() |
 | leds | LED update | leds.is_available() |
 | growth | growth observation | _growth not None, DB queryable |
-| governance | UNITARES check-in | last decision exists and recent |
+| governance | governance block entry | _last_governance_decision not None |
 | drawing | _lumen_draw / autonomy | canvas exists, not stalled |
 | trajectory | trajectory record | _traj not None |
 | voice | voice update | voice object exists |
@@ -35,9 +37,10 @@ New `HEALTH` screen in joystick cycle. One row per subsystem, colored status dot
 `get_health` returns JSON with per-subsystem status, last heartbeat age, probe result, and overall status.
 
 ## Files
-- **New:** `src/anima_mcp/health.py` (~150 lines)
-- **Modify:** `server.py` — register subsystems, heartbeat calls, MCP tool
-- **Modify:** `display/screens.py` — health screen renderer, add to cycle
+- `src/anima_mcp/health.py` (~195 lines) — registry, per-subsystem stale thresholds
+- `src/anima_mcp/server.py` — register subsystems, heartbeat calls
+- `src/anima_mcp/handlers/state_queries.py` — `get_health` MCP handler
+- `src/anima_mcp/display/screens.py` — health screen renderer (colored dots)
 
 ## Out of Scope
 - Alerting/notifications
