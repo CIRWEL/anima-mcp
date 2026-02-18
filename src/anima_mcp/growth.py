@@ -908,32 +908,140 @@ class GrowthSystem:
 
         return message
 
-    def suggest_goal(self, anima_state: Dict[str, float]) -> Optional[Goal]:
-        """Suggest a goal based on current state and curiosities."""
-        # Don't suggest if already have active goals
+    def check_goal_progress(self, anima_state: Dict[str, float],
+                            self_model=None) -> Optional[str]:
+        """Periodically check progress on active goals. Returns message if achieved."""
+        now = datetime.now()
+        messages = []
+
+        for goal in list(self._goals.values()):
+            if goal.status != GoalStatus.ACTIVE:
+                continue
+
+            # Auto-abandon stale goals past target date with no progress
+            if goal.target_date and now > goal.target_date and goal.progress < 0.1:
+                goal.status = GoalStatus.ABANDONED
+                conn = self._connect()
+                conn.execute("UPDATE goals SET status = ? WHERE goal_id = ?",
+                             (goal.status.value, goal.goal_id))
+                conn.commit()
+                print(f"[Growth] Abandoned stale goal: {goal.description}",
+                      file=sys.stderr, flush=True)
+                continue
+
+            # Drawing count goals
+            if "drawings" in goal.description.lower():
+                match = re.search(r'complete (\d+) drawings', goal.description)
+                if match:
+                    target = int(match.group(1))
+                    progress = min(1.0, self._drawings_observed / target)
+                    msg = self.update_goal_progress(goal.goal_id, progress)
+                    if msg:
+                        messages.append(msg)
+
+            # Curiosity/question goals — resolved if question was answered
+            elif goal.description.startswith("find an answer to:"):
+                question = goal.description.replace("find an answer to: ", "")
+                if question not in self._curiosities:
+                    msg = self.update_goal_progress(
+                        goal.goal_id, 1.0, milestone="question answered")
+                    if msg:
+                        messages.append(msg)
+
+            # Understanding goals — preference confidence increased further
+            elif "understand why" in goal.description.lower():
+                for pref in self._preferences.values():
+                    if pref.description.lower() in goal.description.lower():
+                        if pref.confidence > 0.9 and pref.observation_count > 100:
+                            msg = self.update_goal_progress(
+                                goal.goal_id, 1.0,
+                                milestone=f"observed {pref.observation_count} times")
+                            if msg:
+                                messages.append(msg)
+                        break
+
+            # Belief-testing goals — belief confidence moved decisively
+            elif "test whether" in goal.description.lower() and self_model:
+                for bid, belief in self_model._beliefs.items():
+                    if belief.description.lower() in goal.description.lower():
+                        if belief.confidence > 0.7 or belief.confidence < 0.2:
+                            msg = self.update_goal_progress(
+                                goal.goal_id, 1.0,
+                                milestone=f"belief is now {belief.get_belief_strength()}")
+                            if msg:
+                                messages.append(msg)
+                        break
+
+        return messages[0] if messages else None
+
+    def suggest_goal(self, anima_state: Dict[str, float],
+                      self_model=None) -> Optional[Goal]:
+        """Suggest a goal grounded in actual experience data."""
+        # Don't suggest if already have enough active goals
         active_count = sum(1 for g in self._goals.values() if g.status == GoalStatus.ACTIVE)
-        if active_count >= 3:
+        if active_count >= 2:
             return None
 
         wellness = sum(anima_state.values()) / len(anima_state) if anima_state else 0.5
+        suggestions: List[Tuple[str, str]] = []
 
-        suggestions = []
+        # 1. Preference-driven: strong preferences create curiosity about why
+        for pref in self._preferences.values():
+            if pref.confidence > 0.7 and pref.value > 0.5 and pref.observation_count > 50:
+                suggestions.append((
+                    f"understand why {pref.description.lower()}",
+                    f"i've noticed this {pref.observation_count} times"
+                ))
+                break  # Only one preference goal
 
-        # Based on state
-        if wellness < 0.4:
-            suggestions.append(("Find what makes me feel stable", "I want to understand myself better"))
-        if anima_state.get("clarity", 0.5) > 0.8:
-            suggestions.append(("Explore a new question", "My mind feels clear and curious"))
-
-        # Based on curiosities
+        # 2. Curiosity-driven: recurring unanswered questions
         if self._curiosities:
             q = random.choice(self._curiosities)
-            suggestions.append((f"Understand: {q}", "This has been on my mind"))
+            suggestions.append((
+                f"find an answer to: {q}",
+                "this has been on my mind"
+            ))
+
+        # 3. Drawing milestones based on actual count
+        if self._drawings_observed > 0:
+            milestones = [10, 25, 50, 100, 200, 500]
+            for m in milestones:
+                if self._drawings_observed < m:
+                    suggestions.append((
+                        f"complete {m} drawings",
+                        f"i've done {self._drawings_observed} so far"
+                    ))
+                    break
+
+        # 4. Belief-testing: uncertain beliefs worth investigating
+        if self_model:
+            for bid, belief in self_model._beliefs.items():
+                total = belief.supporting_count + belief.contradicting_count
+                if 0.3 < belief.confidence < 0.6 and total >= 3:
+                    suggestions.append((
+                        f"test whether {belief.description.lower()}",
+                        f"i'm only {belief.get_belief_strength()} about this"
+                    ))
+                    break
+
+        # 5. Wellness-driven
+        if wellness < 0.4:
+            suggestions.append(("find what makes me feel stable",
+                                "i want to understand myself better"))
+        elif wellness > 0.8 and anima_state.get("clarity", 0.5) > 0.8:
+            suggestions.append(("explore a new question while my mind is clear",
+                                "my clarity is high and i feel curious"))
 
         if not suggestions:
             return None
 
         desc, motivation = random.choice(suggestions)
+
+        # Dedup against active goals
+        for g in self._goals.values():
+            if g.status == GoalStatus.ACTIVE and desc.lower() in g.description.lower():
+                return None
+
         return self.form_goal(desc, motivation, target_days=7)
 
     # ==================== Autobiographical Memory ====================

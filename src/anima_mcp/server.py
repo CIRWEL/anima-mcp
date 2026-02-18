@@ -68,6 +68,7 @@ from .server_state import (
     TRAJECTORY_INTERVAL, GOVERNANCE_INTERVAL, LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     REFLECTION_INTERVAL, EXPRESSION_INTERVAL, SELF_ANSWER_INTERVAL,
+    GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL,
     MESSAGE_RESPONSE_INTERVAL,
     ERROR_LOG_THROTTLE, STATUS_LOG_THROTTLE, DISPLAY_LOG_THROTTLE,
     WARN_LOG_THROTTLE, SCHEMA_LOG_THROTTLE, SELF_DIALOGUE_LOG_THROTTLE,
@@ -1956,6 +1957,46 @@ async def _update_display_loop():
 
                 safe_call(growth_observe, default=None, log_error=True)
                 _health.heartbeat("growth")
+
+            # Goal system: Suggest new goals every ~2 hours
+            if loop_count % GOAL_SUGGEST_INTERVAL == 0 and anima and _growth:
+                def goal_suggest():
+                    """Suggest a goal grounded in Lumen's experience."""
+                    anima_state = {
+                        "warmth": anima.warmth, "clarity": anima.clarity,
+                        "stability": anima.stability, "presence": anima.presence,
+                    }
+                    try:
+                        from .self_model import get_self_model
+                        sm = get_self_model()
+                    except Exception:
+                        sm = None
+                    goal = _growth.suggest_goal(anima_state, self_model=sm)
+                    if goal:
+                        from .messages import add_observation
+                        add_observation(f"new goal: {goal.description}", author="lumen")
+
+                safe_call(goal_suggest, default=None, log_error=True)
+
+            # Goal system: Check progress every ~10 minutes
+            if loop_count % GOAL_CHECK_INTERVAL == 0 and anima and _growth:
+                def goal_check():
+                    """Check progress on active goals."""
+                    anima_state = {
+                        "warmth": anima.warmth, "clarity": anima.clarity,
+                        "stability": anima.stability, "presence": anima.presence,
+                    }
+                    try:
+                        from .self_model import get_self_model
+                        sm = get_self_model()
+                    except Exception:
+                        sm = None
+                    msg = _growth.check_goal_progress(anima_state, self_model=sm)
+                    if msg:
+                        from .messages import add_observation
+                        add_observation(msg, author="lumen")
+
+                safe_call(goal_check, default=None, log_error=True)
 
             # Trajectory: Record anima history for trajectory signature computation
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin

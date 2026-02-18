@@ -410,6 +410,17 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
                 trigger_desc += f" (surprise level: {context.surprise_level:.2f})"
             state_desc += trigger_desc
 
+        # Add self-reflection insights (preferences, beliefs, drawing patterns)
+        try:
+            from .self_reflection import get_reflection_system
+            strong = get_reflection_system().get_strongest_insights(limit=5)
+            if strong:
+                state_desc += "\n\nThings I've learned about myself:\n" + "\n".join(
+                    f"- {i.description}" for i in strong
+                )
+        except Exception:
+            pass
+
         if mode == "wonder":
             recent_q = "\n".join(f"- {q}" for q in context.unanswered_questions[:3]) if context.unanswered_questions else "(none)"
 
