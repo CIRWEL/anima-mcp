@@ -113,10 +113,12 @@ class ArtEra(Protocol):
         clarity: float,
         stability: float,
         presence: float,
+        light_regime: str = "dim",
     ) -> Tuple[Tuple[int, int, int], str]:
         """Generate a color for the current mark.
 
         Returns (rgb_tuple, hue_category_string).
         hue_category is one of: "warm", "cool", "neutral", "vibrant" (for mood tracker).
+        light_regime: "dark" (<20 lux), "dim" (20-200), "bright" (>200) — total visual field.
         """
         ...

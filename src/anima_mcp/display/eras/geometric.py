@@ -440,11 +440,13 @@ class GeometricEra:
         clarity: float,
         stability: float,
         presence: float,
+        light_regime: str = "dim",
     ) -> Tuple[Tuple[int, int, int], str]:
         """Generate color — warm/cool based on warmth, saturation from clarity.
 
         Original geometric phase used a simpler color model than the
         gestural era's full-palette approach.
+        light_regime modulates: dark → cooler bias, bright → warmer bias.
         """
         import colorsys
 
@@ -457,9 +459,24 @@ class GeometricEra:
             hue = random.uniform(180, 300) - (0.5 - warmth) * 40
         hue = hue % 360
 
+        # Light regime modulation
+        if light_regime == "dark":
+            # In darkness: shift toward cooler, lower saturation
+            hue = (hue + 20) % 360
+            sat_mod = -0.08
+            val_mod = -0.08
+        elif light_regime == "bright":
+            # In bright light: shift toward warmer, higher saturation
+            hue = (hue - 10) % 360
+            sat_mod = 0.1
+            val_mod = 0.05
+        else:
+            sat_mod = 0.0
+            val_mod = 0.0
+
         # Saturation from clarity
-        saturation = max(0.2, min(1.0, 0.3 + clarity * 0.6 + random.gauss(0, 0.1)))
-        brightness = max(0.3, min(1.0, 0.4 + stability * 0.5 + random.gauss(0, 0.1)))
+        saturation = max(0.2, min(1.0, 0.3 + clarity * 0.6 + random.gauss(0, 0.1) + sat_mod))
+        brightness = max(0.3, min(1.0, 0.4 + stability * 0.5 + random.gauss(0, 0.1) + val_mod))
 
         rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
         color = tuple(int(c * 255) for c in rgb)

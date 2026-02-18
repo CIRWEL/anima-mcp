@@ -17,6 +17,15 @@ from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
 
+# === LED Self-Glow Estimation ===
+# The VEML7700 light sensor sits next to the DotStar LEDs.
+# These constants estimate how much lux the LEDs contribute to the sensor reading.
+# Formula: estimated_glow = LED_LUX_PER_BRIGHTNESS * brightness + LED_LUX_AMBIENT_FLOOR
+# TODO: empirically calibrate on Pi hardware with known brightness levels
+LED_LUX_PER_BRIGHTNESS: float = 4000.0   # lux per unit brightness (0-1 scale)
+LED_LUX_AMBIENT_FLOOR: float = 8.0       # minimal ambient lux when LEDs are very dim
+
+
 @dataclass
 class NervousSystemCalibration:
     """
@@ -52,10 +61,10 @@ class NervousSystemCalibration:
     })
     
     clarity_weights: Dict[str, float] = field(default_factory=lambda: {
-        "prediction_accuracy": 0.5,  # How well I predict my own state = internal seeing
-        "neural": 0.3,               # Alpha power = relaxed awareness
-        "sensor_coverage": 0.2,      # Data richness
-        # "light" removed: LEDs affect sensor creating feedback loop
+        "prediction_accuracy": 0.45,  # How well I predict my own state = internal seeing
+        "neural": 0.25,               # Alpha power = relaxed awareness
+        "sensor_coverage": 0.15,      # Data richness
+        "world_light": 0.15,          # Environmental light (self-glow subtracted)
     })
     
     stability_weights: Dict[str, float] = field(default_factory=lambda: {

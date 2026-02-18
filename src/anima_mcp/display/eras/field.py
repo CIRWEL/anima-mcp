@@ -241,12 +241,14 @@ class FieldEra:
         clarity: float,
         stability: float,
         presence: float,
+        light_regime: str = "dim",
     ) -> Tuple[Tuple[int, int, int], str]:
         """Near-monochromatic palette — base hue with brightness from field strength.
 
         The base hue drifts very slowly. Saturation and brightness vary
         with field strength and anima state, creating depth through
         value contrast rather than hue contrast.
+        light_regime modulates: dark → deeper/cooler tones, bright → warmer/vivid.
         """
         import colorsys
 
@@ -260,13 +262,23 @@ class FieldEra:
         if random.random() < 0.08:
             hue = (state.base_hue + 180 + random.gauss(0, 15)) % 360.0
 
+        # Light regime modulation
+        if light_regime == "dark":
+            sat_mod = -0.05
+            val_mod = -0.1
+        elif light_regime == "bright":
+            sat_mod = 0.08
+            val_mod = 0.1
+        else:
+            sat_mod = 0.0
+            val_mod = 0.0
+
         # Saturation: moderate, influenced by clarity
-        saturation = max(0.2, min(0.9, 0.4 + clarity * 0.3 + random.gauss(0, 0.1)))
+        saturation = max(0.2, min(0.9, 0.4 + clarity * 0.3 + random.gauss(0, 0.1) + sat_mod))
 
         # Brightness: varies widely for depth — field strength modulates
-        # Use focus position to approximate field strength (cheaper than re-calling)
         brightness_base = 0.3 + stability * 0.4
-        brightness = max(0.15, min(1.0, brightness_base + random.gauss(0, 0.2)))
+        brightness = max(0.15, min(1.0, brightness_base + random.gauss(0, 0.2) + val_mod))
 
         rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
         color = tuple(int(c * 255) for c in rgb)

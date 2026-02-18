@@ -185,11 +185,13 @@ class PointillistEra:
         clarity: float,
         stability: float,
         presence: float,
+        light_regime: str = "dim",
     ) -> Tuple[Tuple[int, int, int], str]:
         """Generate colors for optical mixing — complementary pairs, analogous clusters.
 
         The color anchor shifts slowly. Each dot is either near the anchor hue
         or its complement, creating optical mixing when dots overlap.
+        light_regime modulates: dark → deeper values, bright → higher saturation.
         """
         import colorsys
 
@@ -210,9 +212,20 @@ class PointillistEra:
             offset = random.choice([120, -120])
             hue = (anchor + offset + random.gauss(0, 10)) % 360.0
 
+        # Light regime modulation
+        if light_regime == "dark":
+            sat_mod = -0.08
+            val_mod = -0.12
+        elif light_regime == "bright":
+            sat_mod = 0.1
+            val_mod = 0.08
+        else:
+            sat_mod = 0.0
+            val_mod = 0.0
+
         # Higher saturation than gestural — dots need to be vivid for optical mixing
-        saturation = max(0.4, min(1.0, 0.6 + clarity * 0.3 + random.gauss(0, 0.1)))
-        brightness = max(0.3, min(1.0, 0.5 + stability * 0.4 + random.gauss(0, 0.1)))
+        saturation = max(0.4, min(1.0, 0.6 + clarity * 0.3 + random.gauss(0, 0.1) + sat_mod))
+        brightness = max(0.3, min(1.0, 0.5 + stability * 0.4 + random.gauss(0, 0.1) + val_mod))
 
         rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
         color = tuple(int(c * 255) for c in rgb)

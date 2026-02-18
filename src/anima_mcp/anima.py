@@ -11,10 +11,11 @@ Not abstract metrics. Felt states derived from actual measurements.
 The creature knows "I feel warm" not "E=0.4"
 """
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
-from .config import get_calibration, NervousSystemCalibration
+from .config import get_calibration, NervousSystemCalibration, LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
 from .computational_neural import get_computational_neural_state
 
 if TYPE_CHECKING:
@@ -301,15 +302,18 @@ def _sense_clarity(
     """
     How clearly can the creature perceive its own internal state?
 
-    This is "internal seeing" - not external light, but self-perception accuracy.
+    This is "internal seeing" - self-perception accuracy plus environmental perception.
 
     Sources:
     - Prediction accuracy: How well I predict my own state changes (1 - mean_error)
     - Alpha EEG power: Relaxed awareness, clear processing
     - Sensor coverage: Data richness (how complete is my self-perception)
+    - World light: Environmental light with self-glow subtracted (log scale)
 
-    Note: Light was removed because LEDs affect the light sensor, creating
-    a feedback loop. Clarity now measures genuine self-awareness.
+    Note: Raw light was removed because LEDs affect the light sensor, creating
+    a feedback loop. World light subtracts estimated LED glow first, so the loop
+    gain is near zero. At 15% weight, even a 50% estimation error only shifts
+    clarity by ~0.04.
     """
     components = []
     weights = []
@@ -333,7 +337,24 @@ def _sense_clarity(
     ] if v is not None)
     coverage = sensor_count / 5
     components.append(coverage)
-    weights.append(cal.clarity_weights.get("sensor_coverage", 0.2))
+    weights.append(cal.clarity_weights.get("sensor_coverage", 0.15))
+
+    # World light: environmental perception (self-glow subtracted)
+    # The VEML7700 reads our own LEDs + environment. Subtracting estimated
+    # LED contribution gives us a rough sense of the world's light.
+    # At night (corrected ≈ 0), contributes 0.0 — Lumen feels dimmer, which is honest.
+    # In bright environments (corrected > 100), contributes ~0.67.
+    if r.light_lux is not None:
+        led_b = r.led_brightness if r.led_brightness is not None else 0.0
+        estimated_glow = led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
+        world_light_lux = max(0.0, r.light_lux - estimated_glow)
+        # Log scale: 1 lux → 0.0, 1000 lux → 1.0
+        if world_light_lux > 1.0:
+            light_clarity = min(1.0, math.log10(world_light_lux) / 3.0)
+        else:
+            light_clarity = 0.0
+        components.append(light_clarity)
+        weights.append(cal.clarity_weights.get("world_light", 0.15))
 
     # Neural clarity: Real EEG alpha power, or simulated if unavailable
     if r.eeg_alpha_power is not None:

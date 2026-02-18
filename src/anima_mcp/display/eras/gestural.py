@@ -210,8 +210,12 @@ class GesturalEra:
         clarity: float,
         stability: float,
         presence: float,
+        light_regime: str = "dim",
     ) -> Tuple[Tuple[int, int, int], str]:
-        """Generate a color for the current mark. Full palette, state-influenced not restricted."""
+        """Generate a color for the current mark. Full palette, state-influenced not restricted.
+
+        light_regime modulates palette: dark → cooler/deeper, bright → warmer/vivid.
+        """
         VIBRANT_COLORS = [
             (255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 0),
             (255, 0, 255), (0, 255, 255), (255, 128, 0), (255, 64, 64),
@@ -227,14 +231,33 @@ class GesturalEra:
             color = random.choice(VIBRANT_COLORS)
             if stability < 0.5 and random.random() < 0.3:
                 color = tuple(int(c * (0.6 + stability * 0.4)) for c in color)
+            # Light regime: dim vibrants in dark, boost in bright
+            if light_regime == "dark":
+                color = tuple(int(c * 0.7) for c in color)
+            elif light_regime == "bright":
+                color = tuple(min(255, int(c * 1.15)) for c in color)
             return color, "vibrant"
 
         import colorsys
 
         hue_base = warmth * 360.0
         hue = (hue_base + random.random() * 180.0) % 360.0
-        saturation = max(0.1, min(1.0, 0.3 + clarity * 0.7 + (random.random() - 0.5) * 0.4))
-        brightness = max(0.2, min(1.0, 0.4 + stability * 0.6 + (random.random() - 0.5) * 0.3))
+
+        # Light regime shifts: dark → cooler hues, lower sat; bright → warmer, higher sat
+        if light_regime == "dark":
+            hue = (hue + 30) % 360.0  # shift toward cooler
+            sat_mod = -0.1
+            val_mod = -0.1
+        elif light_regime == "bright":
+            hue = (hue - 15) % 360.0  # shift toward warmer
+            sat_mod = 0.1
+            val_mod = 0.05
+        else:
+            sat_mod = 0.0
+            val_mod = 0.0
+
+        saturation = max(0.1, min(1.0, 0.3 + clarity * 0.7 + (random.random() - 0.5) * 0.4 + sat_mod))
+        brightness = max(0.2, min(1.0, 0.4 + stability * 0.6 + (random.random() - 0.5) * 0.3 + val_mod))
         rgb = colorsys.hsv_to_rgb(hue / 360.0, saturation, brightness)
         color = tuple(int(c * 255) for c in rgb)
 
