@@ -981,20 +981,10 @@ class ScreenRenderer:
             except Exception:
                 pass
     
-    # Primary screens (joystick cycle) — user-facing, 7 screens
-    # All screens — reordered: face first, then content, then technical
-    ALL_SCREENS = [
-        ScreenMode.FACE,
-        ScreenMode.MESSAGES, ScreenMode.VISITORS, ScreenMode.QUESTIONS,
-        ScreenMode.NOTEPAD, ScreenMode.ART_ERAS,
-        ScreenMode.SELF_GRAPH,
-        ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS,
-        ScreenMode.NEURAL, ScreenMode.LEARNING,
-    ]
-
     def next_mode(self):
-        """Cycle to next screen mode."""
-        regular_modes = self.ALL_SCREENS
+        """Cycle to next screen mode (including notepad)."""
+        # Cycle through all screens including notepad, questions, and visitors
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -1004,8 +994,9 @@ class ScreenRenderer:
         self.set_mode(regular_modes[next_idx])
 
     def previous_mode(self):
-        """Cycle to previous screen mode."""
-        regular_modes = self.ALL_SCREENS
+        """Cycle to previous screen mode (including notepad)."""
+        # Cycle through all screens including notepad, questions, and visitors
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -1023,7 +1014,9 @@ class ScreenRenderer:
 
     def _draw_screen_indicator(self, draw, current_mode: ScreenMode):
         """Draw small dots at bottom showing current screen position."""
-        screens = self.ALL_SCREENS
+        # Screen order (including notepad, questions, visitors, art_eras in regular cycle)
+        screens = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS,
+                   ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
 
         try:
             current_idx = screens.index(current_mode)
@@ -1776,124 +1769,221 @@ class ScreenRenderer:
             self._display.render_text(text, (10, 10))
     
     def _render_diagnostics(self, anima: Optional[Anima], readings: Optional[SensorReadings], governance: Optional[Dict[str, Any]]):
-        """Render diagnostics screen — clean layout with anima + governance."""
+        """Render diagnostics screen with visual gauges for anima values."""
         if not anima:
             self._display.render_text("DIAGNOSTICS\n\nNo data", (10, 10))
             return
 
+        # Cache: anima values + governance state rounded to display precision
         gov_state = governance.get("unitares_agent_id", "")[:8] if governance else ""
+        try:
+            from ..eisv import get_trajectory_awareness
+            _traj_shape = get_trajectory_awareness().current_shape or ""
+        except Exception:
+            _traj_shape = ""
         diag_key = (
             f"{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|"
-            f"{anima.presence:.2f}|{gov_state}"
+            f"{anima.presence:.2f}|{gov_state}|{_traj_shape}"
         )
         if self._check_screen_cache("diagnostics", diag_key):
             return
 
         try:
+            # Create canvas for visual rendering
             if hasattr(self._display, '_create_canvas'):
                 image, draw = self._display._create_canvas(COLORS.BG_DARK)
             else:
                 self._render_diagnostics_text_fallback(anima, governance)
                 return
 
+            # Use design system colors (warm, elegant)
             CYAN = COLORS.SOFT_CYAN
-            GREEN = COLORS.SOFT_GREEN
+            BLUE = COLORS.SOFT_BLUE
             YELLOW = COLORS.SOFT_YELLOW
             ORANGE = COLORS.SOFT_ORANGE
             RED = COLORS.SOFT_CORAL
+            GREEN = COLORS.SOFT_GREEN
             PURPLE = COLORS.SOFT_PURPLE
-            BLUE = COLORS.SOFT_BLUE
             WHITE = COLORS.TEXT_PRIMARY
-            DIM = COLORS.TEXT_DIM
-            SUBTLE = COLORS.BG_SUBTLE
+            LIGHT_CYAN = COLORS.TEXT_SECONDARY
+            DARK_GRAY = COLORS.BG_SUBTLE
+            DIM_BLUE = COLORS.TEXT_DIM
 
+            # Use cached fonts (loading from disk is slow)
             fonts = self._get_fonts()
             font = fonts['medium']
-            font_sm = fonts['small']
-            font_lg = fonts['large']
+            font_small = fonts['small']
+            font_large = fonts['large']
 
-            x0 = 12
-            y = 8
+            y_offset = 6
+            bar_x = 10
+            bar_width = 130
+            bar_height = 10
 
-            # --- Title ---
-            draw.text((x0, y), "diagnostics", fill=CYAN, font=font)
-            y += 18
+            # Helper function to draw a gauge (compact)
+            def draw_gauge(label: str, value: float, color: Tuple[int, int, int], description: str):
+                nonlocal y_offset
+                # Label and value on same line
+                draw.text((bar_x, y_offset), label, fill=WHITE, font=font_small)
+                draw.text((bar_x + 60, y_offset), f"{value:.0%}", fill=color, font=font_small)
+                draw.text((bar_x + 100, y_offset), description, fill=LIGHT_CYAN, font=font_small)
+                y_offset += 14
 
-            # --- Anima: 4 compact horizontal bars ---
-            bar_w = 100
-            bar_h = 7
-            gauges = [
-                ("W", anima.warmth, ORANGE),
-                ("C", anima.clarity, GREEN),
-                ("S", anima.stability, YELLOW),
-                ("P", anima.presence, BLUE),
-            ]
-            for label, val, color in gauges:
-                draw.text((x0, y), label, fill=color, font=font_sm)
-                bx = x0 + 16
-                draw.rectangle([bx, y + 1, bx + bar_w, y + 1 + bar_h], fill=SUBTLE)
-                fw = int(val * bar_w)
-                if fw > 0:
-                    draw.rectangle([bx, y + 1, bx + fw, y + 1 + bar_h], fill=color)
-                draw.text((bx + bar_w + 6, y), f"{val:.0%}", fill=DIM, font=font_sm)
-                y += bar_h + 6
+                # Background bar
+                draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
+                              fill=DARK_GRAY, outline=LIGHT_CYAN)
 
-            # --- Mood ---
-            y += 4
+                # Fill bar
+                fill_width = int(value * bar_width)
+                if fill_width > 0:
+                    draw.rectangle([bar_x, y_offset, bar_x + fill_width, y_offset + bar_height],
+                                  fill=color)
+
+                y_offset += bar_height + 4
+
+            # Warmth gauge
+            warmth_desc = "warm" if anima.warmth > 0.6 else "cold" if anima.warmth < 0.3 else "cool" if anima.warmth < 0.5 else "ok"
+            warmth_color = ORANGE if anima.warmth > 0.6 else CYAN if anima.warmth < 0.4 else YELLOW
+            draw_gauge("warmth", anima.warmth, warmth_color, warmth_desc)
+
+            # Clarity gauge
+            clarity_desc = "clear" if anima.clarity > 0.7 else "foggy" if anima.clarity < 0.5 else "mixed"
+            clarity_color = GREEN if anima.clarity > 0.7 else PURPLE if anima.clarity < 0.5 else YELLOW
+            draw_gauge("clarity", anima.clarity, clarity_color, clarity_desc)
+
+            # Stability gauge
+            stability_desc = "steady" if anima.stability > 0.7 else "shaky" if anima.stability < 0.5 else "ok"
+            stability_color = GREEN if anima.stability > 0.7 else RED if anima.stability < 0.5 else YELLOW
+            draw_gauge("stability", anima.stability, stability_color, stability_desc)
+
+            # Presence gauge
+            presence_desc = "here" if anima.presence > 0.7 else "distant" if anima.presence < 0.5 else "present"
+            presence_color = CYAN if anima.presence > 0.7 else DIM_BLUE if anima.presence < 0.5 else BLUE
+            draw_gauge("presence", anima.presence, presence_color, presence_desc)
+
+            # Overall mood summary - LARGER and more prominent
+            y_offset += 6
             feeling = anima.feeling()
-            mood = feeling.get('mood', '?')
+            mood = feeling.get('mood', 'unknown')
             mood_color = GREEN if "content" in mood.lower() or "happy" in mood.lower() else YELLOW if "neutral" in mood.lower() else CYAN
-            draw.text((x0, y), mood, fill=mood_color, font=font_lg)
-            y += 24
+            draw.text((bar_x, y_offset), f"mood: {mood}", fill=mood_color, font=font_large)
+            y_offset += 22
 
-            # --- Separator ---
-            draw.line([(x0, y), (228, y)], fill=SUBTLE, width=1)
-            y += 8
-
-            # --- Governance ---
-            if governance:
-                action = governance.get("action", "?")
-                margin = governance.get("margin", "")
-
-                # Action badge
-                if action == "proceed":
-                    ac, at = GREEN, "PROCEED"
-                elif action == "pause":
-                    ac, at = YELLOW, "PAUSE"
-                elif action == "halt":
-                    ac, at = RED, "HALT"
+            # Governance section - larger text for legibility
+            if y_offset < 180:
+                draw.text((bar_x, y_offset), "governance", fill=WHITE, font=font)
+                
+                # Debug: log governance state
+                if governance is None:
+                    print("[Diagnostics] Governance is None", file=sys.stderr, flush=True)
                 else:
-                    ac, at = DIM, action.upper()[:10]
+                    print(f"[Diagnostics] Governance: action={governance.get('action')}, margin={governance.get('margin')}", file=sys.stderr, flush=True)
+                
+                y_offset += 16
+                if governance:
+                    action = governance.get("action", "unknown")
+                    margin = governance.get("margin", "")
+                    source = governance.get("source", "")
 
-                draw.rectangle([x0, y, x0 + 76, y + 16], fill=SUBTLE, outline=ac, width=2)
-                draw.text((x0 + 4, y + 1), at, fill=ac, font=font)
+                    # Action indicator - larger badge
+                    if action == "proceed":
+                        action_color = GREEN
+                        action_text = "PROCEED"
+                    elif action == "pause":
+                        action_color = YELLOW
+                        action_text = "PAUSE"
+                    elif action == "halt":
+                        action_color = RED
+                        action_text = "HALT"
+                    else:
+                        action_color = LIGHT_CYAN
+                        action_text = action.upper()
 
-                if margin:
-                    mc = {"comfortable": GREEN, "tight": YELLOW, "warning": ORANGE, "critical": RED}
-                    draw.text((x0 + 84, y + 1), margin.lower(), fill=mc.get(margin.lower(), DIM), font=font)
-                y += 22
+                    # Draw action badge - larger and more visible
+                    action_box_width = 80
+                    action_box_height = 18
+                    draw.rectangle([bar_x, y_offset, bar_x + action_box_width, y_offset + action_box_height],
+                                  fill=DARK_GRAY, outline=action_color, width=2)
+                    draw.text((bar_x + 4, y_offset + 2), action_text, fill=action_color, font=font)
 
-                # EISV row
-                eisv = governance.get("eisv")
-                if eisv:
-                    labels = ["E", "I", "S", "V"]
-                    vals = [eisv.get(l, 0.0) for l in labels]
-                    colors = [GREEN, BLUE, ORANGE, PURPLE]
-                    mbw = 42
-                    mbh = 6
-                    for i, (l, v, c) in enumerate(zip(labels, vals, colors)):
-                        mx = x0 + i * (mbw + 6)
-                        draw.text((mx, y), l, fill=c, font=font_sm)
-                        draw.rectangle([mx + 10, y + 2, mx + 10 + mbw - 12, y + 2 + mbh], fill=SUBTLE)
-                        fw = int(v * (mbw - 12))
-                        if fw > 0:
-                            draw.rectangle([mx + 10, y + 2, mx + 10 + fw, y + 2 + mbh], fill=c)
-            else:
-                draw.text((x0, y), "no governance", fill=DIM, font=font)
+                    # Margin (right of action) - larger font
+                    if margin:
+                        margin_x = bar_x + action_box_width + 8
+                        margin_colors = {"comfortable": GREEN, "tight": YELLOW, "warning": ORANGE, "critical": RED}
+                        margin_color = margin_colors.get(margin.lower(), LIGHT_CYAN)
+                        draw.text((margin_x, y_offset + 2), margin.lower(), fill=margin_color, font=font)
 
-            # Screen indicator
+                    y_offset += action_box_height + 4
+
+                    # Source indicator (unitares vs local)
+                    if source:
+                        source_lower = source.lower()
+                        if "unitares" in source_lower:
+                            source_color = GREEN
+                            source_text = "unitares"
+                        elif "local" in source_lower:
+                            source_color = YELLOW
+                            source_text = "local"
+                        else:
+                            source_color = LIGHT_CYAN
+                            source_text = source[:10]
+                        draw.text((bar_x, y_offset), f"via: {source_text}", fill=source_color, font=font_small)
+                        y_offset += 14
+
+                    # EISV metrics - larger bars if space
+                    if y_offset < 205:
+                        eisv = governance.get("eisv")
+                        if eisv:
+                            eisv_labels = ["E", "I", "S", "V"]
+                            eisv_values = [
+                                eisv.get("E", 0.0),
+                                eisv.get("I", 0.0),
+                                eisv.get("S", 0.0),
+                                eisv.get("V", 0.0)
+                            ]
+                            eisv_colors = [GREEN, BLUE, ORANGE, PURPLE]
+
+                            # Larger EISV bars
+                            mini_bar_width = 40
+                            mini_bar_height = 8
+                            mini_spacing = 8
+                            for i, (label, value, color) in enumerate(zip(eisv_labels, eisv_values, eisv_colors)):
+                                x_pos = bar_x + i * (mini_bar_width + mini_spacing)
+                                # Label
+                                draw.text((x_pos, y_offset), label, fill=color, font=font_small)
+                                # Mini bar
+                                draw.rectangle([x_pos, y_offset + 12, x_pos + mini_bar_width, y_offset + 12 + mini_bar_height],
+                                              fill=DARK_GRAY, outline=LIGHT_CYAN)
+                                fill_width = int(value * mini_bar_width)
+                                if fill_width > 0:
+                                    draw.rectangle([x_pos, y_offset + 12, x_pos + fill_width, y_offset + 12 + mini_bar_height],
+                                                  fill=color)
+                            y_offset += 12 + mini_bar_height + 4  # Advance past EISV bars
+                else:
+                    # No governance - show waiting
+                    draw.text((bar_x, y_offset + 16), "waiting...", fill=LIGHT_CYAN, font=font)
+
+            # Trajectory awareness shape
+            if y_offset < 225:
+                try:
+                    from ..eisv import get_trajectory_awareness
+                    _traj = get_trajectory_awareness()
+                    _shape = _traj.current_shape or "..."
+                    _buf_size = _traj.buffer_size
+                    _buf_cap = _traj._buffer.maxlen
+                    import time as _time
+                    _cache_age = int(_time.time() - _traj._cache_time) if _traj._cache_time > 0 else -1
+                    _cache_str = f"{_cache_age}s" if _cache_age >= 0 else "n/a"
+                    _traj_text = f"traj: {_shape} ({_buf_size}/{_buf_cap}, {_cache_str})"
+                    draw.text((bar_x, y_offset), _traj_text, fill=LIGHT_CYAN, font=font_small)
+                    y_offset += 14
+                except Exception:
+                    pass
+
+            # Screen indicator dots
             self._draw_screen_indicator(draw, ScreenMode.DIAGNOSTICS)
 
+            # Update display + cache
             self._store_screen_cache("diagnostics", diag_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
@@ -4419,146 +4509,93 @@ class ScreenRenderer:
         identity: Optional[CreatureIdentity] = None,
     ):
         """
-        Render Lumen's self-schema graph G_t — clean concentric ring layout.
+        Render Lumen's self-schema graph G_t.
 
-        Uses Pillow draw primitives for antialiased rendering instead of
-        pixel-by-pixel placement.
+        PoC for StructScore visual integrity evaluation.
+        Base: 12 nodes (1 identity + 4 anima + 4 sensors + 3 resources).
+        Enhanced: +N preference nodes + N belief nodes.
         """
         from ..self_schema import get_current_schema
-        from ..self_schema_renderer import _build_node_positions, _get_anima_color, _get_sensor_color, _get_resource_color
-        from ..self_schema_renderer import COLORS as SCHEMA_COLORS
+        from ..self_schema_renderer import render_schema_to_pixels, COLORS, WIDTH, HEIGHT
         from ..growth import get_growth_system
         from ..self_model import get_self_model
-        import math
 
+        # Get growth_system for learned preferences (uses DB, 456K+ observations)
         growth_system = None
         try:
             growth_system = get_growth_system()
         except Exception:
-            pass
+            pass  # Non-fatal
 
+        # Get self_model for learned beliefs
         self_model = None
         try:
             self_model = get_self_model()
         except Exception:
-            pass
+            pass  # Non-fatal
 
+        # Extract current G_t (with preferences and beliefs)
         schema = get_current_schema(
-            identity=identity, anima=anima, readings=readings,
-            growth_system=growth_system, include_preferences=True,
+            identity=identity,
+            anima=anima,
+            readings=readings,
+            growth_system=growth_system,
+            include_preferences=True,
             self_model=self_model,
         )
 
-        # Cache key
-        node_vals = "|".join(f"{n.value:.2f}" for n in schema.nodes[:12])
-        sg_key = f"{len(schema.nodes)}|{len(schema.edges)}|{node_vals}"
-        if self._check_screen_cache("self_graph", sg_key):
-            return
+        # Render to pixels
+        pixels = render_schema_to_pixels(schema)
 
-        if not hasattr(self._display, '_create_canvas'):
-            core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-            learned = len(schema.nodes) - core_count
-            self._display.render_text(f"SELF\n\n{core_count} core + {learned} learned\n{len(schema.edges)} edges", (10, 10))
-            return
+        # Try canvas-based rendering
+        if hasattr(self._display, '_create_canvas'):
+            try:
+                # Create canvas with schema background color
+                image, draw = self._display._create_canvas(COLORS["background"])
 
-        try:
-            image, draw = self._display._create_canvas(SCHEMA_COLORS["background"])
-            fonts = self._get_fonts()
-            font_sm = fonts['small']
+                # Draw all pixels from schema render
+                for (x, y), color in pixels.items():
+                    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                        image.putpixel((x, y), color)
 
-            node_positions = _build_node_positions(schema)
+                # Add title at top
+                fonts = self._get_fonts()
+                font_small = fonts['small']
+                CYAN = (0, 255, 255)
+                draw.text((5, 2), "self-schema G_t", fill=CYAN, font=font_small)
 
-            # Draw edges — thin lines using Pillow (antialiased)
-            for edge in schema.edges:
-                if edge.source_id in node_positions and edge.target_id in node_positions:
-                    x0, y0 = node_positions[edge.source_id]
-                    x1, y1 = node_positions[edge.target_id]
-                    w = abs(edge.weight)
-                    if edge.weight >= 0:
-                        b = 0.3 + w * 0.4
-                        ec = (int(60 * b), int(140 * b), int(60 * b))
-                    else:
-                        b = 0.3 + w * 0.4
-                        ec = (int(140 * b), int(60 * b), int(60 * b))
-                    draw.line([(x0, y0), (x1, y1)], fill=ec, width=1)
+                # Add node count at bottom left — breakdown so count matches what's visible
+                GRAY = (120, 120, 120)
+                core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+                learned_count = len(schema.nodes) - core_count
+                if learned_count > 0:
+                    count_str = f"{core_count} core + {learned_count} learned, {len(schema.edges)} edges"
+                else:
+                    count_str = f"{core_count} nodes, {len(schema.edges)} edges"
+                draw.text((5, 225), count_str, fill=GRAY, font=font_small)
 
-            # Draw nodes — filled ellipses with labels
-            type_labels = {
-                "identity": ("identity", SCHEMA_COLORS["identity"], 12),
-                "anima": (None, None, 9),       # color from value
-                "sensor": (None, None, 7),      # color from value
-                "resource": (None, None, 6),    # color from value
-                "preference": ("pref", SCHEMA_COLORS["preference"], 5),
-                "belief": ("belief", SCHEMA_COLORS["belief"], 4),
-            }
-            # Labels for anima/sensor nodes
-            anima_labels = ["warmth", "clarity", "stability", "presence"]
-            sensor_labels = ["light", "temp", "humid", "press"]
-            resource_labels = ["mem", "cpu", "disk"]
-            anima_idx = sensor_idx = resource_idx = 0
+                # Nav dots
+                self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
 
-            for node in schema.nodes:
-                if node.node_id not in node_positions:
-                    continue
-                cx, cy = node_positions[node.node_id]
-                nt = node.node_type
-                info = type_labels.get(nt, ("?", (100, 100, 100), 4))
-                label, color, radius = info
+                # Update display
+                if hasattr(self._display, '_image'):
+                    self._display._image = image
+                if hasattr(self._display, '_show'):
+                    self._display._show()
+                return
+            except Exception as e:
+                print(f"[Self Graph] Canvas error: {e}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
 
-                # Dynamic colors for value-based nodes
-                if nt == "anima":
-                    color = _get_anima_color(node.value)
-                    label = anima_labels[anima_idx] if anima_idx < 4 else "?"
-                    anima_idx += 1
-                elif nt == "sensor":
-                    color = _get_sensor_color(node.value)
-                    label = sensor_labels[sensor_idx] if sensor_idx < 4 else "?"
-                    sensor_idx += 1
-                elif nt == "resource":
-                    color = _get_resource_color(node.value)
-                    label = resource_labels[resource_idx] if resource_idx < 3 else "?"
-                    resource_idx += 1
-
-                # Draw circle
-                draw.ellipse([cx - radius, cy - radius, cx + radius, cy + radius], fill=color)
-
-                # Draw label below node (skip for tiny outer nodes)
-                if radius >= 5 and label:
-                    # Abbreviate to 3 chars for tight fit
-                    short = label[:3]
-                    bbox = draw.textbbox((0, 0), short, font=font_sm)
-                    tw = bbox[2] - bbox[0]
-                    lx = cx - tw // 2
-                    ly = cy + radius + 2
-                    if ly + 10 > 232:
-                        ly = cy - radius - 12  # above if near bottom
-                    draw.text((lx, ly), short, fill=(160, 160, 160), font=font_sm)
-
-            # Title
-            draw.text((5, 2), "self", fill=COLORS.SOFT_CYAN, font=fonts['medium'])
-
-            # Summary at bottom
-            core = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-            learned = len(schema.nodes) - core
-            if learned > 0:
-                summary = f"{core}+{learned} nodes  {len(schema.edges)} edges"
-            else:
-                summary = f"{core} nodes  {len(schema.edges)} edges"
-            draw.text((5, 225), summary, fill=(100, 100, 100), font=font_sm)
-
-            self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
-            self._store_screen_cache("self_graph", sg_key, image)
-            if hasattr(self._display, '_image'):
-                self._display._image = image
-            if hasattr(self._display, '_show'):
-                self._display._show()
-
-        except Exception as e:
-            import traceback
-            print(f"[Self Graph] Error: {e}", file=sys.stderr, flush=True)
-            traceback.print_exc(file=sys.stderr)
-            core = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-            self._display.render_text(f"SELF\n\n{core} nodes\n{len(schema.edges)} edges", (10, 10))
+        # Fallback to text rendering
+        core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+        learned_count = len(schema.nodes) - core_count
+        if learned_count > 0:
+            text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
+        else:
+            text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
+        self._display.render_text(text, (10, 10))
 
     def _check_lumen_said_finished(self) -> bool:
         """
