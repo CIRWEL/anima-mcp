@@ -982,20 +982,19 @@ class ScreenRenderer:
                 pass
     
     # Primary screens (joystick cycle) — user-facing, 7 screens
-    PRIMARY_SCREENS = [
-        ScreenMode.FACE, ScreenMode.MESSAGES, ScreenMode.VISITORS,
-        ScreenMode.QUESTIONS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS,
+    # All screens — reordered: face first, then content, then technical
+    ALL_SCREENS = [
+        ScreenMode.FACE,
+        ScreenMode.MESSAGES, ScreenMode.VISITORS, ScreenMode.QUESTIONS,
+        ScreenMode.NOTEPAD, ScreenMode.ART_ERAS,
         ScreenMode.SELF_GRAPH,
-    ]
-    # Debug screens — accessible via MCP manage_display switch, not in joystick cycle
-    DEBUG_SCREENS = [
         ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS,
         ScreenMode.NEURAL, ScreenMode.LEARNING,
     ]
 
     def next_mode(self):
-        """Cycle to next screen mode (primary screens only)."""
-        regular_modes = self.PRIMARY_SCREENS
+        """Cycle to next screen mode."""
+        regular_modes = self.ALL_SCREENS
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -1005,8 +1004,8 @@ class ScreenRenderer:
         self.set_mode(regular_modes[next_idx])
 
     def previous_mode(self):
-        """Cycle to previous screen mode (primary screens only)."""
-        regular_modes = self.PRIMARY_SCREENS
+        """Cycle to previous screen mode."""
+        regular_modes = self.ALL_SCREENS
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -1024,7 +1023,7 @@ class ScreenRenderer:
 
     def _draw_screen_indicator(self, draw, current_mode: ScreenMode):
         """Draw small dots at bottom showing current screen position."""
-        screens = self.PRIMARY_SCREENS
+        screens = self.ALL_SCREENS
 
         try:
             current_idx = screens.index(current_mode)
