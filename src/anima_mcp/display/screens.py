@@ -592,6 +592,7 @@ class DrawingState:
         2. Coherence settled AND attention exhausted (pattern found + no energy)
         3. High compositional satisfaction AND curiosity depleted (good composition + explored)
         4. Extreme fatigue (emergency exit if stuck)
+        5. Stalled too long — energy near-zero with pixels on canvas (prevents stuck drawings)
 
         This gives Lumen multiple ways to complete drawings naturally.
         """
@@ -612,6 +613,15 @@ class DrawingState:
         # Path 4: Emergency exit - too fatigued to continue
         if self.fatigue > 0.85:
             return True
+
+        # Path 5: Stalled — energy is near-zero (no marks being placed) and
+        # phase hasn't progressed for >120 seconds. This catches the case where
+        # attention signals stall because no marks are placed to evolve them.
+        if canvas is not None and self.derived_energy < 0.05:
+            import time
+            phase_duration = time.time() - canvas.phase_start_time
+            if phase_duration > 120 and len(canvas.pixels) >= 50:
+                return True
 
         return False
 
@@ -1308,8 +1318,9 @@ class ScreenRenderer:
                 if self._state._frame_count % 10 == 0:
                     self.canvas_check_autonomy(anima)
             except Exception as e:
-                # Don't let autonomy errors break rendering
-                pass
+                # Don't let autonomy errors break rendering, but log them
+                if self._state._frame_count % 100 == 0:
+                    print(f"[Canvas] Autonomy check error: {e}", file=sys.stderr, flush=True)
 
             # Disable auto-return - let user stay on screens as long as they want
             # Only auto-return to FACE if explicitly requested via button
@@ -4172,8 +4183,9 @@ class ScreenRenderer:
                 transition_to("developing")
 
         elif current_phase == "closing":
-            # Stay in closing until canvas is cleared
-            pass
+            # Mark canvas as satisfied (first time entering closing)
+            if not self._canvas.is_satisfied:
+                self._canvas.mark_satisfied()
 
     def _update_drawing_phase(self, anima: Anima):
         """Update Lumen's drawing phase based on energy level.
