@@ -190,7 +190,6 @@ class NextStepsAdvocate:
                 estimated_time="5 minutes",
                 related_files=[
                     "src/anima_mcp/unitares_bridge.py",
-                    "src/anima_mcp/server_integrated.py",
                 ],
             ))
         
