@@ -26,6 +26,36 @@ anima-creature.service      anima.service
 | `anima` | `anima_mcp.server:main` | MCP server |
 | `anima-creature` | `anima_mcp.stable_creature:main` | Hardware broker |
 
+### MCP Server Structure
+
+`server.py` is the orchestrator (~3,400 lines). Handlers and tool definitions are extracted:
+
+| Module | Purpose |
+|--------|---------|
+| `server.py` | Main loop, wake/sleep lifecycle, REST endpoints, global state |
+| `tool_registry.py` | Tool definitions (TOOLS lists), HANDLERS dict, FastMCP setup |
+| `handlers/system_ops.py` | git_pull, system_service, power, deploy, tailscale, ssh_port |
+| `handlers/state_queries.py` | get_state, get_identity, read_sensors, get_health, get_calibration |
+| `handlers/knowledge.py` | get_self_knowledge, get_growth, get_qa_insights, get_trajectory |
+| `handlers/display_ops.py` | capture_screen, show_face, diagnostics, manage_display |
+| `handlers/communication.py` | lumen_qa, post_message, say, configure_voice, primitive_feedback |
+| `handlers/workflows.py` | unified_workflow, next_steps, set_calibration, get_lumen_context |
+
+Handler modules use late imports from `server.py` for global state access (e.g., `from ..server import _get_store`).
+
+### Health Monitoring
+
+`health.py` tracks 9 subsystems with heartbeats + functional probes. Rendered on LCD health screen.
+
+| Status | Color | Meaning |
+|--------|-------|---------|
+| ok | Green | Heartbeat fresh, probe passes |
+| stale | Yellow | Heartbeat expired, probe passes |
+| degraded | Yellow/Orange | Probe failing |
+| missing | Red | No heartbeat AND probe failing |
+
+Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth, governance) use 90s.
+
 ### Learning Systems (run in broker only)
 
 These modules run in `stable_creature.py`, not in `server.py`:

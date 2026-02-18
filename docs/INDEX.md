@@ -42,12 +42,16 @@
 **Key source files for understanding the system:**
 | File | What it does |
 |------|--------------|
+| `src/anima_mcp/server.py` | Main loop, lifecycle, REST API (~3,400 lines) |
+| `src/anima_mcp/tool_registry.py` | Tool definitions, HANDLERS dict, FastMCP setup |
+| `src/anima_mcp/handlers/` | 6 handler modules (system, state, knowledge, display, comms, workflows) |
+| `src/anima_mcp/health.py` | Subsystem health monitoring (9 subsystems, per-subsystem stale thresholds) |
 | `src/anima_mcp/anima.py` | Anima calculation (warmth, clarity, stability, presence) |
 | `src/anima_mcp/computational_neural.py` | Neural bands from Pi hardware (delta/theta/alpha/beta/gamma) + drawing phase modulation |
 | `src/anima_mcp/eisv_mapper.py` | EISV mapping for UNITARES governance |
 | `src/anima_mcp/display/screens.py` | Display screens, drawing engine (CanvasState, DrawingEISV, DrawingIntent) |
 | `src/anima_mcp/display/art_era.py` | Art era protocol — EraState base class + ArtEra interface |
-| `src/anima_mcp/display/eras/` | Pluggable art era modules (gestural, pointillist, field) |
+| `src/anima_mcp/display/eras/` | Pluggable art era modules (gestural, pointillist, field, geometric) |
 
 **Archived concepts** (in `archive/2026-02/`): ADAPTIVE_LEARNING.md, ERROR_RECOVERY.md, GAP_HANDLING.md
 
@@ -103,7 +107,7 @@
 ## Common Mistakes
 
 - SSH: port **22**, user **unitares-anima**, key `~/.ssh/id_ed25519_pi`
-- Don't edit `server.py` without checking what other agents changed
+- Handler code lives in `handlers/` — check there before editing `server.py`
 - Anima dataclass requires `readings` field - don't construct without it
 - Color constants in `screens.py` are **local to each function** - grep entire function after changes
 - Display frozen? `ssh lumen.local 'sudo systemctl restart anima'`

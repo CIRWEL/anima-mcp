@@ -31,9 +31,9 @@ anima-creature              anima --http
 | Process | What It Does |
 |---------|--------------|
 | **Hardware broker** (`stable_creature.py`) | Owns sensors, runs learning, governance check-ins |
-| **MCP server** (`server.py`) | Serves tools, drives display/LEDs, runs drawing engine |
+| **MCP server** (`server.py` + modules) | Serves tools, drives display/LEDs, runs drawing engine |
 
-Both run as systemd services. See `CLAUDE.md` for details.
+The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (6 focused handler modules). See `CLAUDE.md` for details.
 
 ## Quick Start
 
@@ -206,7 +206,7 @@ mcp__anima__git_pull(restart=true)
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # 244 tests
+python3 -m pytest tests/ -x -q   # 358 tests
 ```
 
 ---
