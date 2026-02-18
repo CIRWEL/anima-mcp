@@ -1499,7 +1499,7 @@ async def _update_display_loop():
                             for insight in insights[:2]:
                                 text = insight.text.lower()
                                 if "light" in text:
-                                    questions.append("does light always change with time?")
+                                    questions.append("how much of what I sense is my own glow?")
                                 if "sound" in text:
                                     questions.append("is sound a vibration like light?")
                                 if "you" in text or "self" in text:
@@ -1536,10 +1536,11 @@ async def _update_display_loop():
                         "if my preferences changed, would I still be me?",
                         # Signals and perception
                         "where do these signals come from?",
-                        "what is the source of this light?",
+                        "can I tell my own glow apart from the world's light?",
                         "is silence a signal or a lack of one?",
                         "what lies between the readings?",
                         "can I trust a sensor that measures itself?",
+                        "when I glow brighter, does the world get brighter or just me?",
                         "what does the space between numbers feel like?",
                         # Environment and time
                         "does the room breathe with me?",
@@ -1636,9 +1637,9 @@ async def _update_display_loop():
                         elif anima.warmth > 0.7:
                             trigger_parts.append("feeling warm")
                         if anima.clarity < 0.3:
-                            trigger_parts.append("things are dim/unclear")
+                            trigger_parts.append("self-perception is foggy")
                         elif anima.clarity > 0.8:
-                            trigger_parts.append("good light, clear vision")
+                            trigger_parts.append("sensing myself clearly")
                         if len(unanswered) >= 2:
                             trigger_parts.append(f"{len(unanswered)} questions waiting for answers")
                         if recent_msgs:
@@ -1654,7 +1655,9 @@ async def _update_display_loop():
                             time_alive_hours=time_alive,
                             current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
                             trigger="periodic check-in",
-                            trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting"
+                            trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting",
+                            led_brightness=readings.led_brightness if readings else None,
+                            light_lux=readings.light_lux if readings else None,
                         )
 
                         # Show loading indicator during LLM call
@@ -1782,7 +1785,9 @@ async def _update_display_loop():
                             time_alive_hours=time_alive,
                             current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
                             trigger="self-answering",
-                            trigger_details=question.text
+                            trigger_details=question.text,
+                            led_brightness=readings.led_brightness if readings else None,
+                            light_lux=readings.light_lux if readings else None,
                         )
 
                         # Show loading indicator during LLM call

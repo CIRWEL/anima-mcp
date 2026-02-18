@@ -62,8 +62,8 @@ PRIMITIVES: Dict[str, PrimitiveToken] = {
     # State layer - describe current environment
     "warm": PrimitiveToken("warm", TokenCategory.STATE, warmth_affinity=0.8),
     "cold": PrimitiveToken("cold", TokenCategory.STATE, warmth_affinity=-0.8),
-    "bright": PrimitiveToken("bright", TokenCategory.STATE, brightness_affinity=0.8),
-    "dim": PrimitiveToken("dim", TokenCategory.STATE, brightness_affinity=-0.8),
+    "new": PrimitiveToken("new", TokenCategory.STATE, brightness_affinity=0.8),
+    "soft": PrimitiveToken("soft", TokenCategory.STATE, brightness_affinity=-0.8),
     "quiet": PrimitiveToken("quiet", TokenCategory.STATE, stability_affinity=0.7),
     "busy": PrimitiveToken("busy", TokenCategory.STATE, stability_affinity=-0.5),
 

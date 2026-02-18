@@ -283,7 +283,7 @@ class StudentExpressionGenerator:
 # ---------------------------------------------------------------------------
 
 LUMEN_TOKENS: List[str] = [
-    "warm", "cold", "bright", "dim", "quiet", "busy",
+    "warm", "cold", "new", "soft", "quiet", "busy",
     "here", "feel", "sense", "you", "with",
     "why", "what", "wonder", "more", "less",
 ]
@@ -298,10 +298,10 @@ TOKEN_MAP: Dict[str, List[str]] = {
     "~reflection~":    ["what", "feel"],
     "~ripple~":        ["busy", "sense"],
     "~deep_listening~": ["quiet", "sense"],
-    "~emergence~":     ["more", "bright"],
+    "~emergence~":     ["more", "new"],
     "~questioning~":   ["why", "what"],
     "~holding~":       ["here", "with"],
-    "~releasing~":     ["less", "dim"],
+    "~releasing~":     ["less", "soft"],
     "~threshold~":     ["sense", "more"],
     "~return~":        ["here", "warm"],
 }
