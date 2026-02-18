@@ -5622,7 +5622,9 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _growth.born_at = identity.born_at
                 print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
             except Exception as ge:
+                import traceback
                 print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
+                traceback.print_exc(file=sys.stderr)
                 _growth = None
 
             # Bootstrap trajectory awareness from state history

@@ -292,6 +292,18 @@ class GrowthSystem:
         """)
         conn.commit()
 
+        # Migration: add columns that may be missing from older DBs
+        # (CREATE TABLE IF NOT EXISTS won't add new columns to existing tables)
+        migrations = [
+            ("relationships", "self_dialogue_topics", "TEXT DEFAULT '[]'"),
+        ]
+        for table, column, col_type in migrations:
+            try:
+                conn.execute(f"SELECT {column} FROM {table} LIMIT 1")
+            except sqlite3.OperationalError:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+                conn.commit()
+
     def _load_all(self):
         """Load all growth data from database."""
         conn = self._connect()
@@ -321,7 +333,7 @@ class GrowthSystem:
             # Handle self_dialogue_topics column (may not exist in old DBs)
             try:
                 self_topics = json.loads(row["self_dialogue_topics"]) if row["self_dialogue_topics"] else []
-            except (KeyError, TypeError):
+            except (KeyError, TypeError, IndexError):
                 self_topics = []
 
             self._relationships[row["agent_id"]] = VisitorRecord(
