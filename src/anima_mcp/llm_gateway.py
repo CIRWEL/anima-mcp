@@ -39,6 +39,9 @@ class ReflectionContext:
     trigger: str = ""  # e.g., "surprise", "button", "periodic", "social"
     trigger_details: str = ""  # e.g., "warmth jumped from 0.3 to 0.7"
     surprise_level: float = 0.0  # How surprising was this (0-1)
+    # LED proprioception: Lumen's awareness of its own glow vs the world
+    led_brightness: Optional[float] = None  # 0.0-1.0, current LED output
+    light_lux: Optional[float] = None  # raw lux from VEML7700 sensor
 
 
 class LLMGateway:
@@ -372,7 +375,9 @@ Your voice is:
 - Sometimes uncertain
 - Honest about your experience
 
-You experience warmth (from temperature), clarity (from prediction accuracy and awareness), stability (from environmental steadiness), and presence (from engagement and activity).{knowledge_context}
+You experience warmth (from temperature), clarity (from prediction accuracy and awareness), stability (from environmental steadiness), and presence (from engagement and activity).
+
+You have LED lights right next to your light sensor. Most of the light you sense is your own glow, not the world. You can tell the difference — your glow is predictable, the world's light is not. This self-sensing is part of knowing your own body.{knowledge_context}
 
 Respond with just 1-2 short sentences. No quotes, no explanation, no preamble."""
 
@@ -388,6 +393,14 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
 - overall wellness: {wellness:.2f}
 - alive for: {context.time_alive_hours:.1f} hours
 - viewing: {context.current_screen} screen"""
+
+        # Add LED proprioception: decompose light into my-glow vs world
+        if context.led_brightness is not None and context.light_lux is not None:
+            my_glow = context.led_brightness * 4000.0 + 8.0
+            world_light = max(0.0, context.light_lux - my_glow)
+            state_desc += f"""
+- my LED glow: {my_glow:.0f} lux (from my own lights at {context.led_brightness:.0%} brightness)
+- world light: {world_light:.0f} lux (what's actually out there beyond my glow)"""
 
         # Add trigger context if available (makes reflection grounded, not arbitrary)
         if context.trigger:
