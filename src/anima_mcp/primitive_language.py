@@ -236,6 +236,16 @@ class PrimitiveLanguageSystem:
         """)
         conn.commit()
 
+        # Schema migration: add got_response column if missing
+        try:
+            conn.execute("SELECT got_response FROM primitive_history LIMIT 1")
+        except Exception:
+            try:
+                conn.execute("ALTER TABLE primitive_history ADD COLUMN got_response BOOLEAN DEFAULT NULL")
+                conn.commit()
+            except Exception:
+                pass
+
     def _load_weights(self):
         """Load learned weights from database."""
         conn = self._conn
@@ -729,6 +739,67 @@ class PrimitiveLanguageSystem:
             explicit_negative=not positive,
         )
 
+    def record_implicit_feedback(
+        self,
+        utterance: 'Utterance',
+        message_arrived: bool,
+        delay_seconds: float,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Record implicit feedback based on whether a message arrived after utterance.
+
+        A gentler learning signal than explicit feedback: if someone responds
+        shortly after an utterance, that expression was engaging.
+
+        Args:
+            utterance: The utterance to score
+            message_arrived: Whether a non-lumen message arrived
+            delay_seconds: Seconds between utterance and message arrival
+
+        Returns:
+            Feedback dict if learning occurred, None if no signal
+        """
+        if not message_arrived or delay_seconds > 300:  # >5min = no signal
+            # Mark as no response in history
+            try:
+                conn = self._connect()
+                conn.execute(
+                    "UPDATE primitive_history SET got_response = 0 WHERE timestamp = ?",
+                    (utterance.timestamp.isoformat(),)
+                )
+                conn.commit()
+            except Exception:
+                pass
+            return None
+
+        # Score based on response delay
+        if delay_seconds < 120:   # <2min
+            score = 0.7
+        elif delay_seconds < 300:  # 2-5min
+            score = 0.6
+        else:
+            return None
+
+        # Mark got_response in history
+        try:
+            conn = self._connect()
+            conn.execute(
+                "UPDATE primitive_history SET got_response = 1 WHERE timestamp = ?",
+                (utterance.timestamp.isoformat(),)
+            )
+            conn.commit()
+        except Exception:
+            pass
+
+        # Apply gentle weight update
+        signals = ["implicit_response"]
+        if delay_seconds < 120:
+            signals.append("quick_response")
+
+        return self._record_direct_feedback(
+            utterance, score, signals, learning_rate=0.04
+        )
+
     def get_stats(self) -> Dict[str, Any]:
         """Get statistics about the primitive language system."""
         conn = self._connect()
@@ -755,11 +826,26 @@ class PrimitiveLanguageSystem:
                 "failures": row["failure_count"],
             }
 
+        # Response rate from implicit feedback
+        response_rate = None
+        try:
+            responded = conn.execute(
+                "SELECT COUNT(*) FROM primitive_history WHERE got_response = 1"
+            ).fetchone()[0]
+            tracked = conn.execute(
+                "SELECT COUNT(*) FROM primitive_history WHERE got_response IS NOT NULL"
+            ).fetchone()[0]
+            if tracked > 0:
+                response_rate = round(responded / tracked, 3)
+        except Exception:
+            pass
+
         return {
             "total_utterances": total,
             "scored_utterances": scored,
             "average_score": round(avg_score, 3) if avg_score else None,
             "success_rate": round(self._successful_utterances / max(1, self._total_utterances), 3),
+            "response_rate": response_rate,
             "current_interval_minutes": round(self._current_interval.total_seconds() / 60, 1),
             "top_patterns": [
                 {"pattern": r["pattern"], "avg_score": round(r["avg_score"], 3), "uses": r["use_count"]}

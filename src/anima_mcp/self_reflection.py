@@ -717,6 +717,54 @@ class SelfReflectionSystem:
 
         return new_insights
 
+    def _analyze_long_term_trends(self) -> List[Insight]:
+        """Generate insights from multi-day trends via memory consolidation."""
+        new_insights = []
+        now = datetime.now()
+
+        try:
+            from .anima_history import get_anima_history
+            history = get_anima_history()
+        except Exception:
+            return []
+
+        for dimension in ["warmth", "clarity", "stability", "presence"]:
+            trend = history.detect_long_term_trend(dimension)
+            if trend is None or trend["direction"] == "stable":
+                continue
+
+            insight_id = f"trend_{dimension}_{trend['direction']}"
+
+            if insight_id in self._insights:
+                existing = self._insights[insight_id]
+                existing.validation_count += 1
+                existing.last_validated = now
+                self._save_insight(existing)
+                continue
+
+            if trend["direction"] == "increasing":
+                description = f"my {dimension} has been gradually increasing over the past days"
+            else:
+                description = f"my {dimension} has been gradually decreasing over the past days"
+
+            insight = Insight(
+                id=insight_id,
+                category=InsightCategory.WELLNESS,
+                description=description,
+                confidence=min(1.0, 0.5 + trend["n_summaries"] * 0.05),
+                sample_count=trend["n_summaries"],
+                discovered_at=now,
+                last_validated=now,
+                validation_count=1,
+                contradiction_count=0,
+            )
+            self._save_insight(insight)
+            new_insights.append(insight)
+            print(f"[SelfReflection] Long-term trend: {description}",
+                  file=sys.stderr, flush=True)
+
+        return new_insights
+
     # ==================== Core Reflection ====================
 
     def reflect(self) -> Optional[str]:
@@ -738,6 +786,9 @@ class SelfReflectionSystem:
         new_insights.extend(self._analyze_preference_insights())
         new_insights.extend(self._analyze_belief_insights())
         new_insights.extend(self._analyze_drawing_insights())
+
+        # Analyze long-term trends from memory consolidation
+        new_insights.extend(self._analyze_long_term_trends())
 
         # Pick something to share
         if new_insights:

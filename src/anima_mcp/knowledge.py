@@ -97,9 +97,15 @@ class KnowledgeBase:
         source_question: str,
         source_answer: str,
         source_author: str,
-        category: str = "general"
+        category: str = "general",
+        confidence: Optional[float] = None,
     ) -> Insight:
-        """Add a new learned insight."""
+        """Add a new learned insight.
+
+        Args:
+            confidence: Initial confidence. If None, defaults to 1.0 for
+                external sources, 0.7 for self-sourced (author=="lumen").
+        """
         import uuid
 
         # Check for duplicate insights (similar text)
@@ -111,6 +117,10 @@ class KnowledgeBase:
                 self._save()
                 return existing
 
+        # Default confidence: lower for self-sourced insights
+        if confidence is None:
+            confidence = 0.7 if source_author.lower() == "lumen" else 1.0
+
         insight_id = str(uuid.uuid4())[:8]
         insight = Insight(
             insight_id=insight_id,
@@ -120,6 +130,7 @@ class KnowledgeBase:
             source_author=source_author,
             timestamp=time.time(),
             category=category,
+            confidence=confidence,
         )
         self._insights.append(insight)
 
@@ -299,10 +310,14 @@ def add_insight(
     source_question: str,
     source_answer: str,
     source_author: str,
-    category: str = "general"
+    category: str = "general",
+    confidence: Optional[float] = None,
 ) -> Insight:
     """Convenience: add an insight."""
-    return get_knowledge().add_insight(text, source_question, source_answer, source_author, category)
+    return get_knowledge().add_insight(
+        text, source_question, source_answer, source_author,
+        category, confidence=confidence,
+    )
 
 
 def get_insights(limit: int = 10, category: Optional[str] = None) -> List[Insight]:

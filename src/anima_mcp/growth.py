@@ -607,6 +607,70 @@ class GrowthSystem:
 
         return insight
 
+    def record_drawing_completion(
+        self,
+        pixel_count: int,
+        mark_count: int,
+        coherence: float,
+        satisfaction: float,
+    ) -> Optional[str]:
+        """
+        Record completion of a drawing with emotional feedback.
+
+        Bridges drawing output back into Lumen's growth system:
+        - Updates drawing_satisfaction preference
+        - Records autobiographical memory if satisfaction is high
+
+        Args:
+            pixel_count: Total pixels in the drawing
+            mark_count: Number of distinct marks/strokes
+            coherence: EISV compositional coherence (0-1)
+            satisfaction: Compositional satisfaction score (0-1)
+
+        Returns:
+            Insight message if a preference threshold was crossed
+        """
+        # Map satisfaction to preference value: 0.5=neutral, >0.5=positive
+        pref_value = satisfaction * 2.0 - 1.0  # Map [0,1] to [-1,1]
+
+        insight = self._update_preference(
+            "drawing_satisfaction", PreferenceCategory.ACTIVITY,
+            "I enjoy making art" if satisfaction > 0.5 else "My art feels incomplete",
+            pref_value,
+        )
+
+        # Record autobiographical memory for satisfying drawings
+        if satisfaction > 0.7:
+            self._record_memory(
+                f"Made a drawing I'm pleased with ({pixel_count} pixels, "
+                f"coherence {coherence:.2f})",
+                emotional_impact=min(1.0, satisfaction),
+                category="creative",
+            )
+
+        return insight
+
+    def get_draw_chance_modifier(self) -> float:
+        """
+        Get a multiplier for drawing probability based on past satisfaction.
+
+        Returns 1.0 (no change) when there's no data, scaling up to 1.3
+        for high satisfaction + confidence.
+
+        Returns:
+            Float multiplier in range [1.0, 1.3]
+        """
+        pref = self._preferences.get("drawing_satisfaction")
+        if pref is None or pref.observation_count < 3:
+            return 1.0
+
+        # Scale from 1.0 to 1.3 based on satisfaction and confidence
+        # value ranges from -1 to 1, confidence from 0 to 1
+        satisfaction_factor = max(0.0, (pref.value + 1.0) / 2.0)  # normalize to [0, 1]
+        modifier = 1.0 + satisfaction_factor * pref.confidence * 0.3
+
+        return min(1.3, max(1.0, round(modifier, 3)))
+
     def _update_preference(self, name: str, category: PreferenceCategory,
                            description: str, observed_value: float) -> Optional[str]:
         """Update or create a preference. Returns insight message if confidence increased significantly."""

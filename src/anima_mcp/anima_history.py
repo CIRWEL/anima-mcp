@@ -25,6 +25,41 @@ except ImportError:
 
 
 @dataclass
+class DaySummary:
+    """Consolidated summary of one active period."""
+    date: str                              # ISO date string
+    attractor_center: List[float]          # [warmth, clarity, stability, presence]
+    attractor_variance: List[float]        # variance per dimension
+    n_observations: int
+    time_span_hours: float
+    notable_perturbations: int             # count of perturbations detected
+    dimension_trends: Dict[str, float]     # per-dim mean for this period
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "date": self.date,
+            "center": self.attractor_center,
+            "variance": self.attractor_variance,
+            "n_obs": self.n_observations,
+            "hours": round(self.time_span_hours, 2),
+            "perturbations": self.notable_perturbations,
+            "trends": self.dimension_trends,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'DaySummary':
+        return cls(
+            date=data["date"],
+            attractor_center=data["center"],
+            attractor_variance=data["variance"],
+            n_observations=data["n_obs"],
+            time_span_hours=data["hours"],
+            notable_perturbations=data["perturbations"],
+            dimension_trends=data["trends"],
+        )
+
+
+@dataclass
 class AnimaSnapshot:
     """A single anima state observation."""
     timestamp: datetime
@@ -350,6 +385,183 @@ class AnimaHistory:
             "time_span_seconds": round(time_span, 2),
             "center": [round(c, 4) for c in center],
         }
+
+    # === Memory Consolidation ===
+
+    def consolidate(self) -> Optional[DaySummary]:
+        """
+        Consolidate current buffer into a DaySummary.
+
+        Compresses the rolling buffer into a single summary that captures
+        the essential character of this active period. Requires ≥100
+        observations to produce a meaningful summary.
+
+        Returns:
+            DaySummary if enough data, None otherwise
+        """
+        if len(self._history) < 100:
+            return None
+
+        observations = list(self._history)
+        n = len(observations)
+
+        # Compute center (mean per dimension)
+        center = [
+            sum(s.warmth for s in observations) / n,
+            sum(s.clarity for s in observations) / n,
+            sum(s.stability for s in observations) / n,
+            sum(s.presence for s in observations) / n,
+        ]
+
+        # Compute variance per dimension
+        variance = [
+            sum((s.warmth - center[0])**2 for s in observations) / n,
+            sum((s.clarity - center[1])**2 for s in observations) / n,
+            sum((s.stability - center[2])**2 for s in observations) / n,
+            sum((s.presence - center[3])**2 for s in observations) / n,
+        ]
+
+        # Time span
+        time_span_hours = (
+            observations[-1].timestamp - observations[0].timestamp
+        ).total_seconds() / 3600.0
+
+        # Count perturbations (distance from center > 0.15)
+        perturbation_count = 0
+        for s in observations:
+            dist = sum((c - v)**2 for c, v in zip(
+                center, s.to_vector()
+            )) ** 0.5
+            if dist > 0.15:
+                perturbation_count += 1
+
+        # Dimension trends (just the means, labeled)
+        dim_names = ["warmth", "clarity", "stability", "presence"]
+        trends = {name: round(center[i], 4) for i, name in enumerate(dim_names)}
+
+        summary = DaySummary(
+            date=datetime.now().isoformat(),
+            attractor_center=[round(c, 4) for c in center],
+            attractor_variance=[round(v, 6) for v in variance],
+            n_observations=n,
+            time_span_hours=time_span_hours,
+            notable_perturbations=perturbation_count,
+            dimension_trends=trends,
+        )
+
+        # Persist to day summaries file
+        self._save_day_summary(summary)
+
+        return summary
+
+    def get_day_summaries(self, limit: int = 30) -> List[DaySummary]:
+        """
+        Load persisted day summaries.
+
+        Args:
+            limit: Maximum number of summaries to return (most recent first)
+
+        Returns:
+            List of DaySummary objects, newest first
+        """
+        summaries_path = self._get_summaries_path()
+        if not summaries_path.exists():
+            return []
+
+        try:
+            with open(summaries_path, 'r') as f:
+                data = json.load(f)
+            summaries = [DaySummary.from_dict(d) for d in data.get("summaries", [])]
+            # Return newest first, limited
+            return list(reversed(summaries[-limit:]))
+        except Exception as e:
+            print(f"[AnimaHistory] Could not load day summaries: {e}", file=sys.stderr)
+            return []
+
+    def detect_long_term_trend(
+        self, dimension: str, window_days: int = 7
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Detect long-term trend in a dimension across day summaries.
+
+        Uses simple linear regression over day summary centers to find
+        whether a dimension is trending up, down, or stable.
+
+        Args:
+            dimension: One of 'warmth', 'clarity', 'stability', 'presence'
+            window_days: Number of recent summaries to analyze
+
+        Returns:
+            Dict with trend info, or None if insufficient data (<3 summaries)
+        """
+        summaries = self.get_day_summaries(limit=window_days)
+
+        if len(summaries) < 3:
+            return None
+
+        dim_idx = ["warmth", "clarity", "stability", "presence"].index(dimension)
+
+        # Extract values (summaries are newest-first, reverse for chronological)
+        values = [s.attractor_center[dim_idx] for s in reversed(summaries)]
+        n = len(values)
+
+        # Simple linear regression: y = mx + b
+        x_mean = (n - 1) / 2.0
+        y_mean = sum(values) / n
+
+        numerator = sum((i - x_mean) * (v - y_mean) for i, v in enumerate(values))
+        denominator = sum((i - x_mean)**2 for i in range(n))
+
+        if denominator == 0:
+            slope = 0.0
+        else:
+            slope = numerator / denominator
+
+        # Determine direction
+        if abs(slope) < 0.005:
+            direction = "stable"
+        elif slope > 0:
+            direction = "increasing"
+        else:
+            direction = "decreasing"
+
+        return {
+            "dimension": dimension,
+            "trend": round(slope, 6),
+            "direction": direction,
+            "n_summaries": n,
+            "recent_value": round(values[-1], 4),
+            "oldest_value": round(values[0], 4),
+        }
+
+    def _get_summaries_path(self) -> Path:
+        """Get path for day summaries persistence."""
+        return self.persistence_path.parent / "day_summaries.json"
+
+    def _save_day_summary(self, summary: DaySummary):
+        """Append a day summary to persistent storage, keeping max 30."""
+        summaries_path = self._get_summaries_path()
+
+        existing = []
+        if summaries_path.exists():
+            try:
+                with open(summaries_path, 'r') as f:
+                    data = json.load(f)
+                existing = data.get("summaries", [])
+            except Exception:
+                existing = []
+
+        existing.append(summary.to_dict())
+
+        # Keep only last 30
+        existing = existing[-30:]
+
+        try:
+            summaries_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(summaries_path, 'w') as f:
+                json.dump({"summaries": existing, "version": "1.0"}, f)
+        except Exception as e:
+            print(f"[AnimaHistory] Could not save day summary: {e}", file=sys.stderr)
 
     def __len__(self) -> int:
         return len(self._history)
