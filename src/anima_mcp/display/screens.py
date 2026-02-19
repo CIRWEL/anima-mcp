@@ -638,6 +638,55 @@ DrawingEISV = DrawingState
 
 
 @dataclass
+class DrawingGoal:
+    """A compositional intention for the current drawing.
+
+    Generated at canvas_clear time from Lumen's current state.
+    Provides gentle biases to color temperature and initial focus,
+    giving each drawing a subtle intentional character.
+    """
+    warmth_bias: float = 0.0        # -0.15 to +0.15, biases warmth for generate_color
+    coverage_target: str = "balanced"  # "sparse", "balanced", "dense"
+    initial_quadrant: Optional[int] = None  # 0-3, starting focus quadrant
+    description: str = ""
+
+    @staticmethod
+    def from_state(warmth: float, clarity: float,
+                   hour: Optional[int] = None) -> "DrawingGoal":
+        """Generate a drawing goal from current anima state."""
+        goal = DrawingGoal()
+
+        # Color warmth follows anima warmth (subtle: max +/-0.15)
+        goal.warmth_bias = (warmth - 0.5) * 0.3
+
+        # Coverage follows clarity
+        if clarity > 0.7:
+            goal.coverage_target = "sparse"
+        elif clarity < 0.3:
+            goal.coverage_target = "dense"
+        else:
+            goal.coverage_target = "balanced"
+
+        # Initial focus quadrant by time of day
+        if hour is not None:
+            if 6 <= hour < 12:
+                goal.initial_quadrant = 0  # Top-left: morning freshness
+            elif 12 <= hour < 18:
+                goal.initial_quadrant = 1  # Top-right: afternoon energy
+            # Night: None (center default)
+
+        parts = []
+        if goal.warmth_bias > 0.1:
+            parts.append("warm tones")
+        elif goal.warmth_bias < -0.1:
+            parts.append("cool tones")
+        parts.append(goal.coverage_target)
+        goal.description = ", ".join(parts) if parts else "open exploration"
+
+        return goal
+
+
+@dataclass
 class DrawingIntent:
     """Lumen's drawing intent — focus, state, and mark count.
 
@@ -704,6 +753,8 @@ class ScreenRenderer:
         self._state = ScreenState()
         self._canvas = CanvasState()
         self._intent = DrawingIntent()
+        self._drawing_goal: Optional[DrawingGoal] = None
+        self._last_anima = None  # Store last anima for goal generation at canvas_clear
         # Load any persisted canvas from disk (includes attention/narrative state)
         self._canvas.load_from_disk()
         # Restore drawing state from persisted canvas
@@ -4018,6 +4069,9 @@ class ScreenRenderer:
         stability = anima.stability
         presence = anima.presence
 
+        # Store last anima for goal generation at canvas_clear time
+        self._last_anima = anima
+
         # Light regime: dark / dim / bright
         # Uses corrected lux (self-glow subtracted) — raw lux is dominated by
         # LED self-illumination (168-728 lux depending on brightness), so raw
@@ -4070,8 +4124,13 @@ class ScreenRenderer:
             return
 
         # --- Delegate to active era ---
+        # Apply drawing goal warmth bias (subtle color temperature shift)
+        draw_warmth = warmth
+        if self._drawing_goal and self._drawing_goal.warmth_bias != 0.0:
+            draw_warmth = max(0.0, min(1.0, warmth + self._drawing_goal.warmth_bias))
+
         color, hue_category = self._active_era.generate_color(
-            era_state, warmth, clarity, stability, presence, light_regime=light_regime)
+            era_state, draw_warmth, clarity, stability, presence, light_regime=light_regime)
 
         C = self._intent.state.coherence()
         if era_state.gesture_remaining <= 0:
@@ -4391,7 +4450,7 @@ class ScreenRenderer:
             return None
         state = self._intent.state
         C = state.coherence()
-        return {
+        result = {
             # EISV core
             "E": round(state.E, 4),
             "I": round(state.I, 4),
@@ -4414,6 +4473,9 @@ class ScreenRenderer:
             "narrative_complete": state.narrative_complete(self._canvas),
             "compositional_satisfaction": round(self._canvas.compositional_satisfaction(), 3),
         }
+        if self._drawing_goal:
+            result["drawing_goal"] = self._drawing_goal.description
+        return result
 
     def set_era(self, era_name: str, force_immediate: bool = False) -> dict:
         """Switch to a different art era (queues if drawing in progress).
@@ -4530,6 +4592,26 @@ class ScreenRenderer:
         if persist:
             self._canvas.save_to_disk()
         print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
+
+        # Generate drawing goal for next canvas
+        try:
+            if self._last_anima:
+                self._drawing_goal = DrawingGoal.from_state(
+                    warmth=self._last_anima.warmth,
+                    clarity=self._last_anima.clarity,
+                    hour=datetime.now().hour,
+                )
+                # Set initial focus based on goal
+                if self._drawing_goal.initial_quadrant is not None:
+                    q = self._drawing_goal.initial_quadrant
+                    self._intent.focus_x = float((q % 2) * 120 + 60)
+                    self._intent.focus_y = float((q // 2) * 120 + 60)
+                print(f"[Canvas] Drawing goal: {self._drawing_goal.description}",
+                      file=sys.stderr, flush=True)
+            else:
+                self._drawing_goal = None
+        except Exception:
+            self._drawing_goal = None
 
     def canvas_save(self, announce: bool = False, manual: bool = False) -> Optional[str]:
         """

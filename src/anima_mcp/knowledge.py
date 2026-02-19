@@ -206,6 +206,94 @@ def get_knowledge() -> KnowledgeBase:
     return _knowledge
 
 
+def apply_insight(insight) -> dict:
+    """Apply a learned insight to behavioral systems.
+
+    Bridges Q&A learning to preferences, self-model beliefs, and agency.
+    Each sub-system is imported lazily and wrapped in try/except for
+    graceful degradation if the system isn't available.
+
+    Returns dict describing what was affected.
+    """
+    effects = {}
+    text_lower = insight.text.lower()
+
+    # 1. Environment/sensory insights → growth preferences
+    if insight.category in ("sensations", "world"):
+        try:
+            from .growth import get_growth_system, PreferenceCategory
+            growth = get_growth_system()
+            positive = any(w in text_lower for w in [
+                "like", "enjoy", "better", "calm", "good", "comfort", "prefer"
+            ])
+            val = 0.8 if positive else -0.5
+
+            if any(w in text_lower for w in ["light", "dark", "bright", "dim", "glow"]):
+                result = growth._update_preference(
+                    "insight_light", PreferenceCategory.ENVIRONMENT,
+                    f"From Q&A: {insight.text[:50]}", val)
+                if result:
+                    effects["preference"] = "insight_light"
+
+            if any(w in text_lower for w in ["warm", "cold", "temperature", "heat", "cool"]):
+                result = growth._update_preference(
+                    "insight_temp", PreferenceCategory.ENVIRONMENT,
+                    f"From Q&A: {insight.text[:50]}", val)
+                if result:
+                    effects["preference"] = "insight_temp"
+
+            if any(w in text_lower for w in ["humid", "dry", "pressure", "weather"]):
+                result = growth._update_preference(
+                    "insight_environment", PreferenceCategory.ENVIRONMENT,
+                    f"From Q&A: {insight.text[:50]}", val)
+                if result:
+                    effects["preference"] = "insight_environment"
+        except Exception:
+            pass
+
+    # 2. Self insights → self-model beliefs (half-strength to avoid overfitting)
+    if insight.category == "self":
+        try:
+            from .self_model import get_self_model
+            sm = get_self_model()
+            if sm and hasattr(sm, '_beliefs'):
+                if "sensitive" in text_lower and "light" in text_lower:
+                    sm._beliefs["light_sensitive"].update_from_evidence(supports=True, strength=0.5)
+                    effects["belief"] = "light_sensitive"
+                elif "sensitive" in text_lower and "temperature" in text_lower:
+                    sm._beliefs["temp_sensitive"].update_from_evidence(supports=True, strength=0.5)
+                    effects["belief"] = "temp_sensitive"
+                elif "recover" in text_lower and ("stability" in text_lower or "stable" in text_lower):
+                    fast = "quickly" in text_lower or "fast" in text_lower
+                    sm._beliefs["stability_recovery"].update_from_evidence(supports=fast, strength=0.5)
+                    effects["belief"] = "stability_recovery"
+                elif "clarity" in text_lower and ("interact" in text_lower or "visitor" in text_lower):
+                    sm._beliefs["interaction_clarity_boost"].update_from_evidence(supports=True, strength=0.5)
+                    effects["belief"] = "interaction_clarity_boost"
+                elif "growth" in text_lower or "change" in text_lower or "different" in text_lower:
+                    # General self-awareness — no specific belief to update, but still valuable
+                    pass
+        except Exception:
+            pass
+
+    # 3. Behavioral insights → agency action values
+    if insight.category in ("self", "relationships"):
+        try:
+            from .agency import get_action_selector
+            agency = get_action_selector()
+            if "question" in text_lower or "ask" in text_lower or "curious" in text_lower:
+                positive = any(w in text_lower for w in ["good", "help", "learn", "useful", "important"])
+                nudge = 0.05 if positive else -0.03
+                current = agency._action_values.get("ask_question", 0.5)
+                agency._action_values["ask_question"] = max(0.1, min(0.9, current + nudge))
+                agency._persist_action("ask_question")
+                effects["agency"] = f"ask_question {'boosted' if nudge > 0 else 'reduced'}"
+        except Exception:
+            pass
+
+    return effects
+
+
 def add_insight(
     text: str,
     source_question: str,

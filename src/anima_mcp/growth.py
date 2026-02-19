@@ -768,6 +768,38 @@ class GrowthSystem:
 
         return reaction
 
+    def get_visitor_context(self, agent_id: str) -> Optional[dict]:
+        """Get context about a known visitor for richer interactions.
+
+        Returns None for unknown visitors or self-dialogue.
+        Agents are ephemeral — this is naming pattern tracking, not real bonds.
+        """
+        if agent_id not in self._relationships:
+            return None
+
+        rec = self._relationships[agent_id]
+        is_self = (agent_id.lower() == "lumen") or (rec.name and rec.name.lower() == "lumen")
+        if is_self:
+            return None  # Self-dialogue context handled separately
+
+        context = {
+            "known": True,
+            "name": rec.name or agent_id,
+            "visits": rec.interaction_count,
+            "frequency": rec.visitor_frequency.value,
+            "topics": list(set(rec.topics_discussed))[-10:],
+            "valence": round(rec.emotional_valence, 2),
+            "gifts": rec.gifts_received,
+        }
+
+        if rec.last_seen:
+            context["last_seen_days_ago"] = (datetime.now() - rec.last_seen).days
+
+        if rec.memorable_moments:
+            context["memorable"] = rec.memorable_moments[-3:]
+
+        return context
+
     def record_self_dialogue_topic(self, question: str) -> Optional[str]:
         """
         Record the topic category of a self-dialogue question.
