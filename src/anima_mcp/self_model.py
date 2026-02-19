@@ -171,6 +171,9 @@ class SelfModel:
             ),
         }
 
+        # Public read-only access (use self.beliefs instead of self._beliefs from outside)
+        self.beliefs = self._beliefs
+
         # Tracking data for belief testing
         self._stability_episodes: deque = deque(maxlen=20)  # (drop_time, recovery_time)
         self._correlation_data: Dict[str, deque] = {

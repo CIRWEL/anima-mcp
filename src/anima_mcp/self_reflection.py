@@ -623,7 +623,7 @@ class SelfReflectionSystem:
         except Exception:
             return []
 
-        for bid, belief in sm._beliefs.items():
+        for bid, belief in sm.beliefs.items():
             total_evidence = belief.supporting_count + belief.contradicting_count
             if total_evidence < 10 or belief.confidence < 0.7:
                 continue
