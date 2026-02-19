@@ -2929,10 +2929,10 @@ class ScreenRenderer:
         """Render Questions screen - Lumen's questions and answers."""
         # Use the proper Q&A renderer instead of filtered messages
         try:
-            self._render_qa_legacy()
+            self._render_qa_content()
         except Exception as e:
             import traceback
-            print(f"[Questions Screen] Error in _render_qa_legacy: {e}", file=sys.stderr, flush=True)
+            print(f"[Questions Screen] Error in _render_qa_content: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
             # Fallback: show error message
             try:
@@ -3287,8 +3287,8 @@ class ScreenRenderer:
                 except Exception:
                     pass
 
-    def _render_qa_legacy(self):
-        """Render Q&A screen - Lumen's questions and agent answers with full threading (legacy)."""
+    def _render_qa_content(self):
+        """Render Q&A screen - Lumen's questions and agent answers with full threading."""
         try:
             from ..messages import get_board, MESSAGE_TYPE_QUESTION, MESSAGE_TYPE_AGENT
 

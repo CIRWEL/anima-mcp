@@ -270,8 +270,97 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             **result,
         }))]
 
+    elif action == "calibrate_leds":
+        import asyncio
+        from ..server import _leds, _get_sensors
+
+        if not _leds or not _leds.is_available():
+            return [TextContent(type="text", text=json.dumps({
+                "error": "LEDs not available"
+            }))]
+
+        sensors = _get_sensors()
+        BRIGHTNESS_LEVELS = [0.0, 0.05, 0.10, 0.12, 0.15, 0.20, 0.25]
+        SETTLE_SECONDS = 2.5
+        SAMPLES_PER_LEVEL = 3
+
+        original_factor = _leds._manual_brightness_factor
+        calibration_data = []
+
+        try:
+            for brightness in BRIGHTNESS_LEVELS:
+                # Override auto-brightness pipeline
+                _leds._manual_brightness_factor = brightness
+                # Directly set LEDs to white at desired brightness
+                if _leds._dots:
+                    for i in range(3):
+                        _leds._dots[i] = (255, 255, 255)
+                    hw_brightness = max(0.001, brightness) if brightness > 0 else 0.0
+                    _leds._dots.brightness = hw_brightness
+                    _leds._dots.show()
+
+                # Wait for sensor to settle
+                await asyncio.sleep(SETTLE_SECONDS)
+
+                # Sample light sensor multiple times
+                lux_readings = []
+                for _ in range(SAMPLES_PER_LEVEL):
+                    try:
+                        readings = sensors.read()
+                        if readings.light_lux is not None:
+                            lux_readings.append(readings.light_lux)
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.3)
+
+                avg_lux = sum(lux_readings) / len(lux_readings) if lux_readings else None
+                calibration_data.append({
+                    "brightness": brightness,
+                    "raw_lux": round(avg_lux, 2) if avg_lux is not None else None,
+                    "samples": len(lux_readings),
+                })
+
+        finally:
+            # Always restore normal operation
+            _leds._manual_brightness_factor = original_factor
+
+        # Linear fit: lux = slope * brightness + intercept
+        fitted = None
+        nonzero = [(d["brightness"], d["raw_lux"])
+                    for d in calibration_data
+                    if d["brightness"] > 0 and d["raw_lux"] is not None]
+        if len(nonzero) >= 2:
+            xs = [b for b, _ in nonzero]
+            ys = [lux for _, lux in nonzero]
+            n = len(xs)
+            mean_x = sum(xs) / n
+            mean_y = sum(ys) / n
+            ss_xy = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+            ss_xx = sum((x - mean_x) ** 2 for x in xs)
+            slope = ss_xy / ss_xx if ss_xx > 0 else 0
+            intercept = mean_y - slope * mean_x
+            fitted = {
+                "LED_LUX_PER_BRIGHTNESS": round(slope, 1),
+                "LED_LUX_AMBIENT_FLOOR": round(intercept, 1),
+            }
+
+        zero_reading = next((d for d in calibration_data if d["brightness"] == 0.0), None)
+
+        return [TextContent(type="text", text=json.dumps({
+            "success": True,
+            "action": "calibrate_leds",
+            "data": calibration_data,
+            "ambient_lux_at_zero_brightness": zero_reading["raw_lux"] if zero_reading else None,
+            "fitted_constants": fitted,
+            "current_config": {
+                "LED_LUX_PER_BRIGHTNESS": 4000.0,
+                "LED_LUX_AMBIENT_FLOOR": 8.0,
+            },
+            "note": "Update config.py with fitted_constants. Calibration takes ~25s and blocks other MCP calls.",
+        }, indent=2))]
+
     else:
         return [TextContent(type="text", text=json.dumps({
             "error": f"Unknown action: {action}",
-            "valid_actions": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era"]
+            "valid_actions": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era", "calibrate_leds"]
         }))]

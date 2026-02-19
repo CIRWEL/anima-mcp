@@ -405,12 +405,23 @@ class GrowthSystem:
         like "bright_light" (69K observations) learned "my LEDs correlate with
         wellness," not "environmental light makes me feel good." Reset these so
         they can relearn honestly from corrected world light.
-
-        Safe to run repeatedly: only fires if observation_count > 1000 (clearly
-        from the raw-lux era since corrected world light rarely exceeds thresholds).
         """
-        tainted = ["bright_light", "drawing_bright"]
+        SENTINEL = "_migration_raw_lux_v1"
+
+        # Fast-exit: already ran
+        if SENTINEL in self._preferences:
+            return
+
         conn = self._connect()
+
+        # Also check DB directly (preferences dict may not include sentinel)
+        row = conn.execute(
+            "SELECT name FROM preferences WHERE name = ?", (SENTINEL,)
+        ).fetchone()
+        if row:
+            return
+
+        tainted = ["bright_light", "drawing_bright"]
         for name in tainted:
             if name in self._preferences:
                 pref = self._preferences[name]
@@ -426,6 +437,13 @@ class GrowthSystem:
                         observation_count=?, last_confirmed=? WHERE name=?
                     """, (pref.value, pref.confidence, pref.observation_count,
                           pref.last_confirmed.isoformat(), name))
+
+        # Write sentinel so this never runs again
+        conn.execute("""
+            INSERT OR REPLACE INTO preferences
+            (name, category, description, value, confidence, observation_count, last_confirmed)
+            VALUES (?, 'system', 'raw-lux migration sentinel', 1.0, 1.0, 1, ?)
+        """, (SENTINEL, datetime.now().isoformat()))
         conn.commit()
 
     # ==================== Preference Learning ====================
@@ -834,10 +852,6 @@ class GrowthSystem:
                     inactive.append((name, days_since))
 
         return sorted(inactive, key=lambda x: x[1], reverse=True)
-
-    # Legacy alias
-    def get_missed_connections(self) -> List[Tuple[str, int]]:
-        return self.get_inactive_visitors()
 
     # ==================== Goal Formation ====================
 
