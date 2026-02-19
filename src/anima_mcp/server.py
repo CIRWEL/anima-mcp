@@ -1075,6 +1075,7 @@ async def _update_display_loop():
                             )
                             if _impl_result:
                                 print(f"[PrimitiveLang] Implicit feedback: response in {_delay:.0f}s, score={_impl_result['score']:.2f}", file=sys.stderr, flush=True)
+                            _last_primitive_utterance = None  # Done — recorded response
                         else:
                             # No response within window — record absence if enough time passed
                             from datetime import timedelta as _td
@@ -1084,7 +1085,7 @@ async def _update_display_loop():
                                     message_arrived=False,
                                     delay_seconds=999,
                                 )
-                        _last_primitive_utterance = None  # Don't check again
+                                _last_primitive_utterance = None  # Done — recorded no-response
 
                     if loop_count % SELF_MODEL_SAVE_INTERVAL == 0:
                         stats = lang.get_stats()
