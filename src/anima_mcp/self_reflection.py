@@ -683,7 +683,8 @@ class SelfReflectionSystem:
                     id=iid, category=InsightCategory.BEHAVIORAL,
                     description=desc, confidence=wp.confidence,
                     sample_count=wp.observation_count,
-                    discovered_at=now, last_validated=now, validation_count=1,
+                    discovered_at=now, last_validated=now,
+                    validation_count=1, contradiction_count=0,
                 )
                 self._save_insight(insight)
                 new_insights.append(insight)
@@ -700,13 +701,14 @@ class SelfReflectionSystem:
         for pref_name, desc in drawing_checks:
             dp = growth._preferences.get(pref_name)
             if dp and dp.confidence > 0.6 and dp.observation_count >= 5:
-                iid = f"drawing_{pref_name}"
+                iid = pref_name  # e.g. "drawing_night" — no double prefix
                 if iid not in self._insights:
                     insight = Insight(
                         id=iid, category=InsightCategory.BEHAVIORAL,
                         description=desc, confidence=dp.confidence,
                         sample_count=dp.observation_count,
-                        discovered_at=now, last_validated=now, validation_count=1,
+                        discovered_at=now, last_validated=now,
+                        validation_count=1, contradiction_count=0,
                     )
                     self._save_insight(insight)
                     new_insights.append(insight)
