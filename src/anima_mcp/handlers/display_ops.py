@@ -280,9 +280,9 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             }))]
 
         sensors = _get_sensors()
-        BRIGHTNESS_LEVELS = [0.0, 0.05, 0.10, 0.12, 0.15, 0.20, 0.25]
-        SETTLE_SECONDS = 2.5
-        SAMPLES_PER_LEVEL = 3
+        BRIGHTNESS_LEVELS = [0.0, 0.05, 0.10, 0.15, 0.25]
+        SETTLE_SECONDS = 1.5
+        SAMPLES_PER_LEVEL = 2
 
         original_factor = _leds._manual_brightness_factor
         calibration_data = []
