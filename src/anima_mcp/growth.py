@@ -594,6 +594,7 @@ class GrowthSystem:
         """Update or create a preference. Returns insight message if confidence increased significantly."""
         conn = self._connect()
         now = datetime.now()
+        insight = None
 
         if name in self._preferences:
             pref = self._preferences[name]
@@ -612,11 +613,11 @@ class GrowthSystem:
             pref.confidence = min(1.0, pref.confidence + 0.1)
             pref.last_confirmed = now
 
-            # Return insight if we crossed a confidence threshold
+            # Insight if we crossed a confidence threshold
             if old_confidence < 0.5 and pref.confidence >= 0.5:
-                return f"I'm becoming sure: {description}"
+                insight = f"I'm becoming sure: {description}"
             elif old_confidence < 0.8 and pref.confidence >= 0.8:
-                return f"I know this about myself: {description}"
+                insight = f"I know this about myself: {description}"
         else:
             # New preference discovered
             pref = Preference(
@@ -630,9 +631,9 @@ class GrowthSystem:
                 last_confirmed=now,
             )
             self._preferences[name] = pref
-            return f"I'm noticing something: {description}"
+            insight = f"I'm noticing something: {description}"
 
-        # Save to database
+        # Always save to database (was previously skipped on early returns)
         conn.execute("""
             INSERT OR REPLACE INTO preferences
             (name, category, description, value, confidence, observation_count, first_noticed, last_confirmed)
@@ -642,7 +643,7 @@ class GrowthSystem:
               pref.first_noticed.isoformat(), pref.last_confirmed.isoformat()))
         conn.commit()
 
-        return None
+        return insight
 
     # ==================== Relationship Memory ====================
 
