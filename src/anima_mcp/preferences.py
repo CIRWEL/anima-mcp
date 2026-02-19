@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 from collections import deque
 import json
+import sys
 from pathlib import Path
 import math
 
@@ -149,7 +150,7 @@ class PreferenceSystem:
                             p.confidence = pdata.get("confidence", 0.0)
                             p.experience_count = pdata.get("experience_count", 0)
             except Exception as e:
-                print(f"[Preferences] Could not load: {e}")
+                print(f"[Preferences] Could not load: {e}", file=sys.stderr, flush=True)
 
     def _save(self):
         """Save preferences to disk."""
@@ -171,7 +172,7 @@ class PreferenceSystem:
             with open(self.persistence_path, 'w') as f:
                 json.dump(data, f, indent=2)
         except Exception as e:
-            print(f"[Preferences] Could not save: {e}")
+            print(f"[Preferences] Could not save: {e}", file=sys.stderr, flush=True)
 
     def record_state(self, state: Dict[str, float]):
         """Record current state for experience tracking."""

@@ -51,7 +51,6 @@ class ScreenState:
     """Current screen state."""
     mode: ScreenMode = ScreenMode.FACE
     last_switch_time: float = 0.0
-    auto_return_seconds: float = 60.0  # Auto-return to FACE after 60s (longer for exploration)
     last_user_action_time: float = 0.0  # Track when user last interacted
 
     # Message board interaction state

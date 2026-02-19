@@ -6,6 +6,7 @@ Uses computational neural for EEG bands (same as Pi).
 """
 
 import random
+import sys
 import psutil
 from datetime import datetime
 from .base import SensorBackend, SensorReadings
@@ -64,7 +65,7 @@ class MockSensors(SensorBackend):
                 "gamma": neural.gamma,
             }
         except Exception as e:
-            print(f"[MockSensors] Computational neural error: {e}")
+            print(f"[MockSensors] Computational neural error: {e}", file=sys.stderr, flush=True)
 
         return SensorReadings(
             timestamp=now,
