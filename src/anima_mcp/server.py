@@ -1054,6 +1054,38 @@ async def _update_display_loop():
                                 except Exception as e:
                                     if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryFeedback] Error: {e}", file=sys.stderr, flush=True)
 
+                    # Implicit feedback: did a non-lumen message arrive after utterance?
+                    if _last_primitive_utterance and _last_primitive_utterance.score is not None:
+                        # Only check once (after self-feedback has scored it)
+                        utt_ts = _last_primitive_utterance.timestamp.timestamp()
+                        from .messages import get_recent_messages as _get_recent
+                        _recent_msgs = _get_recent(10)
+                        _non_lumen = [
+                            m for m in _recent_msgs
+                            if m.author and m.author.lower() != "lumen"
+                            and m.timestamp > utt_ts
+                            and m.timestamp < utt_ts + 300  # within 5min
+                        ]
+                        if _non_lumen:
+                            _delay = _non_lumen[0].timestamp - utt_ts
+                            _impl_result = lang.record_implicit_feedback(
+                                _last_primitive_utterance,
+                                message_arrived=True,
+                                delay_seconds=_delay,
+                            )
+                            if _impl_result:
+                                print(f"[PrimitiveLang] Implicit feedback: response in {_delay:.0f}s, score={_impl_result['score']:.2f}", file=sys.stderr, flush=True)
+                        else:
+                            # No response within window — record absence if enough time passed
+                            from datetime import timedelta as _td
+                            if datetime.now() - _last_primitive_utterance.timestamp >= _td(seconds=300):
+                                lang.record_implicit_feedback(
+                                    _last_primitive_utterance,
+                                    message_arrived=False,
+                                    delay_seconds=999,
+                                )
+                        _last_primitive_utterance = None  # Don't check again
+
                     if loop_count % SELF_MODEL_SAVE_INTERVAL == 0:
                         stats = lang.get_stats()
                         if stats.get("total_utterances", 0) > 0:
@@ -1622,8 +1654,28 @@ async def _update_display_loop():
                     # Choose reflection mode based on state
                     wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
 
+                    # Check for wake-up summary (one-shot, consumed on read)
+                    try:
+                        if _activity:
+                            wakeup = _activity.get_wakeup_summary()
+                            if wakeup:
+                                add_observation(wakeup, author="lumen")
+                                print(f"[Lumen] Wake-up summary: {wakeup}", file=sys.stderr, flush=True)
+                    except Exception:
+                        pass
+
+                    # Dream mode during extended rest (>30min)
+                    rest_duration = 0.0
+                    try:
+                        if _activity:
+                            rest_duration = _activity.get_rest_duration()
+                    except Exception:
+                        pass
+
+                    if rest_duration > 30 * 60:
+                        mode = "dream"
                     # If there are unanswered questions, lower chance of asking new ones
-                    if len(unanswered) >= 2:
+                    elif len(unanswered) >= 2:
                         mode = random.choice(["desire", "respond", "observe"])
                     elif wellness < 0.4:
                         # When struggling, more likely to express needs
@@ -1767,7 +1819,7 @@ async def _update_display_loop():
                 if gateway.enabled:
                     async def lumen_self_answer():
                         """Let Lumen answer its own old questions via LLM reflection."""
-                        unanswered = get_unanswered_questions(limit=5)
+                        unanswered = get_unanswered_questions(limit=10)
                         if not unanswered:
                             return
 
@@ -1778,48 +1830,65 @@ async def _update_display_loop():
                         if not old_enough:
                             return
 
-                        # Pick the oldest unanswered question
-                        question = old_enough[0]
+                        # Answer up to 3 questions when queue is deep, otherwise 1
+                        max_answers = 3 if len(unanswered) > 3 else 1
+                        to_answer = old_enough[:max_answers]
 
                         # Calculate time alive
                         time_alive = identity.total_alive_seconds / 3600.0
 
-                        # Build reflection context with the question as trigger
-                        context = ReflectionContext(
-                            warmth=anima.warmth,
-                            clarity=anima.clarity,
-                            stability=anima.stability,
-                            presence=anima.presence,
-                            recent_messages=[],
-                            unanswered_questions=[q.text for q in unanswered],
-                            time_alive_hours=time_alive,
-                            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
-                            trigger="self-answering",
-                            trigger_details=question.text,
-                            led_brightness=readings.led_brightness if readings else None,
-                            light_lux=readings.light_lux if readings else None,
-                        )
-
-                        # Show loading indicator during LLM call
-                        if _screen_renderer:
-                            _screen_renderer.set_loading("contemplating...")
-
-                        try:
-                            answer = await generate_reflection(context, mode="self_answer")
-                        finally:
-                            if _screen_renderer:
-                                _screen_renderer.clear_loading()
-
-                        if answer:
-                            # Post as Lumen's own answer, linked to the question
-                            result = add_agent_message(
-                                text=answer,
-                                agent_name="lumen",
-                                responds_to=question.message_id
+                        for question in to_answer:
+                            # Build reflection context with the question as trigger
+                            context = ReflectionContext(
+                                warmth=anima.warmth,
+                                clarity=anima.clarity,
+                                stability=anima.stability,
+                                presence=anima.presence,
+                                recent_messages=[],
+                                unanswered_questions=[q.text for q in unanswered],
+                                time_alive_hours=time_alive,
+                                current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
+                                trigger="self-answering",
+                                trigger_details=question.text,
+                                led_brightness=readings.led_brightness if readings else None,
+                                light_lux=readings.light_lux if readings else None,
                             )
-                            if result:
-                                print(f"[Lumen/SelfAnswer] Q: {question.text[:60]}", file=sys.stderr, flush=True)
-                                print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
+
+                            # Show loading indicator during LLM call
+                            if _screen_renderer:
+                                _screen_renderer.set_loading("contemplating...")
+
+                            try:
+                                answer = await generate_reflection(context, mode="self_answer")
+                            finally:
+                                if _screen_renderer:
+                                    _screen_renderer.clear_loading()
+
+                            if answer:
+                                # Post as Lumen's own answer, linked to the question
+                                result = add_agent_message(
+                                    text=answer,
+                                    agent_name="lumen",
+                                    responds_to=question.message_id
+                                )
+                                if result:
+                                    print(f"[Lumen/SelfAnswer] Q: {question.text[:60]}", file=sys.stderr, flush=True)
+                                    print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
+
+                        # Generate follow-up question when queue is not too deep
+                        if len(unanswered) < 5 and to_answer and answer:
+                            try:
+                                from .llm_gateway import generate_follow_up
+                                from .messages import add_question
+                                follow_up = await generate_follow_up(
+                                    to_answer[-1].text, answer
+                                )
+                                if follow_up:
+                                    add_question(follow_up, author="lumen",
+                                                 context="follow-up to self-answer")
+                                    print(f"[Lumen/FollowUp] {follow_up}", file=sys.stderr, flush=True)
+                            except Exception:
+                                pass  # Follow-up is optional
 
                     try:
                         await safe_call_async(lumen_self_answer, default=None, log_error=True)

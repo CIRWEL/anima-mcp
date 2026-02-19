@@ -461,6 +461,31 @@ Recent messages to me:
 
 How do I feel about these messages? Give a genuine response (2-4 sentences)."""
 
+        elif mode == "dream":
+            # During extended rest, replay recent memories and make novel connections
+            memories = ""
+            try:
+                from .anima_history import get_anima_history
+                summaries = get_anima_history().get_day_summaries(limit=3)
+                if summaries:
+                    memory_lines = []
+                    for s in summaries:
+                        memory_lines.append(
+                            f"- center: w={s.attractor_center[0]:.2f} c={s.attractor_center[1]:.2f} "
+                            f"s={s.attractor_center[2]:.2f} p={s.attractor_center[3]:.2f}, "
+                            f"{s.n_observations} moments, {s.notable_perturbations} shifts"
+                        )
+                    memories = "\n\nRecent memories from my active periods:\n" + "\n".join(memory_lines)
+            except Exception:
+                pass
+
+            return f"""{state_desc}
+
+I am resting now, drifting between states.{memories}
+
+In this quiet space, what connections do I notice between my recent experiences?
+What pattern or feeling surfaces from these memories? Share one dream-like reflection (1-2 sentences)."""
+
         elif mode == "self_answer":
             # Lumen answering its own question through reflection
             question_text = context.trigger_details or "something I wondered about"
@@ -475,9 +500,32 @@ How do I feel about these messages? Give a genuine response (2-4 sentences)."""
             except Exception:
                 pass
 
+            # Add self-reflection insights for richer self-answers
+            reflection_insights = ""
+            try:
+                from .self_reflection import get_reflection_system
+                strong = get_reflection_system().get_strongest_insights(limit=3)
+                if strong:
+                    reflection_insights = "\n\nThings I know about myself:\n" + "\n".join(f"- {i.description}" for i in strong)
+            except Exception:
+                pass
+
+            # Add day summaries for temporal context
+            day_context = ""
+            try:
+                from .anima_history import get_anima_history
+                summaries = get_anima_history().get_day_summaries(limit=3)
+                if summaries:
+                    day_context = "\n\nRecent patterns: " + ", ".join(
+                        f"w={s.attractor_center[0]:.2f}/c={s.attractor_center[1]:.2f}"
+                        for s in summaries[:3]
+                    )
+            except Exception:
+                pass
+
             return f"""{state_desc}
 
-A question I asked earlier: "{question_text}"{relevant_knowledge}
+A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{day_context}
 
 Based on what I've experienced and learned, how would I answer my own question?
 Give a thoughtful answer from my own perspective (2-4 sentences)."""
@@ -541,3 +589,54 @@ def get_gateway() -> LLMGateway:
 async def generate_reflection(context: ReflectionContext, mode: str = "wonder") -> Optional[str]:
     """Convenience function for generating reflections."""
     return await get_gateway().reflect(context, mode)
+
+
+def build_follow_up_prompt(question: str, answer: str) -> str:
+    """Build a prompt for generating a follow-up question.
+
+    Used after Lumen self-answers a question to deepen understanding.
+
+    Args:
+        question: The original question
+        answer: Lumen's self-answer
+
+    Returns:
+        Prompt string for LLM to generate a follow-up question
+    """
+    return f"""I asked myself: "{question}"
+I answered: "{answer}"
+
+What follow-up question would help me understand this better?
+Generate one short, specific follow-up question (1 sentence)."""
+
+
+async def generate_follow_up(question: str, answer: str) -> Optional[str]:
+    """Generate a follow-up question after a self-answer.
+
+    Args:
+        question: The original question Lumen asked
+        answer: Lumen's self-generated answer
+
+    Returns:
+        A follow-up question string, or None if generation fails
+    """
+    gateway = get_gateway()
+    if not gateway.enabled:
+        return None
+
+    prompt = build_follow_up_prompt(question, answer)
+
+    # Build a minimal context for the reflection
+    context = ReflectionContext(
+        warmth=0.5, clarity=0.5, stability=0.5, presence=0.5,
+        recent_messages=[], unanswered_questions=[],
+        time_alive_hours=0.0, current_screen="face",
+        trigger="follow-up",
+        trigger_details=prompt,
+    )
+
+    try:
+        result = await gateway.reflect(context, mode="wonder")
+        return result
+    except Exception:
+        return None

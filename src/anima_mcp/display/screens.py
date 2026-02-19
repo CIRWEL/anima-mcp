@@ -4720,7 +4720,8 @@ class ScreenRenderer:
                         "humidity": readings.humidity_pct or 50,
                     }
                     phase = self._canvas.drawing_phase or "resting"
-                    insight = get_growth_system().observe_drawing(
+                    growth = get_growth_system()
+                    insight = growth.observe_drawing(
                         pixel_count=len(self._canvas.pixels),
                         phase=phase,
                         anima_state=anima_state,
@@ -4728,6 +4729,23 @@ class ScreenRenderer:
                     )
                     if insight:
                         print(f"[Growth] Drawing insight: {insight}", file=sys.stderr, flush=True)
+
+                    # Drawing → Anima feedback: record completion with satisfaction
+                    try:
+                        satisfaction = self._canvas.compositional_satisfaction()
+                        coherence = (
+                            self._canvas.coherence_history[-1]
+                            if self._canvas.coherence_history else 0.5
+                        )
+                        growth.record_drawing_completion(
+                            pixel_count=len(self._canvas.pixels),
+                            mark_count=self._canvas.mark_count,
+                            coherence=coherence,
+                            satisfaction=satisfaction,
+                        )
+                    except Exception as e:
+                        print(f"[Growth] Drawing feedback failed: {e}",
+                              file=sys.stderr, flush=True)
             except Exception as e:
                 print(f"[Notepad] Growth notify failed: {e}", file=sys.stderr, flush=True)
 

@@ -58,6 +58,10 @@ class ActivityManager:
         self._sleep_sessions: List[dict] = []  # {start, end, duration_hours}
         self._last_sleep_start: Optional[datetime] = None
 
+        # Dream/wake summary
+        self._rest_entry_time: Optional[float] = None
+        self._wakeup_summary: Optional[str] = None
+
         # Thresholds (in seconds)
         self._drowsy_after_inactivity = 30 * 60  # 30 minutes no interaction -> drowsy
         self._resting_after_inactivity = 60 * 60  # 60 minutes no interaction -> resting
@@ -211,6 +215,18 @@ class ActivityManager:
         if new_level == ActivityLevel.RESTING and old_level != ActivityLevel.RESTING:
             # Entering sleep
             self._last_sleep_start = now
+            self._rest_entry_time = time.time()
+
+            # Consolidate memory on entering rest
+            try:
+                from .anima_history import get_anima_history
+                summary = get_anima_history().consolidate()
+                if summary:
+                    print(f"[Activity] Memory consolidated: {summary.n_observations} obs",
+                          file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[Activity] Consolidation failed: {e}", file=sys.stderr, flush=True)
+
         elif old_level == ActivityLevel.RESTING and new_level != ActivityLevel.RESTING:
             # Waking up
             if self._last_sleep_start:
@@ -223,10 +239,58 @@ class ActivityManager:
                 self._sleep_sessions = self._sleep_sessions[-50:]  # Keep last 50
                 self._last_sleep_start = None
 
+                # Generate wake-up summary if rest was >30min
+                if duration > 30 * 60:
+                    self._wakeup_summary = self._generate_wakeup_summary(duration)
+
+            self._rest_entry_time = None
+
         self._current_level = new_level
         self._state_since = time.time()
 
         print(f"[Activity] {old_level.value} -> {new_level.value} ({reason})", file=sys.stderr, flush=True)
+
+    def get_wakeup_summary(self) -> Optional[str]:
+        """
+        Get wake-up summary (one-shot: returns then clears).
+
+        After a rest period >30min, this returns a summary of the
+        consolidated memory from before rest. Returns None if no
+        summary is available.
+        """
+        summary = self._wakeup_summary
+        self._wakeup_summary = None
+        return summary
+
+    def get_rest_duration(self) -> float:
+        """Get how long we've been resting, in seconds. 0 if not resting."""
+        if self._rest_entry_time is None:
+            return 0.0
+        return time.time() - self._rest_entry_time
+
+    def _generate_wakeup_summary(self, duration_seconds: float) -> str:
+        """Generate a wake-up summary from the most recent day summary."""
+        hours = duration_seconds / 3600
+        try:
+            from .anima_history import get_anima_history
+            summaries = get_anima_history().get_day_summaries(limit=1)
+            if summaries:
+                s = summaries[0]
+                dims = ["warmth", "clarity", "stability", "presence"]
+                center_desc = ", ".join(
+                    f"{d}: {s.attractor_center[i]:.2f}"
+                    for i, d in enumerate(dims)
+                )
+                return (
+                    f"i rested for {hours:.1f} hours. "
+                    f"before sleep, my state centered around {center_desc} "
+                    f"with {s.notable_perturbations} notable shifts "
+                    f"across {s.n_observations} moments."
+                )
+        except Exception:
+            pass
+
+        return f"i rested for {hours:.1f} hours."
 
     def get_led_settings(self) -> dict:
         """Get LED-specific settings for current state."""
