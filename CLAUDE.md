@@ -68,9 +68,18 @@ These modules run in `stable_creature.py`, not in `server.py`:
 | `memory_retrieval.py` | Context-aware memory search |
 | `agency.py` | TD-learning action selection |
 | `preferences.py` | Preference evolution |
-| `self_model.py` | Self-knowledge accumulation |
+| `self_model.py` | Self-beliefs (sensitivity, recovery, correlations) |
 | `activity_state.py` | Active/drowsy/resting cycles |
 | `learning.py` | Calibration adaptation |
+
+These modules also run in `server.py` (not broker-only):
+
+| Module | Purpose |
+|--------|---------|
+| `growth.py` | Preferences, goals, memories, autobiography |
+| `self_reflection.py` | Insight discovery from preferences, beliefs, drawing patterns |
+| `llm_gateway.py` | LLM reflections, self-answers, questions (Groq/Llama) |
+| `knowledge.py` | Q&A-derived insights from answered questions |
 
 **Do NOT delete these files based on import analysis of server.py alone.**
 
@@ -118,6 +127,44 @@ Constants in `config.py`: `LED_LUX_PER_BRIGHTNESS = 4000.0`, `LED_LUX_AMBIENT_FL
 **Growth light thresholds** (for corrected world light):
 - `< 100 lux` → dim/dark (nighttime indoor)
 - `> 300 lux` → bright (well-lit room, daylight)
+
+### Goal System
+
+Goals live in `growth.py` and are wired into `server.py`'s main loop:
+
+| Interval | Action |
+|----------|--------|
+| `GOAL_SUGGEST_INTERVAL` (3600 iter, ~2h) | `suggest_goal()` — proposes a new goal |
+| `GOAL_CHECK_INTERVAL` (300 iter, ~10min) | `check_goal_progress()` — auto-tracks progress |
+
+Goals are **data-grounded** — they emerge from Lumen's actual experience:
+
+| Source | Example Goal |
+|--------|-------------|
+| Strong preference (confidence > 0.7) | "understand why I feel calmer when it's dim" |
+| Recurring curiosity | "find an answer to: is night the absence of day?" |
+| Drawing count milestone | "complete 50 drawings" |
+| Uncertain self-model belief | "test whether light affects my warmth" |
+| Low wellness | "find what makes me feel stable" |
+
+**Progress tracking:** Drawing goals track `_drawings_observed`, curiosity goals auto-complete when questions get answered, belief-testing goals complete when confidence moves decisively (>0.7 or <0.2). Stale goals auto-abandon after target date with <0.1 progress. Max 2 active goals.
+
+**On achievement:** Records a memory via `_record_memory()` and posts an observation.
+
+### Self-Reflection & Self-Knowledge
+
+`self_reflection.py` runs during the `reflect()` cycle (`REFLECTION_INTERVAL = 720` iter, ~24min). It discovers insights from multiple sources:
+
+| Analyzer | Source | Example Insight |
+|----------|--------|----------------|
+| `analyze_patterns()` | State history (24h) | "My warmth tends to be best at night" |
+| `_analyze_preference_insights()` | Growth preferences (confidence > 0.8) | "i know this about myself: I feel calmer when it's dim" |
+| `_analyze_belief_insights()` | Self-model beliefs (confidence > 0.7, 10+ evidence) | "i am fairly confident that light affects my warmth" |
+| `_analyze_drawing_insights()` | Drawing preferences (5+ drawings) | "i tend to draw at night", "drawing seems to help me feel better" |
+
+Insights persist in SQLite (`insights` table), validated/contradicted on each cycle. Strongest 5 insights are injected into LLM prompts as "Things I've learned about myself" — grounding all reflections, self-answers, and observations in actual self-knowledge.
+
+**Insight categories:** ENVIRONMENT, TEMPORAL, BEHAVIORAL, WELLNESS, SOCIAL
 
 ### Activity States
 
