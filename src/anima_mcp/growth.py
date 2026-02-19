@@ -311,8 +311,12 @@ class GrowthSystem:
 
         # Load preferences
         for row in conn.execute("SELECT * FROM preferences"):
+            try:
+                cat = PreferenceCategory(row["category"])
+            except ValueError:
+                continue  # Skip system/sentinel rows with non-enum categories
             self._preferences[row["name"]] = Preference(
-                category=PreferenceCategory(row["category"]),
+                category=cat,
                 name=row["name"],
                 description=row["description"] or "",
                 value=row["value"],
@@ -408,13 +412,9 @@ class GrowthSystem:
         """
         SENTINEL = "_migration_raw_lux_v1"
 
-        # Fast-exit: already ran
-        if SENTINEL in self._preferences:
-            return
-
+        # Fast-exit: check DB for sentinel (sentinel has category='system',
+        # so it's skipped by _load_all and won't be in self._preferences)
         conn = self._connect()
-
-        # Also check DB directly (preferences dict may not include sentinel)
         row = conn.execute(
             "SELECT name FROM preferences WHERE name = ?", (SENTINEL,)
         ).fetchone()
