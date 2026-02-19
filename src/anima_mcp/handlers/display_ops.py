@@ -353,10 +353,10 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "ambient_lux_at_zero_brightness": zero_reading["raw_lux"] if zero_reading else None,
             "fitted_constants": fitted,
             "current_config": {
-                "LED_LUX_PER_BRIGHTNESS": 4000.0,
+                "LED_LUX_PER_BRIGHTNESS": 400.0,
                 "LED_LUX_AMBIENT_FLOOR": 8.0,
             },
-            "note": "Update config.py with fitted_constants. Calibration takes ~25s and blocks other MCP calls.",
+            "note": "Compare fitted_constants against current_config. Update config.py if significantly different.",
         }, indent=2))]
 
     else:
