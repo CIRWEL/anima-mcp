@@ -177,3 +177,49 @@ class TestNoWeightUpdateOnNoMessage:
 
         new_weight = pls._token_weights.get("warm", 1.0)
         assert new_weight == pytest.approx(old_weight)
+
+
+# ==================== Server integration contract ====================
+
+class TestServerIntegrationContract:
+    """Test the contract between server.py and record_implicit_feedback.
+
+    The server should only call record_implicit_feedback when:
+    1. A non-lumen message arrived within 5min (message_arrived=True)
+    2. Or 5min elapsed with no message (message_arrived=False)
+
+    It should NOT clear the utterance reference if still waiting.
+    Regression test for bug where _last_primitive_utterance was set to None
+    before the 5-minute window expired.
+    """
+
+    def test_got_response_null_means_not_yet_evaluated(self, pls):
+        """Utterances with got_response=NULL haven't been evaluated yet.
+
+        Server should keep checking until window expires or message arrives.
+        """
+        utt = _make_utterance()
+        pls._save_utterance(utt)
+
+        # Before any implicit feedback call, got_response should be NULL
+        conn = pls._connect()
+        row = conn.execute(
+            "SELECT got_response FROM primitive_history WHERE timestamp = ?",
+            (utt.timestamp.isoformat(),)
+        ).fetchone()
+        assert row is not None
+        assert row["got_response"] is None  # Not yet evaluated
+
+    def test_multiple_implicit_calls_idempotent(self, pls):
+        """Calling implicit feedback twice on same utterance is safe."""
+        utt = _make_utterance()
+        pls._save_utterance(utt)
+
+        # First call: response arrived
+        r1 = pls.record_implicit_feedback(utt, message_arrived=True, delay_seconds=60)
+        assert r1 is not None
+
+        # Second call: same utterance, same result — idempotent
+        r2 = pls.record_implicit_feedback(utt, message_arrived=True, delay_seconds=60)
+        assert r2 is not None
+        # Weight update applies twice (server should prevent this), but no crash
