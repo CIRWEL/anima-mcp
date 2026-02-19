@@ -963,7 +963,7 @@ class GrowthSystem:
 
             # Belief-testing goals — belief confidence moved decisively
             elif "test whether" in goal.description.lower() and self_model:
-                for bid, belief in self_model._beliefs.items():
+                for bid, belief in self_model.beliefs.items():
                     if belief.description.lower() in goal.description.lower():
                         if belief.confidence > 0.7 or belief.confidence < 0.2:
                             msg = self.update_goal_progress(
@@ -1016,7 +1016,7 @@ class GrowthSystem:
 
         # 4. Belief-testing: uncertain beliefs worth investigating
         if self_model:
-            for bid, belief in self_model._beliefs.items():
+            for bid, belief in self_model.beliefs.items():
                 total = belief.supporting_count + belief.contradicting_count
                 if 0.3 < belief.confidence < 0.6 and total >= 3:
                     suggestions.append((
