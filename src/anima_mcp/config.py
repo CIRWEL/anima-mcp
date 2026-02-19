@@ -21,8 +21,14 @@ from typing import Tuple, Optional, Dict, Any
 # The VEML7700 light sensor sits next to the DotStar LEDs.
 # These constants estimate how much lux the LEDs contribute to the sensor reading.
 # Formula: estimated_glow = LED_LUX_PER_BRIGHTNESS * brightness + LED_LUX_AMBIENT_FLOOR
-# TODO: empirically calibrate on Pi hardware with known brightness levels
-LED_LUX_PER_BRIGHTNESS: float = 4000.0   # lux per unit brightness (0-1 scale)
+#
+# Empirically calibrated 2026-02-18 via manage_display(action="calibrate_leds"):
+#   brightness=0.00 → ~15-44 lux (ambient only, LEDs off)
+#   brightness=0.12 → ~29-62 lux (LED adds ~13-17 lux)
+#   brightness=0.25 → ~99-112 lux (LED adds ~68-83 lux)
+#   Fitted slopes: 391, 538 across two runs. Using 400 as conservative mid-value.
+#   Previous guess of 4000 was 10x too high — world_light was near-zero at all times.
+LED_LUX_PER_BRIGHTNESS: float = 400.0    # lux per unit brightness (0-1 scale)
 LED_LUX_AMBIENT_FLOOR: float = 8.0       # minimal ambient lux when LEDs are very dim
 
 

@@ -355,14 +355,11 @@ class MetacognitiveMonitor:
         # will read — this is genuine proprioception: predicting our own
         # sensory input from knowledge of our own motor output.
         #
-        # Empirical mapping (from auto-brightness compensation in leds.py):
-        #   LED brightness 0.0 → ~5-12 lux (ambient only, LEDs off/minimal)
-        #   LED brightness 0.05 → ~20-50 lux
-        #   LED brightness 0.10 → ~40-100 lux
-        #   LED brightness 0.15 → ~100-300 lux
-        #   LED brightness 0.25 → ~400-800 lux
-        #   LED brightness 0.50 → ~1500-3000 lux
-        # Roughly: lux ≈ brightness * 4000 + ambient_floor
+        # Empirically calibrated 2026-02-18 via manage_display(action="calibrate_leds"):
+        #   LED brightness 0.00 → ~15-44 lux (ambient only, LEDs off)
+        #   LED brightness 0.12 → ~29-62 lux (LED adds ~13-17 lux)
+        #   LED brightness 0.25 → ~99-112 lux (LED adds ~68-83 lux)
+        # Roughly: lux ≈ brightness * 400 + ambient_floor
         # We use a learned baseline for the ambient floor.
         if led_brightness is not None and led_brightness >= 0:
             # Estimate expected lux from our own LED output
