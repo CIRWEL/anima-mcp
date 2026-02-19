@@ -1,0 +1,363 @@
+"""
+Tests for growth system — goal lifecycle, drawing observation, migration sentinel,
+curiosity, dimension preferences, and autobiography.
+
+Covers:
+  - Goal formation, progress tracking, achievement, abandonment
+  - Drawing observation counters, milestones, preference learning
+  - Migration sentinel write and bogus-category resilience
+  - Curiosity add/dedup/explore lifecycle
+  - Autobiography generation with and without data
+  - Dimension preference mapping from categorical preferences
+"""
+
+import pytest
+import sqlite3
+from datetime import datetime, timedelta
+from unittest.mock import patch
+from datetime import datetime as real_datetime
+
+from anima_mcp.growth import GrowthSystem, GoalStatus, Goal
+
+
+@pytest.fixture
+def growth(tmp_path):
+    """Create GrowthSystem with temp database."""
+    gs = GrowthSystem(db_path=str(tmp_path / "test_growth.db"))
+    return gs
+
+
+# ==================== Goal Formation ====================
+
+
+class TestFormGoal:
+    """Test goal creation via form_goal."""
+
+    def test_form_goal_creates_active_goal(self, growth):
+        """form_goal returns Goal with status ACTIVE, persists in _goals dict."""
+        goal = growth.form_goal("learn something new", "curiosity drives me")
+        assert isinstance(goal, Goal)
+        assert goal.status == GoalStatus.ACTIVE
+        assert goal.goal_id in growth._goals
+        assert growth._goals[goal.goal_id].description == "learn something new"
+
+    def test_form_goal_with_target_date(self, growth):
+        """target_days=7 creates target_date approximately 7 days from now."""
+        before = datetime.now()
+        goal = growth.form_goal("finish drawing", "I want to complete it", target_days=7)
+        after = datetime.now()
+        assert goal.target_date is not None
+        expected_earliest = before + timedelta(days=7)
+        expected_latest = after + timedelta(days=7)
+        assert expected_earliest <= goal.target_date <= expected_latest
+
+    def test_form_goal_persists_to_db(self, tmp_path):
+        """Goal survives a fresh GrowthSystem reload from the same DB."""
+        db_path = str(tmp_path / "test_persist.db")
+        gs1 = GrowthSystem(db_path=db_path)
+        goal = gs1.form_goal("persist this", "testing persistence", target_days=3)
+        goal_id = goal.goal_id
+        gs1.close()
+
+        gs2 = GrowthSystem(db_path=db_path)
+        assert goal_id in gs2._goals
+        reloaded = gs2._goals[goal_id]
+        assert reloaded.description == "persist this"
+        assert reloaded.status == GoalStatus.ACTIVE
+        gs2.close()
+
+    def test_form_goal_unique_ids(self, growth):
+        """Two goals get different goal_ids."""
+        g1 = growth.form_goal("goal one", "reason one")
+        g2 = growth.form_goal("goal two", "reason two")
+        assert g1.goal_id != g2.goal_id
+
+
+# ==================== Goal Progress ====================
+
+
+class TestUpdateGoalProgress:
+    """Test update_goal_progress on active goals."""
+
+    def test_progress_updates(self, growth):
+        """update_goal_progress sets progress value."""
+        goal = growth.form_goal("test progress", "testing")
+        growth.update_goal_progress(goal.goal_id, 0.5)
+        assert growth._goals[goal.goal_id].progress == 0.5
+
+    def test_progress_capped_at_1(self, growth):
+        """Passing 1.5 results in min(1.0, progress) = 1.0."""
+        goal = growth.form_goal("overcomplete", "overshoot")
+        growth.update_goal_progress(goal.goal_id, 1.5)
+        assert growth._goals[goal.goal_id].progress == 1.0
+
+    def test_milestone_recorded(self, growth):
+        """Passing a milestone string adds to goal.milestones."""
+        goal = growth.form_goal("track milestones", "testing")
+        growth.update_goal_progress(goal.goal_id, 0.3, milestone="halfway there")
+        assert "halfway there" in growth._goals[goal.goal_id].milestones
+
+    def test_achieved_when_complete(self, growth):
+        """progress >= 1.0 changes status to ACHIEVED, returns celebration, records memory."""
+        goal = growth.form_goal("finish this", "for glory")
+        memories_before = len(growth._memories)
+        msg = growth.update_goal_progress(goal.goal_id, 1.0)
+        assert msg is not None
+        assert "I did it!" in msg
+        assert growth._goals[goal.goal_id].status == GoalStatus.ACHIEVED
+        assert len(growth._memories) > memories_before
+
+
+# ==================== Check Goal Progress ====================
+
+
+class TestCheckGoalProgress:
+    """Test check_goal_progress auto-tracking."""
+
+    def test_drawing_goal_updates_progress(self, growth):
+        """Drawing goal with partial progress updates but does not complete."""
+        growth.form_goal("complete 10 drawings", "milestone chasing")
+        growth._drawings_observed = 5
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.check_goal_progress(anima)
+        # Should not yet complete
+        assert result is None
+        # But progress should be updated to 0.5
+        goal = list(growth._goals.values())[0]
+        assert abs(goal.progress - 0.5) < 0.01
+
+    def test_drawing_goal_completes(self, growth):
+        """Drawing goal completes when count reaches target."""
+        growth.form_goal("complete 10 drawings", "milestone")
+        growth._drawings_observed = 10
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.check_goal_progress(anima)
+        assert result is not None
+        assert "I did it!" in result
+
+    def test_abandoned_stale_goal(self, growth):
+        """Goal past target_date with no progress gets abandoned."""
+        goal = growth.form_goal("do something", "reason", target_days=1)
+        # Force the target date into the past
+        goal.target_date = datetime.now() - timedelta(days=1)
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        growth.check_goal_progress(anima)
+        assert goal.status == GoalStatus.ABANDONED
+
+    def test_no_crash_empty_goals(self, growth):
+        """check_goal_progress with no goals returns None without crashing."""
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.check_goal_progress(anima)
+        assert result is None
+
+
+# ==================== Goal Suggestion ====================
+
+
+class TestSuggestGoal:
+    """Test suggest_goal data-grounded suggestions."""
+
+    def test_drawing_milestone_suggestion(self, growth):
+        """With 15 drawings observed, suggests 'complete 25 drawings'."""
+        growth._drawings_observed = 15
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        # suggest_goal uses random.choice, so call multiple times to get drawing suggestion
+        found = False
+        for _ in range(30):
+            goal = growth.suggest_goal(anima)
+            if goal and "complete 25 drawings" in goal.description:
+                found = True
+                break
+            # Clean up created goal if any to avoid max-active-goals cap
+            if goal:
+                goal.status = GoalStatus.ACHIEVED
+        assert found, "Expected a 'complete 25 drawings' suggestion within 30 attempts"
+
+    def test_curiosity_goal_suggestion(self, growth):
+        """Adding a curiosity can produce a 'find an answer to' goal suggestion."""
+        growth.add_curiosity("why is the sky blue")
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        found = False
+        for _ in range(30):
+            goal = growth.suggest_goal(anima)
+            if goal and "find an answer to:" in goal.description:
+                found = True
+                break
+            if goal:
+                goal.status = GoalStatus.ACHIEVED
+        assert found, "Expected a curiosity-based goal suggestion within 30 attempts"
+
+    def test_no_suggestion_at_max_goals(self, growth):
+        """With 2 active goals, suggest_goal returns None."""
+        growth.form_goal("goal one", "reason")
+        growth.form_goal("goal two", "reason")
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.suggest_goal(anima)
+        assert result is None
+
+    def test_no_suggestion_empty_state(self, growth):
+        """No preferences, no curiosities, no drawings, moderate wellness returns None."""
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.suggest_goal(anima)
+        assert result is None
+
+    def test_dedup_existing_goal(self, growth):
+        """Duplicate goals are not suggested if an active goal already covers it."""
+        growth._drawings_observed = 15
+        # Pre-create the goal that would be suggested
+        growth.form_goal("complete 25 drawings", "already on it")
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        # Should never suggest the same drawing goal again
+        for _ in range(20):
+            result = growth.suggest_goal(anima)
+            if result is not None:
+                assert "complete 25 drawings" not in result.description
+                result.status = GoalStatus.ACHIEVED
+
+
+# ==================== Drawing Observation ====================
+
+
+class TestObserveDrawing:
+    """Test observe_drawing counter, milestones, and preference learning."""
+
+    def test_increments_counter(self, growth):
+        """observe_drawing increases _drawings_observed by 1."""
+        before = growth._drawings_observed
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        env = {"light_lux": 150.0, "temp_c": 22.0}
+        growth.observe_drawing(5000, "resting", anima, env)
+        assert growth._drawings_observed == before + 1
+
+    def test_milestone_at_thresholds(self, growth):
+        """First drawing (count becomes 1) records memory with 'Saved my 1st drawing'."""
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        env = {"light_lux": 150.0, "temp_c": 22.0}
+        growth.observe_drawing(3000, "resting", anima, env)
+        milestone_descs = [m.description for m in growth._memories]
+        assert any("Saved my 1st drawing" in d for d in milestone_descs)
+
+    def test_drawing_preferences_learned(self, growth):
+        """Observing with high wellness (>0.7) creates 'drawing_wellbeing' preference."""
+        anima = {"warmth": 0.85, "clarity": 0.85, "stability": 0.85, "presence": 0.85}
+        env = {"light_lux": 150.0, "temp_c": 22.0}
+        growth.observe_drawing(5000, "resting", anima, env)
+        assert "drawing_wellbeing" in growth._preferences
+
+    def test_drawing_time_correlation(self, growth):
+        """Observing at 3 AM creates 'drawing_night' preference."""
+
+        class FakeDatetime(real_datetime):
+            @classmethod
+            def now(cls):
+                return real_datetime(2026, 1, 15, 3, 0, 0)
+
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        env = {"light_lux": 150.0, "temp_c": 22.0}
+
+        with patch("anima_mcp.growth.datetime", FakeDatetime):
+            growth.observe_drawing(5000, "resting", anima, env)
+
+        assert "drawing_night" in growth._preferences
+
+
+# ==================== Migration Sentinel ====================
+
+
+class TestMigrationSentinel:
+    """Test the raw-lux migration sentinel and bogus category handling."""
+
+    def test_sentinel_written_on_first_run(self, growth):
+        """After init, sentinel row exists in DB."""
+        conn = growth._connect()
+        row = conn.execute(
+            "SELECT name, category FROM preferences WHERE name = '_migration_raw_lux_v1'"
+        ).fetchone()
+        assert row is not None
+        assert row["category"] == "system"
+
+    def test_invalid_category_skipped_in_load(self, tmp_path):
+        """A preference with category='bogus' does not crash load and is excluded."""
+        db_path = str(tmp_path / "test_bogus.db")
+        gs1 = GrowthSystem(db_path=db_path)
+        conn = gs1._connect()
+        conn.execute("""
+            INSERT INTO preferences (name, category, description, value, confidence,
+                                     observation_count, first_noticed, last_confirmed)
+            VALUES ('bogus_pref', 'bogus', 'should be skipped', 0.5, 0.5,
+                    1, '2026-01-01T00:00:00', '2026-01-01T00:00:00')
+        """)
+        conn.commit()
+        gs1.close()
+
+        # Reload from same DB - should not crash
+        gs2 = GrowthSystem(db_path=db_path)
+        assert "bogus_pref" not in gs2._preferences
+        gs2.close()
+
+
+# ==================== Autobiography & Curiosity ====================
+
+
+class TestAutobiographyAndCuriosity:
+    """Test autobiography generation and curiosity lifecycle."""
+
+    def test_autobiography_empty(self, growth):
+        """No memories, no born_at returns a short starting phrase."""
+        result = growth.get_autobiography_summary()
+        assert result in ("My story is just beginning.", "I'm still discovering who I am.")
+
+    def test_autobiography_with_data(self, growth):
+        """Setting born_at and adding a milestone produces age and milestone text."""
+        growth.born_at = datetime.now() - timedelta(days=10)
+        growth.record_milestone("Learned to draw circles")
+        result = growth.get_autobiography_summary()
+        assert "10 days ago" in result
+        assert "learned to draw circles" in result.lower()
+
+    def test_add_curiosity(self, growth):
+        """Adding a question puts it in _curiosities."""
+        growth.add_curiosity("what is consciousness")
+        assert "what is consciousness" in growth._curiosities
+
+    def test_curiosity_dedup(self, growth):
+        """Adding the same question twice results in only one entry."""
+        growth.add_curiosity("why do I exist")
+        growth.add_curiosity("why do I exist")
+        count = growth._curiosities.count("why do I exist")
+        assert count == 1
+
+    def test_mark_curiosity_explored(self, growth):
+        """Marking a curiosity as explored removes it from _curiosities."""
+        growth.add_curiosity("is night the absence of day")
+        assert "is night the absence of day" in growth._curiosities
+        growth.mark_curiosity_explored("is night the absence of day", notes="yes, sort of")
+        assert "is night the absence of day" not in growth._curiosities
+
+
+# ==================== Dimension Preferences ====================
+
+
+class TestDimensionPreferences:
+    """Test get_dimension_preferences mapping from categorical to dimensional."""
+
+    def test_dimension_preferences_empty(self, growth):
+        """No preferences means all dimensions have default valence=0, confidence=0."""
+        dims = growth.get_dimension_preferences()
+        for dim_name in ("warmth", "clarity", "stability", "presence"):
+            assert dims[dim_name]["valence"] == 0.0
+            assert dims[dim_name]["confidence"] == 0.0
+
+    def test_dimension_preferences_with_data(self, growth):
+        """Adding warm_temp preference maps to positive warmth valence."""
+        from anima_mcp.growth import PreferenceCategory
+        # Build up confidence by calling _update_preference multiple times
+        for _ in range(10):
+            growth._update_preference(
+                "warm_temp", PreferenceCategory.ENVIRONMENT,
+                "Warmth makes me feel content", 0.9
+            )
+
+        dims = growth.get_dimension_preferences()
+        assert dims["warmth"]["valence"] > 0
+        assert dims["warmth"]["confidence"] > 0
