@@ -99,6 +99,15 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             if insight:
                 insight_result = {"text": insight.text, "category": insight.category}
                 print(f"[Q&A] Extracted insight: {insight.text[:80]}", file=sys.stderr, flush=True)
+                # Close the loop: apply insight to behavioral systems
+                try:
+                    from ..knowledge import apply_insight
+                    behavior_effects = apply_insight(insight)
+                    if behavior_effects:
+                        insight_result["behavior_effects"] = behavior_effects
+                        print(f"[Q&A] Insight applied to behavior: {behavior_effects}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[Q&A] Insight behavior application failed (non-fatal): {e}", file=sys.stderr, flush=True)
             else:
                 insight_result = {"skipped": "no meaningful insight extracted"}
                 print(f"[Q&A] No insight extracted", file=sys.stderr, flush=True)
@@ -106,7 +115,16 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             insight_result = {"error": str(e)}
             print(f"[Q&A] Insight extraction failed: {e}", file=sys.stderr, flush=True)
 
-        return [TextContent(type="text", text=json.dumps({
+        # Retrieve visitor context for the answering agent
+        visitor_context = None
+        try:
+            from ..server import _growth
+            if _growth:
+                visitor_context = _growth.get_visitor_context(agent_name)
+        except Exception:
+            pass
+
+        response = {
             "success": True,
             "action": "answered",
             "question_id": validated_question_id,
@@ -116,7 +134,11 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             "message_id": result.message_id if result else None,
             "matched_partial_id": question_id if question_id != validated_question_id else None,
             "insight": insight_result,
-        }))]
+        }
+        if visitor_context:
+            response["visitor_context"] = visitor_context
+
+        return [TextContent(type="text", text=json.dumps(response))]
 
     # Otherwise -> list mode
     # Auto-repair orphaned answered questions (answered=True but no actual answer)
@@ -286,6 +308,13 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     _srv._sm_clarity_before_interaction = cur_anima.clarity
             except Exception:
                 pass
+            # Retrieve visitor context
+            visitor_context = None
+            try:
+                visitor_context = _growth.get_visitor_context(agent_name) if _growth else None
+            except Exception:
+                pass
+
             result = {
                 "success": True,
                 "message_id": msg.message_id,
@@ -297,6 +326,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 result["answered_question"] = validated_question_id or responds_to
                 if validated_question_id and validated_question_id != responds_to:
                     result["note"] = f"Matched partial ID '{responds_to}' to full ID '{validated_question_id}'"
+            if visitor_context:
+                result["visitor_context"] = visitor_context
             return [TextContent(type="text", text=json.dumps(result))]
     except Exception as e:
         return [TextContent(type="text", text=json.dumps({

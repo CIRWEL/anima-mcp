@@ -208,6 +208,7 @@ class ActionSelector:
         surprise_level: float = 0.0,
         surprise_sources: Optional[List[str]] = None,
         can_speak: bool = False,
+        self_predictions: Optional[Dict[str, float]] = None,
     ) -> Action:
         """
         Select an action based on current context.
@@ -313,6 +314,30 @@ class ActionSelector:
                     ),
                     self._get_action_value("led_brightness") + abs(direction) * 0.4,
                 ))
+
+        # 7. Prediction-informed adjustments
+        if self_predictions and candidates:
+            try:
+                pred_surprise = self_predictions.get("surprise_likelihood", 0.5)
+                pred_recovery = self_predictions.get("fast_recovery", 0.5)
+
+                for i, (action, value) in enumerate(candidates):
+                    boost = 0.0
+                    if action.action_type == ActionType.ASK_QUESTION and pred_surprise > 0.6:
+                        # High predicted surprise → more curious
+                        boost = pred_surprise * 0.3
+                        action.motivation += f" (predicted surprise: {pred_surprise:.1f})"
+                    elif action.action_type == ActionType.STAY_QUIET and pred_surprise < 0.3:
+                        # Low predicted surprise → more comfortable staying quiet
+                        boost = 0.2
+                    elif action.action_type == ActionType.FOCUS_ATTENTION and pred_recovery > 0.6:
+                        # High predicted recovery → more willing to explore
+                        boost = pred_recovery * 0.2
+                        action.motivation += f" (confident in recovery)"
+                    if boost > 0:
+                        candidates[i] = (action, value + boost)
+            except Exception:
+                pass  # Predictions are advisory, never block action selection
 
         # Select action with highest value (with some noise for stochasticity)
         if not candidates:

@@ -279,6 +279,77 @@ class ActivityManager:
             "settings": self._level_settings[self._current_level],
         }
 
+    def apply_learned_patterns(
+        self,
+        adaptive_model=None,
+        self_model=None,
+    ) -> dict:
+        """Adjust circadian schedule based on learned temporal patterns.
+
+        Called periodically (~once per hour) to incorporate what Lumen
+        has learned about its own temporal rhythms into activity planning.
+
+        Adjustments are small nudges (+/-0.1 max) so the schedule
+        can't swing dramatically even with noisy data.
+
+        Returns dict of adjustments made.
+        """
+        adjustments = {}
+
+        # Use adaptive prediction to find hours with high/low clarity
+        if adaptive_model:
+            try:
+                from datetime import datetime as _dt
+                for hour in range(24):
+                    test_time = _dt.now().replace(hour=hour, minute=30)
+                    clarity_pred, clarity_conf = adaptive_model.predict(
+                        "clarity", current_time=test_time)
+
+                    if clarity_conf > 0.4 and clarity_pred is not None:
+                        base = self._circadian_schedule.get(hour, 0.5)
+                        nudge = (clarity_pred - 0.5) * 0.2  # Max +/-0.1
+                        new_val = max(0.1, min(1.0, base + nudge))
+                        if abs(new_val - base) > 0.03:
+                            self._circadian_schedule[hour] = round(new_val, 3)
+                            adjustments[f"hour_{hour}"] = {
+                                "from": round(base, 3),
+                                "to": round(new_val, 3),
+                                "clarity_pred": round(clarity_pred, 3),
+                            }
+            except Exception:
+                pass
+
+        # Use self-model beliefs to inform peak hours
+        if self_model:
+            try:
+                beliefs = self_model._beliefs if hasattr(self_model, '_beliefs') else {}
+
+                # Morning clarity belief → boost morning activity
+                morning = beliefs.get("morning_clarity")
+                if morning and morning.confidence > 0.5:
+                    boost = (morning.value - 0.5) * 0.15
+                    if abs(boost) > 0.02:
+                        for h in range(6, 10):
+                            base = self._circadian_schedule.get(h, 0.5)
+                            self._circadian_schedule[h] = round(
+                                max(0.1, min(1.0, base + boost)), 3)
+                        adjustments["morning_clarity_boost"] = round(boost, 3)
+
+                # Evening warmth belief → keep slightly more active for social
+                evening = beliefs.get("evening_warmth_increase")
+                if evening and evening.confidence > 0.5 and evening.value > 0.5:
+                    boost = (evening.value - 0.5) * 0.1
+                    if abs(boost) > 0.02:
+                        for h in range(18, 22):
+                            base = self._circadian_schedule.get(h, 0.5)
+                            self._circadian_schedule[h] = round(
+                                max(0.1, min(1.0, base + boost)), 3)
+                        adjustments["evening_warmth_boost"] = round(boost, 3)
+            except Exception:
+                pass
+
+        return adjustments
+
     def get_sleep_summary(self) -> dict:
         """Get summary of sleep/rest sessions."""
         if not self._sleep_sessions:

@@ -361,6 +361,7 @@ def run_creature():
     last_state_for_action = None  # State before action for learning
     last_learning_save = time.time()  # Track periodic learning saves
     readings = None  # Initialize before loop (first iteration has no prior readings)
+    last_pattern_apply = 0  # Track periodic learned pattern application
 
     try:
         while running:
@@ -573,6 +574,8 @@ def run_creature():
 
             # 2b-v. Action Selection: Choose what to do based on state and preferences
             selected_action = None
+            action_predictions = None
+            action_pred_context = None
             if action_selector and preferences:
                 try:
                     current_state = {
@@ -583,12 +586,28 @@ def run_creature():
                         "last_surprise": pred_error.surprise,
                     }
 
+                    # Get self-model predictions to inform action selection
+                    if self_model and pred_error.surprise_sources:
+                        try:
+                            sources = pred_error.surprise_sources
+                            if any("light" in s or "lux" in s for s in sources):
+                                action_pred_context = "light_change"
+                            elif any("temp" in s for s in sources):
+                                action_pred_context = "temp_change"
+                            elif anima.stability < 0.3:
+                                action_pred_context = "stability_drop"
+                            if action_pred_context:
+                                action_predictions = self_model.predict_own_response(action_pred_context)
+                        except Exception:
+                            pass
+
                     selected_action = action_selector.select_action(
                         current_state,
                         preferences=preferences,
                         surprise_level=pred_error.surprise,
                         surprise_sources=pred_error.surprise_sources,
                         can_speak=voice is not None,
+                        self_predictions=action_predictions,
                     )
 
                     # Execute action effects
@@ -633,6 +652,23 @@ def run_creature():
                         satisfaction_after,
                         pred_error.surprise,
                     )
+
+                    # Verify self-model predictions against actual outcomes
+                    if self_model and action_predictions and action_pred_context:
+                        try:
+                            actual = {
+                                "surprise_likelihood": pred_error.surprise,
+                            }
+                            if "warmth_change" in action_predictions:
+                                actual["warmth_change"] = anima.warmth - last_state_for_action.get("warmth", 0.5)
+                            if "clarity_change" in action_predictions:
+                                actual["clarity_change"] = anima.clarity - last_state_for_action.get("clarity", 0.5)
+                            if "fast_recovery" in action_predictions:
+                                recovery = 1.0 if anima.stability > 0.5 else anima.stability
+                                actual["fast_recovery"] = recovery
+                            self_model.verify_prediction(action_pred_context, action_predictions, actual)
+                        except Exception:
+                            pass
                 except Exception as e:
                     print(f"[Agency] Outcome recording error: {e}", file=sys.stderr, flush=True)
 
@@ -825,6 +861,22 @@ def run_creature():
                     last_learning_save = time.time()
                 except Exception:
                     pass  # Non-fatal
+
+            # Apply learned patterns to activity schedule (~once per hour)
+            if ACTIVITY_STATE_AVAILABLE and activity_manager and ENHANCED_LEARNING_AVAILABLE:
+                if time.time() - last_pattern_apply > 3600:
+                    try:
+                        adjustments = activity_manager.apply_learned_patterns(
+                            adaptive_model=adaptive_model if ENHANCED_LEARNING_AVAILABLE else None,
+                            self_model=self_model if ENHANCED_LEARNING_AVAILABLE else None,
+                        )
+                        if adjustments:
+                            print(f"[Activity] Applied {len(adjustments)} learned pattern adjustments",
+                                  file=sys.stderr, flush=True)
+                        last_pattern_apply = time.time()
+                    except Exception as e:
+                        print(f"[Activity] Pattern apply error (non-fatal): {e}", file=sys.stderr, flush=True)
+                        last_pattern_apply = time.time()
 
             time.sleep(UPDATE_INTERVAL)
     except KeyboardInterrupt:
