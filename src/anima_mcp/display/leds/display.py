@@ -214,36 +214,6 @@ class LEDDisplay:
         print(f"[LEDs] Starting dance: {dance_type.value}", file=sys.stderr, flush=True)
         return True
 
-    def trigger_dance_for_event(self, event: str) -> bool:
-        event_lower = event.lower()
-        if event_lower in EVENT_TO_DANCE:
-            dance_type, duration = EVENT_TO_DANCE[event_lower]
-            return self.start_dance(dance_type, duration)
-        return False
-
-    def check_sound_event(
-        self,
-        sound_level: Optional[float],
-        prev_sound_level: Optional[float] = None
-    ) -> Optional[str]:
-        if sound_level is None:
-            return None
-        if prev_sound_level is not None:
-            delta = sound_level - prev_sound_level
-            if delta > 25 and sound_level > 50:
-                return "sudden_sound"
-            if delta < -30 and prev_sound_level > 60 and sound_level < 30:
-                return "quiet_restored"
-        if sound_level > 65:
-            import random
-            if random.random() < 0.01:
-                return "music" if sound_level > 75 else "voice_detected"
-        elif 40 < sound_level < 60:
-            import random
-            if random.random() < 0.005:
-                return "sound_activity"
-        return None
-
     def get_proprioceptive_state(self) -> dict:
         brightness = self._cached_pipeline_brightness or self._base_brightness
         return {

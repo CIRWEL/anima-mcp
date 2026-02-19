@@ -11,6 +11,7 @@ Adapts to:
 """
 
 import json
+import sys
 import yaml
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -233,10 +234,10 @@ class ConfigManager:
                 # Validate
                 valid, error = self._config.validate()
                 if not valid:
-                    print(f"[Config] Warning: Invalid config, using defaults: {error}")
+                    print(f"[Config] Warning: Invalid config, using defaults: {error}", file=sys.stderr, flush=True)
                     self._config = AnimaConfig()
             except Exception as e:
-                print(f"[Config] Error loading config, using defaults: {e}")
+                print(f"[Config] Error loading config, using defaults: {e}", file=sys.stderr, flush=True)
                 self._config = AnimaConfig()
         else:
             # No config file - use defaults
@@ -261,7 +262,7 @@ class ConfigManager:
         # Validate before saving
         valid, error = config.validate()
         if not valid:
-            print(f"[Config] Cannot save invalid config: {error}")
+            print(f"[Config] Cannot save invalid config: {error}", file=sys.stderr, flush=True)
             return False
         
         # Track calibration changes
@@ -329,7 +330,7 @@ class ConfigManager:
             # Force reload on next access to ensure consistency
             return True
         except Exception as e:
-            print(f"[Config] Error saving config: {e}")
+            print(f"[Config] Error saving config: {e}", file=sys.stderr, flush=True)
             return False
     
     def reload(self) -> AnimaConfig:

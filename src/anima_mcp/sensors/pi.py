@@ -59,7 +59,7 @@ class PiSensors(SensorBackend):
         )
         
         if self._i2c is None:
-            print("[PiSensors] I2C init failed after retries")
+            print("[PiSensors] I2C init failed after retries", file=sys.stderr, flush=True)
             return
 
         # AHT20 sensor (temperature + humidity) at 0x38 with retry
@@ -72,9 +72,9 @@ class PiSensors(SensorBackend):
             default=None
         )
         if self._aht:
-            print("[PiSensors] AHT20 initialized")
+            print("[PiSensors] AHT20 initialized", file=sys.stderr, flush=True)
         else:
-            print("[PiSensors] AHT20 not available after retries")
+            print("[PiSensors] AHT20 not available after retries", file=sys.stderr, flush=True)
 
         # VEML7700 light sensor at 0x10 with retry
         def init_light():
@@ -86,9 +86,9 @@ class PiSensors(SensorBackend):
             default=None
         )
         if self._light_sensor:
-            print("[PiSensors] VEML7700 initialized")
+            print("[PiSensors] VEML7700 initialized", file=sys.stderr, flush=True)
         else:
-            print("[PiSensors] VEML7700 not available after retries")
+            print("[PiSensors] VEML7700 not available after retries", file=sys.stderr, flush=True)
 
         # BMP280 pressure/temperature sensor at 0x76 or 0x77 with retry
         def init_bmp():
@@ -102,9 +102,9 @@ class PiSensors(SensorBackend):
             default=None
         )
         if self._bmp280:
-            print("[PiSensors] BMP280 initialized")
+            print("[PiSensors] BMP280 initialized", file=sys.stderr, flush=True)
         else:
-            print("[PiSensors] BMP280 not available after retries")
+            print("[PiSensors] BMP280 not available after retries", file=sys.stderr, flush=True)
 
         # Brain HAT (EEG hardware) - Not available
         # No physical EEG hardware exists. Neural signals come from computational proprioception.
@@ -244,7 +244,7 @@ class PiSensors(SensorBackend):
                 "gamma": neural.gamma,
             }
         except Exception as e:
-            print(f"[PiSensors] Computational neural error: {e}")
+            print(f"[PiSensors] Computational neural error: {e}", file=sys.stderr, flush=True)
 
         # Neural frequency bands come from computational proprioception (not physical EEG hardware)
         # No physical EEG hardware exists - neural signals are derived from environment + computation

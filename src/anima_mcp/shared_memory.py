@@ -13,6 +13,7 @@ Usage:
 
 import fcntl
 import json
+import sys
 import os
 import time
 from datetime import datetime
@@ -59,7 +60,7 @@ class SharedMemoryClient:
             self.backend = backend
 
         if self.backend == "redis" and not HAS_REDIS:
-            print("[SharedMemory] Redis requested but 'redis' package not installed. Falling back to file.")
+            print("[SharedMemory] Redis requested but 'redis' package not installed. Falling back to file.", file=sys.stderr, flush=True)
             self.backend = "file"
 
         # Initialize backend
@@ -73,13 +74,13 @@ class SharedMemoryClient:
                 )
                 self._redis_client.ping() # Test connection
             except Exception as e:
-                print(f"[SharedMemory] Redis connection failed: {e}. Falling back to file.")
+                print(f"[SharedMemory] Redis connection failed: {e}. Falling back to file.", file=sys.stderr, flush=True)
                 self.backend = "file"
                 self._ensure_file_dir()
         else:
             self._ensure_file_dir()
             
-        print(f"[SharedMemory] Initialized with backend: {self.backend}")
+        print(f"[SharedMemory] Initialized with backend: {self.backend}", file=sys.stderr, flush=True)
 
     def _check_redis(self) -> bool:
         """Check if Redis server is reachable."""
@@ -109,7 +110,7 @@ class SharedMemoryClient:
                 self._redis_client.set(REDIS_KEY, json.dumps(envelope))
                 return True
             except Exception as e:
-                print(f"[SharedMemory] Redis write error: {e}")
+                print(f"[SharedMemory] Redis write error: {e}", file=sys.stderr, flush=True)
                 return False
         else:
             return self._write_file(envelope)
@@ -132,7 +133,7 @@ class SharedMemoryClient:
                 finally:
                     fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         except Exception as e:
-            print(f"[SharedMemory] File write error: {e}")
+            print(f"[SharedMemory] File write error: {e}", file=sys.stderr, flush=True)
             return False
 
     def read(self) -> Optional[Dict[str, Any]]:
@@ -145,7 +146,7 @@ class SharedMemoryClient:
                     return envelope.get("data")
                 return None
             except Exception as e:
-                print(f"[SharedMemory] Redis read error: {e}")
+                print(f"[SharedMemory] Redis read error: {e}", file=sys.stderr, flush=True)
                 # Optional: Fallback to file reading? For now, just fail.
                 return None
         else:
@@ -199,7 +200,7 @@ class SharedMemoryClient:
 
         # Only log persistent failures (>2 retries), not transient single-attempt errors
         if last_error and error_count > 2:
-            print(f"[SharedMemory] File read error after {error_count} attempts: {last_error}")
+            print(f"[SharedMemory] File read error after {error_count} attempts: {last_error}", file=sys.stderr, flush=True)
         return None
 
     def clear(self):
