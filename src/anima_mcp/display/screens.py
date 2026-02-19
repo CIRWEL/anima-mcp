@@ -3082,7 +3082,7 @@ class ScreenRenderer:
                 y += 20
 
                 # --- Drawing stats ---
-                energy = self._canvas.energy if self._canvas else 0.0
+                energy = self._intent.state.derived_energy if self._intent else 0.0
                 drawings = self._canvas.drawings_saved if self._canvas else 0
                 phase = self._canvas.drawing_phase if self._canvas else "?"
 

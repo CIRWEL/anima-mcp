@@ -48,13 +48,9 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent]:
 
         # Get current screen/era context
         screen_mode = _screen_renderer.get_mode().value
-        era_info = {}
-        if screen_mode == "art_eras":
-            from ..display.art_era_canvas import get_current_era_info
-            try:
-                era_info = get_current_era_info() or {}
-            except Exception:
-                pass
+        era_name = None
+        if screen_mode == "art_eras" and hasattr(_screen_renderer, '_active_era') and _screen_renderer._active_era:
+            era_name = _screen_renderer._active_era.name
 
         result = {
             "success": True,
@@ -62,7 +58,7 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent]:
             "width": current_image.width,
             "height": current_image.height,
             "screen": screen_mode,
-            "era": era_info.get("name") if era_info else None,
+            "era": era_name,
             "format": "PNG",
             "note": "Display as: <img src='data:image/png;base64,{image_base64}' />"
         }
