@@ -377,7 +377,10 @@ class UnitaresBridge:
             self._prev_complexity = complexity
 
             # Build arguments for process_agent_update
+            # client_session_id is the #1 priority for identity resolution in UNITARES,
+            # ensuring stable binding across service restarts regardless of HTTP fingerprint
             update_arguments = {
+                "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
                 "agent_name": "Lumen",  # Enables name-claim identity recovery after session key change
                 "complexity": complexity,
                 "confidence": confidence,
@@ -663,6 +666,7 @@ class UnitaresBridge:
                 "params": {
                     "name": "identity",
                     "arguments": {
+                        "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
                         "name": name
                     }
                 }
@@ -726,7 +730,8 @@ class UnitaresBridge:
                 "params": {
                     "name": "update_agent_metadata",
                     "arguments": {
-                        # Don't pass agent_id - let session binding handle it
+                        # client_session_id ensures stable identity binding across restarts
+                        "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
                         "purpose": f"{creature_name} - embodied digital creature (creature_id: {creature_id[:8]}...)",
                         "tags": [creature_name.lower(), "anima", "creature", "embodied", "autonomous"],
                         "preferences": metadata,
