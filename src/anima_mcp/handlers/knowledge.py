@@ -277,12 +277,31 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
             result["identity_status"] = "stable"
             result["note"] = "Identity is stable - consistent patterns established"
 
-        # Anomaly detection (compare to historical if requested)
+        # Anomaly detection via genesis (Σ₀) lineage comparison
         if compare_historical:
-            result["anomaly_detection"] = {
-                "available": False,
-                "note": "Historical comparison requires persistent signature storage (future feature)"
-            }
+            if signature.genesis_signature is not None:
+                lineage_sim = signature.lineage_similarity()
+                result["anomaly_detection"] = {
+                    "available": True,
+                    "lineage_similarity": round(lineage_sim, 4) if lineage_sim is not None else None,
+                    "has_genesis": True,
+                    "genesis_observations": signature.genesis_signature.observation_count,
+                    "genesis_computed_at": signature.genesis_signature.computed_at.isoformat(),
+                    "drift_status": (
+                        "stable" if lineage_sim is not None and lineage_sim >= 0.7
+                        else "drifting" if lineage_sim is not None and lineage_sim >= 0.5
+                        else "diverged" if lineage_sim is not None
+                        else "unknown"
+                    ),
+                }
+            else:
+                from ..trajectory import GENESIS_MIN_OBSERVATIONS
+                result["anomaly_detection"] = {
+                    "available": False,
+                    "has_genesis": False,
+                    "note": f"Genesis forms after {GENESIS_MIN_OBSERVATIONS} observations "
+                            f"(current: {signature.observation_count})",
+                }
 
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
