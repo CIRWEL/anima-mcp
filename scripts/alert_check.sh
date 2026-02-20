@@ -6,7 +6,7 @@
 # DEFINITIVE: anima-mcp runs on port 8766 - see docs/operations/DEFINITIVE_PORTS.md
 PI_HOST="192.168.1.165"
 PI_PORT="8766"
-PI_TAILSCALE="100.83.45.66"
+PI_TAILSCALE="lumen"  # Tailscale hostname (stable across reboots)
 
 # Local UNITARES governance
 UNITARES_HOST="localhost"

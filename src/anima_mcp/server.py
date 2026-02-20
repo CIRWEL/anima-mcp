@@ -25,6 +25,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import uuid
 from datetime import datetime
 from typing import Any, Dict
@@ -109,6 +110,9 @@ _sm_pending_prediction: dict | None = None  # {context, prediction, warmth_befor
 _sm_clarity_before_interaction: float | None = None
 # LED proprioception - carry LED state across iterations for prediction
 _led_proprioception: dict | None = None  # {brightness, expression_mode, is_dancing, ...}
+
+# Thread lock for lazy-init singletons (metacog, unitares bridge)
+_state_lock = threading.Lock()
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
@@ -606,7 +610,8 @@ async def _update_display_loop():
             
             # Read current state with error recovery
             # Read from shared memory (broker) or fallback to sensors
-            readings, anima = _get_readings_and_anima(fallback_to_sensors=True)  # Always allow fallback
+            # Only fallback if broker is NOT running to prevent I2C collisions
+            readings, anima = _get_readings_and_anima(fallback_to_sensors=not _is_broker_running())
             
             if readings is None or anima is None:
                 # Sensor read failed - skip this iteration
