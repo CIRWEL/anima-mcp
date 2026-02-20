@@ -181,9 +181,7 @@ class LEDDisplay:
                 phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
                 mod = 0.88 + 0.12 * math.sin(phase)
                 self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
-            pulse = 0.0 if state.brightness < 0.05 else (
-                _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, state.brightness / 0.12))
-            )
+            pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, state.brightness / 0.12))
             raw = max(self._hardware_brightness_floor, min(0.5, state.brightness + pulse))
             perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
             self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
@@ -307,7 +305,7 @@ class LEDDisplay:
                     if abs(delta_b) > 0.001:
                         self._current_brightness += delta_b * self._brightness_transition_speed
                     brightness = max(self._hardware_brightness_floor, self._current_brightness)
-                    pulse = 0.0 if brightness < 0.05 else (_brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12)))
+                    pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12))
                     raw = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
                     perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
                     t = time.time()
