@@ -173,14 +173,14 @@ class LEDDisplay:
                 print("[LEDs] set_all called but LEDs unavailable", file=sys.stderr, flush=True)
             return
         state = self._apply_flash(state)
-        if self._last_state and self._last_state == state:
-            return
         from ...error_recovery import safe_call_with_timeout
 
         def _set():
-            self._dots[0] = state.led2
-            self._dots[1] = state.led1
-            self._dots[2] = state.led0
+            t = time.time()
+            for i, color in enumerate([state.led2, state.led1, state.led0]):
+                phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
+                mod = 0.88 + 0.12 * math.sin(phase)
+                self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
             pulse = 0.0 if state.brightness < 0.05 else (
                 _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, state.brightness / 0.12))
             )
@@ -310,6 +310,11 @@ class LEDDisplay:
                     pulse = 0.0 if brightness < 0.05 else (_brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12)))
                     raw = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
                     perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
+                    t = time.time()
+                    for i, color in enumerate([self._last_state.led2, self._last_state.led1, self._last_state.led0]):
+                        phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
+                        mod = 0.88 + 0.12 * math.sin(phase)
+                        self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
                     self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
                     self._dots.show()
                     return self._last_state
@@ -456,7 +461,6 @@ class LEDDisplay:
                     state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._manual_brightness_factor)
 
         if self._enable_patterns and self._pattern_mode == "expressive":
-            import math
             if clarity < 0.3 or stability < 0.3:
                 speed, amp = 2.0, 0.4
             elif warmth > 0.6 and stability > 0.6:
