@@ -97,6 +97,10 @@ class UnitaresCognitive:
             print("[UnitaresCognitive] aiohttp not installed", flush=True)
             return None
 
+        # Inject client_session_id for stable identity binding across restarts
+        if "client_session_id" not in arguments and self._agent_id:
+            arguments["client_session_id"] = f"lumen-{self._agent_id}"
+
         mcp_request = {
             "jsonrpc": "2.0",
             "id": 1,
