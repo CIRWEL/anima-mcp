@@ -378,6 +378,7 @@ class UnitaresBridge:
 
             # Build arguments for process_agent_update
             update_arguments = {
+                "agent_name": "Lumen",  # Enables name-claim identity recovery after session key change
                 "complexity": complexity,
                 "confidence": confidence,
                 "ethical_drift": ethical_drift,
