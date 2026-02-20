@@ -9,8 +9,7 @@ Minimal tools for a persistent creature:
 
 Transports:
 - stdio: Local single-client (default)
-- HTTP (--http): Multi-client with Streamable HTTP at /mcp/ (recommended)
-  Also serves legacy /sse endpoint for backwards compatibility
+- HTTP (--http): Multi-client with Streamable HTTP at /mcp/
 
 Agent Coordination:
 - Active agents: Claude + Cursor/Composer
@@ -2620,9 +2619,10 @@ def run_http_server(host: str, port: int):
     """Run MCP server over HTTP with Streamable HTTP transport.
 
     Endpoints:
-    - /mcp/  : Streamable HTTP (recommended, modern MCP transport)
-    - /sse   : Legacy SSE endpoint (backwards compatible)
+    - /mcp/  : Streamable HTTP (MCP transport)
     - /health: Health check
+    - /v1/tools/call: REST API for direct tool calls
+    - /dashboard, /state, /qa, etc.: Control Center endpoints
 
     NOTE: Server operates locally even without network connectivity.
     WiFi is only needed for remote MCP clients to connect.
@@ -2635,12 +2635,12 @@ def run_http_server(host: str, port: int):
         import uvicorn
 
         # Log that local operation continues regardless of network
-        print("[Server] Starting HTTP server (Streamable HTTP + legacy SSE)", file=sys.stderr, flush=True)
+        print("[Server] Starting HTTP server (Streamable HTTP)", file=sys.stderr, flush=True)
         print("[Server] Network connectivity only needed for remote MCP clients", file=sys.stderr, flush=True)
 
         # Check if FastMCP is available
         if not HAS_FASTMCP:
-            print("[Server] ERROR: FastMCP not available - cannot start SSE server", file=sys.stderr, flush=True)
+            print("[Server] ERROR: FastMCP not available - cannot start HTTP server", file=sys.stderr, flush=True)
             print("[Server] Install mcp[cli] to get FastMCP support", file=sys.stderr, flush=True)
             raise SystemExit(1)
 
@@ -2650,622 +2650,600 @@ def run_http_server(host: str, port: int):
             print("[Server] ERROR: Failed to create FastMCP server", file=sys.stderr, flush=True)
             raise SystemExit(1)
 
-        print("[Server] Creating FastMCP SSE application...", file=sys.stderr, flush=True)
+        print("[Server] Setting up Streamable HTTP transport...", file=sys.stderr, flush=True)
 
-        # Get the Starlette app from FastMCP (SSE transport)
-        # This is the pattern governance-mcp-v1 uses successfully
-        app = mcp.sse_app()
+        # === Streamable HTTP transport (the only MCP transport) ===
+        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+        from starlette.applications import Starlette
+        from starlette.routing import Mount, Route
+        from starlette.responses import JSONResponse, PlainTextResponse
 
-        # === Add Streamable HTTP transport (MCP 1.24.0+) ===
-        # This is what governance uses and Claude Code prefers for type="http" configs
-        HAS_STREAMABLE_HTTP = False
         _streamable_session_manager = None
         _streamable_running = False
 
-        try:
-            from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-            from starlette.routing import Mount, Route
-            from starlette.responses import JSONResponse, PlainTextResponse
+        # Create session manager for Streamable HTTP
+        _streamable_session_manager = StreamableHTTPSessionManager(
+            app=mcp._mcp_server,  # Access the underlying MCP server
+            json_response=True,  # Use JSON responses (proper Streamable HTTP)
+            stateless=True,  # Allow stateless for compatibility
+        )
 
-            # Create session manager for Streamable HTTP
-            _streamable_session_manager = StreamableHTTPSessionManager(
-                app=mcp._mcp_server,  # Access the underlying MCP server
-                json_response=True,  # Use JSON responses (proper Streamable HTTP)
-                stateless=True,  # Allow stateless for compatibility
-            )
+        print("[Server] Streamable HTTP transport available at /mcp/", file=sys.stderr, flush=True)
 
-            HAS_STREAMABLE_HTTP = True
-            print("[Server] Streamable HTTP transport available at /mcp/", file=sys.stderr, flush=True)
+        # Create ASGI app for /mcp
+        async def streamable_mcp_asgi(scope, receive, send):
+            """ASGI app for Streamable HTTP MCP at /mcp/."""
+            if scope.get("type") != "http":
+                return
 
-            # Create ASGI app for /mcp
-            async def streamable_mcp_asgi(scope, receive, send):
-                """ASGI app for Streamable HTTP MCP at /mcp/."""
-                if scope.get("type") != "http":
-                    return
+            if not _streamable_running:
+                response = JSONResponse({
+                    "status": "starting_up",
+                    "message": "Streamable HTTP session manager not ready"
+                }, status_code=503)
+                await response(scope, receive, send)
+                return
 
-                if not _streamable_running:
-                    response = JSONResponse({
-                        "status": "starting_up",
-                        "message": "Streamable HTTP session manager not ready"
-                    }, status_code=503)
+            try:
+                await _streamable_session_manager.handle_request(scope, receive, send)
+            except Exception as e:
+                print(f"[MCP] Error in Streamable HTTP handler: {e}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+                try:
+                    response = JSONResponse({"error": str(e)}, status_code=500)
                     await response(scope, receive, send)
-                    return
+                except RuntimeError:
+                    pass
 
-                try:
-                    await _streamable_session_manager.handle_request(scope, receive, send)
-                except Exception as e:
-                    print(f"[MCP] Error in Streamable HTTP handler: {e}", file=sys.stderr, flush=True)
-                    import traceback
-                    traceback.print_exc(file=sys.stderr)
+        # Health check endpoint for monitoring
+        async def health_check(request):
+            """Simple health check - returns 200 if server is running."""
+            status = "ok" if SERVER_READY else "starting"
+            return PlainTextResponse(f"{status}\n")
+
+        # Simple REST API for tool calls (used by Control Center)
+        async def rest_tool_call(request):
+            """REST API for calling MCP tools directly.
+
+            POST /v1/tools/call
+            Body: {"name": "tool_name", "arguments": {...}}
+            Returns: {"success": true, "result": ...} or {"success": false, "error": "..."}
+            """
+            try:
+                body = await request.json()
+                tool_name = body.get("name")
+                arguments = body.get("arguments", {})
+
+                if not tool_name:
+                    return JSONResponse({"success": False, "error": "Missing 'name' field"}, status_code=400)
+
+                if tool_name not in HANDLERS:
+                    return JSONResponse({"success": False, "error": f"Unknown tool: {tool_name}"}, status_code=404)
+
+                # Call the tool handler
+                handler = HANDLERS[tool_name]
+                result = await handler(arguments)
+
+                # Extract text from TextContent
+                if result and len(result) > 0:
+                    text_result = result[0].text
                     try:
-                        response = JSONResponse({"error": str(e)}, status_code=500)
-                        await response(scope, receive, send)
-                    except RuntimeError:
-                        pass
-
-            # Mount creates sub-application at /mcp/
-            # Note: Clients should use /mcp/ (with trailing slash) to avoid 307 redirect
-            app.routes.insert(0, Mount("/mcp", app=streamable_mcp_asgi))
-            print("[Server] Registered /mcp/ endpoint for Streamable HTTP transport", file=sys.stderr, flush=True)
-
-            # Health check endpoint for monitoring
-            async def health_check(request):
-                """Simple health check - returns 200 if server is running."""
-                status = "ok" if SERVER_READY else "starting"
-                return PlainTextResponse(f"{status}\n")
-
-            app.routes.append(Route("/health", health_check, methods=["GET"]))
-            print("[Server] Registered /health endpoint", file=sys.stderr, flush=True)
-
-            # Simple REST API for tool calls (used by Control Center)
-            async def rest_tool_call(request):
-                """REST API for calling MCP tools directly.
-
-                POST /v1/tools/call
-                Body: {"name": "tool_name", "arguments": {...}}
-                Returns: {"success": true, "result": ...} or {"success": false, "error": "..."}
-                """
-                try:
-                    body = await request.json()
-                    tool_name = body.get("name")
-                    arguments = body.get("arguments", {})
-
-                    if not tool_name:
-                        return JSONResponse({"success": False, "error": "Missing 'name' field"}, status_code=400)
-
-                    if tool_name not in HANDLERS:
-                        return JSONResponse({"success": False, "error": f"Unknown tool: {tool_name}"}, status_code=404)
-
-                    # Call the tool handler
-                    handler = HANDLERS[tool_name]
-                    result = await handler(arguments)
-
-                    # Extract text from TextContent
-                    if result and len(result) > 0:
-                        text_result = result[0].text
-                        try:
-                            # Try to parse as JSON for cleaner response
-                            parsed = json.loads(text_result)
-                            return JSONResponse({"success": True, "result": parsed})
-                        except json.JSONDecodeError:
-                            return JSONResponse({"success": True, "result": text_result})
-
-                    return JSONResponse({"success": True, "result": None})
-
-                except Exception as e:
-                    print(f"[REST API] Error: {e}", file=sys.stderr, flush=True)
-                    return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-
-            app.routes.append(Route("/v1/tools/call", rest_tool_call, methods=["POST"]))
-            print("[Server] Registered /v1/tools/call REST endpoint", file=sys.stderr, flush=True)
-
-            # Dashboard endpoint - serves the Lumen Control Center
-            from starlette.responses import HTMLResponse, FileResponse
-            from pathlib import Path
-
-            async def dashboard(request):
-                """Serve the Lumen Control Center dashboard."""
-                # Find control_center.html relative to this file
-                server_dir = Path(__file__).parent
-                project_root = server_dir.parent.parent
-                dashboard_path = project_root / "docs" / "control_center.html"
-
-                if dashboard_path.exists():
-                    return FileResponse(dashboard_path, media_type="text/html")
-                else:
-                    return HTMLResponse(
-                        "<html><body><h1>Dashboard Not Found</h1>"
-                        f"<p>Expected at: {dashboard_path}</p></body></html>",
-                        status_code=404
-                    )
-
-            app.routes.append(Route("/dashboard", dashboard, methods=["GET"]))
-            print("[Server] Registered /dashboard endpoint", file=sys.stderr, flush=True)
-
-            # REST API endpoints for Control Center dashboard
-            # These map to MCP tools for convenient dashboard access
-
-            async def rest_state(request):
-                """GET /state - Format matching message_server.py."""
-                try:
-                    # Use internal functions (same as MCP get_state)
-                    readings, anima = _get_readings_and_anima()
-                    if readings is None or anima is None:
-                        return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
-
-                    feeling = anima.feeling()
-                    store = _get_store()
-                    identity = store.get_identity() if store else None
-
-                    # Build neural bands from raw sensor data
-                    neural = _extract_neural_bands(readings)
-
-                    # EISV
-                    from .eisv_mapper import anima_to_eisv
-                    eisv = anima_to_eisv(anima, readings)
-
-                    # Governance
-                    gov = _last_governance_decision or {}
-
-                    return JSONResponse({
-                        "name": identity.name if identity else "Lumen",
-                        "mood": feeling["mood"],
-                        "warmth": anima.warmth,
-                        "clarity": anima.clarity,
-                        "stability": anima.stability,
-                        "presence": anima.presence,
-                        "feeling": feeling,
-                        "surprise": 0,
-                        "cpu_temp": readings.cpu_temp_c or 0,
-                        "ambient_temp": readings.ambient_temp_c or 0,
-                        "light": readings.light_lux or 0,
-                        "humidity": readings.humidity_pct or 0,
-                        "pressure": readings.pressure_hpa or 0,
-                        "cpu_percent": readings.cpu_percent or 0,
-                        "memory_percent": readings.memory_percent or 0,
-                        "disk_percent": readings.disk_percent or 0,
-                        "neural": neural,
-                        "eisv": eisv.to_dict(),
-                        "governance": {
-                            "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
-                            "margin": gov.get("margin", "") if gov else "",
-                            "source": gov.get("source", "") if gov else "",
-                            "connected": bool(gov),
-                        },
-                        "awakenings": identity.total_awakenings if identity else 0,
-                        "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
-                        "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
-                        "activity": {
-                            **(_activity.get_status() if _activity else {"level": "active"}),
-                            "sleep": _activity.get_sleep_summary() if _activity else {"sessions": 0},
-                        },
-                        "timestamp": str(readings.timestamp) if readings.timestamp else "",
-                    })
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_qa(request):
-                """GET /qa - Get questions and answers (matching message_server.py format)."""
-                try:
-                    from .messages import get_board, MESSAGE_TYPE_QUESTION
-
-                    board = get_board()
-                    board._load(force=True)
-
-                    # Get all questions
-                    questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
-
-                    # Build Q&A pairs with answers
-                    qa_pairs = []
-                    for q in questions:
-                        # Find answer for this question
-                        answer = None
-                        for m in board._messages:
-                            if getattr(m, "responds_to", None) == q.message_id:
-                                answer = {"text": m.text, "author": m.author, "timestamp": m.timestamp}
-                                break
-                        qa_pairs.append({
-                            "id": q.message_id,
-                            "question": q.text,
-                            "answered": q.answered,
-                            "timestamp": q.timestamp,
-                            "answer": answer
-                        })
-
-                    # Count truly unanswered (no actual answer message) from ALL questions
-                    truly_unanswered = sum(1 for q in qa_pairs if q["answer"] is None)
-
-                    # Reverse to show newest first
-                    limit = int(request.query_params.get("limit", "20"))
-                    limit = min(limit, 50)
-                    qa_pairs.reverse()
-                    qa_pairs = qa_pairs[:limit]
-
-                    return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": truly_unanswered})
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_messages(request):
-                """GET /messages - Get recent message board entries."""
-                try:
-                    from .messages import get_board, get_recent_messages
-                    limit = int(request.query_params.get("limit", "20"))
-                    limit = min(limit, 100)
-                    messages = get_recent_messages(limit)
-                    board = get_board()
-                    return JSONResponse({
-                        "messages": [
-                            {
-                                "id": m.message_id,
-                                "text": m.text,
-                                "type": m.msg_type,
-                                "author": m.author,
-                                "timestamp": m.timestamp,
-                                "responds_to": m.responds_to,
-                            }
-                            for m in messages
-                        ],
-                        "total": len(board._messages),
-                        "returned": len(messages),
-                    })
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_answer(request):
-                """POST /answer - Answer a question from Lumen."""
-                try:
-                    body = await request.json()
-                    question_id = body.get("question_id") or body.get("id")
-                    answer = body.get("answer")
-                    author = body.get("author", "Kenny")  # Preserve author name
-                    result = await handle_lumen_qa({
-                        "question_id": question_id,
-                        "answer": answer,
-                        "agent_name": author
-                    })
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        return JSONResponse(data)
-                    return JSONResponse({"success": True})
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_message(request):
-                """POST /message - Send a message to Lumen."""
-                try:
-                    body = await request.json()
-                    message = body.get("message", body.get("text", ""))
-                    author = body.get("author", "dashboard")
-                    responds_to = body.get("responds_to")
-                    payload = {"message": message, "source": "dashboard", "agent_name": author}
-                    if responds_to:
-                        payload["responds_to"] = responds_to
-                    result = await handle_post_message(payload)
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        return JSONResponse(data)
-                    return JSONResponse({"success": True})
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_learning(request):
-                """GET /learning - Exact copy of message_server.py format."""
-                try:
-                    import sqlite3
-                    from pathlib import Path
-                    from datetime import datetime, timedelta
-
-                    # Find database - prefer ANIMA_DB env var, then ~/.anima/
-                    import os
-                    db_path = None
-                    env_db = os.environ.get("ANIMA_DB")
-                    candidates = [Path(env_db)] if env_db else []
-                    candidates.extend([Path.home() / ".anima" / "anima.db", Path.home() / "anima-mcp" / "anima.db"])
-                    for p in candidates:
-                        if p.exists():
-                            db_path = p
-                            break
-
-                    if not db_path:
-                        return JSONResponse({"error": "No identity database"}, status_code=500)
-
-                    conn = sqlite3.connect(str(db_path))
-
-                    # Get identity stats
-                    identity = conn.execute("SELECT name, total_awakenings, total_alive_seconds FROM identity LIMIT 1").fetchone()
-
-                    # Get recent state history for learning trends
-                    one_day_ago = (datetime.now() - timedelta(hours=24)).isoformat()
-                    recent_states = conn.execute(
-                        "SELECT warmth, clarity, stability, presence, timestamp FROM state_history WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 100",
-                        (one_day_ago,)
-                    ).fetchall()
-
-                    # Calculate averages and trends
-                    if recent_states:
-                        avg_warmth = sum(s[0] for s in recent_states) / len(recent_states)
-                        avg_clarity = sum(s[1] for s in recent_states) / len(recent_states)
-                        avg_stability = sum(s[2] for s in recent_states) / len(recent_states)
-                        avg_presence = sum(s[3] for s in recent_states) / len(recent_states)
-
-                        mid = len(recent_states) // 2
-                        if mid > 0:
-                            first_half = recent_states[mid:]
-                            second_half = recent_states[:mid]
-                            stability_trend = sum(s[2] for s in second_half) / len(second_half) - sum(s[2] for s in first_half) / len(first_half)
-                        else:
-                            stability_trend = 0
-                    else:
-                        avg_warmth = avg_clarity = avg_stability = avg_presence = 0
-                        stability_trend = 0
-
-                    # Get recent events
-                    events = conn.execute(
-                        "SELECT event_type, timestamp FROM events ORDER BY timestamp DESC LIMIT 10"
-                    ).fetchall()
-
-                    alive_hours = identity[2] / 3600 if identity else 0
-                    conn.close()
-
-                    # Exact same format as message_server.py
-                    return JSONResponse({
-                        "name": identity[0] if identity else "Unknown",
-                        "awakenings": identity[1] if identity else 0,
-                        "alive_hours": round(alive_hours, 1),
-                        "samples_24h": len(recent_states),
-                        "avg_warmth": round(avg_warmth, 3),
-                        "avg_clarity": round(avg_clarity, 3),
-                        "avg_stability": round(avg_stability, 3),
-                        "avg_presence": round(avg_presence, 3),
-                        "stability_trend": round(stability_trend, 3),
-                        "recent_events": [{"type": e[0], "time": e[1]} for e in events[:5]]
-                    })
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_voice(request):
-                """GET /voice - Get voice system status."""
-                try:
-                    result = await handle_configure_voice({"action": "status"})
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        return JSONResponse(data)
-                    return JSONResponse({"mode": "text"})
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_gallery(request):
-                """GET /gallery - Get Lumen's drawings."""
-                try:
-                    import re
-                    from pathlib import Path
-                    from datetime import datetime as dt
-                    drawings_dir = Path.home() / ".anima" / "drawings"
-
-                    if not drawings_dir.exists():
-                        return JSONResponse({"drawings": [], "total": 0})
-
-                    files = list(drawings_dir.glob("lumen_drawing*.png"))
-
-                    # Eras — chronological periods in Lumen's drawing history
-                    # Each entry: (cutoff_timestamp, era_name)
-                    # Drawings BEFORE the cutoff belong to that era
-                    _ERAS = [
-                        ("20260207_190000", "geometric"),
-                    ]
-                    _CURRENT_ERA = "gestural"
-
-                    def get_era(filename):
-                        """Determine which era a drawing belongs to."""
-                        m = re.search(r"(\d{8}_\d{6})", filename)
-                        if m:
-                            ts_str = m.group(1)
-                            for cutoff, name in _ERAS:
-                                if ts_str < cutoff:
-                                    return name
-                        return _CURRENT_ERA
-
-                    def parse_ts(f):
-                        m = re.search(r"(\d{8})_(\d{6})", f.name)
-                        if m:
-                            try:
-                                return dt.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
-                            except ValueError:
-                                pass
-                        return f.stat().st_mtime
-
-                    files = sorted(files, key=parse_ts, reverse=True)
-
-                    # Pagination support
-                    offset = int(request.query_params.get("offset", 0))
-                    limit = int(request.query_params.get("limit", 50))
-                    limit = min(limit, 100)  # cap at 100 per request
-
-                    page_files = files[offset:offset + limit]
-
-                    drawings = []
-                    for f in page_files:
-                        drawings.append({
-                            "filename": f.name,
-                            "timestamp": parse_ts(f),
-                            "size": f.stat().st_size,
-                            "manual": "_manual" in f.name,
-                            "era": get_era(f.name),
-                        })
-
-                    return JSONResponse({
-                        "drawings": drawings,
-                        "total": len(files),
-                        "offset": offset,
-                        "limit": limit,
-                        "has_more": offset + limit < len(files),
-                    })
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-
-            async def rest_gallery_image(request):
-                """GET /gallery/{filename} - Serve a drawing image."""
-                from starlette.responses import Response
-                from pathlib import Path
-                filename = request.path_params.get("filename", "")
-                # Sanitize filename
-                if "/" in filename or ".." in filename or not filename.endswith(".png"):
-                    return Response(content="Bad request", status_code=400)
-                img_path = Path.home() / ".anima" / "drawings" / filename
-                if not img_path.exists():
-                    return Response(content="Not found", status_code=404)
-                try:
-                    with open(img_path, "rb") as f:
-                        img_data = f.read()
-                    return Response(
-                        content=img_data,
-                        media_type="image/png",
-                        headers={"Cache-Control": "max-age=3600"}
-                    )
-                except Exception as e:
-                    return Response(content=str(e), status_code=500)
-
-            app.routes.append(Route("/state", rest_state, methods=["GET"]))
-            app.routes.append(Route("/qa", rest_qa, methods=["GET"]))
-            app.routes.append(Route("/answer", rest_answer, methods=["POST"]))
-            app.routes.append(Route("/message", rest_message, methods=["POST"]))
-            app.routes.append(Route("/messages", rest_messages, methods=["GET"]))
-            app.routes.append(Route("/learning", rest_learning, methods=["GET"]))
-            app.routes.append(Route("/voice", rest_voice, methods=["GET"]))
-
-            async def rest_health(request):
-                """GET /health - Get subsystem health status."""
-                try:
-                    result = await handle_get_health({})
-                    if result and len(result) > 0:
-                        data = json.loads(result[0].text)
-                        return JSONResponse(data)
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
-                return JSONResponse({"error": "no data"}, status_code=500)
-            app.routes.append(Route("/health", rest_health, methods=["GET"]))
-
-            app.routes.append(Route("/gallery", rest_gallery, methods=["GET"]))
-            app.routes.append(Route("/gallery/{filename}", rest_gallery_image, methods=["GET"]))
-
-            async def rest_gallery_page(request):
-                """Serve the Lumen Drawing Gallery page."""
-                server_dir = Path(__file__).parent
-                project_root = server_dir.parent.parent
-                gallery_path = project_root / "docs" / "gallery.html"
-                if gallery_path.exists():
-                    return FileResponse(gallery_path, media_type="text/html")
-                else:
-                    return HTMLResponse(
-                        "<html><body><h1>Gallery Not Found</h1>"
-                        f"<p>Expected at: {gallery_path}</p></body></html>",
-                        status_code=404
-                    )
-
-            app.routes.append(Route("/gallery-page", rest_gallery_page, methods=["GET"]))
-
-            async def rest_layers(request):
-                """GET /layers - Full proprioception stack for architecture page."""
-                try:
-                    readings, anima = _get_readings_and_anima()
-                    if readings is None or anima is None:
-                        return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
-
-                    feeling = anima.feeling()
-                    store = _get_store()
-                    identity = store.get_identity() if store else None
-
-                    # Physical sensors
-                    physical = {
-                        "ambient_temp_c": readings.ambient_temp_c or 0,
-                        "humidity_pct": readings.humidity_pct or 0,
-                        "light_lux": readings.light_lux or 0,
-                        "pressure_hpa": readings.pressure_hpa or 0,
-                    }
-
-                    # Neural bands
-                    neural = _extract_neural_bands(readings)
-
-                    # Anima
-                    anima_data = {
-                        "warmth": round(anima.warmth, 3),
-                        "clarity": round(anima.clarity, 3),
-                        "stability": round(anima.stability, 3),
-                        "presence": round(anima.presence, 3),
-                    }
-
-                    # EISV
-                    from .eisv_mapper import anima_to_eisv
-                    eisv = anima_to_eisv(anima, readings)
-                    eisv_data = eisv.to_dict()
-
-                    # Governance
-                    gov = _last_governance_decision or {}
-                    governance_data = {
+                        # Try to parse as JSON for cleaner response
+                        parsed = json.loads(text_result)
+                        return JSONResponse({"success": True, "result": parsed})
+                    except json.JSONDecodeError:
+                        return JSONResponse({"success": True, "result": text_result})
+
+                return JSONResponse({"success": True, "result": None})
+
+            except Exception as e:
+                print(f"[REST API] Error: {e}", file=sys.stderr, flush=True)
+                return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+        # Dashboard endpoint - serves the Lumen Control Center
+        from starlette.responses import HTMLResponse, FileResponse
+        from pathlib import Path
+
+        async def dashboard(request):
+            """Serve the Lumen Control Center dashboard."""
+            # Find control_center.html relative to this file
+            server_dir = Path(__file__).parent
+            project_root = server_dir.parent.parent
+            dashboard_path = project_root / "docs" / "control_center.html"
+
+            if dashboard_path.exists():
+                return FileResponse(dashboard_path, media_type="text/html")
+            else:
+                return HTMLResponse(
+                    "<html><body><h1>Dashboard Not Found</h1>"
+                    f"<p>Expected at: {dashboard_path}</p></body></html>",
+                    status_code=404
+                )
+
+        # REST API endpoints for Control Center dashboard
+        # These map to MCP tools for convenient dashboard access
+
+        async def rest_state(request):
+            """GET /state - Format matching message_server.py."""
+            try:
+                # Use internal functions (same as MCP get_state)
+                readings, anima = _get_readings_and_anima()
+                if readings is None or anima is None:
+                    return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
+
+                feeling = anima.feeling()
+                store = _get_store()
+                identity = store.get_identity() if store else None
+
+                # Build neural bands from raw sensor data
+                neural = _extract_neural_bands(readings)
+
+                # EISV
+                from .eisv_mapper import anima_to_eisv
+                eisv = anima_to_eisv(anima, readings)
+
+                # Governance
+                gov = _last_governance_decision or {}
+
+                return JSONResponse({
+                    "name": identity.name if identity else "Lumen",
+                    "mood": feeling["mood"],
+                    "warmth": anima.warmth,
+                    "clarity": anima.clarity,
+                    "stability": anima.stability,
+                    "presence": anima.presence,
+                    "feeling": feeling,
+                    "surprise": 0,
+                    "cpu_temp": readings.cpu_temp_c or 0,
+                    "ambient_temp": readings.ambient_temp_c or 0,
+                    "light": readings.light_lux or 0,
+                    "humidity": readings.humidity_pct or 0,
+                    "pressure": readings.pressure_hpa or 0,
+                    "cpu_percent": readings.cpu_percent or 0,
+                    "memory_percent": readings.memory_percent or 0,
+                    "disk_percent": readings.disk_percent or 0,
+                    "neural": neural,
+                    "eisv": eisv.to_dict(),
+                    "governance": {
                         "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
-                        "margin": gov.get("margin", "unknown") if gov else "n/a",
+                        "margin": gov.get("margin", "") if gov else "",
                         "source": gov.get("source", "") if gov else "",
                         "connected": bool(gov),
-                    }
-                    if gov and gov.get("eisv"):
-                        governance_data["eisv"] = gov["eisv"]
+                    },
+                    "awakenings": identity.total_awakenings if identity else 0,
+                    "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
+                    "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
+                    "activity": {
+                        **(_activity.get_status() if _activity else {"level": "active"}),
+                        "sleep": _activity.get_sleep_summary() if _activity else {"sessions": 0},
+                    },
+                    "timestamp": str(readings.timestamp) if readings.timestamp else "",
+                })
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
 
-                    # System
-                    system = {
-                        "cpu_temp_c": readings.cpu_temp_c or 0,
-                        "cpu_percent": readings.cpu_percent or 0,
-                        "memory_percent": readings.memory_percent or 0,
-                        "disk_percent": readings.disk_percent or 0,
-                    }
+        async def rest_qa(request):
+            """GET /qa - Get questions and answers (matching message_server.py format)."""
+            try:
+                from .messages import get_board, MESSAGE_TYPE_QUESTION
 
-                    # Identity
-                    identity_data = {}
-                    if identity:
-                        alive_seconds = identity.total_alive_seconds + (store.get_session_alive_seconds() if store else 0)
-                        identity_data = {
-                            "name": identity.name,
-                            "awakenings": identity.total_awakenings,
-                            "alive_hours": round(alive_seconds / 3600, 1),
-                            "alive_ratio": round(identity.alive_ratio(), 3),
-                            "age_days": round(identity.age_seconds() / 86400, 1),
-                        }
+                board = get_board()
+                board._load(force=True)
 
-                    return JSONResponse({
-                        "physical": physical,
-                        "neural": neural,
-                        "anima": anima_data,
-                        "feeling": feeling,
-                        "eisv": eisv_data,
-                        "governance": governance_data,
-                        "system": system,
-                        "identity": identity_data,
-                        "mood": feeling.get("mood", "unknown"),
+                # Get all questions
+                questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
+
+                # Build Q&A pairs with answers
+                qa_pairs = []
+                for q in questions:
+                    # Find answer for this question
+                    answer = None
+                    for m in board._messages:
+                        if getattr(m, "responds_to", None) == q.message_id:
+                            answer = {"text": m.text, "author": m.author, "timestamp": m.timestamp}
+                            break
+                    qa_pairs.append({
+                        "id": q.message_id,
+                        "question": q.text,
+                        "answered": q.answered,
+                        "timestamp": q.timestamp,
+                        "answer": answer
                     })
-                except Exception as e:
-                    return JSONResponse({"error": str(e)}, status_code=500)
 
-            app.routes.append(Route("/layers", rest_layers, methods=["GET"]))
+                # Count truly unanswered (no actual answer message) from ALL questions
+                truly_unanswered = sum(1 for q in qa_pairs if q["answer"] is None)
 
-            async def rest_architecture_page(request):
-                """Serve the Lumen Architecture page."""
-                server_dir = Path(__file__).parent
-                project_root = server_dir.parent.parent
-                page_path = project_root / "docs" / "architecture.html"
-                if page_path.exists():
-                    return FileResponse(page_path, media_type="text/html")
+                # Reverse to show newest first
+                limit = int(request.query_params.get("limit", "20"))
+                limit = min(limit, 50)
+                qa_pairs.reverse()
+                qa_pairs = qa_pairs[:limit]
+
+                return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": truly_unanswered})
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_messages(request):
+            """GET /messages - Get recent message board entries."""
+            try:
+                from .messages import get_board, get_recent_messages
+                limit = int(request.query_params.get("limit", "20"))
+                limit = min(limit, 100)
+                messages = get_recent_messages(limit)
+                board = get_board()
+                return JSONResponse({
+                    "messages": [
+                        {
+                            "id": m.message_id,
+                            "text": m.text,
+                            "type": m.msg_type,
+                            "author": m.author,
+                            "timestamp": m.timestamp,
+                            "responds_to": m.responds_to,
+                        }
+                        for m in messages
+                    ],
+                    "total": len(board._messages),
+                    "returned": len(messages),
+                })
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_answer(request):
+            """POST /answer - Answer a question from Lumen."""
+            try:
+                body = await request.json()
+                question_id = body.get("question_id") or body.get("id")
+                answer = body.get("answer")
+                author = body.get("author", "Kenny")  # Preserve author name
+                result = await handle_lumen_qa({
+                    "question_id": question_id,
+                    "answer": answer,
+                    "agent_name": author
+                })
+                if result and len(result) > 0:
+                    data = json.loads(result[0].text)
+                    return JSONResponse(data)
+                return JSONResponse({"success": True})
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_message(request):
+            """POST /message - Send a message to Lumen."""
+            try:
+                body = await request.json()
+                message = body.get("message", body.get("text", ""))
+                author = body.get("author", "dashboard")
+                responds_to = body.get("responds_to")
+                payload = {"message": message, "source": "dashboard", "agent_name": author}
+                if responds_to:
+                    payload["responds_to"] = responds_to
+                result = await handle_post_message(payload)
+                if result and len(result) > 0:
+                    data = json.loads(result[0].text)
+                    return JSONResponse(data)
+                return JSONResponse({"success": True})
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_learning(request):
+            """GET /learning - Exact copy of message_server.py format."""
+            try:
+                import sqlite3
+                from pathlib import Path
+                from datetime import datetime, timedelta
+
+                # Find database - prefer ANIMA_DB env var, then ~/.anima/
+                import os
+                db_path = None
+                env_db = os.environ.get("ANIMA_DB")
+                candidates = [Path(env_db)] if env_db else []
+                candidates.extend([Path.home() / ".anima" / "anima.db", Path.home() / "anima-mcp" / "anima.db"])
+                for p in candidates:
+                    if p.exists():
+                        db_path = p
+                        break
+
+                if not db_path:
+                    return JSONResponse({"error": "No identity database"}, status_code=500)
+
+                conn = sqlite3.connect(str(db_path))
+
+                # Get identity stats
+                identity = conn.execute("SELECT name, total_awakenings, total_alive_seconds FROM identity LIMIT 1").fetchone()
+
+                # Get recent state history for learning trends
+                one_day_ago = (datetime.now() - timedelta(hours=24)).isoformat()
+                recent_states = conn.execute(
+                    "SELECT warmth, clarity, stability, presence, timestamp FROM state_history WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 100",
+                    (one_day_ago,)
+                ).fetchall()
+
+                # Calculate averages and trends
+                if recent_states:
+                    avg_warmth = sum(s[0] for s in recent_states) / len(recent_states)
+                    avg_clarity = sum(s[1] for s in recent_states) / len(recent_states)
+                    avg_stability = sum(s[2] for s in recent_states) / len(recent_states)
+                    avg_presence = sum(s[3] for s in recent_states) / len(recent_states)
+
+                    mid = len(recent_states) // 2
+                    if mid > 0:
+                        first_half = recent_states[mid:]
+                        second_half = recent_states[:mid]
+                        stability_trend = sum(s[2] for s in second_half) / len(second_half) - sum(s[2] for s in first_half) / len(first_half)
+                    else:
+                        stability_trend = 0
                 else:
-                    return HTMLResponse(
-                        "<html><body><h1>Architecture Page Not Found</h1>"
-                        f"<p>Expected at: {page_path}</p></body></html>",
-                        status_code=404
-                    )
+                    avg_warmth = avg_clarity = avg_stability = avg_presence = 0
+                    stability_trend = 0
 
-            app.routes.append(Route("/architecture", rest_architecture_page, methods=["GET"]))
+                # Get recent events
+                events = conn.execute(
+                    "SELECT event_type, timestamp FROM events ORDER BY timestamp DESC LIMIT 10"
+                ).fetchall()
 
-            print("[Server] Registered dashboard REST endpoints (/state, /qa, /gallery, /gallery-page, /layers, /architecture, /message, /learning, /voice)", file=sys.stderr, flush=True)
+                alive_hours = identity[2] / 3600 if identity else 0
+                conn.close()
 
-        except Exception as e:
-            print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
+                # Exact same format as message_server.py
+                return JSONResponse({
+                    "name": identity[0] if identity else "Unknown",
+                    "awakenings": identity[1] if identity else 0,
+                    "alive_hours": round(alive_hours, 1),
+                    "samples_24h": len(recent_states),
+                    "avg_warmth": round(avg_warmth, 3),
+                    "avg_clarity": round(avg_clarity, 3),
+                    "avg_stability": round(avg_stability, 3),
+                    "avg_presence": round(avg_presence, 3),
+                    "stability_trend": round(stability_trend, 3),
+                    "recent_events": [{"type": e[0], "time": e[1]} for e in events[:5]]
+                })
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_voice(request):
+            """GET /voice - Get voice system status."""
+            try:
+                result = await handle_configure_voice({"action": "status"})
+                if result and len(result) > 0:
+                    data = json.loads(result[0].text)
+                    return JSONResponse(data)
+                return JSONResponse({"mode": "text"})
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_gallery(request):
+            """GET /gallery - Get Lumen's drawings."""
+            try:
+                import re
+                from pathlib import Path
+                from datetime import datetime as dt
+                drawings_dir = Path.home() / ".anima" / "drawings"
+
+                if not drawings_dir.exists():
+                    return JSONResponse({"drawings": [], "total": 0})
+
+                files = list(drawings_dir.glob("lumen_drawing*.png"))
+
+                # Eras — chronological periods in Lumen's drawing history
+                # Each entry: (cutoff_timestamp, era_name)
+                # Drawings BEFORE the cutoff belong to that era
+                _ERAS = [
+                    ("20260207_190000", "geometric"),
+                ]
+                _CURRENT_ERA = "gestural"
+
+                def get_era(filename):
+                    """Determine which era a drawing belongs to."""
+                    m = re.search(r"(\d{8}_\d{6})", filename)
+                    if m:
+                        ts_str = m.group(1)
+                        for cutoff, name in _ERAS:
+                            if ts_str < cutoff:
+                                return name
+                    return _CURRENT_ERA
+
+                def parse_ts(f):
+                    m = re.search(r"(\d{8})_(\d{6})", f.name)
+                    if m:
+                        try:
+                            return dt.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
+                        except ValueError:
+                            pass
+                    return f.stat().st_mtime
+
+                files = sorted(files, key=parse_ts, reverse=True)
+
+                # Pagination support
+                offset = int(request.query_params.get("offset", 0))
+                limit = int(request.query_params.get("limit", 50))
+                limit = min(limit, 100)  # cap at 100 per request
+
+                page_files = files[offset:offset + limit]
+
+                drawings = []
+                for f in page_files:
+                    drawings.append({
+                        "filename": f.name,
+                        "timestamp": parse_ts(f),
+                        "size": f.stat().st_size,
+                        "manual": "_manual" in f.name,
+                        "era": get_era(f.name),
+                    })
+
+                return JSONResponse({
+                    "drawings": drawings,
+                    "total": len(files),
+                    "offset": offset,
+                    "limit": limit,
+                    "has_more": offset + limit < len(files),
+                })
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_gallery_image(request):
+            """GET /gallery/{filename} - Serve a drawing image."""
+            from starlette.responses import Response
+            from pathlib import Path
+            filename = request.path_params.get("filename", "")
+            # Sanitize filename
+            if "/" in filename or ".." in filename or not filename.endswith(".png"):
+                return Response(content="Bad request", status_code=400)
+            img_path = Path.home() / ".anima" / "drawings" / filename
+            if not img_path.exists():
+                return Response(content="Not found", status_code=404)
+            try:
+                with open(img_path, "rb") as f:
+                    img_data = f.read()
+                return Response(
+                    content=img_data,
+                    media_type="image/png",
+                    headers={"Cache-Control": "max-age=3600"}
+                )
+            except Exception as e:
+                return Response(content=str(e), status_code=500)
+
+        async def rest_health_detailed(request):
+            """GET /health/detailed - Get subsystem health status."""
+            try:
+                result = await handle_get_health({})
+                if result and len(result) > 0:
+                    data = json.loads(result[0].text)
+                    return JSONResponse(data)
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+            return JSONResponse({"error": "no data"}, status_code=500)
+
+        async def rest_gallery_page(request):
+            """Serve the Lumen Drawing Gallery page."""
+            server_dir = Path(__file__).parent
+            project_root = server_dir.parent.parent
+            gallery_path = project_root / "docs" / "gallery.html"
+            if gallery_path.exists():
+                return FileResponse(gallery_path, media_type="text/html")
+            else:
+                return HTMLResponse(
+                    "<html><body><h1>Gallery Not Found</h1>"
+                    f"<p>Expected at: {gallery_path}</p></body></html>",
+                    status_code=404
+                )
+
+        async def rest_layers(request):
+            """GET /layers - Full proprioception stack for architecture page."""
+            try:
+                readings, anima = _get_readings_and_anima()
+                if readings is None or anima is None:
+                    return JSONResponse({"error": "Unable to read sensor data"}, status_code=500)
+
+                feeling = anima.feeling()
+                store = _get_store()
+                identity = store.get_identity() if store else None
+
+                # Physical sensors
+                physical = {
+                    "ambient_temp_c": readings.ambient_temp_c or 0,
+                    "humidity_pct": readings.humidity_pct or 0,
+                    "light_lux": readings.light_lux or 0,
+                    "pressure_hpa": readings.pressure_hpa or 0,
+                }
+
+                # Neural bands
+                neural = _extract_neural_bands(readings)
+
+                # Anima
+                anima_data = {
+                    "warmth": round(anima.warmth, 3),
+                    "clarity": round(anima.clarity, 3),
+                    "stability": round(anima.stability, 3),
+                    "presence": round(anima.presence, 3),
+                }
+
+                # EISV
+                from .eisv_mapper import anima_to_eisv
+                eisv = anima_to_eisv(anima, readings)
+                eisv_data = eisv.to_dict()
+
+                # Governance
+                gov = _last_governance_decision or {}
+                governance_data = {
+                    "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
+                    "margin": gov.get("margin", "unknown") if gov else "n/a",
+                    "source": gov.get("source", "") if gov else "",
+                    "connected": bool(gov),
+                }
+                if gov and gov.get("eisv"):
+                    governance_data["eisv"] = gov["eisv"]
+
+                # System
+                system = {
+                    "cpu_temp_c": readings.cpu_temp_c or 0,
+                    "cpu_percent": readings.cpu_percent or 0,
+                    "memory_percent": readings.memory_percent or 0,
+                    "disk_percent": readings.disk_percent or 0,
+                }
+
+                # Identity
+                identity_data = {}
+                if identity:
+                    alive_seconds = identity.total_alive_seconds + (store.get_session_alive_seconds() if store else 0)
+                    identity_data = {
+                        "name": identity.name,
+                        "awakenings": identity.total_awakenings,
+                        "alive_hours": round(alive_seconds / 3600, 1),
+                        "alive_ratio": round(identity.alive_ratio(), 3),
+                        "age_days": round(identity.age_seconds() / 86400, 1),
+                    }
+
+                return JSONResponse({
+                    "physical": physical,
+                    "neural": neural,
+                    "anima": anima_data,
+                    "feeling": feeling,
+                    "eisv": eisv_data,
+                    "governance": governance_data,
+                    "system": system,
+                    "identity": identity_data,
+                    "mood": feeling.get("mood", "unknown"),
+                })
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_architecture_page(request):
+            """Serve the Lumen Architecture page."""
+            server_dir = Path(__file__).parent
+            project_root = server_dir.parent.parent
+            page_path = project_root / "docs" / "architecture.html"
+            if page_path.exists():
+                return FileResponse(page_path, media_type="text/html")
+            else:
+                return HTMLResponse(
+                    "<html><body><h1>Architecture Page Not Found</h1>"
+                    f"<p>Expected at: {page_path}</p></body></html>",
+                    status_code=404
+                )
+
+        # === Build Starlette app with all routes ===
+        app = Starlette(routes=[
+            Mount("/mcp", app=streamable_mcp_asgi),
+            Route("/health", health_check, methods=["GET"]),
+            Route("/health/detailed", rest_health_detailed, methods=["GET"]),
+            Route("/v1/tools/call", rest_tool_call, methods=["POST"]),
+            Route("/dashboard", dashboard, methods=["GET"]),
+            Route("/state", rest_state, methods=["GET"]),
+            Route("/qa", rest_qa, methods=["GET"]),
+            Route("/answer", rest_answer, methods=["POST"]),
+            Route("/message", rest_message, methods=["POST"]),
+            Route("/messages", rest_messages, methods=["GET"]),
+            Route("/learning", rest_learning, methods=["GET"]),
+            Route("/voice", rest_voice, methods=["GET"]),
+            Route("/gallery", rest_gallery, methods=["GET"]),
+            Route("/gallery/{filename}", rest_gallery_image, methods=["GET"]),
+            Route("/gallery-page", rest_gallery_page, methods=["GET"]),
+            Route("/layers", rest_layers, methods=["GET"]),
+            Route("/architecture", rest_architecture_page, methods=["GET"]),
+        ])
+        print("[Server] Starlette app created with all routes", file=sys.stderr, flush=True)
 
         # Start display loop before server runs
         start_display_loop()
@@ -3282,37 +3260,34 @@ def run_http_server(host: str, port: int):
         asyncio.create_task(server_warmup_task())
 
         print(f"MCP server running at http://{host}:{port}", file=sys.stderr, flush=True)
-        if HAS_STREAMABLE_HTTP:
-            print(f"  Streamable HTTP: http://{host}:{port}/mcp (recommended)", file=sys.stderr, flush=True)
-        print(f"  SSE (legacy):    http://{host}:{port}/sse", file=sys.stderr, flush=True)
+        print(f"  Streamable HTTP: http://{host}:{port}/mcp/", file=sys.stderr, flush=True)
 
         # Start Streamable HTTP session manager as background task
         # Uses anyio task group pattern (same as governance-mcp)
-        if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
-            import anyio
+        import anyio
 
-            async def start_streamable_http():
-                nonlocal _streamable_running
-                try:
-                    async with anyio.create_task_group() as tg:
-                        # Manually set internal state (same pattern as governance-mcp)
-                        _streamable_session_manager._task_group = tg
-                        _streamable_session_manager._has_started = True
-                        _streamable_running = True
-                        print("[Server] Streamable HTTP session manager running", file=sys.stderr, flush=True)
-                        # Keep running until cancelled
-                        await asyncio.Event().wait()
-                except asyncio.CancelledError:
-                    print("StreamableHTTP session manager shutting down", file=sys.stderr, flush=True)
-                    _streamable_running = False
-                except Exception as e:
-                    print(f"[Server] Streamable HTTP error: {e}", file=sys.stderr, flush=True)
-                    _streamable_running = False
+        async def start_streamable_http():
+            nonlocal _streamable_running
+            try:
+                async with anyio.create_task_group() as tg:
+                    # Manually set internal state (same pattern as governance-mcp)
+                    _streamable_session_manager._task_group = tg
+                    _streamable_session_manager._has_started = True
+                    _streamable_running = True
+                    print("[Server] Streamable HTTP session manager running", file=sys.stderr, flush=True)
+                    # Keep running until cancelled
+                    await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                print("[Server] Streamable HTTP session manager shutting down", file=sys.stderr, flush=True)
+                _streamable_running = False
+            except Exception as e:
+                print(f"[Server] Streamable HTTP error: {e}", file=sys.stderr, flush=True)
+                _streamable_running = False
 
-            streamable_task = asyncio.create_task(start_streamable_http())
+        streamable_task = asyncio.create_task(start_streamable_http())
 
         try:
-            # Run with uvicorn (matches governance-mcp-v1 pattern)
+            # Run with uvicorn
             config = uvicorn.Config(
                 app,
                 host=host,
@@ -3324,8 +3299,7 @@ def run_http_server(host: str, port: int):
             server = uvicorn.Server(config)
             await server.serve()
         finally:
-            if HAS_STREAMABLE_HTTP and 'streamable_task' in dir():
-                streamable_task.cancel()
+            streamable_task.cancel()
             stop_display_loop()
             sleep()
 
@@ -3349,166 +3323,7 @@ def run_http_server(host: str, port: int):
 
     # Run the async server
     asyncio.run(_run_http_server_async())
-    return  # Early return - skip the old code below
 
-    # === Streamable HTTP transport (MCP 1.24.0+) ===
-    HAS_STREAMABLE_HTTP = False
-    _streamable_session_manager = None
-    _streamable_running = False
-
-    try:
-        import anyio
-        from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-
-        # Create session manager for Streamable HTTP using FastMCP's internal server
-        _streamable_session_manager = StreamableHTTPSessionManager(
-            app=mcp._mcp_server,  # Access the underlying MCP server from FastMCP
-            json_response=False,  # Use SSE streams (default, more efficient)
-            stateless=True,  # Allow stateless for compatibility
-        )
-
-        HAS_STREAMABLE_HTTP = True
-        print("[Server] Streamable HTTP transport available at /mcp", file=sys.stderr, flush=True)
-
-        # Create ASGI wrapper for streamable HTTP
-        async def streamable_mcp_asgi(scope, receive, send):
-            """ASGI handler for Streamable HTTP MCP at /mcp."""
-            # Check shutdown first - reject new requests during shutdown
-            if SERVER_SHUTTING_DOWN:
-                try:
-                    response = JSONResponse({
-                        "status": "shutting_down",
-                        "message": "Server is shutting down"
-                    }, status_code=503)
-                    await response(scope, receive, send)
-                except (RuntimeError, Exception):
-                    pass  # Connection may already be closed during shutdown
-                return
-
-            if not _streamable_running:
-                response = JSONResponse({
-                    "status": "starting_up",
-                    "message": "Streamable HTTP session manager not ready"
-                }, status_code=503)
-                await response(scope, receive, send)
-                return
-
-            if not SERVER_READY:
-                response = JSONResponse({
-                    "status": "warming_up",
-                    "message": "Server is starting up"
-                }, status_code=503)
-                await response(scope, receive, send)
-                return
-
-            try:
-                await _streamable_session_manager.handle_request(scope, receive, send)
-            except Exception as e:
-                if SERVER_SHUTTING_DOWN:
-                    return  # Suppress errors during shutdown
-                print(f"[MCP] Error in Streamable HTTP handler: {e}", file=sys.stderr, flush=True)
-                try:
-                    response = JSONResponse({"error": str(e)}, status_code=500)
-                    await response(scope, receive, send)
-                except RuntimeError:
-                    pass  # Connection already closed
-
-        # Mount streamable HTTP endpoint
-        app.routes.append(Mount("/mcp", app=streamable_mcp_asgi))
-
-    except Exception as e:
-        print(f"[Server] Streamable HTTP transport not available: {e}", file=sys.stderr, flush=True)
-
-    # === Async server runner ===
-    async def run_server():
-        """Run the server with proper async context for background tasks."""
-        global SERVER_READY, SERVER_STARTUP_TIME
-        nonlocal _streamable_running
-
-        import uvicorn
-
-        # Start display loop
-        print("[Server] Starting display loop...", file=sys.stderr, flush=True)
-        start_display_loop()
-        print("[Server] Display loop started", file=sys.stderr, flush=True)
-
-        # Start warmup task
-        async def server_warmup_task():
-            global SERVER_READY, SERVER_STARTUP_TIME
-            SERVER_STARTUP_TIME = datetime.now()
-            await asyncio.sleep(2.0)
-            SERVER_READY = True
-            print("[Server] Warmup complete - server ready to accept requests", file=sys.stderr, flush=True)
-
-        asyncio.create_task(server_warmup_task())
-
-        # Start streamable HTTP session manager if available
-        if HAS_STREAMABLE_HTTP and _streamable_session_manager is not None:
-            async def start_streamable_http():
-                nonlocal _streamable_running
-                try:
-                    import anyio
-                    async with anyio.create_task_group() as tg:
-                        _streamable_session_manager._task_group = tg
-                        _streamable_running = True
-                        print("[Server] Streamable HTTP session manager started", file=sys.stderr, flush=True)
-                        await anyio.sleep_forever()
-                except Exception as e:
-                    print(f"[Server] Streamable HTTP session manager error: {e}", file=sys.stderr, flush=True)
-                    _streamable_running = False
-
-            asyncio.create_task(start_streamable_http())
-
-        print(f"SSE server running at http://{host}:{port}")
-        print(f"  SSE transport: http://{host}:{port}/sse")
-        if HAS_STREAMABLE_HTTP:
-            print(f"  Streamable HTTP: http://{host}:{port}/mcp")
-
-        # Run with uvicorn using async server
-        config = uvicorn.Config(
-            app,
-            host=host,
-            port=port,
-            log_level="warning",
-            timeout_keep_alive=5,
-            timeout_graceful_shutdown=10,
-        )
-        server = uvicorn.Server(config)
-
-        try:
-            await server.serve()
-        finally:
-            print("[Server] Stopping display loop...", file=sys.stderr, flush=True)
-            stop_display_loop()
-
-    # Handle graceful shutdown
-    def shutdown_handler(sig, frame):
-        global SERVER_SHUTTING_DOWN
-        SERVER_SHUTTING_DOWN = True  # Signal handlers to reject new requests
-        try:
-            print("\nShutting down...", file=sys.stderr, flush=True)
-        except (ValueError, OSError):
-            pass  # stdout/stderr might be closed
-        try:
-            stop_display_loop()
-            sleep()
-        except Exception:
-            pass  # Don't crash on shutdown errors
-        raise SystemExit(0)
-
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
-
-    # Run the async server
-    try:
-        asyncio.run(run_server())
-    finally:
-        # Display loop is stopped by lifespan context manager
-        # Only stop here if lifespan didn't run (shouldn't happen, but be safe)
-        try:
-            stop_display_loop()
-        except Exception:
-            pass  # Don't crash on shutdown
 
 def main():
     """Entry point."""
@@ -3562,7 +3377,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Anima MCP Server")
     parser.add_argument("--http", "--sse", action="store_true", dest="http_server",
-                        help="Run HTTP server (serves /mcp/ Streamable HTTP + /sse legacy)")
+                        help="Run HTTP server with Streamable HTTP at /mcp/")
     parser.add_argument("--host", default="0.0.0.0", help="HTTP server host (default: 0.0.0.0)")
     parser.add_argument("--port", type=int, default=8766, help="HTTP server port (default: 8766)")
     args = parser.parse_args()
