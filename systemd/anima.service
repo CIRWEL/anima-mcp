@@ -23,7 +23,7 @@ Environment="PYTHONUNBUFFERED=1"
 ExecStartPre=/bin/sh -c 'fuser -k 8766/tcp 2>/dev/null || true; sleep 2'
 
 # Executable
-ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/anima --sse --host 0.0.0.0 --port 8766
+ExecStart=/home/unitares-anima/anima-mcp/.venv/bin/anima --http --host 0.0.0.0 --port 8766
 
 # Restart policy - allow more retries for undervoltage recovery
 Restart=on-failure
