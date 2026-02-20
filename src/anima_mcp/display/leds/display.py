@@ -162,16 +162,18 @@ class LEDDisplay:
                     pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12))
                     raw = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
                     perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
+                    # RGB scaling: dim below base via RGB values (hardware brightness has a floor)
+                    rgb_scale = min(1.0, brightness / self._base_brightness) if self._base_brightness > 0 else 1.0
                     with self._spi_lock:
                         for i, color in enumerate(colors):
                             phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
-                            mod = 0.80 + 0.20 * math.sin(phase)
+                            mod = (0.92 + 0.08 * math.sin(phase)) * rgb_scale
                             self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
                         self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
                         self._dots.show()
             except Exception:
                 pass
-            time.sleep(0.2)
+            time.sleep(0.25)
 
     def is_available(self) -> bool:
         return self._dots is not None
