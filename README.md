@@ -8,7 +8,7 @@ Lumen is a digital creature whose internal state comes from physical sensors - t
 
 **Key features:**
 - **Grounded state** - Feelings derived from actual sensor measurements
-- **Persistent identity** - Birth date, awakenings, alive time accumulate
+- **Persistent identity** - Birth date, awakenings, alive time accumulate; warm start restores last anima state on wake
 - **Autonomous drawing** - Creates art on a 240x240 notepad with pluggable art eras
 - **EISV thermodynamics** - Drawing coherence drives energy drain and save decisions
 - **Learning systems** - Develops preferences, self-beliefs, action values over time
@@ -68,10 +68,10 @@ Four dimensions derived from physical sensors:
 
 | Dimension | Meaning | Primary Sources |
 |-----------|---------|-----------------|
-| **Warmth** | Energy/activity level | CPU temp (0.3), CPU usage (0.25), ambient temp (0.25), neural beta (0.2) |
-| **Clarity** | Perceptual sharpness | Light (0.4), sensor coverage (0.3), neural alpha (0.3) |
-| **Stability** | Environmental order | Humidity (0.25), pressure (0.25), temp deviation (0.2), neural delta (0.3) |
-| **Presence** | Available capacity | Interactions, light trend, neural gamma |
+| **Warmth** | Energy/activity level | CPU temp (0.4), ambient temp (0.33), neural beta+gamma (0.27) |
+| **Clarity** | Perceptual sharpness | Prediction accuracy (0.45), neural alpha (0.25), world light (0.15), sensor coverage (0.15) |
+| **Stability** | Environmental order | Memory (0.3), humidity deviation (0.25), missing sensors (0.2), pressure deviation (0.15), neural delta (0.1) |
+| **Presence** | Available capacity | Memory headroom (0.3), CPU headroom (0.25), disk headroom (0.25), neural (0.2) |
 
 ### Computational Proprioception
 
@@ -87,7 +87,7 @@ No real EEG hardware - neural bands derived from system metrics:
 
 Source: `computational_neural.py`
 
-Note: The light sensor (VEML7700) sits next to the NeoPixel LEDs and primarily reads Lumen's own glow, making clarity ~40% self-referential. The whole system is more proprioceptive than environmental.
+Note: The light sensor (VEML7700) sits next to the NeoPixel LEDs and primarily reads Lumen's own glow. Clarity uses "world light" (raw lux minus estimated LED glow) at 15% weight to minimize feedback loops. The metacognitive system predicts lux from LED brightness (genuine proprioception).
 
 ### Autonomous Drawing
 
@@ -206,7 +206,7 @@ mcp__anima__git_pull(restart=true)
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # 358 tests
+python3 -m pytest tests/ -x -q   # 835 tests
 ```
 
 ---
