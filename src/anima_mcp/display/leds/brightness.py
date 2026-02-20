@@ -54,6 +54,13 @@ def get_pulsing_brightness(
 
 
 def apply_gamma(raw: float, gamma: float = 1.8, floor: float = 0.008, cap: float = 0.5) -> float:
-    """Perceptual brightness. raw in [floor, cap] -> perceptual."""
+    """Perceptual brightness. raw in [floor, cap] -> perceptual.
+
+    At very low brightness (< 0.03), caps gamma inflation to 3x to prevent
+    Night mode from being too bright (0.008 -> 0.068 uncapped).
+    """
     raw = max(floor, min(cap, raw))
-    return max(floor, min(cap, raw ** (1.0 / gamma)))
+    corrected = raw ** (1.0 / gamma)
+    if raw < 0.03:
+        corrected = min(corrected, raw * 3)
+    return max(floor, min(cap, corrected))
