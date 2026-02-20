@@ -110,6 +110,8 @@ _sm_pending_prediction: dict | None = None  # {context, prediction, warmth_befor
 _sm_clarity_before_interaction: float | None = None
 # LED proprioception - carry LED state across iterations for prediction
 _led_proprioception: dict | None = None  # {brightness, expression_mode, is_dancing, ...}
+# Warm start - last known anima state from before shutdown, used for first sense after wake
+_warm_start_anima: dict | None = None  # {warmth, clarity, stability, presence}
 
 # Thread lock for lazy-init singletons (metacog, unitares bridge)
 _state_lock = threading.Lock()
@@ -186,6 +188,29 @@ async def _close_unitares_bridge():
 
 _last_shm_data = None  # Cached per-iteration shared memory read
 
+def _get_warm_start_anticipation():
+    """Consume warm start state as a synthetic Anticipation (one-shot).
+
+    On the first sense after wake, this blends last-known anima state
+    with current sensor readings so Lumen doesn't start from scratch.
+    """
+    global _warm_start_anima
+    if _warm_start_anima is None:
+        return None
+    from .memory import Anticipation
+    state = _warm_start_anima
+    _warm_start_anima = None  # One-shot: only used for first sense
+    return Anticipation(
+        warmth=state["warmth"],
+        clarity=state["clarity"],
+        stability=state["stability"],
+        presence=state["presence"],
+        confidence=0.6,  # Moderate confidence — it's real data but could be stale
+        sample_count=1,
+        bucket_description="warm start from last shutdown",
+    )
+
+
 def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorReadings | None, Anima | None]:
     """
     Read sensor data from shared memory (broker) or fallback to direct sensor access.
@@ -238,8 +263,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             anima_dict = shm_data["anima"]
             calibration = get_calibration()
 
-            # Get anticipation from memory (what Lumen expects based on past experience)
-            anticipation = anticipate_state(shm_data.get("readings", {}))
+            # Use warm start anticipation (first sense after wake) or memory
+            anticipation = _get_warm_start_anticipation() or anticipate_state(shm_data.get("readings", {}))
 
             # Recompute anima from readings with memory influence
             anima = sense_self_with_memory(readings, anticipation, calibration)
@@ -277,8 +302,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             
             calibration = get_calibration()
 
-            # Get anticipation from memory
-            anticipation = anticipate_state(readings.to_dict() if readings else {})
+            # Use warm start anticipation (first sense after wake) or memory
+            anticipation = _get_warm_start_anticipation() or anticipate_state(readings.to_dict() if readings else {})
 
             anima = sense_self_with_memory(readings, anticipation, calibration)
             if anima is None:
@@ -2395,7 +2420,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         anima_id: UUID from environment or database (DO NOT override - use existing identity)
     """
     import time as _time
-    global _store, _anima_id, _growth
+    global _store, _anima_id, _growth, _warm_start_anima
 
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
@@ -2464,6 +2489,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
 
             # Bootstrap trajectory awareness from state history
+            # and restore last known anima state for warm start
             try:
                 import os as _os
                 _db_path = _os.path.join(_os.path.expanduser("~"), ".anima", "anima.db")
@@ -2475,6 +2501,16 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 if history:
                     n = _traj.bootstrap_from_history(history)
                     print(f"[EISV] Bootstrapped trajectory buffer with {n} historical states", file=sys.stderr, flush=True)
+
+                    # Warm start: use last state_history row as initial anticipation
+                    last = history[-1]  # Most recent (ascending order)
+                    _warm_start_anima = {
+                        "warmth": last["warmth"],
+                        "clarity": last["clarity"],
+                        "stability": last["stability"],
+                        "presence": last["presence"],
+                    }
+                    print(f"[Wake] Warm start from last state: w={last['warmth']:.2f} c={last['clarity']:.2f} s={last['stability']:.2f} p={last['presence']:.2f}", file=sys.stderr, flush=True)
             except Exception as e:
                 print(f"[EISV] Bootstrap failed (non-fatal): {e}", file=sys.stderr, flush=True)
 
