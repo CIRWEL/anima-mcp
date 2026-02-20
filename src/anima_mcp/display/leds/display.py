@@ -2,6 +2,7 @@
 
 import math
 import sys
+import threading
 import time
 from typing import Optional, Tuple
 
@@ -109,6 +110,9 @@ class LEDDisplay:
         self._pulse_amount = 0.05
         self._flash_until = 0.0
         self._flash_color = (100, 100, 100)
+        self._spi_lock = threading.Lock()
+        self._animation_running = False
+        self._animation_thread: Optional[threading.Thread] = None
         self._init_leds()
 
     def _init_leds(self):
@@ -128,9 +132,46 @@ class LEDDisplay:
             except Exception:
                 pass
             print("[LEDs] DotStar LEDs initialized successfully", file=sys.stderr, flush=True)
+            self._start_animation()
         except Exception as e:
             print(f"[LEDs] Failed to initialize: {e}", file=sys.stderr, flush=True)
             self._dots = None
+
+    def _start_animation(self):
+        """Start background animation thread for smooth LED breathing."""
+        if self._animation_thread is not None:
+            return
+        self._animation_running = True
+        self._animation_thread = threading.Thread(target=self._animation_loop, daemon=True)
+        self._animation_thread.start()
+        print("[LEDs] Animation thread started (~5fps)", file=sys.stderr, flush=True)
+
+    def _animation_loop(self):
+        """Fast LED update loop for smooth per-LED wave + pulse."""
+        while self._animation_running:
+            try:
+                state = self._last_state
+                if self._dots and state and self._cached_pipeline_brightness is not None:
+                    t = time.time()
+                    # Flash override
+                    if t < self._flash_until:
+                        colors = [self._flash_color] * 3
+                    else:
+                        colors = [state.led2, state.led1, state.led0]
+                    brightness = max(self._hardware_brightness_floor, self._current_brightness)
+                    pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12))
+                    raw = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
+                    perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
+                    with self._spi_lock:
+                        for i, color in enumerate(colors):
+                            phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
+                            mod = 0.80 + 0.20 * math.sin(phase)
+                            self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
+                        self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
+                        self._dots.show()
+            except Exception:
+                pass
+            time.sleep(0.2)
 
     def is_available(self) -> bool:
         return self._dots is not None
@@ -173,27 +214,8 @@ class LEDDisplay:
                 print("[LEDs] set_all called but LEDs unavailable", file=sys.stderr, flush=True)
             return
         state = self._apply_flash(state)
-        from ...error_recovery import safe_call_with_timeout
-
-        def _set():
-            t = time.time()
-            for i, color in enumerate([state.led2, state.led1, state.led0]):
-                phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
-                mod = 0.88 + 0.12 * math.sin(phase)
-                self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
-            pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, state.brightness / 0.12))
-            raw = max(self._hardware_brightness_floor, min(0.5, state.brightness + pulse))
-            perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
-            self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
-            self._dots.show()
-            return True
-
-        success = safe_call_with_timeout(_set, timeout_seconds=0.3, default=False, log_error=False)
-        if success:
-            self._last_state = state
-            self._update_count += 1
-        elif self._update_count % 50 == 0:
-            print("[LEDs] Update skipped (timeout/hardware issue)", file=sys.stderr, flush=True)
+        self._last_state = state
+        self._update_count += 1
 
     def quick_flash(self, color: Tuple[int, int, int] = (100, 100, 100), duration_ms: int = 50):
         if self._dots:
@@ -299,22 +321,11 @@ class LEDDisplay:
             manual_changed = self._cached_manual_brightness is not None and abs(self._manual_brightness_factor - self._cached_manual_brightness) > 0.01
             if max_delta < self._cached_state_change_threshold and not light_changed and not activity_changed and not manual_changed:
                 state_changed = False
-                if self._last_state and self._dots and self._cached_pipeline_brightness is not None:
+                if self._last_state and self._cached_pipeline_brightness is not None:
                     target = self._cached_pipeline_brightness
                     delta_b = target - self._current_brightness
                     if abs(delta_b) > 0.001:
                         self._current_brightness += delta_b * self._brightness_transition_speed
-                    brightness = max(self._hardware_brightness_floor, self._current_brightness)
-                    pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12))
-                    raw = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
-                    perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
-                    t = time.time()
-                    for i, color in enumerate([self._last_state.led2, self._last_state.led1, self._last_state.led0]):
-                        phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
-                        mod = 0.88 + 0.12 * math.sin(phase)
-                        self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
-                    self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
-                    self._dots.show()
                     return self._last_state
 
         _manual_just_changed = (
