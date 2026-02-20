@@ -18,7 +18,9 @@ See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, List, Optional, TYPE_CHECKING
+import json
 import sys
 
 # Optional numpy for advanced computations
@@ -459,7 +461,7 @@ class TrajectorySignature:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary."""
-        return {
+        result = {
             "preferences": self.preferences,
             "beliefs": self.beliefs,
             "attractor": self.attractor,
@@ -469,6 +471,36 @@ class TrajectorySignature:
             "observation_count": self.observation_count,
             "stability_score": round(self.get_stability_score(), 3),
         }
+        if self.genesis_signature is not None:
+            result["genesis_signature"] = self.genesis_signature.to_dict()
+        return result
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'TrajectorySignature':
+        """Deserialize from dictionary."""
+        computed_at = data.get("computed_at")
+        if isinstance(computed_at, str):
+            try:
+                computed_at = datetime.fromisoformat(computed_at)
+            except (ValueError, TypeError):
+                computed_at = datetime.now()
+        elif not isinstance(computed_at, datetime):
+            computed_at = datetime.now()
+
+        sig = cls(
+            preferences=data.get("preferences", {}),
+            beliefs=data.get("beliefs", {}),
+            attractor=data.get("attractor"),
+            recovery=data.get("recovery", {}),
+            relational=data.get("relational", {}),
+            computed_at=computed_at,
+            observation_count=data.get("observation_count", 0),
+        )
+        # Recursively deserialize nested genesis if present
+        genesis_data = data.get("genesis_signature")
+        if isinstance(genesis_data, dict):
+            sig.genesis_signature = cls.from_dict(genesis_data)
+        return sig
 
     def summary(self) -> Dict[str, Any]:
         """Get a compact summary of the signature."""
@@ -500,13 +532,19 @@ def compute_trajectory_signature(
     Each component is optional - the signature will include whatever
     data is available.
 
+    Genesis (Σ₀) handling:
+    - On every call, attempts to load genesis from disk
+    - If no genesis exists and observation_count >= GENESIS_MIN_OBSERVATIONS,
+      freezes the current signature as genesis (write-once, never overwrites)
+    - Attaches genesis to the returned signature for drift detection
+
     Args:
         growth_system: GrowthSystem instance (for Π, Δ)
         self_model: SelfModel instance (for Β, Ρ)
         anima_history: AnimaHistory instance (for Α)
 
     Returns:
-        TrajectorySignature Σ
+        TrajectorySignature Σ (with genesis_signature attached if available)
     """
     # Extract components from each system
 
@@ -553,7 +591,7 @@ def compute_trajectory_signature(
         except Exception as e:
             print(f"[Trajectory] Could not get relational: {e}", file=sys.stderr)
 
-    return TrajectorySignature(
+    sig = TrajectorySignature(
         preferences=preferences,
         beliefs=beliefs,
         attractor=attractor,
@@ -561,6 +599,23 @@ def compute_trajectory_signature(
         relational=relational,
         observation_count=observation_count,
     )
+
+    # ── Genesis (Σ₀) management ──
+    # Try to load existing genesis from disk
+    genesis = load_genesis()
+
+    if genesis is not None:
+        # Attach existing genesis for drift detection
+        sig.genesis_signature = genesis
+    elif observation_count >= GENESIS_MIN_OBSERVATIONS:
+        # Sufficient observations — freeze current signature as genesis
+        # save_genesis is write-once and will not overwrite
+        saved = save_genesis(sig)
+        if saved:
+            # Reload to get a clean copy (sig itself should not self-reference)
+            sig.genesis_signature = load_genesis()
+
+    return sig
 
 
 def compare_signatures(sig1: TrajectorySignature, sig2: TrajectorySignature) -> Dict[str, Any]:
@@ -615,3 +670,83 @@ def compare_signatures(sig1: TrajectorySignature, sig2: TrajectorySignature) -> 
         "components": components,
         "is_same_identity": overall > 0.8,
     }
+
+
+# ── Genesis Persistence ──────────────────────────────────────────────
+
+# Minimum observations before genesis is considered stable enough to lock
+GENESIS_MIN_OBSERVATIONS = 30
+
+# Default persistence path for genesis signature
+_GENESIS_PATH = Path.home() / ".anima" / "trajectory_genesis.json"
+
+# Module-level cache to avoid re-reading disk on every check-in
+_cached_genesis: Optional[TrajectorySignature] = None
+
+
+def save_genesis(signature: TrajectorySignature, path: Optional[Path] = None) -> bool:
+    """
+    Persist genesis signature (Σ₀) to disk. Write-once: never overwrites.
+
+    Args:
+        signature: The trajectory signature to freeze as genesis
+        path: Override persistence path (default ~/.anima/trajectory_genesis.json)
+
+    Returns:
+        True if saved, False if genesis already exists on disk
+    """
+    global _cached_genesis
+    dest = path or _GENESIS_PATH
+    if dest.exists():
+        return False  # Genesis is immutable — never overwrite
+
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        data = signature.to_dict()
+        data["frozen_at"] = datetime.now().isoformat()
+        with open(dest, "w") as f:
+            json.dump(data, f, indent=2)
+        _cached_genesis = signature
+        print(
+            f"[Trajectory] Genesis Σ₀ frozen (obs={signature.observation_count}, "
+            f"stability={signature.get_stability_score():.3f})",
+            file=sys.stderr,
+        )
+        return True
+    except Exception as e:
+        print(f"[Trajectory] Could not save genesis: {e}", file=sys.stderr)
+        return False
+
+
+def load_genesis(path: Optional[Path] = None) -> Optional[TrajectorySignature]:
+    """
+    Load persisted genesis signature from disk.
+
+    Returns cached version if already loaded.
+
+    Args:
+        path: Override persistence path
+
+    Returns:
+        TrajectorySignature or None if no genesis exists
+    """
+    global _cached_genesis
+    if _cached_genesis is not None:
+        return _cached_genesis
+
+    src = path or _GENESIS_PATH
+    if not src.exists():
+        return None
+
+    try:
+        with open(src, "r") as f:
+            data = json.load(f)
+        _cached_genesis = TrajectorySignature.from_dict(data)
+        print(
+            f"[Trajectory] Genesis Σ₀ loaded (obs={_cached_genesis.observation_count})",
+            file=sys.stderr,
+        )
+        return _cached_genesis
+    except Exception as e:
+        print(f"[Trajectory] Could not load genesis: {e}", file=sys.stderr)
+        return None

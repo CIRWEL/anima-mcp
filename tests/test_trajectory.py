@@ -16,6 +16,9 @@ from anima_mcp.trajectory import (
     TrajectorySignature,
     compute_trajectory_signature,
     compare_signatures,
+    save_genesis,
+    load_genesis,
+    GENESIS_MIN_OBSERVATIONS,
 )
 
 
@@ -752,6 +755,144 @@ class TestAdaptiveWeights:
         # Preferences should have higher weight (lower variance)
         if "preferences" in weights and "beliefs" in weights:
             assert weights["preferences"] > weights["beliefs"]
+
+
+# =============================================================================
+# Test: Serialization (from_dict / to_dict roundtrip)
+# =============================================================================
+
+class TestSerialization:
+    """Tests for to_dict() / from_dict() roundtrip."""
+
+    def test_empty_roundtrip(self, empty_signature):
+        """Empty signature should roundtrip."""
+        data = empty_signature.to_dict()
+        restored = TrajectorySignature.from_dict(data)
+        assert restored.preferences == {}
+        assert restored.beliefs == {}
+        assert restored.attractor is None
+        assert restored.observation_count == 0
+
+    def test_full_roundtrip(self, full_signature):
+        """Full signature should roundtrip all fields."""
+        data = full_signature.to_dict()
+        restored = TrajectorySignature.from_dict(data)
+        assert restored.preferences == full_signature.preferences
+        assert restored.beliefs == full_signature.beliefs
+        assert restored.attractor == full_signature.attractor
+        assert restored.recovery == full_signature.recovery
+        assert restored.relational == full_signature.relational
+        assert restored.observation_count == full_signature.observation_count
+
+    def test_genesis_included_in_dict(self, full_signature, similar_signature):
+        """to_dict should include genesis when present."""
+        full_signature.genesis_signature = similar_signature
+        data = full_signature.to_dict()
+        assert "genesis_signature" in data
+        assert data["genesis_signature"]["observation_count"] == similar_signature.observation_count
+
+    def test_genesis_not_in_dict_when_none(self, full_signature):
+        """to_dict should omit genesis when None."""
+        full_signature.genesis_signature = None
+        data = full_signature.to_dict()
+        assert "genesis_signature" not in data
+
+    def test_from_dict_invalid_date(self):
+        """Invalid date string should fall back to now."""
+        data = {"computed_at": "not-a-date", "observation_count": 5}
+        sig = TrajectorySignature.from_dict(data)
+        assert isinstance(sig.computed_at, datetime)
+        assert sig.observation_count == 5
+
+    def test_similarity_preserved_after_roundtrip(self, full_signature, similar_signature):
+        """Similarity should be same before and after serialization."""
+        sim_before = full_signature.similarity(similar_signature)
+        restored = TrajectorySignature.from_dict(full_signature.to_dict())
+        sim_after = restored.similarity(similar_signature)
+        assert sim_before == pytest.approx(sim_after, abs=0.001)
+
+
+# =============================================================================
+# Test: Genesis Persistence
+# =============================================================================
+
+class TestGenesisPersistence:
+    """Tests for save_genesis() and load_genesis()."""
+
+    def test_save_and_load_roundtrip(self, full_signature, tmp_path):
+        """Genesis should roundtrip through file."""
+        genesis_path = tmp_path / "genesis.json"
+        assert save_genesis(full_signature, path=genesis_path) is True
+        loaded = load_genesis(path=genesis_path)
+        assert loaded is not None
+        assert loaded.observation_count == full_signature.observation_count
+        assert loaded.preferences == full_signature.preferences
+
+    def test_save_is_write_once(self, full_signature, tmp_path):
+        """Second save should return False (never overwrites)."""
+        genesis_path = tmp_path / "genesis.json"
+        assert save_genesis(full_signature, path=genesis_path) is True
+        # Second save should fail
+        sig2 = TrajectorySignature(observation_count=999)
+        assert save_genesis(sig2, path=genesis_path) is False
+        # Should still be the original
+        import anima_mcp.trajectory as tmod
+        tmod._cached_genesis = None  # Clear cache to force re-read
+        loaded = load_genesis(path=genesis_path)
+        assert loaded.observation_count == full_signature.observation_count
+
+    def test_load_nonexistent_returns_none(self, tmp_path):
+        """Loading from nonexistent path should return None."""
+        import anima_mcp.trajectory as tmod
+        tmod._cached_genesis = None
+        assert load_genesis(path=tmp_path / "nonexistent.json") is None
+
+    def test_load_caches(self, full_signature, tmp_path):
+        """Second load should use cache."""
+        import anima_mcp.trajectory as tmod
+        genesis_path = tmp_path / "genesis.json"
+        save_genesis(full_signature, path=genesis_path)
+        # Clear cache, load, verify cached
+        tmod._cached_genesis = None
+        first = load_genesis(path=genesis_path)
+        second = load_genesis(path=genesis_path)
+        assert first is second  # Same object from cache
+
+    def test_compute_creates_genesis_when_mature(self, tmp_path):
+        """compute_trajectory_signature should auto-create genesis at threshold."""
+        import anima_mcp.trajectory as tmod
+        # Clear module-level cache
+        tmod._cached_genesis = None
+
+        mock_history = MagicMock()
+        mock_history.get_attractor_basin.return_value = {
+            "center": [0.5, 0.5, 0.5, 0.5],
+            "n_observations": GENESIS_MIN_OBSERVATIONS,
+        }
+
+        with patch.object(tmod, '_GENESIS_PATH', tmp_path / "genesis.json"):
+            sig = compute_trajectory_signature(anima_history=mock_history)
+            # Should have created genesis and attached it
+            assert sig.genesis_signature is not None
+            assert sig.genesis_signature.observation_count == GENESIS_MIN_OBSERVATIONS
+            # File should exist
+            assert (tmp_path / "genesis.json").exists()
+
+    def test_compute_skips_genesis_below_threshold(self, tmp_path):
+        """compute_trajectory_signature should not create genesis below threshold."""
+        import anima_mcp.trajectory as tmod
+        tmod._cached_genesis = None
+
+        mock_history = MagicMock()
+        mock_history.get_attractor_basin.return_value = {
+            "center": [0.5, 0.5, 0.5, 0.5],
+            "n_observations": GENESIS_MIN_OBSERVATIONS - 1,
+        }
+
+        with patch.object(tmod, '_GENESIS_PATH', tmp_path / "genesis.json"):
+            sig = compute_trajectory_signature(anima_history=mock_history)
+            assert sig.genesis_signature is None
+            assert not (tmp_path / "genesis.json").exists()
 
 
 if __name__ == "__main__":
