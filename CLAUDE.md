@@ -28,7 +28,7 @@ anima-creature.service      anima.service
 
 ### MCP Server Structure
 
-`server.py` is the orchestrator (~3,400 lines). Handlers and tool definitions are extracted:
+`server.py` is the orchestrator (~3,440 lines). Handlers and tool definitions are extracted:
 
 | Module | Purpose |
 |--------|---------|
@@ -280,6 +280,8 @@ Or manually:
 ssh unitares-anima@100.83.45.66 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-creature anima'
 ```
 
+**After restart, wait 30-60 seconds.** The Pi is slow to boot the service. You will see "SSE server unavailable" errors from the STDIO proxy during this window — this is normal. Do not panic, do not retry rapidly, just wait and try again.
+
 ## UNITARES Integration
 
 Lumen checks in with UNITARES governance via Tailscale from **two processes**:
@@ -302,6 +304,21 @@ Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy,
 DrawingEISV state is included in governance check-in payload (`sensor_data.drawing_eisv`) when drawing.
 Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
 Non-proceed verdicts are logged immediately with DrawingEISV state if available.
+
+## Operational Facts
+
+Things agents keep re-discovering. Read this so you don't waste time.
+
+| Fact | Detail |
+|------|--------|
+| **Transport** | Streamable HTTP only at `/mcp/`. SSE was removed. No `/sse` endpoint exists. |
+| **Ports** | anima-mcp = **8766**, UNITARES governance = **8767**. Never guess. |
+| **Pi restart time** | 30-60 seconds after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. |
+| **Tailscale IPs** | Pi: `100.103.208.117`, Mac: `100.96.201.46`. These are stable. |
+| **alive_ratio** | `total_alive_seconds / age_seconds`. Lumen is ~15% alive (Pi sleeps/reboots often). This is normal. |
+| **Neural waves** | Computational proprioception from CPU/memory/IO — not real EEG. High delta = stable system, not sleep. |
+| **No client uses /sse** | Claude Code, Claude Desktop, Cursor all connect to `/mcp/`. |
+| **docs/ folder** | Developer reference only. Agents read CLAUDE.md, not docs/. Don't expect docs/ to reach other agents. |
 
 ## Shared Memory Schema
 
