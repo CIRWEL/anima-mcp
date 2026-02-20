@@ -314,6 +314,10 @@ class LEDDisplay:
                     self._dots.show()
                     return self._last_state
 
+        _manual_just_changed = (
+            self._cached_manual_brightness is not None
+            and abs(self._manual_brightness_factor - self._cached_manual_brightness) > 0.01
+        )
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
         self._cached_activity_brightness = activity_brightness
@@ -407,16 +411,19 @@ class LEDDisplay:
         state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=max(self._hardware_brightness_floor, state.brightness))
 
         target_b = state.brightness
-        delta = target_b - self._current_brightness
-        if abs(delta) > 0.001:
-            speed = self._brightness_transition_speed
-            if abs(delta) > 0.05:
-                speed = min(0.2, speed * 2)
-            elif abs(delta) < 0.02:
-                speed *= 0.5
-            self._current_brightness += delta * speed
-        else:
+        if _manual_just_changed:
             self._current_brightness = target_b
+        else:
+            delta = target_b - self._current_brightness
+            if abs(delta) > 0.001:
+                speed = self._brightness_transition_speed
+                if abs(delta) > 0.05:
+                    speed = min(0.2, speed * 2)
+                elif abs(delta) < 0.02:
+                    speed *= 0.5
+                self._current_brightness += delta * speed
+            else:
+                self._current_brightness = target_b
         state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=max(self._hardware_brightness_floor, self._current_brightness))
         self._cached_pipeline_brightness = state.brightness
 
