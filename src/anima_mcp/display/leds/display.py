@@ -101,12 +101,12 @@ class LEDDisplay:
         self._current_dance: Optional[Dance] = None
         self._dance_cooldown_until = 0.0
         self._last_dance_trigger: Optional[str] = None
-        self._spontaneous_dance_chance = 0.001
+        self._spontaneous_dance_chance = 0.005
         self._manual_brightness_factor = 1.0
         self._current_brightness = 0.1
         self._brightness_transition_speed = 0.08
-        self._pulse_cycle = 4.0
-        self._pulse_amount = 0.015
+        self._pulse_cycle = 12.0
+        self._pulse_amount = 0.05
         self._flash_until = 0.0
         self._flash_color = (100, 100, 100)
         self._init_leds()
@@ -363,7 +363,7 @@ class LEDDisplay:
         self._last_anima_values = (warmth, clarity, stability, presence)
 
         if self._color_transitions_enabled and self._last_state and self._last_colors[0] is not None:
-            tf = 0.15 if state_change_detected else 0.05
+            tf = 0.15 if state_change_detected else 0.10
             state = LEDState(
                 led0=_colors.transition_color(self._last_colors[0], state.led0, tf, self._color_transitions_enabled),
                 led1=_colors.transition_color(self._last_colors[1], state.led1, tf, self._color_transitions_enabled),
