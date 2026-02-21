@@ -121,6 +121,30 @@ class IdentityStore:
                 presence REAL,
                 sensors TEXT DEFAULT '{}'
             );
+
+            CREATE TABLE IF NOT EXISTS drawing_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                E REAL NOT NULL,
+                I REAL NOT NULL,
+                S REAL NOT NULL,
+                V REAL NOT NULL,
+                C REAL NOT NULL,
+                marks INTEGER NOT NULL,
+                phase TEXT,
+                era TEXT,
+                energy REAL,
+                curiosity REAL,
+                engagement REAL,
+                fatigue REAL,
+                arc_phase TEXT,
+                gesture_entropy REAL,
+                switching_rate REAL,
+                intentionality REAL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_drawing_history_time
+                ON drawing_history(timestamp DESC);
         """)
         conn.commit()
 
@@ -432,6 +456,60 @@ class IdentityStore:
                 "clarity": row["clarity"],
                 "stability": row["stability"],
                 "presence": row["presence"],
+            })
+        return result
+
+    def record_drawing_state(
+        self,
+        E: float, I: float, S: float, V: float, C: float,
+        marks: int, phase: str | None, era: str | None,
+        energy: float, curiosity: float, engagement: float, fatigue: float,
+        arc_phase: str | None, gesture_entropy: float,
+        switching_rate: float, intentionality: float,
+    ) -> None:
+        """Record DrawingEISV state snapshot. Best-effort, never raises."""
+        try:
+            conn = self._connect()
+            conn.execute(
+                """INSERT INTO drawing_history
+                   (timestamp, E, I, S, V, C, marks, phase, era, energy,
+                    curiosity, engagement, fatigue, arc_phase,
+                    gesture_entropy, switching_rate, intentionality)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    datetime.now().isoformat(),
+                    E, I, S, V, C, marks, phase, era, energy,
+                    curiosity, engagement, fatigue, arc_phase,
+                    gesture_entropy, switching_rate, intentionality,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            pass  # Best-effort — never crash the drawing loop
+
+    def get_recent_drawing_history(self, limit: int = 100) -> list[dict]:
+        """Get recent drawing_history entries, ascending timestamp."""
+        conn = self._connect()
+        rows = conn.execute(
+            """SELECT timestamp, E, I, S, V, C, marks, phase, era, energy,
+                      curiosity, engagement, fatigue, arc_phase,
+                      gesture_entropy, switching_rate, intentionality
+               FROM drawing_history
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (limit,),
+        ).fetchall()
+
+        result = []
+        for row in reversed(rows):
+            result.append({
+                "timestamp": row[0], "E": row[1], "I": row[2],
+                "S": row[3], "V": row[4], "C": row[5],
+                "marks": row[6], "phase": row[7], "era": row[8],
+                "energy": row[9], "curiosity": row[10], "engagement": row[11],
+                "fatigue": row[12], "arc_phase": row[13],
+                "gesture_entropy": row[14], "switching_rate": row[15],
+                "intentionality": row[16],
             })
         return result
 
