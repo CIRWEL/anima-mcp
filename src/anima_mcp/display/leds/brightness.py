@@ -8,7 +8,7 @@ import math
 import time
 
 
-def get_pulse(pulse_cycle: float = 4.0) -> float:
+def get_pulse(pulse_cycle: float = 12.0) -> float:
     """Primary + secondary breath wave. Returns 0-1."""
     t = time.time()
     primary = (1.0 + math.sin(t * 2 * math.pi / pulse_cycle)) * 0.5

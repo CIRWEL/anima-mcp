@@ -109,7 +109,7 @@ def get_shape_color_bias(shape) -> Tuple[int, int, int]:
         "basin_transition_down": (2, 0, -2),
         "basin_transition_up": (10, 4, -2),
         "entropy_spike_recovery": (6, 4, -2),
-        "drift_dissonance": (-4, -4, -4),
+        "drift_dissonance": (0, -2, -4),
         "void_rising": (6, 4, -2),
     }
     return SHAPE_BIASES.get(str(shape), (0, 0, 0))
