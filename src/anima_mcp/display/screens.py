@@ -3346,10 +3346,8 @@ class ScreenRenderer:
             board = get_board()
             board._load()
             all_messages = board._messages
-            scroll_idx = getattr(self._state, 'message_scroll_index', 0)
-            expanded_id = getattr(self._state, 'message_expanded_id', None)
             msg_ids = "|".join(f"{m.message_id}" for m in all_messages[-15:]) if all_messages else ""
-            qa_cache_key = f"qa|{msg_ids}|{scroll_idx}|{expanded_id or ''}"
+            qa_cache_key = f"qa|{msg_ids}|{self._state.qa_scroll_index}|{self._state.qa_expanded}|{self._state.qa_full_view}|{self._state.qa_focus}|{self._state.qa_text_scroll}"
             if self._check_screen_cache("qa", qa_cache_key):
                 return
 
