@@ -1,10 +1,14 @@
-"""State-change LED patterns (warmth_spike, clarity_boost, etc.)."""
+"""State-change LED patterns (warmth_spike, clarity_boost only).
 
-import math
+No alert or stability_warning patterns. All colors warm amber/gold.
+Patterns last 2.0s with smooth fade (no rapid flashing).
+"""
+
 import time
 from typing import Optional, Tuple
 
 from .types import LEDState
+from .colors import blend_colors
 
 
 def detect_state_change(
@@ -17,25 +21,30 @@ def detect_state_change(
     """
     Detect significant state changes for pattern triggers.
     Returns (updated_last_values, pattern_name or None).
+
+    Only warmth_spike and clarity_boost are supported.
+    No alert or stability_warning triggers.
     """
     if last is None:
         return (warmth, clarity, stability, presence), None
     last_w, last_c, last_s, last_p = last
     dw = abs(warmth - last_w)
     dc = abs(clarity - last_c)
-    ds = abs(stability - last_s)
-    dp = abs(presence - last_p)
     new_last = (warmth, clarity, stability, presence)
 
     if dw > 0.2 and warmth > last_w:
         return new_last, "warmth_spike"
     if dc > 0.3 and clarity > last_c:
         return new_last, "clarity_boost"
-    if ds > 0.2 and stability < last_s:
-        return new_last, "stability_warning"
-    if clarity < 0.3 or stability < 0.3:
-        return new_last, "alert"
     return new_last, None
+
+
+# Warm pattern target colors
+_WARMTH_SPIKE_COLOR = (255, 160, 50)   # warm highlight (not orange flash)
+_CLARITY_BOOST_COLOR = (240, 200, 120)  # warm white (not pure white)
+
+_PATTERN_DURATION = 2.0  # seconds
+_BLEND_RATIO = 0.4       # max blend toward target color
 
 
 def get_pattern_colors(
@@ -45,36 +54,33 @@ def get_pattern_colors(
 ) -> Tuple[LEDState, Optional[str]]:
     """
     Get colors for a pattern. Returns (state, active_pattern_or_none).
-    When elapsed > 0.5s, returns (base_state, None) to clear pattern.
+
+    Patterns last 2.0s with smooth fade. Only warmth_spike and clarity_boost
+    are recognized; any other pattern name returns (base_state, None).
     """
     elapsed = time.time() - pattern_start_time
-    if elapsed > 0.5:
+    if elapsed > _PATTERN_DURATION:
         return base_state, None
 
-    if pattern_name == "warmth_spike" and elapsed < 0.3:
-        return LEDState(
-            led0=(255, 150, 0),
-            led1=base_state.led1,
-            led2=base_state.led2,
-            brightness=base_state.brightness
-        ), pattern_name
-    if pattern_name == "clarity_boost" and elapsed < 0.2:
-        return LEDState(
-            led0=base_state.led0,
-            led1=(255, 255, 255),
-            led2=base_state.led2,
-            brightness=base_state.brightness
-        ), pattern_name
-    if pattern_name == "stability_warning" and elapsed < 0.4:
-        return LEDState(
-            led0=base_state.led0,
-            led1=base_state.led1,
-            led2=(255, 0, 0),
-            brightness=base_state.brightness
-        ), pattern_name
-    if pattern_name == "alert":
-        pulse = (math.sin(elapsed * math.pi * 4) + 1) / 2
-        c = (255, int(200 * pulse), 0)
-        return LEDState(led0=c, led1=c, led2=c, brightness=base_state.brightness), pattern_name
+    # Smooth fade: 1.0 at start, 0.0 at 2.0s
+    fade = max(0.0, 1.0 - elapsed / _PATTERN_DURATION)
+    blend = fade * _BLEND_RATIO
 
+    if pattern_name == "warmth_spike":
+        return LEDState(
+            led0=blend_colors(base_state.led0, _WARMTH_SPIKE_COLOR, blend),
+            led1=blend_colors(base_state.led1, _WARMTH_SPIKE_COLOR, blend * 0.3),
+            led2=base_state.led2,
+            brightness=base_state.brightness
+        ), pattern_name
+
+    if pattern_name == "clarity_boost":
+        return LEDState(
+            led0=base_state.led0,
+            led1=blend_colors(base_state.led1, _CLARITY_BOOST_COLOR, blend),
+            led2=blend_colors(base_state.led2, _CLARITY_BOOST_COLOR, blend * 0.3),
+            brightness=base_state.brightness
+        ), pattern_name
+
+    # Unknown/removed patterns (alert, stability_warning) — return base, no active
     return base_state, None
