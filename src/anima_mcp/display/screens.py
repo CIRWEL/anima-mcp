@@ -4200,6 +4200,34 @@ class ScreenRenderer:
         except Exception:
             pass
 
+        # --- Record DrawingEISV for history (every 10 marks to throttle I/O) ---
+        if self._identity_store and self._intent.mark_count % 10 == 0:
+            try:
+                # Compute switching rate from gesture history
+                gh = state.gesture_history
+                if len(gh) >= 2:
+                    switches = sum(1 for j in range(1, len(gh)) if gh[j] != gh[j-1])
+                    sr = switches / (len(gh) - 1)
+                else:
+                    sr = 0.0
+                self._identity_store.record_drawing_state(
+                    E=state.E, I=state.I, S=state.S, V=state.V,
+                    C=C,
+                    marks=self._intent.mark_count,
+                    phase=state.arc_phase,
+                    era=self._active_era.name if self._active_era else None,
+                    energy=state.derived_energy,
+                    curiosity=state.curiosity,
+                    engagement=state.engagement,
+                    fatigue=state.fatigue,
+                    arc_phase=state.arc_phase,
+                    gesture_entropy=S_signal,
+                    switching_rate=sr,
+                    intentionality=I_signal,
+                )
+            except Exception:
+                pass  # Never crash drawing for history
+
     def _eisv_step(self) -> Tuple[float, float]:
         """Step EISV thermodynamics — same equations as governance, proprioceptive signals.
 
