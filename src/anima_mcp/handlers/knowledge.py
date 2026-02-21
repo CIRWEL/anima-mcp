@@ -202,6 +202,17 @@ async def handle_get_qa_insights(arguments: dict) -> list[TextContent]:
         kb = get_knowledge()
         insights = get_insights(limit=limit, category=category)
 
+        import time as _time
+
+        def _age_str(ts: float) -> str:
+            age = _time.time() - ts
+            if age < 3600:
+                return f"{int(age/60)}m ago"
+            elif age < 86400:
+                return f"{int(age/3600)}h ago"
+            else:
+                return f"{int(age/86400)}d ago"
+
         result = {
             "total_insights": len(kb._insights),
             "category_filter": category if category else "all",
@@ -213,7 +224,7 @@ async def handle_get_qa_insights(arguments: dict) -> list[TextContent]:
                     "source_author": i.source_author,
                     "category": i.category,
                     "confidence": i.confidence,
-                    "age": i.age_string(),
+                    "age": _age_str(i.timestamp),
                     "timestamp": i.timestamp,
                 }
                 for i in insights
