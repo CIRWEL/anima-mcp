@@ -75,25 +75,25 @@ def render_dance(dance: Dance, base_state: LEDState) -> LEDState:
         sparkle_phase = int(elapsed * sparkle_speed) % 6
         sparkle_gold = (255, 220, 100)
         led0 = blend_colors(base_state.led0, sparkle_gold if sparkle_phase in [0, 3] else base_state.led0, 0.7 * intensity)
-        led1 = blend_colors(base_state.led1, (255, 255, 255) if sparkle_phase in [1, 4] else base_state.led1, 0.8 * intensity)
+        led1 = blend_colors(base_state.led1, (255, 200, 100) if sparkle_phase in [1, 4] else base_state.led1, 0.8 * intensity)
         led2 = blend_colors(base_state.led2, sparkle_gold if sparkle_phase in [2, 5] else base_state.led2, 0.7 * intensity)
-        mult = 1.0 + (0.4 * math.sin(elapsed * sparkle_speed * math.pi) * intensity)
+        mult = min(1.0, 1.0 + (0.4 * math.sin(elapsed * sparkle_speed * math.pi) * intensity))
         return LEDState(led0, led1, led2, base_state.brightness * mult)
 
     if dance.dance_type == DanceType.CURIOUS_PULSE:
         pulse_freq = 2.0 + progress * 2.0
         pulse = (math.sin(elapsed * pulse_freq * math.pi * 2) + 1) / 2
-        curious = (150, 200, 255)
+        curious = (220, 170, 80)
         blend = pulse * 0.5 * intensity
         led0 = blend_colors(base_state.led0, curious, blend)
-        led1 = blend_colors(base_state.led1, (255, 255, 255), blend * 1.2)
+        led1 = blend_colors(base_state.led1, (255, 200, 100), blend * 1.2)
         led2 = blend_colors(base_state.led2, curious, blend)
-        mult = 1.0 + (0.3 * pulse * intensity)
+        mult = min(1.0, 1.0 + (0.3 * pulse * intensity))
         return LEDState(led0, led1, led2, base_state.brightness * mult)
 
     if dance.dance_type == DanceType.CONTEMPLATIVE_WAVE:
         wave_pos = (elapsed * 0.5) % 1.0
-        thought = (100, 50, 200)
+        thought = (180, 120, 50)
         w0 = max(0, 1 - abs(wave_pos - 0.0) * 3) * intensity
         w1 = max(0, 1 - abs(wave_pos - 0.5) * 3) * intensity
         w2 = max(0, 1 - abs(wave_pos - 1.0) * 3) * intensity
@@ -107,24 +107,24 @@ def render_dance(dance: Dance, base_state: LEDState) -> LEDState:
         if progress < 0.3:
             build = progress / 0.3
             led0 = blend_colors(base_state.led0, welcome, build * 0.6 * intensity)
-            led1 = blend_colors(base_state.led1, (255, 255, 255), build * 0.8 * intensity)
+            led1 = blend_colors(base_state.led1, (255, 200, 100), build * 0.8 * intensity)
             led2 = blend_colors(base_state.led2, welcome, build * 0.6 * intensity)
-            mult = 1.0 + (0.5 * build * intensity)
+            mult = min(1.0, 1.0 + (0.5 * build * intensity))
         elif progress < 0.5:
             led0 = blend_colors(base_state.led0, (255, 220, 180), 0.7 * intensity)
-            led1 = (255, 255, 255)
+            led1 = (255, 200, 100)
             led2 = blend_colors(base_state.led2, (255, 220, 180), 0.7 * intensity)
-            mult = 1.5 * intensity
+            mult = min(1.0, 1.5 * intensity)
         else:
             settle = (progress - 0.5) / 0.5
             led0 = blend_colors(blend_colors(base_state.led0, (255, 220, 180), 0.7), base_state.led0, settle)
-            led1 = blend_colors((255, 255, 255), base_state.led1, settle)
+            led1 = blend_colors((255, 200, 100), base_state.led1, settle)
             led2 = blend_colors(blend_colors(base_state.led2, (255, 220, 180), 0.7), base_state.led2, settle)
-            mult = 1.5 - (0.5 * settle)
+            mult = min(1.0, 1.5 - (0.5 * settle))
         return LEDState(led0, led1, led2, base_state.brightness * mult)
 
     if dance.dance_type == DanceType.DISCOVERY_BLOOM:
-        discovery = (255, 100, 255)
+        discovery = (255, 180, 80)
         if progress < 0.3:
             ci = (progress / 0.3) * intensity
             led0, led1, led2 = base_state.led0, blend_colors(base_state.led1, discovery, ci * 0.8), base_state.led2
@@ -135,11 +135,11 @@ def render_dance(dance: Dance, base_state: LEDState) -> LEDState:
             led2 = blend_colors(base_state.led2, discovery, spread * 0.6 * intensity)
         else:
             settle = (progress - 0.6) / 0.4
-            afterglow = (255, 180, 200)
+            afterglow = (255, 180, 100)
             led0 = blend_colors(blend_colors(base_state.led0, discovery, 0.6), afterglow, settle * 0.3)
             led1 = blend_colors(blend_colors(base_state.led1, discovery, 0.8), afterglow, settle * 0.5)
             led2 = blend_colors(blend_colors(base_state.led2, discovery, 0.6), afterglow, settle * 0.3)
-        mult = 1.0 + (0.4 * (1 - progress) * intensity)
+        mult = min(1.0, 1.0 + (0.4 * (1 - progress) * intensity))
         return LEDState(led0, led1, led2, base_state.brightness * mult)
 
     if dance.dance_type == DanceType.CONTENTMENT_GLOW:
@@ -149,17 +149,17 @@ def render_dance(dance: Dance, base_state: LEDState) -> LEDState:
         led0 = blend_colors(base_state.led0, content, amount * intensity)
         led1 = blend_colors(base_state.led1, content, amount * 0.8 * intensity)
         led2 = blend_colors(base_state.led2, content, amount * intensity)
-        return LEDState(led0, led1, led2, base_state.brightness * (1.0 + 0.1 * glow_breath))
+        return LEDState(led0, led1, led2, min(base_state.brightness, base_state.brightness * (1.0 + 0.1 * glow_breath)))
 
     if dance.dance_type == DanceType.PLAYFUL_CHASE:
         chase_speed = 4.0
         chase_pos = (elapsed * chase_speed) % 3
-        playful = [(255, 100, 100), (100, 255, 100), (100, 100, 255)]
+        playful = [(255, 160, 60), (240, 140, 50), (220, 120, 40)]
         led0 = blend_colors(base_state.led0, playful[int(chase_pos) % 3], 0.6 * intensity)
         led1 = blend_colors(base_state.led1, playful[(int(chase_pos) + 1) % 3], 0.6 * intensity)
         led2 = blend_colors(base_state.led2, playful[(int(chase_pos) + 2) % 3], 0.6 * intensity)
         bounce = abs(math.sin(elapsed * chase_speed * math.pi))
-        mult = 1.0 + (0.2 * bounce * intensity)
+        mult = min(1.0, 1.0 + (0.2 * bounce * intensity))
         return LEDState(led0, led1, led2, base_state.brightness * mult)
 
     return base_state
