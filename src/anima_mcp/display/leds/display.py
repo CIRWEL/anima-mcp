@@ -52,36 +52,21 @@ class LEDDisplay:
             cfg = get_display_config()
             self._base_brightness = brightness or cfg.led_brightness
             self._enable_breathing = enable_breathing if enable_breathing is not None else cfg.breathing_enabled
-            self._pulsing_enabled = cfg.pulsing_enabled
             self._color_transitions_enabled = cfg.color_transitions_enabled
             self._pattern_mode = cfg.pattern_mode
-            self._auto_brightness_enabled = cfg.auto_brightness_enabled
-            self._auto_brightness_min = cfg.auto_brightness_min
-            self._auto_brightness_max = cfg.auto_brightness_max
-            self._pulsing_threshold_clarity = cfg.pulsing_threshold_clarity
-            self._pulsing_threshold_stability = cfg.pulsing_threshold_stability
             self._enable_patterns = enable_patterns if enable_patterns is not None else True
         except ImportError:
             self._base_brightness = brightness or 0.04
             self._enable_breathing = enable_breathing if enable_breathing is not None else True
-            self._pulsing_enabled = True
             self._color_transitions_enabled = True
             self._pattern_mode = "standard"
-            self._auto_brightness_enabled = True
-            self._auto_brightness_min = 0.04
-            self._auto_brightness_max = 0.15
-            self._pulsing_threshold_clarity = 0.4
-            self._pulsing_threshold_stability = 0.4
             self._enable_patterns = True
 
-        self._base_brightness = max(0.08, min(0.15, self._base_brightness))
-        self._auto_brightness_min = max(0.04, self._auto_brightness_min)
-        self._auto_brightness_max = min(0.18, max(0.10, self._auto_brightness_max))
+        self._base_brightness = max(0.0, min(0.12, self._base_brightness))
 
         self._dots = None
         self._brightness = self._base_brightness
         self._hardware_brightness_floor = 0.008
-        self._brightness_gamma = 1.8
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_colors = [None, None, None]
@@ -90,12 +75,10 @@ class LEDDisplay:
         self._pattern_active: Optional[str] = None
         self._pattern_start_time: float = 0.0
         self._last_anima_values: Optional[Tuple[float, float, float, float]] = None
-        self._state_change_pulse_active = False
-        self._state_change_pulse_start: Optional[float] = None
         self._expression_mode = expression_mode
+        self._known_brightness = self._base_brightness  # Proprioceptive: Lumen knows this
         self._cached_anima_state = None
         self._cached_light_level = None
-        self._cached_activity_brightness = None
         self._cached_manual_brightness = None
         self._cached_pipeline_brightness = None
         self._cached_state_change_threshold = 0.05
@@ -237,9 +220,8 @@ class LEDDisplay:
         return True
 
     def get_proprioceptive_state(self) -> dict:
-        brightness = self._cached_pipeline_brightness or self._base_brightness
         return {
-            "brightness": brightness,
+            "brightness": self._known_brightness,
             "expression_mode": self._expression_mode,
             "is_dancing": self._current_dance is not None and not self._current_dance.is_complete,
             "dance_type": self._current_dance.dance_type.value if self._current_dance and not self._current_dance.is_complete else None,
@@ -267,10 +249,9 @@ class LEDDisplay:
             "current_brightness": self._base_brightness + _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount,
             "pulse_cycle": self._pulse_cycle,
             "pulse_amount": self._pulse_amount,
-            "pulsing_enabled": self._pulsing_enabled,
+            "known_brightness": self._known_brightness,
             "color_transitions_enabled": self._color_transitions_enabled,
             "pattern_mode": self._pattern_mode,
-            "auto_brightness_enabled": self._auto_brightness_enabled,
             "last_light_level": self._last_light_level,
             "current_dance": dance_info,
             "last_dance": self._last_dance_trigger,
@@ -319,9 +300,8 @@ class LEDDisplay:
             lw, lc, ls, lp = self._cached_anima_state
             max_delta = max(abs(warmth - lw), abs(clarity - lc), abs(stability - ls), abs(presence - lp))
             light_changed = light_level is not None and self._cached_light_level is not None and abs(light_level - self._cached_light_level) > 50
-            activity_changed = self._cached_activity_brightness is not None and abs(activity_brightness - self._cached_activity_brightness) > 0.01
             manual_changed = self._cached_manual_brightness is not None and abs(self._manual_brightness_factor - self._cached_manual_brightness) > 0.01
-            if max_delta < self._cached_state_change_threshold and not light_changed and not activity_changed and not manual_changed:
+            if max_delta < self._cached_state_change_threshold and not light_changed and not manual_changed:
                 state_changed = False
                 if self._last_state and self._cached_pipeline_brightness is not None:
                     target = self._cached_pipeline_brightness
@@ -336,7 +316,6 @@ class LEDDisplay:
         )
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
-        self._cached_activity_brightness = activity_brightness
         self._cached_manual_brightness = self._manual_brightness_factor
 
         self._last_state_values, pattern_trigger = _patterns.detect_state_change(
@@ -378,8 +357,6 @@ class LEDDisplay:
             lw, lc, ls, lp = self._last_anima_values
             if abs(warmth - lw) > 0.15 or abs(clarity - lc) > 0.15 or abs(stability - ls) > 0.15 or abs(presence - lp) > 0.15:
                 state_change_detected = True
-                self._state_change_pulse_active = True
-                self._state_change_pulse_start = time.time()
         self._last_anima_values = (warmth, clarity, stability, presence)
 
         if self._color_transitions_enabled and self._last_state and self._last_colors[0] is not None:
@@ -397,14 +374,6 @@ class LEDDisplay:
             state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._manual_brightness_factor)
         else:
             state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._base_brightness)
-
-        if self._manual_brightness_factor >= 1.0 and self._state_change_pulse_active and self._state_change_pulse_start:
-            elapsed = time.time() - self._state_change_pulse_start
-            if elapsed < 0.8:
-                state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=state.brightness * (1.0 + 0.1 * (1.0 - elapsed / 0.8)))
-            else:
-                self._state_change_pulse_active = False
-                self._state_change_pulse_start = None
 
         if self._manual_brightness_factor >= 1.0 and activity_brightness < 1.0:
             state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=state.brightness * activity_brightness)
@@ -427,6 +396,7 @@ class LEDDisplay:
                 self._current_brightness = target_b
         state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=max(self._hardware_brightness_floor, self._current_brightness))
         self._cached_pipeline_brightness = state.brightness
+        self._known_brightness = self._current_brightness
 
         if is_anticipating and anticipation_confidence > 0.1:
             memory_color = (255, 200, 100)
@@ -456,23 +426,6 @@ class LEDDisplay:
                 if self._manual_brightness_factor < 0.05 and state.brightness > self._manual_brightness_factor * 1.1:
                     state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._manual_brightness_factor)
 
-        if self._enable_patterns and self._pattern_mode == "expressive":
-            if clarity < 0.3 or stability < 0.3:
-                speed, amp = 2.0, 0.4
-            elif warmth > 0.6 and stability > 0.6:
-                speed, amp = 0.125, 0.2
-            elif clarity > 0.7:
-                speed, amp = 1.0, 0.3
-            else:
-                speed, amp = 0.125, 0.15
-            t = time.time()
-            wave_colors = []
-            for i, bc in enumerate([state.led0, state.led1, state.led2]):
-                phase = (t * speed * math.pi * 2) + (i * math.pi / 3)
-                wb = 0.5 + (amp * 0.5 * math.sin(phase))
-                wave_colors.append(tuple(int(c * wb) for c in bc))
-            state = LEDState(led0=wave_colors[0], led1=wave_colors[1], led2=wave_colors[2], brightness=state.brightness)
-
         try:
             self.set_all(state)
         except Exception as e:
@@ -484,8 +437,6 @@ class LEDDisplay:
             features = []
             if not state_changed:
                 features.append("cached")
-            if self._state_change_pulse_active:
-                features.append("pulse")
             if self._current_dance and not self._current_dance.is_complete:
                 features.append(f"dance({self._current_dance.dance_type.value})")
             fs = f" [{', '.join(features)}]" if features else ""
