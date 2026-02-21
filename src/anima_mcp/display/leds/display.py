@@ -62,7 +62,7 @@ class LEDDisplay:
             self._pulsing_threshold_stability = cfg.pulsing_threshold_stability
             self._enable_patterns = enable_patterns if enable_patterns is not None else True
         except ImportError:
-            self._base_brightness = brightness or 0.12
+            self._base_brightness = brightness or 0.04
             self._enable_breathing = enable_breathing if enable_breathing is not None else True
             self._pulsing_enabled = True
             self._color_transitions_enabled = True
@@ -159,9 +159,9 @@ class LEDDisplay:
                     else:
                         colors = [state.led2, state.led1, state.led0]
                     brightness = max(self._hardware_brightness_floor, self._current_brightness)
-                    pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.12))
-                    raw = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
-                    perceptual = _brightness.apply_gamma(raw, self._brightness_gamma, self._hardware_brightness_floor, 0.5)
+                    pulse = _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount * min(1.0, max(0.15, brightness / 0.04))
+                    pulse = min(pulse, max(0.005, brightness * 0.08))
+                    perceptual = max(self._hardware_brightness_floor, min(0.5, brightness + pulse))
                     # RGB scaling: dim below base via RGB values (hardware brightness has a floor)
                     rgb_scale = min(1.0, brightness / self._base_brightness) if self._base_brightness > 0 else 1.0
                     with self._spi_lock:
@@ -392,26 +392,11 @@ class LEDDisplay:
             )
         self._last_colors = [state.led0, state.led1, state.led2]
 
+        # Manual brightness control only — no auto-brightness, no pulsing-brightness
         if self._manual_brightness_factor < 1.0:
             state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._manual_brightness_factor)
         else:
             state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._base_brightness)
-            if self._auto_brightness_enabled and light_level is not None:
-                state = LEDState(
-                    led0=state.led0, led1=state.led1, led2=state.led2,
-                    brightness=_brightness.get_auto_brightness(
-                        light_level, self._base_brightness,
-                        self._auto_brightness_min, self._auto_brightness_max,
-                        self._auto_brightness_enabled, self._brightness
-                    ),
-                )
-        if self._manual_brightness_factor >= 1.0:
-            pm = _brightness.get_pulsing_brightness(
-                clarity, stability, self._pulsing_enabled,
-                self._pulsing_threshold_clarity, self._pulsing_threshold_stability
-            )
-            if pm < 1.0:
-                state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=state.brightness * pm)
 
         if self._manual_brightness_factor >= 1.0 and self._state_change_pulse_active and self._state_change_pulse_start:
             elapsed = time.time() - self._state_change_pulse_start

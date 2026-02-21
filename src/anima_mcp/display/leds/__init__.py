@@ -6,7 +6,7 @@ Refactored into submodules:
 - colors: derive_led_state, get_shape_color_bias, blend_colors, transition_color
 - dances: DanceType, Dance, render_dance, EVENT_TO_DANCE
 - patterns: detect_state_change, get_pattern_colors
-- brightness: get_pulse, get_auto_brightness, get_pulsing_brightness, apply_gamma
+- brightness: get_pulse, estimate_instantaneous_brightness
 - display: LEDDisplay
 """
 
