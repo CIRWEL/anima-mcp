@@ -116,7 +116,7 @@ class PilRenderer(DisplayRenderer):
         ]
         self._brightness_index: int = 0  # Index into presets
         self._manual_brightness: float = 1.0  # Display multiplier
-        # Default Medium (0.12) - never 1.0, which would bypass manual and trigger auto-brightness feedback loop
+        # Default Medium (0.12) - manual brightness for LEDs (auto-brightness removed)
         self._manual_led_brightness: float = 0.12
         self._brightness_config_path = Path.home() / ".anima" / "display_brightness.json"
         self._load_brightness()

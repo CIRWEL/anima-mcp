@@ -350,10 +350,11 @@ class MetacognitiveMonitor:
         prediction.pressure_hpa = self._baseline_pressure
 
         # === PROPRIOCEPTIVE LIGHT PREDICTION ===
-        # The VEML7700 light sensor sits next to Lumen's NeoPixel LEDs.
-        # If we know our own LED brightness, we can predict what the sensor
-        # will read — this is genuine proprioception: predicting our own
-        # sensory input from knowledge of our own motor output.
+        # Lumen's brightness is manually controlled (dimmer). Lumen knows the
+        # current setting as _known_brightness. This is a stable value that only
+        # changes when Kenny adjusts the dimmer — NOT from auto-brightness.
+        # Prediction errors therefore reflect genuine environmental changes
+        # (lamp on, sunrise) rather than self-inflicted brightness oscillation.
         #
         # Empirically calibrated 2026-02-18 via manage_display(action="calibrate_leds"):
         #   LED brightness 0.00 → ~15-44 lux (ambient only, LEDs off)

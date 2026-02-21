@@ -56,6 +56,7 @@ from collections import deque
 from .anima import sense_self
 from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW
 from .display.leds.brightness import estimate_instantaneous_brightness
+from .display.leds.display import get_led_display
 from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from .identity import IdentityStore
@@ -364,7 +365,12 @@ def run_creature():
     last_learning_save = time.time()  # Track periodic learning saves
     readings = None  # Initialize before loop (first iteration has no prior readings)
     last_pattern_apply = 0  # Track periodic learned pattern application
-    _prev_led_brightness = 0.12  # LED brightness from previous cycle for correction
+    # Get initial LED brightness from display singleton (manual dimmer setting)
+    try:
+        _led_display = get_led_display()
+        _prev_led_brightness = _led_display.get_proprioceptive_state().get("brightness", 0.04)
+    except Exception:
+        _prev_led_brightness = 0.04  # Default matches LEDDisplay default
     _world_light_buffer = deque(maxlen=WORLD_LIGHT_SMOOTH_WINDOW)  # Rolling avg
 
     try:
@@ -415,8 +421,12 @@ def run_creature():
                     stability=anima.stability,
                     light_level=_smoothed_world_light,
                 )
-                # Update LED brightness estimate for next cycle using activity multiplier
-                _prev_led_brightness = 0.12 * activity_state.brightness_multiplier
+                # Update LED brightness estimate for next cycle using actual manual setting
+                try:
+                    _known_br = _led_display.get_proprioceptive_state().get("brightness", 0.04)
+                except Exception:
+                    _known_br = 0.04
+                _prev_led_brightness = _known_br * activity_state.brightness_multiplier
                 readings.led_brightness = _prev_led_brightness
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
