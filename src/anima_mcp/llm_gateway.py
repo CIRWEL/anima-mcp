@@ -123,8 +123,8 @@ class LLMGateway:
         """Check if any provider is configured."""
         return len(self._providers) > 0
 
-    # Modes that need longer responses (answers, responses to messages)
-    _LONG_MODES = {"self_answer", "respond"}
+    # Modes that need longer responses (answers, responses to messages, questions)
+    _LONG_MODES = {"self_answer", "respond", "wonder"}
 
     async def reflect(self, context: ReflectionContext, mode: str = "wonder") -> Optional[str]:
         """
