@@ -52,8 +52,10 @@ if sys.stdout.encoding != 'utf-8':
         pass # If reconfigure fails (e.g. older python), we might be stuck
 
 from .sensors import get_sensors
+from collections import deque
 from .anima import sense_self
-from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW
+from .display.leds.brightness import estimate_instantaneous_brightness
 from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from .identity import IdentityStore
@@ -362,6 +364,8 @@ def run_creature():
     last_learning_save = time.time()  # Track periodic learning saves
     readings = None  # Initialize before loop (first iteration has no prior readings)
     last_pattern_apply = 0  # Track periodic learned pattern application
+    _prev_led_brightness = 0.12  # LED brightness from previous cycle for correction
+    _world_light_buffer = deque(maxlen=WORLD_LIGHT_SMOOTH_WINDOW)  # Rolling avg
 
     try:
         while running:
@@ -386,7 +390,18 @@ def run_creature():
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
-            # 2. Update Anima State
+            # 1b. LED Proprioception: estimate brightness BEFORE sense_self()
+            # Use previous cycle's base brightness + current breathing pulse phase
+            # so clarity's world_light correction tracks actual LED output.
+            _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
+            readings.led_brightness = _instantaneous_led
+
+            # 1c. Compute smoothed world_light for activity manager
+            _raw_world = max(0.0, (readings.light_lux or 0.0) - (_instantaneous_led * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
+            _world_light_buffer.append(_raw_world)
+            _smoothed_world_light = sum(_world_light_buffer) / len(_world_light_buffer)
+
+            # 2. Update Anima State (now has correct led_brightness for correction)
             anima = sense_self(readings)
 
             # 2a. Calculate UNITARES EISV metrics
@@ -395,22 +410,14 @@ def run_creature():
             # 2a-ii. Activity State: Determine wakefulness level
             activity_state = None
             if activity_manager:
-                # Correct for LED self-glow: activity_state needs world light,
-                # not raw lux dominated by Lumen's own LEDs.
-                # Note: readings.led_brightness holds previous cycle's value (set at
-                # line ~405 below), or None on first iteration → default to base 0.12.
-                _led_b = readings.led_brightness if readings.led_brightness is not None else 0.12
-                _world_light = max(0.0, (readings.light_lux or 0.0) - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
                 activity_state = activity_manager.get_state(
                     presence=anima.presence,
                     stability=anima.stability,
-                    light_level=_world_light,
+                    light_level=_smoothed_world_light,
                 )
-                # Proprioception: estimate own LED brightness level
-                # Base brightness (0.12) * activity multiplier gives approximate LED brightness.
-                # This is an estimate — actual brightness depends on auto-brightness, manual
-                # dimmer, etc. Server path uses get_proprioceptive_state() for exact values.
-                readings.led_brightness = 0.12 * activity_state.brightness_multiplier
+                # Update LED brightness estimate for next cycle using activity multiplier
+                _prev_led_brightness = 0.12 * activity_state.brightness_multiplier
+                readings.led_brightness = _prev_led_brightness
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
                     time.sleep(UPDATE_INTERVAL)

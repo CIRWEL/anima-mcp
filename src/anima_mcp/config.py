@@ -31,6 +31,7 @@ from typing import Tuple, Optional, Dict, Any
 #   Previous guess of 4000 was 10x too high — world_light was near-zero at all times.
 LED_LUX_PER_BRIGHTNESS: float = 400.0    # lux per unit brightness (0-1 scale)
 LED_LUX_AMBIENT_FLOOR: float = 8.0       # minimal ambient lux when LEDs are very dim
+WORLD_LIGHT_SMOOTH_WINDOW: int = 4       # rolling average samples (~8s at 2s interval)
 
 
 @dataclass
