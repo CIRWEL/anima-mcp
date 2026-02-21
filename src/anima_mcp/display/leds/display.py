@@ -162,7 +162,7 @@ class LEDDisplay:
         return self._dots is not None
 
     def set_brightness(self, brightness: float):
-        self._base_brightness = max(0, min(1, brightness))
+        self._base_brightness = max(0, min(0.12, brightness))
         self._brightness = self._base_brightness
         if self._dots:
             self._dots.brightness = self._brightness
@@ -408,7 +408,7 @@ class LEDDisplay:
                 brightness=state.brightness,
             )
             if anticipation_confidence > 0.5 and state.brightness >= 0.05:
-                state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=state.brightness * (1.0 + (anticipation_confidence - 0.5) * 0.1))
+                state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=min(0.12, state.brightness * (1.0 + (anticipation_confidence - 0.5) * 0.1)))
 
         if self._manual_brightness_factor >= 0.05:
             spontaneous = _dances.maybe_spontaneous_dance(
