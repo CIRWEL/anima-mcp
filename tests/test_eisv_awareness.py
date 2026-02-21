@@ -381,10 +381,11 @@ class TestLEDShapeBias:
         assert bias[0] > 0  # Warmer red
         assert bias[2] <= 0  # Less blue
 
-    def test_convergence_cool(self):
+    def test_convergence_warm(self):
         from anima_mcp.display.leds import get_shape_color_bias
         bias = get_shape_color_bias("convergence")
-        assert bias[2] > 0  # More blue
+        assert bias[0] >= 0  # Warm: non-negative red
+        assert bias[2] <= 0  # Warm: non-positive blue
 
     def test_unknown_shape_zero(self):
         from anima_mcp.display.leds import get_shape_color_bias
