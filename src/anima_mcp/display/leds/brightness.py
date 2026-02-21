@@ -14,6 +14,21 @@ def get_pulse(pulse_cycle: float = 4.0) -> float:
     return primary * (0.92 + 0.08 * breath)
 
 
+def estimate_instantaneous_brightness(
+    base_brightness: float,
+    pulse_cycle: float = 12.0,
+    pulse_amount: float = 0.05,
+) -> float:
+    """Estimate current LED brightness including breathing pulse.
+
+    Mirrors the animation loop's pulse calculation so the sensor correction
+    can track actual LED output at the moment of reading.
+    """
+    pulse = get_pulse(pulse_cycle)
+    amplitude = pulse_amount * min(1.0, max(0.15, base_brightness / 0.12))
+    return max(0.008, base_brightness + pulse * amplitude)
+
+
 def get_auto_brightness(
     light_level: Optional[float],
     base_brightness: float,
