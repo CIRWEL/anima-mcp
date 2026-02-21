@@ -593,6 +593,8 @@ def get_fastmcp() -> "FastMCP":
                 allowed_hosts=[
                     "127.0.0.1:*", "localhost:*", "[::1]:*",  # Localhost
                     "192.168.1.165:*", "192.168.1.151:*",  # Local network IPs
+                    "100.103.208.117:*",  # Tailscale IP
+                    "lumen-anima.ngrok.io",  # ngrok tunnel
                     "0.0.0.0:*",  # Bind all
                 ],
                 allowed_origins=[
