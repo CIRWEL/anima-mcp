@@ -10,4 +10,4 @@ class LEDState:
     led0: Tuple[int, int, int]  # RGB for warmth (physical left, DotStar index 2)
     led1: Tuple[int, int, int]  # RGB for clarity (physical center, DotStar index 1)
     led2: Tuple[int, int, int]  # RGB for stability/presence (physical right, DotStar index 0)
-    brightness: float = 0.12  # Global brightness (0-1) - auto-brightness overrides this
+    brightness: float = 0.04  # Global brightness (0-1) - manual control only
