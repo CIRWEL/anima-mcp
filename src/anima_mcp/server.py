@@ -58,6 +58,7 @@ from .tool_registry import HANDLERS, get_fastmcp, create_server, HAS_FASTMCP
 # REST API endpoints reference these handlers directly
 from .handlers.communication import handle_lumen_qa, handle_post_message, handle_configure_voice
 from .handlers.state_queries import handle_get_health
+from .handlers.knowledge import handle_get_self_knowledge, handle_get_growth
 from .server_state import (
     # Constants
     SHM_STALE_THRESHOLD_SECONDS, INPUT_ERROR_LOG_INTERVAL,
@@ -2945,6 +2946,30 @@ def run_http_server(host: str, port: int):
                 return JSONResponse({"error": str(e)}, status_code=500)
             return JSONResponse({"error": "no data"}, status_code=500)
 
+        async def rest_self_knowledge(request):
+            """GET /self-knowledge - Get Lumen's accumulated self-knowledge insights."""
+            try:
+                category = request.query_params.get("category")
+                limit = int(request.query_params.get("limit", "50"))
+                result = await handle_get_self_knowledge({"category": category, "limit": limit})
+                if result and len(result) > 0:
+                    data = json.loads(result[0].text)
+                    return JSONResponse(data)
+                return JSONResponse({"error": "no data"}, status_code=500)
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_growth(request):
+            """GET /growth - Get Lumen's growth data (autobiography, goals, memories, preferences)."""
+            try:
+                result = await handle_get_growth({"include": ["all"]})
+                if result and len(result) > 0:
+                    data = json.loads(result[0].text)
+                    return JSONResponse(data)
+                return JSONResponse({"error": "no data"}, status_code=500)
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
         async def rest_gallery_page(request):
             """Serve the Lumen Drawing Gallery page."""
             server_dir = Path(__file__).parent
@@ -3108,6 +3133,8 @@ def run_http_server(host: str, port: int):
             Route("/gallery/{filename}", rest_gallery_image, methods=["GET"]),
             Route("/gallery-page", rest_gallery_page, methods=["GET"]),
             Route("/layers", rest_layers, methods=["GET"]),
+            Route("/self-knowledge", rest_self_knowledge, methods=["GET"]),
+            Route("/growth", rest_growth, methods=["GET"]),
             Route("/architecture", rest_architecture_page, methods=["GET"]),
         ]
         _inner_app = Starlette(routes=all_routes)
