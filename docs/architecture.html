@@ -382,7 +382,7 @@
                 ${metricBar('light', p.light_lux, 5000, c, `${Math.round(p.light_lux)} lux`)}
                 ${metricBar('pressure', p.pressure_hpa, 1013, c, `${p.pressure_hpa.toFixed(0)} hPa`)}
             </div>`;
-            return layerCard(1, 'Physical Sensors', 'exteroception', 'var(--accent-physical)', content);
+            return layerCard('\u25ce', 'Physical Sensors', 'exteroception', 'var(--accent-physical)', content);
         }
 
         function renderNeural(n) {
@@ -418,7 +418,7 @@
                 <div style="margin-top: 8px; font-size: 9px; color: var(--text-faint); font-family: var(--mono); text-align: right;">
                     computational proprioception
                 </div>`;
-            return layerCard(2, 'Neural Signals', 'interoception', 'var(--accent-neural)', content);
+            return layerCard('\u03c8', 'Neural Signals', 'interoception', 'var(--accent-neural)', content);
         }
 
         function renderAnima(a, feeling) {
@@ -441,7 +441,7 @@
                 if (tags) feelingHtml = `<div class="feeling-row">${tags}</div>`;
             }
 
-            return layerCard(3, 'Anima State', 'felt experience', c, bars + feelingHtml);
+            return layerCard('\u27e1', 'Anima State', 'felt experience', c, bars + feelingHtml);
         }
 
         function renderSchemaHub(sh, identity) {
@@ -504,7 +504,7 @@
                     </div>`).join('')}</div>`
                 : '<div style="font-size: 10px; color: var(--text-faint); font-family: var(--mono);">accumulating history...</div>';
 
-            return layerCard(4, 'Schema Hub', 'circulation', c, circulation + nodesHtml);
+            return layerCard('\u222e', 'Schema Hub', 'circulation', c, circulation + nodesHtml);
         }
 
         function renderEISV(e) {
@@ -521,7 +521,7 @@
                 ${metricBar('Entropy', e.S, 1, sColor, `${e.S.toFixed(2)} \u00b7 ${sLabel}`)}
                 ${metricBar('Void', e.V, 0.3, vColor, `${e.V.toFixed(2)} \u00b7 ${vLabel}`)}
             </div>`;
-            return layerCard(5, 'EISV Metrics', 'thermodynamics', c, content);
+            return layerCard('\u0394', 'EISV Metrics', 'thermodynamics', c, content);
         }
 
         function renderGovernance(g) {
@@ -547,7 +547,7 @@
                     </div>
                     <div class="gov-meta">${meta}</div>
                 </div>`;
-            return layerCard(6, 'Governance', 'self-regulation', 'var(--accent-gov)', content);
+            return layerCard('\u2696', 'Governance', 'self-regulation', 'var(--accent-gov)', content);
         }
 
         // Initial fetch + auto-refresh
