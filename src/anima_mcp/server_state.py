@@ -36,12 +36,11 @@ GOVERNANCE_INTERVAL = 30
 LEARNING_INTERVAL = 100
 SELF_MODEL_SAVE_INTERVAL = 300
 SCHEMA_EXTRACTION_INTERVAL = 600
-REFLECTION_INTERVAL = 720
 EXPRESSION_INTERVAL = 900
+UNIFIED_REFLECTION_INTERVAL = 900  # ~30 min — single unified voice
 SELF_ANSWER_INTERVAL = 1800
 GOAL_SUGGEST_INTERVAL = 3600   # ~2 hours — suggest new goals
 GOAL_CHECK_INTERVAL = 300      # ~10 minutes — check goal progress
-MESSAGE_RESPONSE_INTERVAL = 90
 
 # === Error/status logging throttle intervals ===
 ERROR_LOG_THROTTLE = 300       # ~10 minutes between repeated error logs

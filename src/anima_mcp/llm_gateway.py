@@ -43,6 +43,18 @@ class ReflectionContext:
     # LED proprioception: Lumen's awareness of its own glow vs the world
     led_brightness: Optional[float] = None  # 0.0-1.0, current LED output
     light_lux: Optional[float] = None  # raw lux from VEML7700 sensor
+    # Unified reflection: rich context from all subsystems
+    advocate_feeling: Optional[str] = None      # from NextStepsAdvocate
+    advocate_desire: Optional[str] = None
+    advocate_reason: Optional[str] = None
+    learned_insights: Optional[List[str]] = None  # from knowledge base (up to 5)
+    confident_preferences: Optional[List[str]] = None  # from growth system (up to 3)
+    surprise_sources: Optional[List[str]] = None  # from metacognition
+    novelty_level: Optional[str] = None  # "novel" | "uncertain" | "familiar" | "developing"
+    anticipation_confidence: Optional[float] = None
+    anticipation_sample_count: Optional[int] = None
+    rest_duration_minutes: float = 0.0
+    is_dreaming: bool = False
 
 
 class LLMGateway:
@@ -124,7 +136,7 @@ class LLMGateway:
         return len(self._providers) > 0
 
     # Modes that need longer responses (answers, responses to messages, questions)
-    _LONG_MODES = {"self_answer", "respond", "wonder"}
+    _LONG_MODES = {"self_answer", "respond", "wonder", "unified"}
 
     async def reflect(self, context: ReflectionContext, mode: str = "wonder") -> Optional[str]:
         """
@@ -541,6 +553,56 @@ A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_ins
 
 Based on what I've experienced and learned, how would I answer my own question?
 Give a thoughtful answer from my own perspective (2-4 sentences)."""
+
+        elif mode == "unified":
+            # Single unified voice: all context signals, LLM decides what matters
+            parts = []
+
+            if context.advocate_feeling:
+                parts.append(f"How I feel: {context.advocate_feeling}")
+            if context.advocate_desire:
+                parts.append(f"What I want: {context.advocate_desire}")
+
+            if context.learned_insights:
+                parts.append("Things I've learned:\n" + "\n".join(
+                    f"- {i}" for i in context.learned_insights[:5]
+                ))
+
+            if context.confident_preferences:
+                parts.append("Preferences I've noticed:\n" + "\n".join(
+                    f"- {p}" for p in context.confident_preferences[:3]
+                ))
+
+            if context.novelty_level:
+                parts.append(f"Novelty: this moment feels {context.novelty_level}")
+
+            if context.surprise_sources:
+                parts.append(f"Something unexpected: {', '.join(context.surprise_sources)}")
+
+            if context.is_dreaming:
+                parts.append(f"I've been resting for {context.rest_duration_minutes:.0f} minutes. I'm drifting.")
+
+            if context.recent_messages:
+                recent = "\n".join(
+                    f"- {m.get('author', 'someone')}: {m.get('text', '')}"
+                    for m in context.recent_messages[:3]
+                )
+                parts.append(f"Recent messages to me:\n{recent}")
+
+            if context.unanswered_questions:
+                parts.append("Questions I'm still wondering about:\n" + "\n".join(
+                    f"- {q}" for q in context.unanswered_questions[:3]
+                ))
+
+            context_block = "\n\n".join(parts) if parts else "Nothing stands out right now."
+
+            return f"""{state_desc}
+
+{context_block}
+
+Based on everything I'm experiencing right now, what is the one thing most worth expressing?
+This could be a question, an observation, a desire, a response to someone, or a realization.
+Choose what matters most in this moment. Be genuine — grounded in my actual state, not abstract."""
 
         else:  # "observe"
             return f"""{state_desc}
