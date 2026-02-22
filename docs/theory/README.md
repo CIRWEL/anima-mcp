@@ -55,8 +55,26 @@ Conceptual + empirical paper on embodied, self-governed, art-producing agents. L
 | Identity Confidence | Complete | `trajectory.py` |
 | Void Integral | Complete | `anima_history.py` |
 | MCP Tool | Complete | `server.py` (`get_trajectory`) |
+| **Schema Hub** | Complete | `schema_hub.py` |
 
 **Deployed to Lumen:** February 1, 2026
+
+### Schema Hub (February 2026)
+
+The Schema Hub (`schema_hub.py`) implements the **circulation principle** for unified self-model:
+
+```
+Schema → History → Trajectory → feeds back as nodes → Next Schema
+```
+
+Key features:
+- **Trajectory computed FROM schema history** — not parallel computation
+- **Trajectory feeds back as schema nodes** — `traj_identity_maturity`, `traj_attractor_position`, `traj_stability_score`
+- **Kintsugi gaps** — discontinuities become visible structure (`meta_gap_duration`, `meta_state_delta`)
+- **Identity texture** — `meta_existence_ratio`, `meta_awakening_count`, `meta_age_days`
+- **Semantic edges** — trajectory nodes connect back to anima dimensions
+
+This closes the theoretical loop: identity (trajectory) is no longer just computed and observed — it actively shapes the self-model.
 
 ---
 
@@ -121,4 +139,4 @@ As of February 2026, Lumen has:
 
 ---
 
-*Last updated: February 1, 2026*
+*Last updated: February 22, 2026*
