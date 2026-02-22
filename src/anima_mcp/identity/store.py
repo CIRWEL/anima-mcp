@@ -282,6 +282,25 @@ class IdentityStore:
         # 2. Recalculate stats from events (Source of Truth)
         total_awakenings, total_alive_seconds = self._recalculate_stats(conn, creature_id)
 
+        # 2b. Short restart gaps count as alive ("blinking, not gone")
+        # If the gap since last heartbeat is < dedupe window, add it to alive time.
+        # This is consistent with wake dedup: same awakening = same continuous existence.
+        if not should_log_wake:
+            # We're within the dedup window — this is a quick restart
+            hb_row = conn.execute(
+                "SELECT last_heartbeat_at FROM identity WHERE creature_id = ?",
+                (creature_id,)
+            ).fetchone()
+            if hb_row and hb_row[0]:
+                try:
+                    last_hb = datetime.fromisoformat(hb_row[0])
+                    restart_gap = (now - last_hb).total_seconds()
+                    if 0 < restart_gap < dedupe_window_seconds:
+                        total_alive_seconds += restart_gap
+                        print(f"[Wake] Restart gap {restart_gap:.0f}s counted as alive (blinking, not gone)", file=sys.stderr, flush=True)
+                except (ValueError, TypeError):
+                    pass
+
         # Update current event data with correct count (if we logged a wake event)
         if current_event_id is not None:
             conn.execute(
