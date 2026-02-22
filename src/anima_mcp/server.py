@@ -2693,6 +2693,49 @@ def run_http_server(host: str, port: int):
 
         print("[Server] Streamable HTTP transport available at /mcp/", file=sys.stderr, flush=True)
 
+        # --- OAuth 2.1 setup (conditional) ---
+        _oauth_issuer_url = os.environ.get("ANIMA_OAUTH_ISSUER_URL")
+        _oauth_auth_routes = []
+        _oauth_middleware = []
+        _oauth_token_verifier = None
+
+        if _oauth_issuer_url and hasattr(mcp, '_auth_server_provider') and mcp._auth_server_provider:
+            try:
+                from mcp.server.auth.routes import create_auth_routes, create_protected_resource_routes
+                from mcp.server.auth.provider import ProviderTokenVerifier
+                from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
+                from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
+                from starlette.middleware import Middleware
+                from starlette.middleware.authentication import AuthenticationMiddleware
+
+                _oauth_token_verifier = ProviderTokenVerifier(mcp._auth_server_provider)
+
+                _oauth_auth_routes = create_auth_routes(
+                    provider=mcp._auth_server_provider,
+                    issuer_url=mcp.settings.auth.issuer_url,
+                )
+
+                _oauth_auth_routes.extend(
+                    create_protected_resource_routes(
+                        resource_url=mcp.settings.auth.resource_server_url,
+                        authorization_servers=[mcp.settings.auth.issuer_url],
+                        scopes_supported=mcp.settings.auth.required_scopes,
+                    )
+                )
+
+                _oauth_middleware = [
+                    Middleware(AuthenticationMiddleware, backend=BearerAuthBackend(_oauth_token_verifier)),
+                    Middleware(AuthContextMiddleware),
+                ]
+
+                print(f"[Server] OAuth 2.1 routes enabled ({len(_oauth_auth_routes)} routes)", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[Server] OAuth setup failed, continuing without auth: {e}", file=sys.stderr, flush=True)
+                _oauth_auth_routes = []
+                _oauth_middleware = []
+                _oauth_token_verifier = None
+
+
         # Create ASGI app for /mcp
         async def streamable_mcp_asgi(scope, receive, send):
             """ASGI app for Streamable HTTP MCP at /mcp/."""
@@ -3247,8 +3290,22 @@ def run_http_server(host: str, port: int):
                 )
 
         # === Build Starlette app with all routes ===
-        app = Starlette(routes=[
-            Mount("/mcp", app=streamable_mcp_asgi),
+        # Wrap /mcp with OAuth if configured
+        if _oauth_token_verifier:
+            from mcp.server.auth.middleware.bearer_auth import RequireAuthMiddleware
+            from mcp.server.auth.routes import build_resource_metadata_url
+            resource_metadata_url = build_resource_metadata_url(mcp.settings.auth.resource_server_url)
+            mcp_endpoint = RequireAuthMiddleware(
+                streamable_mcp_asgi,
+                required_scopes=mcp.settings.auth.required_scopes or [],
+                resource_metadata_url=resource_metadata_url,
+            )
+        else:
+            mcp_endpoint = streamable_mcp_asgi
+
+        all_routes = [
+            *_oauth_auth_routes,
+            Mount("/mcp", app=mcp_endpoint),
             Route("/health", health_check, methods=["GET"]),
             Route("/health/detailed", rest_health_detailed, methods=["GET"]),
             Route("/v1/tools/call", rest_tool_call, methods=["POST"]),
@@ -3265,7 +3322,8 @@ def run_http_server(host: str, port: int):
             Route("/gallery-page", rest_gallery_page, methods=["GET"]),
             Route("/layers", rest_layers, methods=["GET"]),
             Route("/architecture", rest_architecture_page, methods=["GET"]),
-        ])
+        ]
+        app = Starlette(routes=all_routes, middleware=_oauth_middleware)
         print("[Server] Starlette app created with all routes", file=sys.stderr, flush=True)
 
         # Start display loop before server runs
