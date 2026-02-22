@@ -556,7 +556,7 @@ else:
             text = data.get('text', '').replace("'", "\\'").replace('"', '\\"')
             author = data.get('author', 'user')
             # Normalize identity: known person aliases → canonical name
-            if author.lower() in ('kenny', 'cirwel', 'caretaker'):
+            if author.lower() in ('kenny', 'caretaker'):
                 author = 'Kenny'  # Canonical person name (normalization happens server-side)
             author = author.replace("'", "\\'").replace('"', '\\"')
             responds_to = data.get('responds_to', '').replace("'", "\\'").replace('"', '\\"')
@@ -606,7 +606,7 @@ print("ok")
             answer_text = data.get('answer', '').replace("'", "\\'").replace('"', '\\"')
             author = data.get('author', 'Kenny')
             # Normalize identity: known person aliases → canonical name
-            if author.lower() in ('kenny', 'cirwel', 'caretaker'):
+            if author.lower() in ('kenny', 'caretaker'):
                 author = 'Kenny'  # Canonical person name (normalization happens server-side)
             author = author.replace("'", "\\'").replace('"', '\\"')
 

@@ -45,8 +45,10 @@ GOAL_CHECK_INTERVAL = 300      # ~10 minutes — check goal progress
 # === Identity resolution ===
 # Maps canonical person name → set of aliases (case-insensitive matching)
 # All dashboard interactions also resolve to the first person by default.
+# Note: "cirwel" excluded — agents often inherit this macOS username.
+# Only dashboard source reliably identifies the human.
 KNOWN_PERSON_ALIASES = {
-    "kenny": {"kenny", "cirwel", "caretaker", "dashboard"},
+    "kenny": {"kenny", "caretaker", "dashboard"},
 }
 
 # === Error/status logging throttle intervals ===
