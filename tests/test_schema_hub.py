@@ -65,3 +65,46 @@ class TestSchemaComposition:
         identity_nodes = [n for n in schema.nodes if n.node_id == "identity"]
         assert len(identity_nodes) == 1
         assert identity_nodes[0].label == "TestLumen"
+
+
+class TestSchemaPersistence:
+    """Test SchemaHub schema persistence for gap handling."""
+
+    def test_persist_schema_creates_file(self, tmp_path):
+        """persist_schema creates JSON file."""
+        persist_path = tmp_path / "last_schema.json"
+        hub = SchemaHub(persist_path=persist_path)
+        hub.compose_schema()
+        hub.persist_schema()
+        assert persist_path.exists()
+
+    def test_persist_schema_is_valid_json(self, tmp_path):
+        """Persisted schema is valid JSON."""
+        persist_path = tmp_path / "last_schema.json"
+        hub = SchemaHub(persist_path=persist_path)
+        hub.compose_schema()
+        hub.persist_schema()
+
+        import json
+        data = json.loads(persist_path.read_text())
+        assert "timestamp" in data
+        assert "nodes" in data
+
+    def test_load_previous_schema_returns_none_if_no_file(self, tmp_path):
+        """load_previous_schema returns None if no persisted schema."""
+        persist_path = tmp_path / "nonexistent.json"
+        hub = SchemaHub(persist_path=persist_path)
+        result = hub.load_previous_schema()
+        assert result is None
+
+    def test_load_previous_schema_restores_schema(self, tmp_path):
+        """load_previous_schema restores persisted schema."""
+        persist_path = tmp_path / "last_schema.json"
+        hub1 = SchemaHub(persist_path=persist_path)
+        hub1.compose_schema()
+        hub1.persist_schema()
+
+        hub2 = SchemaHub(persist_path=persist_path)
+        loaded = hub2.load_previous_schema()
+        assert loaded is not None
+        assert isinstance(loaded, SelfSchema)

@@ -109,3 +109,81 @@ class SchemaHub:
         # 5. TODO: Inject gap texture nodes (Task 5)
 
         return schema
+
+    def persist_schema(self) -> bool:
+        """
+        Persist current schema to disk for gap handling.
+
+        Called on sleep/shutdown to save state for later recovery.
+
+        Returns:
+            True if persisted successfully
+        """
+        if not self.schema_history:
+            return False
+
+        schema = self.schema_history[-1]
+
+        # Ensure directory exists
+        self.persist_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Serialize schema
+        data = schema.to_dict()
+        data["_hub_meta"] = {
+            "history_length": len(self.schema_history),
+            "persisted_at": datetime.now().isoformat(),
+        }
+
+        try:
+            self.persist_path.write_text(json.dumps(data, indent=2))
+            return True
+        except Exception:
+            return False
+
+    def load_previous_schema(self) -> Optional[SelfSchema]:
+        """
+        Load previously persisted schema from disk.
+
+        Called on wake to compute gap delta.
+
+        Returns:
+            SelfSchema if found and valid, None otherwise
+        """
+        if not self.persist_path.exists():
+            return None
+
+        try:
+            data = json.loads(self.persist_path.read_text())
+
+            # Reconstruct nodes
+            nodes = [
+                SchemaNode(
+                    node_id=n["id"],
+                    node_type=n["type"],
+                    label=n["label"],
+                    value=n["value"],
+                    raw_value=n.get("raw_value"),
+                )
+                for n in data.get("nodes", [])
+            ]
+
+            # Reconstruct edges
+            edges = [
+                SchemaEdge(
+                    source_id=e["source"],
+                    target_id=e["target"],
+                    weight=e["weight"],
+                )
+                for e in data.get("edges", [])
+            ]
+
+            # Parse timestamp
+            timestamp = datetime.fromisoformat(data["timestamp"])
+
+            return SelfSchema(
+                timestamp=timestamp,
+                nodes=nodes,
+                edges=edges,
+            )
+        except Exception:
+            return None
