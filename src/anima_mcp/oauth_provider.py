@@ -6,9 +6,6 @@ Tokens stored in-memory — reset on server restart (Claude.ai re-authenticates)
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
-import os
 import secrets
 import time
 from dataclasses import dataclass, field
@@ -31,6 +28,7 @@ class AuthCodeEntry:
     redirect_uri: str
     code_challenge: str
     scopes: list[str]
+    redirect_uri_provided_explicitly: bool = True
     created_at: float = field(default_factory=time.time)
     resource: str | None = None
 
@@ -110,6 +108,7 @@ class AnimaOAuthProvider:
             redirect_uri=str(params.redirect_uri),
             code_challenge=params.code_challenge,
             scopes=params.scopes or [],
+            redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
             resource=params.resource,
         )
         self._auth_codes[code] = entry
