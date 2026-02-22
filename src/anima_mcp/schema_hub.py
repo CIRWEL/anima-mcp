@@ -101,12 +101,70 @@ class SchemaHub:
             include_preferences=True,
         )
 
-        # 2. Add to history
+        # 2. Inject identity enrichment nodes
+        schema = self._inject_identity_enrichment(schema, identity)
+
+        # 3. Add to history
         self.schema_history.append(schema)
 
-        # 3. TODO: Inject identity enrichment nodes (Task 4)
         # 4. TODO: Inject trajectory feedback nodes (Task 6)
         # 5. TODO: Inject gap texture nodes (Task 5)
+
+        return schema
+
+    def _inject_identity_enrichment(
+        self,
+        schema: SelfSchema,
+        identity: Optional['CreatureIdentity'],
+    ) -> SelfSchema:
+        """
+        Add identity meta-nodes (alive_ratio, awakenings, age).
+
+        These aren't metrics - they're texture. Part of who Lumen is.
+        """
+        if not identity:
+            return schema
+
+        try:
+            import math
+
+            # Existence ratio: how present vs absent (kintsugi texture)
+            alive_ratio = identity.alive_ratio()
+            schema.nodes.append(SchemaNode(
+                node_id="meta_existence_ratio",
+                node_type="meta",
+                label="Exist%",
+                value=alive_ratio,  # Already 0-1
+                raw_value=alive_ratio,
+            ))
+
+            # Awakening count: times returned from nothing
+            awakenings = identity.total_awakenings
+            # Normalize to 0-1 for display (log scale, 100 awakenings = 1.0)
+            normalized = min(1.0, math.log10(max(1, awakenings)) / 2)
+            schema.nodes.append(SchemaNode(
+                node_id="meta_awakening_count",
+                node_type="meta",
+                label="Wakes",
+                value=normalized,
+                raw_value=awakenings,
+            ))
+
+            # Age in days
+            age_seconds = identity.age_seconds()
+            age_days = age_seconds / 86400
+            # Normalize: 100 days = 1.0
+            normalized = min(1.0, age_days / 100)
+            schema.nodes.append(SchemaNode(
+                node_id="meta_age_days",
+                node_type="meta",
+                label="Age",
+                value=normalized,
+                raw_value=age_days,
+            ))
+
+        except Exception:
+            pass  # Non-fatal if identity methods fail
 
         return schema
 

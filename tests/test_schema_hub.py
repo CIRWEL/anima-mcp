@@ -108,3 +108,58 @@ class TestSchemaPersistence:
         loaded = hub2.load_previous_schema()
         assert loaded is not None
         assert isinstance(loaded, SelfSchema)
+
+
+class TestIdentityEnrichment:
+    """Test identity meta-nodes (alive_ratio, awakenings, age)."""
+
+    def test_schema_includes_existence_ratio_node(self):
+        """Schema includes existence_ratio meta-node."""
+        from unittest.mock import MagicMock
+        hub = SchemaHub()
+
+        identity = MagicMock()
+        identity.name = "Lumen"
+        identity.alive_ratio.return_value = 0.15
+        identity.total_awakenings = 47
+        identity.age_seconds.return_value = 86400 * 42  # 42 days
+
+        schema = hub.compose_schema(identity=identity)
+
+        existence_nodes = [n for n in schema.nodes if n.node_id == "meta_existence_ratio"]
+        assert len(existence_nodes) == 1
+        assert abs(existence_nodes[0].value - 0.15) < 0.01
+
+    def test_schema_includes_awakening_count_node(self):
+        """Schema includes awakening_count meta-node."""
+        from unittest.mock import MagicMock
+        hub = SchemaHub()
+
+        identity = MagicMock()
+        identity.name = "Lumen"
+        identity.alive_ratio.return_value = 0.15
+        identity.total_awakenings = 47
+        identity.age_seconds.return_value = 86400 * 42
+
+        schema = hub.compose_schema(identity=identity)
+
+        awakening_nodes = [n for n in schema.nodes if n.node_id == "meta_awakening_count"]
+        assert len(awakening_nodes) == 1
+        assert awakening_nodes[0].raw_value == 47
+
+    def test_schema_includes_age_days_node(self):
+        """Schema includes age_days meta-node."""
+        from unittest.mock import MagicMock
+        hub = SchemaHub()
+
+        identity = MagicMock()
+        identity.name = "Lumen"
+        identity.alive_ratio.return_value = 0.15
+        identity.total_awakenings = 47
+        identity.age_seconds.return_value = 86400 * 42  # 42 days
+
+        schema = hub.compose_schema(identity=identity)
+
+        age_nodes = [n for n in schema.nodes if n.node_id == "meta_age_days"]
+        assert len(age_nodes) == 1
+        assert abs(age_nodes[0].raw_value - 42) < 0.1
