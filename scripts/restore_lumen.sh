@@ -128,10 +128,50 @@ fi
 log "Installing systemd services (broker + anima)..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo cp ~/anima-mcp/systemd/anima-broker.service /etc/systemd/system/ && sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable anima-broker anima && sudo systemctl start anima-broker && sudo systemctl start anima"
 
+# 5b. Install watchdog timer (restarts failed services)
+log "Installing watchdog timer..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/anima-watchdog.sh && \
+    sudo cp ~/anima-mcp/systemd/anima-watchdog.service /etc/systemd/system/ && \
+    sudo cp ~/anima-mcp/systemd/anima-watchdog.timer /etc/systemd/system/ && \
+    sudo systemctl daemon-reload && \
+    sudo systemctl enable anima-watchdog.timer && \
+    sudo systemctl start anima-watchdog.timer" || log "  watchdog install failed (non-fatal)"
+
+# 6. Install cron jobs (wifi watchdog, db maintenance, backup)
+log "Installing cron jobs..."
+PI_SCRIPTS="/home/${PI_USER}/anima-mcp/scripts"
+PI_LOGS="/home/${PI_USER}/.anima"
+
+# Make scripts executable first
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ${PI_SCRIPTS}/wifi_watchdog.sh ${PI_SCRIPTS}/db_maintenance.sh ${PI_SCRIPTS}/backup_state.sh 2>/dev/null; true"
+
+# Build and install crontab: strip old entries, add current ones
+# Uses heredoc on remote side to handle multi-line reliably
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" bash -s <<'CRON_EOF'
+SCRIPTS="/home/unitares-anima/anima-mcp/scripts"
+LOGS="/home/unitares-anima/.anima"
+
+# Start with existing crontab minus our managed entries
+EXISTING=$(crontab -l 2>/dev/null | grep -v 'wifi_watchdog\|db_maintenance\|backup_state' || true)
+
+# Build new crontab
+{
+    [ -n "$EXISTING" ] && echo "$EXISTING"
+    echo "*/2 * * * * ${SCRIPTS}/wifi_watchdog.sh >> ${LOGS}/wifi_watchdog.log 2>&1"
+    [ -f "${SCRIPTS}/db_maintenance.sh" ] && \
+        echo "0 * * * * ${SCRIPTS}/db_maintenance.sh >> ${LOGS}/db_maintenance.log 2>&1"
+    [ -f "${SCRIPTS}/backup_state.sh" ] && \
+        echo "30 * * * * ${SCRIPTS}/backup_state.sh >> ${LOGS}/backup_state.log 2>&1"
+} | crontab -
+CRON_EOF
+[ $? -eq 0 ] && log "  cron jobs installed" || log "  cron install failed (non-fatal)"
+
 # 7. Verify
 sleep 3
 log "Verifying..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-broker anima" || log "  services may still be starting"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-watchdog.timer" 2>/dev/null && log "  watchdog timer active" || log "  watchdog timer not running"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "crontab -l 2>/dev/null | grep -c 'anima-mcp/scripts'" | xargs -I{} log "  {} cron jobs installed"
 
 # 8. Tailscale (optional — for remote access when not on same WiFi)
 if [ -n "${RESTORE_TAILSCALE:-}" ]; then

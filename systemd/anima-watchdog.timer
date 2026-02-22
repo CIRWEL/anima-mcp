@@ -1,0 +1,11 @@
+[Unit]
+Description=Run Anima Watchdog every 5 minutes
+After=anima.service anima-broker.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
