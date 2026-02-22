@@ -114,6 +114,8 @@ _warm_start_anima: dict | None = None  # {warmth, clarity, stability, presence}
 # Gap awareness - set by startup learning, consumed by warm start and main loop
 _wake_gap: timedelta | None = None  # Time since last state_history row
 _wake_recovery_cycles: int = 0  # Countdown for post-gap presence recovery arc
+_wake_recovery_total: int = 0  # Initial cycle count (for progress calculation)
+_wake_presence_floor: float = 0.3  # Lowest presence cap during recovery
 
 # Thread lock for lazy-init singletons (metacog, unitares bridge)
 _state_lock = threading.Lock()
@@ -388,8 +390,8 @@ async def _update_display_loop():
                 if gap_hours > 1:
                     print(f"[Learning] Gap detected: {gap_hours:.1f} hours since last observation", file=sys.stderr, flush=True)
 
-            # Gap awareness: degrade warm start proportionally to absence duration
-            global _wake_gap, _wake_recovery_cycles
+            # Gap awareness: degrade warm start and set recovery arc
+            global _wake_gap, _wake_recovery_cycles, _wake_recovery_total, _wake_presence_floor
             _wake_gap = gap
             if gap and _warm_start_anima:
                 gap_minutes = gap.total_seconds() / 60
@@ -397,12 +399,14 @@ async def _update_display_loop():
                     # Medium gap: noticeable absence
                     _warm_start_anima["presence"] *= 0.75
                     _wake_recovery_cycles = 10
+                    _wake_presence_floor = 0.55
                     print(f"[Wake] Gap {gap_minutes:.0f}m: presence reduced to {_warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
                 elif gap_minutes >= 60 and gap_minutes < 1440:
                     # Long gap: significant disorientation
                     _warm_start_anima["presence"] *= 0.45
                     _warm_start_anima["clarity"] *= 0.85
                     _wake_recovery_cycles = 20
+                    _wake_presence_floor = 0.35
                     print(f"[Wake] Gap {gap_minutes/60:.1f}h: presence={_warm_start_anima['presence']:.2f}, clarity reduced", file=sys.stderr, flush=True)
                 elif gap_minutes >= 1440:
                     # Very long gap: deep absence
@@ -410,7 +414,9 @@ async def _update_display_loop():
                     _warm_start_anima["clarity"] *= 0.7
                     _warm_start_anima["stability"] *= 0.85
                     _wake_recovery_cycles = 30
+                    _wake_presence_floor = 0.20
                     print(f"[Wake] Gap {gap_minutes/60:.0f}h: deep absence, presence={_warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
+                _wake_recovery_total = _wake_recovery_cycles
             
             if learner.can_learn():
                 obs_count = learner.get_observation_count()
@@ -716,10 +722,13 @@ async def _update_display_loop():
             
             consecutive_errors = 0  # Reset on success
 
-            # Recovery arc: gradually restore presence after a gap
-            if _wake_recovery_cycles > 0:
+            # Recovery arc: cap presence during recovery, gradually lifting
+            if _wake_recovery_cycles > 0 and _wake_recovery_total > 0:
                 _wake_recovery_cycles -= 1
-                anima.presence = min(1.0, anima.presence + 0.02)
+                progress = 1.0 - (_wake_recovery_cycles / _wake_recovery_total)
+                presence_cap = _wake_presence_floor + (1.0 - _wake_presence_floor) * progress
+                if anima.presence > presence_cap:
+                    anima.presence = presence_cap
                 if _wake_recovery_cycles == 0:
                     print(f"[Wake] Recovery complete. Presence: {anima.presence:.2f}", file=sys.stderr, flush=True)
 
@@ -3375,8 +3384,21 @@ def run_http_server(host: str, port: int):
         else:
             mcp_endpoint = streamable_mcp_asgi
 
+        # Handle /mcp (no trailing slash) directly to avoid Starlette's
+        # Mount 307 redirect. The 307 uses http:// behind ngrok (TLS
+        # termination), which breaks Claude.ai's MCP client.
+        async def mcp_no_slash(scope, receive, send):
+            """Forward /mcp to mcp_endpoint as /mcp/ (no redirect)."""
+            if scope.get("type") != "http":
+                return
+            inner = dict(scope)
+            inner["path"] = "/"
+            inner["root_path"] = scope.get("root_path", "") + "/mcp"
+            await mcp_endpoint(inner, receive, send)
+
         all_routes = [
             *_oauth_auth_routes,
+            Route("/mcp", app=mcp_no_slash),
             Mount("/mcp", app=mcp_endpoint),
             Route("/health", health_check, methods=["GET"]),
             Route("/health/detailed", rest_health_detailed, methods=["GET"]),
@@ -3448,6 +3470,8 @@ def run_http_server(host: str, port: int):
                 log_level="info",
                 limit_concurrency=100,
                 timeout_keep_alive=5,
+                proxy_headers=True,          # Trust X-Forwarded-Proto from ngrok
+                forwarded_allow_ips="*",     # Allow proxy headers from any IP
             )
             server = uvicorn.Server(config)
             await server.serve()
