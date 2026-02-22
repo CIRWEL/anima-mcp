@@ -740,6 +740,14 @@ async def _update_display_loop():
             except Exception:
                 pass
 
+            # Identity heartbeat: accumulate alive_seconds incrementally
+            # Prevents losing session time on crashes/restarts
+            try:
+                if _store:
+                    _store.heartbeat(min_interval_seconds=30.0)
+            except Exception:
+                pass
+
             # Feed EISV trajectory awareness buffer
             try:
                 _traj = get_trajectory_awareness()

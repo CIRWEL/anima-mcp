@@ -1,7 +1,7 @@
 # Raspberry Pi Deployment Guide
 
 **Created:** January 12, 2026  
-**Last Updated:** January 12, 2026  
+**Last Updated:** February 21, 2026
 **Status:** Active
 
 ---
@@ -188,8 +188,8 @@ curl http://pi.local:8766/health
 ### 4.4 Test MCP Connection
 
 ```bash
-# From Mac, test SSE connection
-curl http://pi.local:8766/sse
+# From Mac, test Streamable HTTP connection
+curl http://pi.local:8766/health
 ```
 
 ---
@@ -314,46 +314,37 @@ sudo systemctl status anima-ngrok
 
 ## Step 7: Configure MCP Clients
 
-### 7.1 Cursor Configuration
+### 7.1 Cursor / Claude Code Configuration
 
-On Mac, edit `~/.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "anima": {
-      "type": "sse",
-      "url": "http://pi.local:8766/sse"
-    }
-  }
-}
-```
-
-**Or via ngrok:**
-```json
-{
-  "mcpServers": {
-    "anima": {
-      "type": "sse",
-      "url": "https://your-custom-domain.ngrok.io/sse"
-    }
-  }
-}
-```
-
-### 7.2 Claude Desktop Configuration
-
-Edit `~/Library/Application Support/Claude/claude_desktop_config.json`:
+On Mac, edit `~/.cursor/mcp.json` or `~/.claude.json`:
 
 ```json
 {
   "mcpServers": {
     "anima": {
-      "url": "http://pi.local:8766/sse"
+      "type": "http",
+      "url": "http://100.103.208.117:8766/mcp/"
     }
   }
 }
 ```
+
+Uses Tailscale (no auth required). LAN IP (`http://192.168.1.165:8766/mcp/`) also works.
+
+### 7.2 Claude.ai Web (via ngrok + OAuth 2.1)
+
+Claude.ai web connects via ngrok with automatic OAuth 2.1 authentication:
+- URL: `https://lumen-anima.ngrok.io/mcp/`
+- Auth: OAuth 2.1 (PKCE, auto-approve — no manual steps needed)
+- Callback: `https://claude.ai/api/mcp/auth_callback`
+
+**Required env vars** in `~/.anima/anima.env` or systemd service:
+```bash
+ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
+ANIMA_OAUTH_AUTO_APPROVE=true
+```
+
+OAuth only protects `/mcp/` via ngrok. Dashboard and API endpoints remain open.
 
 ---
 
@@ -526,8 +517,9 @@ sudo ufw enable
 ### Ngrok Security
 
 - Use custom domain (not random URLs)
-- Consider adding authentication
-- Monitor tunnel access
+- OAuth 2.1 protects `/mcp/` endpoint (enabled via `ANIMA_OAUTH_ISSUER_URL`)
+- Dashboard endpoints (`/dashboard`, `/gallery-page`, etc.) remain open via ngrok
+- Tokens are in-memory — reset on service restart, clients re-authenticate automatically
 
 ---
 
@@ -562,7 +554,7 @@ sudo journalctl -u lumen -n 50  # Last 50 lines
 
 ```bash
 curl http://localhost:8766/health
-curl http://pi.local:8766/sse
+curl http://pi.local:8766/state
 ```
 
 ---

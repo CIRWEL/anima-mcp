@@ -2,7 +2,7 @@
 
 **Single source of truth for anima-mcp and related services.** When changing a port, update this file and all references below.
 
-**Last Updated:** February 19, 2026
+**Last Updated:** February 21, 2026
 
 ---
 
@@ -22,7 +22,24 @@
 - **Cursor:** `~/.cursor/mcp.json` — anima server URL `http://<Pi-IP>:8766/mcp/`
 - **Scripts:** Any script that builds the Pi URL (e.g. `alert_check.sh`, `message_server.py`, `monitor_health_pi.sh`, `deploy_via_http.sh`, `call_git_pull_via_http.py`) — use 8766 or reference this doc
 
-**Endpoints on 8766:** `/mcp/` (Streamable HTTP), `/health`, `/dashboard`, `/state`, `/v1/tools/call`
+**Endpoints on 8766:**
+- `/mcp/` — Streamable HTTP MCP transport (OAuth 2.1 required via ngrok; open on LAN/Tailscale)
+- `/health`, `/health/detailed` — Health checks
+- `/dashboard`, `/gallery-page`, `/architecture` — Web UI pages
+- `/state`, `/qa`, `/answer`, `/message`, `/messages`, `/learning`, `/voice` — REST API
+- `/gallery`, `/gallery/{file}` — Drawing gallery
+- `/layers` — Proprioception stack
+- `/v1/tools/call` — Direct MCP tool call
+
+**OAuth 2.1 endpoints** (active when `ANIMA_OAUTH_ISSUER_URL` is set):
+- `/.well-known/oauth-authorization-server` — Server metadata
+- `/.well-known/oauth-protected-resource/mcp` — Protected resource metadata
+- `/register` — Dynamic client registration
+- `/authorize` — Authorization (PKCE, auto-approve)
+- `/token` — Token exchange
+- `/revoke` — Token revocation
+
+OAuth only enforced when Host = `lumen-anima.ngrok.io`. All other hosts bypass auth.
 
 ---
 

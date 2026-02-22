@@ -30,12 +30,23 @@ sudo systemctl restart anima
 |----------|---------|----------|
 | `GROQ_API_KEY` | LLM (VQA, self-answering) | [groq.com](https://groq.com) (free) |
 | `UNITARES_AUTH` | Governance BASIC auth | Your UNITARES setup |
+| `ANIMA_OAUTH_ISSUER_URL` | OAuth 2.1 issuer (enables OAuth for Claude.ai web) | Your ngrok URL (e.g. `https://lumen-anima.ngrok.io`) |
+| `ANIMA_OAUTH_AUTO_APPROVE` | Skip consent screen (single-user) | Set to `true` |
+| `ANIMA_OAUTH_SECRET` | OAuth signing secret (optional — auto-generated if unset) | Any random string |
 
 **Example:**
 ```bash
 GROQ_API_KEY=gsk_xxxxxxxxxxxx
 UNITARES_AUTH=unitares:your-password
+ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
+ANIMA_OAUTH_AUTO_APPROVE=true
 ```
+
+**OAuth notes:**
+- OAuth is only required for Claude.ai web connections via ngrok.
+- LAN, Tailscale, and localhost connections bypass OAuth entirely.
+- Tokens are in-memory — reset on service restart. Clients re-authenticate automatically.
+- If `ANIMA_OAUTH_ISSUER_URL` is not set, OAuth is disabled and all connections are open.
 
 ---
 

@@ -20,13 +20,13 @@ cd /Users/cirwel/projects/anima-mcp
 3. **Installs deps** — adafruit-blinka, requirements-pi
 4. **Enables I2C/SPI** for sensors
 5. **Installs broker + anima** (broker owns sensors/shared memory; server owns DB — no contention)
-6. **Creates anima.env** from example if missing — add GROQ_API_KEY, UNITARES_AUTH
+6. **Creates anima.env** from example if missing — add GROQ_API_KEY, UNITARES_AUTH, ANIMA_OAUTH_* vars
 7. **Starts services** — anima-broker, anima
 
 ## Post-Restore
 
 - **MCP config:** Update `~/.cursor/mcp.json` with Pi URL (e.g. `http://100.103.208.117:8766/mcp/`)
-- **Secrets:** Edit `~/.anima/anima.env` on Pi — see `docs/operations/SECRETS_AND_ENV.md`
+- **Secrets:** Edit `~/.anima/anima.env` on Pi — see `docs/operations/SECRETS_AND_ENV.md` (includes OAuth vars for Claude.ai web)
 - **DB corruption:** If broker crashes with "database disk image is malformed", replace with a clean snapshot: `scp ~/backups/lumen/anima_20260210_0600.db unitares-anima@100.103.208.117:~/.anima/anima.db` then restart
 
 ## Related

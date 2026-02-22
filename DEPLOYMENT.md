@@ -101,7 +101,19 @@ ssh unitares-anima@lumen.local \
   "sudo systemctl restart anima-creature && sudo systemctl restart anima"
 ```
 
+## OAuth 2.1 (for Claude.ai web)
+
+If deploying with OAuth support for Claude.ai web, ensure these env vars are set on the Pi (in `~/.anima/anima.env` or systemd service):
+
+```bash
+ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
+ANIMA_OAUTH_AUTO_APPROVE=true
+```
+
+OAuth tokens are in-memory — they reset on restart, and clients re-authenticate automatically. See `docs/operations/SECRETS_AND_ENV.md` for details.
+
 ## See Also
 
 - `docs/operations/PI_DEPLOYMENT.md` - Complete deployment guide
+- `docs/operations/SECRETS_AND_ENV.md` - Environment variables and secrets
 - `docs/operations/TROUBLESHOOTING.md` - Common issues and solutions

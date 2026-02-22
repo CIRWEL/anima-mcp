@@ -49,16 +49,20 @@ anima --http --host 0.0.0.0 --port 8766
 anima-creature
 ```
 
-**MCP connection:**
+**MCP connection (Tailscale — recommended):**
 ```json
 {
   "mcpServers": {
     "anima": {
-      "url": "https://lumen-anima.ngrok.io/mcp/"
+      "type": "http",
+      "url": "http://100.103.208.117:8766/mcp/"
     }
   }
 }
 ```
+
+**Claude.ai web** connects via ngrok with OAuth 2.1 (auto-approve):
+`https://lumen-anima.ngrok.io/mcp/`
 
 ## Core Concepts
 
@@ -158,10 +162,12 @@ Falls back to mock sensors on Mac for development.
 
 ```
 Anima MCP (Pi, port 8766)
-├── Tailscale: 100.103.208.117:8766  (direct, no usage limits)
-├── ngrok:     lumen-anima.ngrok.io   (public, when not at limits)
-└── LAN:       192.168.1.165:8766     (local network)
+├── Tailscale: 100.103.208.117:8766  (direct, no auth, no usage limits)
+├── ngrok:     lumen-anima.ngrok.io   (OAuth 2.1 for /mcp/, dashboards open)
+└── LAN:       192.168.1.165:8766     (direct, no auth)
 ```
+
+**OAuth 2.1** is required only for `/mcp/` via ngrok (Claude.ai web). All other transports and dashboard endpoints are open. See `docs/operations/SECRETS_AND_ENV.md` for OAuth env vars.
 
 ## UNITARES Governance
 
@@ -198,6 +204,8 @@ mcp__anima__git_pull(restart=true)
 |-------|------|
 | Agent instructions | `CLAUDE.md` |
 | Deployment | `DEPLOYMENT.md` |
+| Secrets & env vars | `docs/operations/SECRETS_AND_ENV.md` |
+| OAuth 2.1 design | `docs/plans/2026-02-21-oauth-claude-web-design.md` |
 | Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
 | Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
 | Pi operations | `docs/operations/PI_ACCESS.md` |
