@@ -66,3 +66,46 @@ class SchemaHub:
         self.persist_path = persist_path or Path.home() / ".anima" / "last_schema.json"
         self.last_gap_delta: Optional[GapDelta] = None
         self._trajectory_compute_interval = 20  # Recompute every N schemas
+
+    def compose_schema(
+        self,
+        identity: Optional['CreatureIdentity'] = None,
+        anima: Optional[Any] = None,
+        readings: Optional[Any] = None,
+        growth_system: Optional['GrowthSystem'] = None,
+        self_model: Optional['SelfModel'] = None,
+    ) -> SelfSchema:
+        """
+        Compose unified schema from all source systems.
+
+        This is the main entry point - call this each tick instead of
+        extract_self_schema directly.
+
+        Args:
+            identity: CreatureIdentity from identity store
+            anima: AnimaState with current anima values
+            readings: SensorReadings with sensor data
+            growth_system: GrowthSystem for preferences
+            self_model: SelfModel for beliefs
+
+        Returns:
+            SelfSchema with all nodes and edges
+        """
+        # 1. Get base schema from existing extraction
+        schema = extract_self_schema(
+            identity=identity,
+            anima=anima,
+            readings=readings,
+            growth_system=growth_system,
+            self_model=self_model,
+            include_preferences=True,
+        )
+
+        # 2. Add to history
+        self.schema_history.append(schema)
+
+        # 3. TODO: Inject identity enrichment nodes (Task 4)
+        # 4. TODO: Inject trajectory feedback nodes (Task 6)
+        # 5. TODO: Inject gap texture nodes (Task 5)
+
+        return schema
