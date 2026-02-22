@@ -2696,23 +2696,20 @@ def run_http_server(host: str, port: int):
         # --- OAuth 2.1 setup (conditional) ---
         _oauth_issuer_url = os.environ.get("ANIMA_OAUTH_ISSUER_URL")
         _oauth_auth_routes = []
-        _oauth_middleware = []
         _oauth_token_verifier = None
 
         if _oauth_issuer_url and hasattr(mcp, '_auth_server_provider') and mcp._auth_server_provider:
             try:
-                from mcp.server.auth.routes import create_auth_routes, create_protected_resource_routes
+                from mcp.server.auth.routes import create_auth_routes, create_protected_resource_routes, ClientRegistrationOptions
                 from mcp.server.auth.provider import ProviderTokenVerifier
-                from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend, RequireAuthMiddleware
-                from mcp.server.auth.middleware.auth_context import AuthContextMiddleware
-                from starlette.middleware import Middleware
-                from starlette.middleware.authentication import AuthenticationMiddleware
+                from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
 
                 _oauth_token_verifier = ProviderTokenVerifier(mcp._auth_server_provider)
 
                 _oauth_auth_routes = create_auth_routes(
                     provider=mcp._auth_server_provider,
                     issuer_url=mcp.settings.auth.issuer_url,
+                    client_registration_options=ClientRegistrationOptions(enabled=True),
                 )
 
                 _oauth_auth_routes.extend(
@@ -2723,16 +2720,10 @@ def run_http_server(host: str, port: int):
                     )
                 )
 
-                _oauth_middleware = [
-                    Middleware(AuthenticationMiddleware, backend=BearerAuthBackend(_oauth_token_verifier)),
-                    Middleware(AuthContextMiddleware),
-                ]
-
                 print(f"[Server] OAuth 2.1 routes enabled ({len(_oauth_auth_routes)} routes)", file=sys.stderr, flush=True)
             except Exception as e:
                 print(f"[Server] OAuth setup failed, continuing without auth: {e}", file=sys.stderr, flush=True)
                 _oauth_auth_routes = []
-                _oauth_middleware = []
                 _oauth_token_verifier = None
 
 
@@ -3290,15 +3281,25 @@ def run_http_server(host: str, port: int):
                 )
 
         # === Build Starlette app with all routes ===
-        # Wrap /mcp with OAuth if configured
+        # Wrap /mcp with OAuth if configured.
+        # Auth middleware is chained directly around /mcp (not globally)
+        # to avoid interfering with REST/dashboard routes.
         if _oauth_token_verifier:
             from mcp.server.auth.middleware.bearer_auth import RequireAuthMiddleware
+            from mcp.server.auth.middleware.auth_context import AuthContextMiddleware as _AuthCtx
+            from starlette.middleware.authentication import AuthenticationMiddleware as _AuthMW
             from mcp.server.auth.routes import build_resource_metadata_url
             resource_metadata_url = build_resource_metadata_url(mcp.settings.auth.resource_server_url)
-            mcp_endpoint = RequireAuthMiddleware(
-                streamable_mcp_asgi,
-                required_scopes=mcp.settings.auth.required_scopes or [],
-                resource_metadata_url=resource_metadata_url,
+            # Chain: AuthenticationMiddleware -> AuthContextMiddleware -> RequireAuthMiddleware -> MCP ASGI
+            mcp_endpoint = _AuthMW(
+                _AuthCtx(
+                    RequireAuthMiddleware(
+                        streamable_mcp_asgi,
+                        required_scopes=mcp.settings.auth.required_scopes or [],
+                        resource_metadata_url=resource_metadata_url,
+                    )
+                ),
+                backend=BearerAuthBackend(_oauth_token_verifier),
             )
         else:
             mcp_endpoint = streamable_mcp_asgi
@@ -3323,7 +3324,7 @@ def run_http_server(host: str, port: int):
             Route("/layers", rest_layers, methods=["GET"]),
             Route("/architecture", rest_architecture_page, methods=["GET"]),
         ]
-        app = Starlette(routes=all_routes, middleware=_oauth_middleware)
+        app = Starlette(routes=all_routes)
         print("[Server] Starlette app created with all routes", file=sys.stderr, flush=True)
 
         # Start display loop before server runs
