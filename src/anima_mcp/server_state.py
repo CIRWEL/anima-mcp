@@ -42,6 +42,13 @@ SELF_ANSWER_INTERVAL = 1800
 GOAL_SUGGEST_INTERVAL = 3600   # ~2 hours — suggest new goals
 GOAL_CHECK_INTERVAL = 300      # ~10 minutes — check goal progress
 
+# === Identity resolution ===
+# Maps canonical person name → set of aliases (case-insensitive matching)
+# All dashboard interactions also resolve to the first person by default.
+KNOWN_PERSON_ALIASES = {
+    "kenny": {"kenny", "cirwel", "caretaker", "dashboard"},
+}
+
 # === Error/status logging throttle intervals ===
 ERROR_LOG_THROTTLE = 300       # ~10 minutes between repeated error logs
 STATUS_LOG_THROTTLE = 100      # ~3.3 minutes between status logs

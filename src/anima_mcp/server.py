@@ -2679,11 +2679,14 @@ def run_http_server(host: str, port: int):
                 body = await request.json()
                 question_id = body.get("question_id") or body.get("id")
                 answer = body.get("answer")
-                author = body.get("author", "Kenny")  # Preserve author name
+                author = body.get("author", "Kenny")
+                # Normalize identity: dashboard interactions resolve to person
+                from .growth import normalize_visitor_identity
+                _, display_name, _ = normalize_visitor_identity(author, source="dashboard")
                 result = await handle_lumen_qa({
                     "question_id": question_id,
                     "answer": answer,
-                    "agent_name": author
+                    "agent_name": display_name
                 })
                 if result and len(result) > 0:
                     data = json.loads(result[0].text)
@@ -2698,8 +2701,11 @@ def run_http_server(host: str, port: int):
                 body = await request.json()
                 message = body.get("message", body.get("text", ""))
                 author = body.get("author", "dashboard")
+                # Normalize identity: dashboard interactions resolve to person
+                from .growth import normalize_visitor_identity
+                _, display_name, _ = normalize_visitor_identity(author, source="dashboard")
                 responds_to = body.get("responds_to")
-                payload = {"message": message, "source": "dashboard", "agent_name": author}
+                payload = {"message": message, "source": "dashboard", "agent_name": display_name}
                 if responds_to:
                     payload["responds_to"] = responds_to
                 result = await handle_post_message(payload)

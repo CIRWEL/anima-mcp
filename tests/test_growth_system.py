@@ -82,11 +82,11 @@ class TestGrowthRelationships:
         assert "agent_neg" in growth._relationships
 
     def test_growth_summary_includes_visitors(self, growth):
-        """get_growth_summary should report visitor stats."""
+        """get_growth_summary should report agent visitor stats."""
         growth.record_interaction("bot_1", agent_name="Bot1")
         growth.record_interaction("bot_2", agent_name="Bot2")
         summary = growth.get_growth_summary()
-        assert summary["visitors"]["unique_names"] >= 2
+        assert summary["agents"]["unique_names"] >= 2
 
 
 class TestGrowthMemories:
