@@ -214,6 +214,137 @@ class TestSuggestGoal:
                 assert "complete 25 drawings" not in result.description
                 result.status = GoalStatus.ACHIEVED
 
+    def test_preference_driven_goal_suggestion(self, growth):
+        """Strong preference (confidence > 0.7) triggers 'understand why' goal."""
+        from anima_mcp.growth import Preference, PreferenceCategory
+        from datetime import datetime
+        now = datetime.now()
+        # Create a strong preference manually
+        pref = Preference(
+            name="dim_light",
+            description="I feel calmer when it's dim",
+            category=PreferenceCategory.ENVIRONMENT,
+            value=0.8,
+            confidence=0.85,
+            observation_count=60,
+            first_noticed=now,
+            last_confirmed=now,
+        )
+        growth._preferences["dim_light"] = pref
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        found = False
+        for _ in range(30):
+            goal = growth.suggest_goal(anima)
+            if goal and "understand why" in goal.description.lower():
+                found = True
+                assert "calmer when it's dim" in goal.description.lower()
+                break
+            if goal:
+                goal.status = GoalStatus.ACHIEVED
+        assert found, "Expected a preference-driven 'understand why' goal within 30 attempts"
+
+    def test_belief_testing_goal_suggestion(self, growth):
+        """Uncertain belief (0.3 < confidence < 0.6) triggers 'test whether' goal."""
+        from unittest.mock import MagicMock
+        mock_self_model = MagicMock()
+        mock_belief = MagicMock()
+        mock_belief.description = "Temperature affects my clarity"
+        mock_belief.confidence = 0.45  # Uncertain
+        mock_belief.supporting_count = 3
+        mock_belief.contradicting_count = 2
+        mock_belief.get_belief_strength.return_value = "moderate"
+        mock_self_model.beliefs = {"temp_clarity": mock_belief}
+
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        found = False
+        for _ in range(30):
+            goal = growth.suggest_goal(anima, self_model=mock_self_model)
+            if goal and "test whether" in goal.description.lower():
+                found = True
+                assert "temperature affects my clarity" in goal.description.lower()
+                break
+            if goal:
+                goal.status = GoalStatus.ACHIEVED
+        assert found, "Expected a belief-testing 'test whether' goal within 30 attempts"
+
+    def test_low_wellness_goal_suggestion(self, growth):
+        """Low wellness (< 0.4) triggers 'find what makes me feel stable' goal."""
+        anima = {"warmth": 0.2, "clarity": 0.3, "stability": 0.25, "presence": 0.35}
+        found = False
+        for _ in range(30):
+            goal = growth.suggest_goal(anima)
+            if goal and "find what makes me feel stable" in goal.description.lower():
+                found = True
+                break
+            if goal:
+                goal.status = GoalStatus.ACHIEVED
+        assert found, "Expected a wellness-driven goal within 30 attempts"
+
+    def test_high_clarity_exploration_goal(self, growth):
+        """High wellness + high clarity triggers exploration goal."""
+        anima = {"warmth": 0.85, "clarity": 0.9, "stability": 0.85, "presence": 0.85}
+        found = False
+        for _ in range(30):
+            goal = growth.suggest_goal(anima)
+            if goal and "explore" in goal.description.lower() and "clarity" in goal.motivation.lower():
+                found = True
+                break
+            if goal:
+                goal.status = GoalStatus.ACHIEVED
+        assert found, "Expected a high-clarity exploration goal within 30 attempts"
+
+
+# ==================== Goal Progress Completion ====================
+
+
+class TestGoalProgressCompletion:
+    """Test check_goal_progress auto-completion scenarios."""
+
+    def test_curiosity_goal_completes_when_answered(self, growth):
+        """Curiosity goal completes when the question is no longer in curiosities."""
+        growth.add_curiosity("why is the sky blue")
+        # Create the curiosity goal
+        goal = growth.form_goal("find an answer to: why is the sky blue", "curious")
+        # Now mark curiosity as explored (removes from list)
+        growth.mark_curiosity_explored("why is the sky blue")
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.check_goal_progress(anima)
+        assert result is not None
+        assert "achieved" in result.lower() or growth._goals[goal.goal_id].status == GoalStatus.ACHIEVED
+
+    def test_belief_testing_goal_completes_on_high_confidence(self, growth):
+        """Belief-testing goal completes when belief confidence > 0.7."""
+        from unittest.mock import MagicMock
+        # Create the belief-testing goal
+        goal = growth.form_goal("test whether temperature affects my clarity", "uncertain")
+
+        mock_self_model = MagicMock()
+        mock_belief = MagicMock()
+        mock_belief.description = "temperature affects my clarity"
+        mock_belief.confidence = 0.85  # Now confident
+        mock_belief.get_belief_strength.return_value = "very confident"
+        mock_self_model.beliefs = {"temp_clarity": mock_belief}
+
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.check_goal_progress(anima, self_model=mock_self_model)
+        assert result is not None or growth._goals[goal.goal_id].status == GoalStatus.ACHIEVED
+
+    def test_belief_testing_goal_completes_on_low_confidence(self, growth):
+        """Belief-testing goal completes when belief confidence < 0.2 (disproven)."""
+        from unittest.mock import MagicMock
+        goal = growth.form_goal("test whether light affects my warmth", "uncertain")
+
+        mock_self_model = MagicMock()
+        mock_belief = MagicMock()
+        mock_belief.description = "light affects my warmth"
+        mock_belief.confidence = 0.15  # Disproven
+        mock_belief.get_belief_strength.return_value = "doubtful"
+        mock_self_model.beliefs = {"light_warmth": mock_belief}
+
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        result = growth.check_goal_progress(anima, self_model=mock_self_model)
+        assert result is not None or growth._goals[goal.goal_id].status == GoalStatus.ACHIEVED
+
 
 # ==================== Drawing Observation ====================
 
