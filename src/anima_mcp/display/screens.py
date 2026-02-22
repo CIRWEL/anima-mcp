@@ -20,6 +20,7 @@ import json
 import math
 import random
 
+from ..atomic_write import atomic_json_write
 from .face import FaceState
 from .design import COLORS, SPACING, Timing, ease_smooth
 from ..anima import Anima
@@ -266,7 +267,7 @@ class CanvasState:
                 "coherence_history": self.coherence_history[-20:],  # Keep last 20
                 "i_momentum": self.i_momentum,
             }
-            _get_canvas_path().write_text(json.dumps(data))
+            atomic_json_write(_get_canvas_path(), data)
         except Exception as e:
             print(f"[Canvas] Save to disk error: {e}", file=sys.stderr, flush=True)
 

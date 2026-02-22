@@ -17,6 +17,8 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
+from .atomic_write import atomic_json_write
+
 
 # === LED Self-Glow Estimation ===
 # The VEML7700 light sensor sits next to the DotStar LEDs.
@@ -312,14 +314,23 @@ class ConfigManager:
         
         try:
             data = config.to_dict()
-            
+
             if self.config_path.suffix == ".yaml" or self.config_path.suffix == ".yml":
-                with open(self.config_path, "w") as f:
-                    yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+                # Atomic write for YAML (same pattern as atomic_json_write)
+                import os as _os
+                tmp_path = self.config_path.with_suffix(".tmp")
+                try:
+                    with open(tmp_path, "w") as f:
+                        yaml.dump(data, f, default_flow_style=False, sort_keys=False)
+                        f.flush()
+                        _os.fsync(f.fileno())
+                    tmp_path.replace(self.config_path)
+                except BaseException:
+                    tmp_path.unlink(missing_ok=True)
+                    raise
             else:
-                with open(self.config_path, "w") as f:
-                    json.dump(data, f, indent=2)
-            
+                atomic_json_write(self.config_path, data, indent=2)
+
             self._config = config
             # Force reload on next access to ensure consistency
             return True

@@ -16,6 +16,8 @@ from pathlib import Path
 import json
 import sys
 
+from .atomic_write import atomic_json_write
+
 # Numpy is optional - graceful fallback if not available
 try:
     import numpy as np
@@ -557,9 +559,7 @@ class AnimaHistory:
         existing = existing[-30:]
 
         try:
-            summaries_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(summaries_path, 'w') as f:
-                json.dump({"summaries": existing, "version": "1.0"}, f)
+            atomic_json_write(summaries_path, {"summaries": existing, "version": "1.0"})
         except Exception as e:
             print(f"[AnimaHistory] Could not save day summary: {e}", file=sys.stderr)
 
@@ -569,7 +569,6 @@ class AnimaHistory:
     def _save(self):
         """Persist history to disk."""
         try:
-            self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
             # Only save last 500 for disk efficiency
             recent = list(self._history)[-500:]
             data = {
@@ -577,8 +576,7 @@ class AnimaHistory:
                 "saved_at": datetime.now().isoformat(),
                 "version": "1.0",
             }
-            with open(self.persistence_path, 'w') as f:
-                json.dump(data, f)
+            atomic_json_write(self.persistence_path, data)
         except Exception as e:
             print(f"[AnimaHistory] Could not save: {e}", file=sys.stderr)
 

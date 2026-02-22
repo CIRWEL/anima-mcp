@@ -23,6 +23,8 @@ from typing import Dict, Any, List, Optional, TYPE_CHECKING
 import json
 import sys
 
+from .atomic_write import atomic_json_write
+
 # Optional numpy for advanced computations
 try:
     import numpy as np
@@ -701,11 +703,9 @@ def save_genesis(signature: TrajectorySignature, path: Optional[Path] = None) ->
         return False  # Genesis is immutable — never overwrite
 
     try:
-        dest.parent.mkdir(parents=True, exist_ok=True)
         data = signature.to_dict()
         data["frozen_at"] = datetime.now().isoformat()
-        with open(dest, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_json_write(dest, data, indent=2)
         _cached_genesis = signature
         print(
             f"[Trajectory] Genesis Σ₀ frozen (obs={signature.observation_count}, "

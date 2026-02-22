@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from pathlib import Path
 
+from .atomic_write import atomic_json_write
+
 
 def _get_knowledge_path() -> Path:
     """Get persistent path for knowledge - survives reboots."""
@@ -87,7 +89,7 @@ class KnowledgeBase:
         """Save insights to persistent storage."""
         try:
             data = {"insights": [i.to_dict() for i in self._insights]}
-            self._knowledge_file.write_text(json.dumps(data, indent=2))
+            atomic_json_write(self._knowledge_file, data, indent=2)
         except Exception as e:
             print(f"[Knowledge] Save error: {e}", file=sys.stderr, flush=True)
 

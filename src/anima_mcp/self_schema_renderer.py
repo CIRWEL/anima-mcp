@@ -27,6 +27,8 @@ import json
 from pathlib import Path
 from datetime import datetime
 
+from .atomic_write import atomic_json_write
+
 from .self_schema import SelfSchema, SchemaNode, SchemaEdge
 
 
@@ -502,10 +504,9 @@ def save_render_to_file(
     except ImportError:
         # PIL not available - save pixels as JSON instead
         png_path = output_dir / f"schema_{timestamp}_pixels.json"
-        with open(png_path, "w") as f:
-            # Convert tuple keys to strings for JSON
-            pixel_data = {f"{x},{y}": list(color) for (x, y), color in pixels.items()}
-            json.dump(pixel_data, f)
+        # Convert tuple keys to strings for JSON
+        pixel_data = {f"{x},{y}": list(color) for (x, y), color in pixels.items()}
+        atomic_json_write(png_path, pixel_data)
 
     # Save schema JSON with VQA ground truth
     schema_data = schema.to_dict()
@@ -518,8 +519,7 @@ def save_render_to_file(
         "pixel_count": len(pixels),
     }
 
-    with open(json_path, "w") as f:
-        json.dump(schema_data, f, indent=2)
+    atomic_json_write(json_path, schema_data, indent=2)
 
     return png_path, json_path
 

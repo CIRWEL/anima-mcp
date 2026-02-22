@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, TYPE_CHECKING
 import json
 
+from .atomic_write import atomic_json_write
 from .self_schema import SelfSchema, SchemaNode, SchemaEdge, extract_self_schema
 
 if TYPE_CHECKING:
@@ -201,7 +202,7 @@ class SchemaHub:
         }
 
         try:
-            self.persist_path.write_text(json.dumps(data, indent=2))
+            atomic_json_write(self.persist_path, data, indent=2)
             return True
         except Exception:
             return False

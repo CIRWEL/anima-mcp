@@ -23,6 +23,8 @@ import json
 from pathlib import Path
 import math
 
+from .atomic_write import atomic_json_write
+
 
 @dataclass
 class SelfBelief:
@@ -228,8 +230,7 @@ class SelfModel:
                 },
                 "last_saved": datetime.now().isoformat(),
             }
-            with open(self.persistence_path, 'w') as f:
-                json.dump(data, f, indent=2)
+            atomic_json_write(self.persistence_path, data, indent=2)
         except Exception as e:
             print(f"[SelfModel] Could not save: {e}")
 
