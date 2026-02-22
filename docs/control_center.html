@@ -1358,11 +1358,10 @@
             const trendIcon = data.stability_trend > 0.01 ? '&uarr;' : data.stability_trend < -0.01 ? '&darr;' : '&rarr;';
             const trendClass = data.stability_trend > 0.01 ? 'trend-up' : data.stability_trend < -0.01 ? 'trend-down' : 'trend-neutral';
 
-            const ageDays = data.alive_hours ? Math.round(data.alive_hours / 24) : 0;
             document.getElementById('learningContent').innerHTML = `
                 <div class="learning-stats">
                     <div class="learning-stat">
-                        <div class="learning-stat-value">${ageDays}d</div>
+                        <div class="learning-stat-value">${data.age_days || '?'}d</div>
                         <div class="learning-stat-label">Age</div>
                     </div>
                     <div class="learning-stat">

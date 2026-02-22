@@ -2782,7 +2782,7 @@ def run_http_server(host: str, port: int):
                 conn = sqlite3.connect(str(db_path))
 
                 # Get identity stats
-                identity = conn.execute("SELECT name, total_awakenings, total_alive_seconds FROM identity LIMIT 1").fetchone()
+                identity = conn.execute("SELECT name, total_awakenings, total_alive_seconds, born_at FROM identity LIMIT 1").fetchone()
 
                 # Get recent state history for learning trends
                 one_day_ago = (datetime.now() - timedelta(hours=24)).isoformat()
@@ -2816,11 +2816,19 @@ def run_http_server(host: str, port: int):
                 stability_trend = (newer_avg or 0) - (older_avg or 0) if older_avg else 0
 
                 alive_hours = identity[2] / 3600 if identity else 0
+                age_days = 0
+                if identity and identity[3]:
+                    try:
+                        born = datetime.fromisoformat(identity[3])
+                        age_days = (datetime.now() - born).days
+                    except Exception:
+                        pass
                 conn.close()
 
                 return JSONResponse({
                     "name": identity[0] if identity else "Unknown",
                     "awakenings": identity[1] if identity else 0,
+                    "age_days": age_days,
                     "alive_hours": round(alive_hours, 1),
                     "samples_24h": sample_count_24h,
                     "avg_warmth": round(avg_warmth, 3),
