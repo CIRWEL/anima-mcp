@@ -151,6 +151,69 @@ Goals are **data-grounded** — they emerge from Lumen's actual experience:
 
 **On achievement:** Records a memory via `_record_memory()` and posts an observation.
 
+### Schema Hub (Unified Self-Model)
+
+`schema_hub.py` is the central orchestrator of Lumen's self-understanding. It implements the "circulation" principle: Schema → History → Trajectory → feeds back into Schema.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        SchemaHub                            │
+│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌─────────────┐ │
+│  │ Identity │  │  Growth  │  │SelfModel │  │AnimaHistory │ │
+│  └────┬─────┘  └────┬─────┘  └────┬─────┘  └──────┬──────┘ │
+│       └─────────────┴──────┬──────┴───────────────┘        │
+│                            ▼                               │
+│                    ┌──────────────┐                        │
+│                    │ Schema(t)    │◄──── trajectory        │
+│                    │ current snap │      insights fed      │
+│                    └──────┬───────┘      back as nodes     │
+│              ┌────────────┼────────────┐                   │
+│              ▼            ▼            ▼                   │
+│        ┌─────────┐  ┌──────────┐  ┌─────────┐             │
+│        │ Persist │  │ History  │  │Trajectory│             │
+│        │ (disk)  │  │ (ring)   │  │ Compute  │             │
+│        └─────────┘  └──────────┘  └─────────┘             │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key concepts:**
+
+| Concept | Description |
+|---------|-------------|
+| **Circulation** | Schema history → Trajectory → Trajectory nodes → Next schema |
+| **Kintsugi gaps** | Discontinuities become visible structure, not hidden |
+| **Identity texture** | alive_ratio, awakenings, age as meta-nodes |
+| **Semantic edges** | Trajectory nodes connect back to anima dimensions |
+
+**Schema enrichment pipeline:**
+
+1. `extract_self_schema()` — base schema from all systems
+2. `_inject_identity_enrichment()` — add meta nodes (exist%, wakes, age)
+3. `_inject_gap_texture()` — add gap duration/delta if waking from gap
+4. History append + trajectory recompute (every 20 schemas)
+5. `_inject_trajectory_feedback()` — add maturity, attractor, stability nodes
+
+**Meta nodes added by SchemaHub:**
+
+| Node | Type | Source |
+|------|------|--------|
+| `meta_existence_ratio` | meta | identity.alive_ratio() — presence texture |
+| `meta_awakening_count` | meta | identity.total_awakenings — return count |
+| `meta_age_days` | meta | identity.age_seconds() / 86400 |
+| `meta_gap_duration` | meta | Gap handling — time since last schema |
+| `meta_state_delta` | meta | Gap handling — anima change magnitude |
+| `traj_identity_maturity` | trajectory | observation_count / 50 |
+| `traj_attractor_position` | trajectory | Mean anima center (where Lumen "rests") |
+| `traj_stability_score` | trajectory | 1 - variance (how stable the attractor) |
+
+**Lifecycle integration:**
+
+- `on_wake()` called during server startup — computes gap delta
+- `compose_schema()` replaces direct `extract_self_schema()` calls
+- `persist_schema()` called during sleep — saves to `~/.anima/last_schema.json`
+
+**Design doc:** `docs/plans/2026-02-22-schema-hub-design.md`
+
 ### Self-Reflection & Self-Knowledge
 
 `self_reflection.py` runs during the `reflect()` cycle (`REFLECTION_INTERVAL = 720` iter, ~24min). It discovers insights from multiple sources:
