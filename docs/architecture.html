@@ -29,6 +29,7 @@
             --accent-anima: #f0b87a;
             --accent-eisv: #7ecf8b;
             --accent-gov: #7ecf8b;
+            --accent-schema: #e8c87c;
         }
 
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -209,6 +210,29 @@
         }
         .footer-nav a:hover { color: rgba(255,255,255,0.6); }
 
+        /* Schema Hub circulation */
+        .schema-circulation {
+            display: flex; align-items: center; justify-content: center;
+            gap: 6px; margin-bottom: 12px; font-family: var(--mono);
+            font-size: 10px; color: var(--text-dim);
+        }
+        .schema-arrow { color: var(--accent-schema); opacity: 0.6; }
+        .schema-nodes {
+            display: flex; flex-wrap: wrap; gap: 8px;
+        }
+        .schema-node {
+            display: flex; align-items: center; gap: 6px;
+            padding: 4px 10px; background: rgba(232,200,124,0.06);
+            border: 1px solid rgba(232,200,124,0.15); border-radius: 12px;
+        }
+        .schema-node-label {
+            font-size: 9px; color: var(--text-dim); font-family: var(--mono);
+            text-transform: uppercase; letter-spacing: 0.05em;
+        }
+        .schema-node-value {
+            font-size: 11px; color: var(--accent-schema); font-family: var(--mono);
+        }
+
         /* Error / loading */
         .loading-state {
             text-align: center; padding: 60px 20px; color: var(--text-dim);
@@ -308,6 +332,8 @@
                 ${renderNeural(d.neural)}
                 ${flowLine()}
                 ${renderAnima(d.anima, d.feeling)}
+                ${flowLine()}
+                ${renderSchemaHub(d.schema_hub, d.identity)}
                 ${flowLine()}
                 ${renderEISV(d.eisv)}
                 ${flowLine()}
@@ -416,6 +442,69 @@
             }
 
             return layerCard('\u27e1', 'Anima State', 'felt experience', c, bars + feelingHtml);
+        }
+
+        function renderSchemaHub(sh, identity) {
+            if (!sh && !identity) return '';
+            const c = 'var(--accent-schema)';
+
+            // Circulation diagram
+            const circulation = `
+                <div class="schema-circulation">
+                    <span>Schema</span>
+                    <span class="schema-arrow">\u2192</span>
+                    <span>History</span>
+                    <span class="schema-arrow">\u2192</span>
+                    <span>Trajectory</span>
+                    <span class="schema-arrow">\u2192</span>
+                    <span>Nodes</span>
+                    <span class="schema-arrow">\u21ba</span>
+                </div>`;
+
+            // Build nodes from available data
+            const nodes = [];
+
+            // Identity texture nodes
+            if (identity) {
+                if (identity.alive_ratio !== undefined) {
+                    nodes.push({ label: 'exist%', value: (identity.alive_ratio * 100).toFixed(0) + '%' });
+                }
+                if (identity.awakenings !== undefined) {
+                    nodes.push({ label: 'wakes', value: identity.awakenings });
+                }
+                if (identity.age_days !== undefined) {
+                    nodes.push({ label: 'age', value: identity.age_days.toFixed(0) + 'd' });
+                }
+            }
+
+            // Trajectory feedback nodes
+            if (sh && sh.trajectory) {
+                const t = sh.trajectory;
+                if (t.identity_maturity !== undefined) {
+                    nodes.push({ label: 'mature', value: (t.identity_maturity * 100).toFixed(0) + '%' });
+                }
+                if (t.attractor_magnitude !== undefined) {
+                    nodes.push({ label: 'rest', value: t.attractor_magnitude.toFixed(2) });
+                }
+                if (t.stability !== undefined) {
+                    nodes.push({ label: 'stable', value: (t.stability * 100).toFixed(0) + '%' });
+                }
+            }
+
+            // History info
+            if (sh && sh.history_size !== undefined) {
+                nodes.push({ label: 'history', value: `${sh.history_size}/${sh.history_max}` });
+            }
+
+            const nodesHtml = nodes.length > 0
+                ? `<div class="schema-nodes">${nodes.map(n =>
+                    `<div class="schema-node">
+                        <span class="schema-node-label">${n.label}</span>
+                        <span class="schema-node-value">${n.value}</span>
+                    </div>`).join('')}</div>`
+                : '<div style="font-size: 10px; color: var(--text-faint); font-family: var(--mono);">accumulating history...</div>';
+
+            return layerCard('\u222e', 'Schema Hub', 'circulation', c, circulation + nodesHtml);
         }
 
         function renderEISV(e) {
