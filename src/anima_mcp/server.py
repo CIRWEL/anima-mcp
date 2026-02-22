@@ -3050,6 +3050,35 @@ def run_http_server(host: str, port: int):
                         "age_days": round(identity.age_seconds() / 86400, 1),
                     }
 
+                # Schema Hub - trajectory and circulation data
+                schema_hub_data = {}
+                try:
+                    hub = _get_schema_hub()
+                    schema_hub_data = {
+                        "history_size": len(hub.schema_history),
+                        "history_max": hub.history_size,
+                        "has_trajectory": hub.last_trajectory is not None,
+                    }
+                    if hub.last_trajectory:
+                        traj = hub.last_trajectory
+                        schema_hub_data["trajectory"] = {
+                            "observation_count": traj.observation_count,
+                            "identity_maturity": round(min(1.0, traj.observation_count / 50), 3),
+                        }
+                        if traj.attractor and traj.attractor.get("center"):
+                            center = traj.attractor["center"]
+                            schema_hub_data["trajectory"]["attractor_magnitude"] = round(sum(center) / 4, 3)
+                        if traj.attractor and traj.attractor.get("variance"):
+                            variance = traj.attractor["variance"]
+                            schema_hub_data["trajectory"]["stability"] = round(max(0, 1 - sum(variance) * 10), 3)
+                    if hub.last_gap_delta:
+                        schema_hub_data["gap"] = {
+                            "duration_hours": round(hub.last_gap_delta.duration_seconds / 3600, 2),
+                            "was_gap": hub.last_gap_delta.was_gap,
+                        }
+                except Exception:
+                    pass
+
                 return JSONResponse({
                     "physical": physical,
                     "neural": neural,
@@ -3059,6 +3088,7 @@ def run_http_server(host: str, port: int):
                     "governance": governance_data,
                     "system": system,
                     "identity": identity_data,
+                    "schema_hub": schema_hub_data,
                     "mood": feeling.get("mood", "unknown"),
                 })
             except Exception as e:
