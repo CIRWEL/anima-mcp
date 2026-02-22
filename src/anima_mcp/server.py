@@ -3384,21 +3384,8 @@ def run_http_server(host: str, port: int):
         else:
             mcp_endpoint = streamable_mcp_asgi
 
-        # Handle /mcp (no trailing slash) directly to avoid Starlette's
-        # Mount 307 redirect. The 307 uses http:// behind ngrok (TLS
-        # termination), which breaks Claude.ai's MCP client.
-        async def mcp_no_slash(scope, receive, send):
-            """Forward /mcp to mcp_endpoint as /mcp/ (no redirect)."""
-            if scope.get("type") != "http":
-                return
-            inner = dict(scope)
-            inner["path"] = "/"
-            inner["root_path"] = scope.get("root_path", "") + "/mcp"
-            await mcp_endpoint(inner, receive, send)
-
         all_routes = [
             *_oauth_auth_routes,
-            Route("/mcp", app=mcp_no_slash),
             Mount("/mcp", app=mcp_endpoint),
             Route("/health", health_check, methods=["GET"]),
             Route("/health/detailed", rest_health_detailed, methods=["GET"]),
@@ -3417,7 +3404,19 @@ def run_http_server(host: str, port: int):
             Route("/layers", rest_layers, methods=["GET"]),
             Route("/architecture", rest_architecture_page, methods=["GET"]),
         ]
-        app = Starlette(routes=all_routes)
+        _inner_app = Starlette(routes=all_routes)
+
+        # Wrap app to rewrite /mcp → /mcp/ at the ASGI level.
+        # Starlette's Mount issues a 307 redirect for missing trailing slash,
+        # but behind ngrok the redirect uses http:// (wrong scheme) which
+        # breaks Claude.ai's MCP client. This avoids the redirect entirely.
+        async def _rewrite_mcp_slash(scope, receive, send):
+            if scope.get("type") == "http" and scope.get("path") == "/mcp":
+                scope = dict(scope)
+                scope["path"] = "/mcp/"
+            await _inner_app(scope, receive, send)
+
+        app = _rewrite_mcp_slash
         print("[Server] Starlette app created with all routes", file=sys.stderr, flush=True)
 
         # Start display loop before server runs
