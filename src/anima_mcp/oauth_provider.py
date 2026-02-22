@@ -30,6 +30,7 @@ class AuthCodeEntry:
     scopes: list[str]
     redirect_uri_provided_explicitly: bool = True
     created_at: float = field(default_factory=time.time)
+    expires_at: float = 0.0  # Set by provider on creation
     resource: str | None = None
 
     def is_expired(self, ttl: int = 300) -> bool:
@@ -109,6 +110,7 @@ class AnimaOAuthProvider:
             code_challenge=params.code_challenge,
             scopes=params.scopes or [],
             redirect_uri_provided_explicitly=params.redirect_uri_provided_explicitly,
+            expires_at=time.time() + self._auth_code_ttl,
             resource=params.resource,
         )
         self._auth_codes[code] = entry
