@@ -111,7 +111,7 @@ _led_proprioception: dict | None = None  # {brightness, expression_mode, is_danc
 # Warm start - last known anima state from before shutdown, used for first sense after wake
 _warm_start_anima: dict | None = None  # {warmth, clarity, stability, presence}
 # Gap awareness - set by startup learning, consumed by warm start and main loop
-_wake_gap: timedelta | None = None  # Time since last state_history row
+_wake_gap: timedelta | None = None  # Time since Lumen was last alive (heartbeat/sleep/state_history)
 _wake_recovery_cycles: int = 0  # Countdown for post-gap presence recovery arc
 _wake_recovery_total: int = 0  # Initial cycle count (for progress calculation)
 _wake_presence_floor: float = 0.3  # Lowest presence cap during recovery

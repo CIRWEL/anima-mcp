@@ -49,27 +49,56 @@ class AdaptiveLearner:
     
     def detect_gap(self) -> Optional[timedelta]:
         """
-        Detect time gap since last observation.
-        
+        Detect time gap since Lumen was last alive.
+
+        Uses the persisted heartbeat timestamp (updated every ~30s during
+        operation) or the most recent sleep event as the best estimate of
+        when Lumen was last running.  Falls back to state_history only if
+        neither source is available (legacy databases).
+
         Returns:
-            Time since last observation, or None if no observations exist
+            Time since Lumen was last alive, or None if no data exists
         """
         if not self.db_path.exists():
             return None
-        
+
         conn = self._connect()
+
+        # Best source: persisted heartbeat timestamp (accurate to ~30s)
+        try:
+            row = conn.execute(
+                "SELECT last_heartbeat_at FROM identity LIMIT 1"
+            ).fetchone()
+            if row and row["last_heartbeat_at"]:
+                last_alive = datetime.fromisoformat(row["last_heartbeat_at"])
+                return datetime.now() - last_alive
+        except Exception:
+            pass  # Column may not exist yet (pre-migration)
+
+        # Second best: most recent sleep event (graceful shutdown timestamp)
+        try:
+            row = conn.execute(
+                "SELECT timestamp FROM events WHERE event_type = 'sleep' "
+                "ORDER BY timestamp DESC LIMIT 1"
+            ).fetchone()
+            if row:
+                last_sleep = datetime.fromisoformat(row["timestamp"])
+                return datetime.now() - last_sleep
+        except Exception:
+            pass  # Events table may not exist
+
+        # Legacy fallback: state_history (sparse — only written by MCP handlers)
         row = conn.execute(
-            """SELECT timestamp FROM state_history 
-               ORDER BY timestamp DESC 
+            """SELECT timestamp FROM state_history
+               ORDER BY timestamp DESC
                LIMIT 1"""
         ).fetchone()
-        
+
         if row is None:
             return None
-        
+
         last_obs = datetime.fromisoformat(row["timestamp"])
-        gap = datetime.now() - last_obs
-        return gap
+        return datetime.now() - last_obs
     
     def get_recent_observations(
         self,

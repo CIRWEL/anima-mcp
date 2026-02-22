@@ -146,6 +146,13 @@ class IdentityStore:
             CREATE INDEX IF NOT EXISTS idx_drawing_history_time
                 ON drawing_history(timestamp DESC);
         """)
+
+        # Add last_heartbeat_at column (persists heartbeat timestamp for gap detection)
+        try:
+            conn.execute("ALTER TABLE identity ADD COLUMN last_heartbeat_at TEXT")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+
         conn.commit()
 
     def _recalculate_stats(self, conn: sqlite3.Connection, creature_id: str) -> tuple[int, float]:
@@ -332,10 +339,11 @@ class IdentityStore:
         remaining_seconds = (now - last_checkpoint).total_seconds()
 
         self._identity.total_alive_seconds += remaining_seconds
+        self._identity.last_heartbeat_at = now
 
         conn.execute(
-            "UPDATE identity SET total_alive_seconds = ? WHERE creature_id = ?",
-            (self._identity.total_alive_seconds, self._identity.creature_id)
+            "UPDATE identity SET total_alive_seconds = ?, last_heartbeat_at = ? WHERE creature_id = ?",
+            (self._identity.total_alive_seconds, now.isoformat(), self._identity.creature_id)
         )
 
         conn.execute(
@@ -560,8 +568,8 @@ class IdentityStore:
         self._identity.last_heartbeat_at = now
 
         conn.execute(
-            "UPDATE identity SET total_alive_seconds = ? WHERE creature_id = ?",
-            (self._identity.total_alive_seconds, self._identity.creature_id)
+            "UPDATE identity SET total_alive_seconds = ?, last_heartbeat_at = ? WHERE creature_id = ?",
+            (self._identity.total_alive_seconds, now.isoformat(), self._identity.creature_id)
         )
         conn.commit()
 
