@@ -1358,36 +1358,29 @@
             const trendIcon = data.stability_trend > 0.01 ? '&uarr;' : data.stability_trend < -0.01 ? '&darr;' : '&rarr;';
             const trendClass = data.stability_trend > 0.01 ? 'trend-up' : data.stability_trend < -0.01 ? 'trend-down' : 'trend-neutral';
 
+            const ageDays = data.alive_hours ? Math.round(data.alive_hours / 24) : 0;
             document.getElementById('learningContent').innerHTML = `
                 <div class="learning-stats">
                     <div class="learning-stat">
-                        <div class="learning-stat-value">${data.awakenings}</div>
-                        <div class="learning-stat-label">Awakenings</div>
+                        <div class="learning-stat-value">${ageDays}d</div>
+                        <div class="learning-stat-label">Age</div>
                     </div>
                     <div class="learning-stat">
                         <div class="learning-stat-value">${data.alive_hours}h</div>
                         <div class="learning-stat-label">Time Alive</div>
                     </div>
                     <div class="learning-stat">
-                        <div class="learning-stat-value">${data.samples_24h}</div>
+                        <div class="learning-stat-value">${data.samples_24h.toLocaleString()}</div>
                         <div class="learning-stat-label">Samples (24h)</div>
                     </div>
                 </div>
+                <div class="layer-header">24h Averages <span>— stability trend: <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span></span></div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; font-size: 0.85rem;">
                     <div style="color: #ff6b6b;">W: ${(data.avg_warmth * 100).toFixed(0)}%</div>
                     <div style="color: #4ecdc4;">C: ${(data.avg_clarity * 100).toFixed(0)}%</div>
                     <div style="color: #45b7d1;">S: ${(data.avg_stability * 100).toFixed(0)}%</div>
                     <div style="color: #96ceb4;">P: ${(data.avg_presence * 100).toFixed(0)}%</div>
                 </div>
-                <div style="text-align: center; margin-top: 10px; font-size: 0.9rem;">
-                    Stability Trend: <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span>
-                    <span style="color: var(--text-secondary); font-size: 0.8rem;">(24h average)</span>
-                </div>
-                ${data.recent_events && data.recent_events.length > 0 ? `
-                    <div style="margin-top: 15px; font-size: 0.8rem; color: var(--text-secondary);">
-                        Recent: ${data.recent_events.map(e => e.type).join(', ')}
-                    </div>
-                ` : ''}
             `;
         }
 

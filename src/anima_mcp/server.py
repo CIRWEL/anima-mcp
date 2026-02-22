@@ -2815,15 +2815,9 @@ def run_http_server(host: str, port: int):
                 ).fetchone()[0]
                 stability_trend = (newer_avg or 0) - (older_avg or 0) if older_avg else 0
 
-                # Get recent events
-                events = conn.execute(
-                    "SELECT event_type, timestamp FROM events ORDER BY timestamp DESC LIMIT 10"
-                ).fetchall()
-
                 alive_hours = identity[2] / 3600 if identity else 0
                 conn.close()
 
-                # Exact same format as message_server.py
                 return JSONResponse({
                     "name": identity[0] if identity else "Unknown",
                     "awakenings": identity[1] if identity else 0,
@@ -2834,7 +2828,6 @@ def run_http_server(host: str, port: int):
                     "avg_stability": round(avg_stability, 3),
                     "avg_presence": round(avg_presence, 3),
                     "stability_trend": round(stability_trend, 3),
-                    "recent_events": [{"type": e[0], "time": e[1]} for e in events[:5]]
                 })
             except Exception as e:
                 return JSONResponse({"error": str(e)}, status_code=500)
