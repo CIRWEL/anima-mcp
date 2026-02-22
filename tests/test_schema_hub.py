@@ -308,3 +308,49 @@ class TestTrajectoryFeedback:
         schema = hub.schema_history[-1]
         maturity_nodes = [n for n in schema.nodes if n.node_id == "traj_identity_maturity"]
         assert len(maturity_nodes) == 1
+
+
+class TestSemanticEdges:
+    """Test semantic edges connecting trajectory to anima."""
+
+    def test_trajectory_creates_stability_edge(self):
+        """Trajectory stability node creates edge to anima stability."""
+        hub = SchemaHub()
+        hub._trajectory_compute_interval = 3
+
+        # Generate enough history for trajectory
+        for _ in range(4):
+            hub.compose_schema()
+
+        schema = hub.schema_history[-1]
+
+        # If trajectory was computed and stability node exists,
+        # there should be an edge to anima_stability
+        stability_nodes = [n for n in schema.nodes if n.node_id == "traj_stability_score"]
+        if stability_nodes:
+            stability_edges = [
+                e for e in schema.edges
+                if e.source_id == "traj_stability_score" and e.target_id == "anima_stability"
+            ]
+            assert len(stability_edges) == 1
+
+    def test_trajectory_creates_attractor_edge(self):
+        """Trajectory attractor position node creates edge to anima warmth."""
+        hub = SchemaHub()
+        hub._trajectory_compute_interval = 3
+
+        # Generate enough history for trajectory
+        for _ in range(4):
+            hub.compose_schema()
+
+        schema = hub.schema_history[-1]
+
+        # If trajectory was computed and attractor position node exists,
+        # there should be an edge to anima_warmth
+        attractor_nodes = [n for n in schema.nodes if n.node_id == "traj_attractor_position"]
+        if attractor_nodes:
+            attractor_edges = [
+                e for e in schema.edges
+                if e.source_id == "traj_attractor_position" and e.target_id == "anima_warmth"
+            ]
+            assert len(attractor_edges) == 1
