@@ -2786,28 +2786,34 @@ def run_http_server(host: str, port: int):
 
                 # Get recent state history for learning trends
                 one_day_ago = (datetime.now() - timedelta(hours=24)).isoformat()
-                recent_states = conn.execute(
-                    "SELECT warmth, clarity, stability, presence, timestamp FROM state_history WHERE timestamp > ? ORDER BY timestamp DESC LIMIT 100",
+
+                # Real count (no limit)
+                sample_count_24h = conn.execute(
+                    "SELECT COUNT(*) FROM state_history WHERE timestamp > ?",
                     (one_day_ago,)
-                ).fetchall()
+                ).fetchone()[0]
 
-                # Calculate averages and trends
-                if recent_states:
-                    avg_warmth = sum(s[0] for s in recent_states) / len(recent_states)
-                    avg_clarity = sum(s[1] for s in recent_states) / len(recent_states)
-                    avg_stability = sum(s[2] for s in recent_states) / len(recent_states)
-                    avg_presence = sum(s[3] for s in recent_states) / len(recent_states)
+                # Averages via SQL (all samples, not capped)
+                avgs = conn.execute(
+                    "SELECT AVG(warmth), AVG(clarity), AVG(stability), AVG(presence) FROM state_history WHERE timestamp > ?",
+                    (one_day_ago,)
+                ).fetchone()
+                avg_warmth = avgs[0] or 0
+                avg_clarity = avgs[1] or 0
+                avg_stability = avgs[2] or 0
+                avg_presence = avgs[3] or 0
 
-                    mid = len(recent_states) // 2
-                    if mid > 0:
-                        first_half = recent_states[mid:]
-                        second_half = recent_states[:mid]
-                        stability_trend = sum(s[2] for s in second_half) / len(second_half) - sum(s[2] for s in first_half) / len(first_half)
-                    else:
-                        stability_trend = 0
-                else:
-                    avg_warmth = avg_clarity = avg_stability = avg_presence = 0
-                    stability_trend = 0
+                # Stability trend: compare first half vs second half of 24h window
+                twelve_hours_ago = (datetime.now() - timedelta(hours=12)).isoformat()
+                older_avg = conn.execute(
+                    "SELECT AVG(stability) FROM state_history WHERE timestamp > ? AND timestamp <= ?",
+                    (one_day_ago, twelve_hours_ago)
+                ).fetchone()[0]
+                newer_avg = conn.execute(
+                    "SELECT AVG(stability) FROM state_history WHERE timestamp > ?",
+                    (twelve_hours_ago,)
+                ).fetchone()[0]
+                stability_trend = (newer_avg or 0) - (older_avg or 0) if older_avg else 0
 
                 # Get recent events
                 events = conn.execute(
@@ -2822,7 +2828,7 @@ def run_http_server(host: str, port: int):
                     "name": identity[0] if identity else "Unknown",
                     "awakenings": identity[1] if identity else 0,
                     "alive_hours": round(alive_hours, 1),
-                    "samples_24h": len(recent_states),
+                    "samples_24h": sample_count_24h,
                     "avg_warmth": round(avg_warmth, 3),
                     "avg_clarity": round(avg_clarity, 3),
                     "avg_stability": round(avg_stability, 3),
