@@ -54,12 +54,5 @@ display:
   breathing_enabled: true
   breathing_cycle: 8.0  # seconds
   breathing_variation: 0.1  # ±10%
-  # Enhanced LED features
-  pulsing_enabled: true  # Fast pulsing for low clarity/instability
   color_transitions_enabled: true  # Smooth color changes
   pattern_mode: "standard"  # standard, minimal, expressive, alert
-  auto_brightness_enabled: true  # Auto-adjust based on ambient light
-  auto_brightness_min: 0.15  # Minimum brightness (bright rooms)
-  auto_brightness_max: 0.5   # Maximum brightness (dark rooms)
-  pulsing_threshold_clarity: 0.4  # Clarity threshold for pulsing
-  pulsing_threshold_stability: 0.4  # Stability threshold for pulsing

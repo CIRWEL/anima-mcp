@@ -7,7 +7,7 @@ Each place_mark call draws an entire shape (50-3400 pixels).
 This contrasts with the granular eras that place 1-15 pixels per mark.
 
 Preserved as a pluggable era for rollback. The original code snapshot
-lives in art_movements/geometric.py as a historical capsule.
+was in art_movements/geometric.py (removed, see git history at ed0067d).
 """
 
 import math

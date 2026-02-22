@@ -37,7 +37,6 @@ import time
 import os
 import signal
 import sys
-import subprocess
 import asyncio
 from datetime import datetime
 from typing import Optional
@@ -118,71 +117,7 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-def check_for_running_anima_server():
-    """
-    Check if anima --sse server is already running.
-    
-    With Phase 2 Hardware Broker Pattern, both can run simultaneously
-    if the MCP server is using shared memory. This check now warns
-    but allows continuation if shared memory is available.
-    """
-    try:
-        # Check for anima --sse process
-        result = subprocess.run(
-            ['pgrep', '-f', 'anima --sse'],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.returncode == 0:
-            pids = result.stdout.strip().split('\n')
-            pids = [p for p in pids if p]
-            if pids:
-                # Check if shared memory is available (Redis or file)
-                # This indicates Phase 2+ broker pattern is active
-                from pathlib import Path
-                
-                # Check for file-based shared memory (simpler, no import needed)
-                shm_file = Path("/dev/shm/anima_state.json") if Path("/dev/shm").exists() else Path("/tmp/anima_state.json")
-                file_exists = shm_file.exists()
-                
-                # Try to check Redis (if available)
-                redis_available = False
-                try:
-                    import redis
-                    r = redis.Redis(host='localhost', port=6379, socket_connect_timeout=0.5)
-                    redis_available = r.ping() and r.exists("anima:state")
-                except:
-                    pass
-                
-                if redis_available or file_exists:
-                    print("\n" + "="*70)
-                    print("ℹ️  INFO: Main anima MCP server is running")
-                    print("="*70)
-                    print(f"Found running process(es): {', '.join(pids)}")
-                    print(f"\n✅ Shared memory detected - both scripts can run safely!")
-                    print("The MCP server will read from shared memory (no I2C conflicts).")
-                    print("="*70 + "\n")
-                else:
-                    print("\n" + "="*70)
-                    print("ℹ️  INFO: Main anima MCP server is running")
-                    print("="*70)
-                    print(f"Found running process(es): {', '.join(pids)}")
-                    print("\nShared memory not yet populated (broker just started or restart).")
-                    print("Broker will write state soon; MCP server will read from shared memory.")
-                    print("If you see I2C errors, ensure MCP server uses Phase 2 (shared memory).")
-                    print("="*70 + "\n")
-                    # Don't exit - allow user to decide, but downgrade to INFO (common on restart)
-    except FileNotFoundError:
-        # pgrep not available (shouldn't happen on Pi, but handle gracefully)
-        pass
-    except Exception as e:
-        print(f"[StableCreature] Warning: Could not check for running anima server: {e}")
-
 def run_creature():
-    # Check for conflicts BEFORE initializing sensors
-    check_for_running_anima_server()
-    
     print("[StableCreature] Starting up...")
     
     # Initialize components with error handling

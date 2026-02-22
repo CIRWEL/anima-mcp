@@ -137,14 +137,8 @@ class DisplayConfig:
     breathing_enabled: bool = True
     breathing_cycle: float = 12.0  # Match design doc's 12s cycle
     breathing_variation: float = 0.1
-    pulsing_enabled: bool = False  # Removed — was for low clarity/stability rapid pulse
     color_transitions_enabled: bool = True
     pattern_mode: str = "standard"  # Only "standard" supported now
-    auto_brightness_enabled: bool = False  # Removed — manual control only
-    auto_brightness_min: float = 0.00
-    auto_brightness_max: float = 0.12
-    pulsing_threshold_clarity: float = 0.4
-    pulsing_threshold_stability: float = 0.4
 
 
 @dataclass
