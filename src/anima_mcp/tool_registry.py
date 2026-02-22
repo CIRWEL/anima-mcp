@@ -585,9 +585,29 @@ def get_fastmcp() -> "FastMCP":
     """Get or create the FastMCP server instance."""
     global _fastmcp
     if _fastmcp is None and HAS_FASTMCP:
+        # --- OAuth 2.1 configuration (optional, enabled by env var) ---
+        oauth_issuer_url = os.environ.get("ANIMA_OAUTH_ISSUER_URL")
+        oauth_provider = None
+        auth_settings = None
+
+        if oauth_issuer_url:
+            from mcp.server.auth.settings import AuthSettings
+            from .oauth_provider import AnimaOAuthProvider
+
+            oauth_secret = os.environ.get("ANIMA_OAUTH_SECRET")
+            auto_approve = os.environ.get("ANIMA_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
+            oauth_provider = AnimaOAuthProvider(secret=oauth_secret, auto_approve=auto_approve)
+            auth_settings = AuthSettings(
+                issuer_url=oauth_issuer_url,
+                resource_server_url=oauth_issuer_url,
+            )
+            print(f"[FastMCP] OAuth 2.1 enabled (issuer: {oauth_issuer_url})", file=sys.stderr, flush=True)
+
         _fastmcp = FastMCP(
             name="anima-mcp",
             host="0.0.0.0",  # Bind to all interfaces
+            auth_server_provider=oauth_provider,
+            auth=auth_settings,
             transport_security=TransportSecuritySettings(
                 enable_dns_rebinding_protection=True,
                 allowed_hosts=[
