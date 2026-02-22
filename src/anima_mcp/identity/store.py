@@ -594,7 +594,7 @@ class IdentityStore:
 
         return seconds_since_checkpoint
 
-    def recover_lost_time(self, max_gap_seconds: float = 30.0) -> float:
+    def recover_lost_time(self, max_gap_seconds: float = 600.0) -> float:
         """
         Recover alive time from state_history that wasn't captured due to crashes.
 
@@ -603,8 +603,9 @@ class IdentityStore:
 
         Args:
             max_gap_seconds: Maximum gap between state records to consider continuous
-                            (default: 30s, matching heartbeat interval — under CPU
-                            load, state recording can stall for several seconds)
+                            (default: 600s/10min — state recording intervals vary from
+                            3s to 10min depending on load; gaps >10min indicate actual
+                            downtime, not just sparse recording)
 
         Returns:
             Seconds of recovered time added to total_alive_seconds
