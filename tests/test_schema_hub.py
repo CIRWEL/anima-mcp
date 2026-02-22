@@ -264,3 +264,47 @@ class TestGapHandling:
         delta_nodes = [n for n in schema.nodes if n.node_id == "meta_state_delta"]
         assert len(delta_nodes) == 1
         assert delta_nodes[0].raw_value.get("warmth", 0) > 0
+
+
+class TestTrajectoryFeedback:
+    """Test trajectory computation from schema history and feedback to schema."""
+
+    def test_trajectory_computed_after_threshold(self):
+        """Trajectory is computed after trajectory_compute_interval schemas."""
+        hub = SchemaHub()
+        hub._trajectory_compute_interval = 5  # Lower for testing
+
+        # Add schemas until threshold
+        for _ in range(6):
+            hub.compose_schema()
+
+        # Should have triggered trajectory computation
+        assert hub.last_trajectory is not None
+
+    def test_trajectory_nodes_injected(self):
+        """Trajectory-derived nodes appear in schema after computation."""
+        hub = SchemaHub()
+        hub._trajectory_compute_interval = 3
+
+        # Generate enough history
+        for _ in range(4):
+            hub.compose_schema()
+
+        # Get latest schema
+        schema = hub.schema_history[-1]
+
+        # Should have trajectory-derived nodes
+        traj_nodes = [n for n in schema.nodes if n.node_id.startswith("traj_")]
+        assert len(traj_nodes) > 0
+
+    def test_identity_maturity_node_exists(self):
+        """identity_maturity trajectory node exists after computation."""
+        hub = SchemaHub()
+        hub._trajectory_compute_interval = 3
+
+        for _ in range(4):
+            hub.compose_schema()
+
+        schema = hub.schema_history[-1]
+        maturity_nodes = [n for n in schema.nodes if n.node_id == "traj_identity_maturity"]
+        assert len(maturity_nodes) == 1

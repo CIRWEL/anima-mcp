@@ -108,10 +108,15 @@ class SchemaHub:
         # 3. Inject gap texture (if we just woke from a gap)
         schema = self._inject_gap_texture(schema)
 
-        # 4. Add to history
+        # 4. Add to history (before trajectory so it includes this schema)
         self.schema_history.append(schema)
 
-        # 5. TODO: Inject trajectory feedback nodes (Task 6)
+        # 5. Periodically recompute trajectory from history
+        if len(self.schema_history) % self._trajectory_compute_interval == 0:
+            self.last_trajectory = self._compute_trajectory_from_history()
+
+        # 6. Inject trajectory feedback nodes
+        schema = self._inject_trajectory_feedback(schema)
 
         return schema
 
@@ -368,5 +373,129 @@ class SchemaHub:
         # Clear after injection
         self.last_gap_delta = None
         self._previous_schema = None
+
+        return schema
+
+    def _compute_trajectory_from_history(self) -> Optional['TrajectorySignature']:
+        """
+        Compute trajectory signature from schema history.
+
+        Instead of computing from raw components, we derive trajectory
+        from the schema sequence - this closes the circulation loop.
+        """
+        if len(self.schema_history) < 10:
+            # Not enough history, but still return a minimal trajectory
+            # based on observation count for identity_maturity
+            try:
+                from .trajectory import TrajectorySignature
+            except ImportError:
+                return None
+
+            return TrajectorySignature(
+                observation_count=len(self.schema_history),
+            )
+
+        try:
+            from .trajectory import TrajectorySignature
+        except ImportError:
+            return None
+
+        # Extract anima values from schema history for attractor computation
+        anima_values = []
+        for schema in self.schema_history:
+            values = {}
+            for dim in ["warmth", "clarity", "stability", "presence"]:
+                node = next((n for n in schema.nodes if n.node_id == f"anima_{dim}"), None)
+                if node:
+                    values[dim] = node.value
+            if len(values) == 4:
+                anima_values.append(values)
+
+        attractor = None
+        if len(anima_values) >= 10:
+            # Compute attractor (mean and variance)
+            import statistics
+            attractor = {
+                "center": [
+                    statistics.mean(v["warmth"] for v in anima_values),
+                    statistics.mean(v["clarity"] for v in anima_values),
+                    statistics.mean(v["stability"] for v in anima_values),
+                    statistics.mean(v["presence"] for v in anima_values),
+                ],
+                "variance": [
+                    statistics.variance(v["warmth"] for v in anima_values) if len(anima_values) > 1 else 0,
+                    statistics.variance(v["clarity"] for v in anima_values) if len(anima_values) > 1 else 0,
+                    statistics.variance(v["stability"] for v in anima_values) if len(anima_values) > 1 else 0,
+                    statistics.variance(v["presence"] for v in anima_values) if len(anima_values) > 1 else 0,
+                ],
+                "n_observations": len(anima_values),
+            }
+
+        # Extract belief patterns from latest schema
+        beliefs = {"values": [], "confidences": []}
+        latest = self.schema_history[-1]
+        for node in latest.nodes:
+            if node.node_type == "belief" and node.raw_value:
+                beliefs["values"].append(node.value)
+                beliefs["confidences"].append(node.raw_value.get("confidence", 0) if isinstance(node.raw_value, dict) else 0)
+
+        # Create signature
+        signature = TrajectorySignature(
+            attractor=attractor,
+            beliefs=beliefs,
+            preferences={},
+            recovery={},
+            relational={},
+            observation_count=len(self.schema_history),
+        )
+
+        return signature
+
+    def _inject_trajectory_feedback(self, schema: SelfSchema) -> SelfSchema:
+        """
+        Inject trajectory-derived nodes into schema.
+
+        The trajectory feeds back: schema -> history -> trajectory -> schema nodes.
+        """
+        if not self.last_trajectory:
+            return schema
+
+        traj = self.last_trajectory
+
+        # Identity maturity (based on observation count)
+        obs_count = traj.observation_count
+        maturity = min(1.0, obs_count / 50)  # 50 observations = fully mature
+        schema.nodes.append(SchemaNode(
+            node_id="traj_identity_maturity",
+            node_type="trajectory",
+            label="Mature",
+            value=maturity,
+            raw_value={"observation_count": obs_count},
+        ))
+
+        # Attractor position (where Lumen "rests")
+        if traj.attractor and traj.attractor.get("center"):
+            center = traj.attractor["center"]
+            center_magnitude = sum(center) / 4
+            schema.nodes.append(SchemaNode(
+                node_id="traj_attractor_position",
+                node_type="trajectory",
+                label="Rest",
+                value=center_magnitude,
+                raw_value={"center": center},
+            ))
+
+        # Stability (inverse of variance)
+        if traj.attractor and traj.attractor.get("variance"):
+            variance = traj.attractor["variance"]
+            total_var = sum(variance)
+            stability = max(0, 1 - total_var * 10)
+            schema.nodes.append(SchemaNode(
+                node_id="traj_stability_score",
+                node_type="trajectory",
+                label="Stable",
+                value=stability,
+                raw_value={"variance": variance},
+            ))
 
         return schema
