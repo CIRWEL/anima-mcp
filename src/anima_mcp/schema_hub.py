@@ -104,11 +104,13 @@ class SchemaHub:
         # 2. Inject identity enrichment nodes
         schema = self._inject_identity_enrichment(schema, identity)
 
-        # 3. Add to history
+        # 3. Inject gap texture (if we just woke from a gap)
+        schema = self._inject_gap_texture(schema)
+
+        # 4. Add to history
         self.schema_history.append(schema)
 
-        # 4. TODO: Inject trajectory feedback nodes (Task 6)
-        # 5. TODO: Inject gap texture nodes (Task 5)
+        # 5. TODO: Inject trajectory feedback nodes (Task 6)
 
         return schema
 
@@ -245,3 +247,112 @@ class SchemaHub:
             )
         except Exception:
             return None
+
+    def compute_gap_delta(self, current_schema: SelfSchema) -> Optional[GapDelta]:
+        """
+        Compute delta between current schema and previous persisted schema.
+
+        The gap becomes visible structure - kintsugi seams.
+        """
+        previous = self.load_previous_schema()
+        if previous is None:
+            return None
+
+        # Calculate duration
+        duration = (current_schema.timestamp - previous.timestamp).total_seconds()
+
+        # Calculate anima deltas
+        anima_delta = {}
+        for dim in ["warmth", "clarity", "stability", "presence"]:
+            prev_node = next((n for n in previous.nodes if n.node_id == f"anima_{dim}"), None)
+            curr_node = next((n for n in current_schema.nodes if n.node_id == f"anima_{dim}"), None)
+            if prev_node and curr_node:
+                anima_delta[dim] = abs(curr_node.value - prev_node.value)
+
+        # Track beliefs that may have decayed
+        beliefs_decayed = [
+            n.node_id.replace("belief_", "")
+            for n in previous.nodes
+            if n.node_type == "belief"
+        ]
+
+        return GapDelta(
+            duration_seconds=duration,
+            anima_delta=anima_delta,
+            beliefs_decayed=beliefs_decayed,
+            was_gap=duration > 60,  # > 1 minute counts as gap
+        )
+
+    def on_wake(self) -> Optional[GapDelta]:
+        """
+        Called when Lumen wakes up after a gap.
+
+        Loads previous schema, computes gap delta, stores for injection
+        into next schema composition.
+        """
+        previous = self.load_previous_schema()
+        if previous is None:
+            self.last_gap_delta = None
+            return None
+
+        # Create a temporary current schema just for delta computation
+        temp_schema = SelfSchema(timestamp=datetime.now(), nodes=[], edges=[])
+
+        # Compute basic delta
+        duration = (temp_schema.timestamp - previous.timestamp).total_seconds()
+
+        if duration < 60:  # Less than 1 minute isn't really a gap
+            self.last_gap_delta = None
+            return None
+
+        self.last_gap_delta = GapDelta(
+            duration_seconds=duration,
+            anima_delta={},  # Will be filled on first real compose
+            beliefs_decayed=[],
+            was_gap=True,
+        )
+
+        return self.last_gap_delta
+
+    def _inject_gap_texture(self, schema: SelfSchema) -> SelfSchema:
+        """
+        Inject gap texture nodes if there was a recent gap.
+
+        The gap becomes visible in the schema - not a feeling imposed,
+        but structure that reflects discontinuity.
+        """
+        if not self.last_gap_delta or not self.last_gap_delta.was_gap:
+            return schema
+
+        delta = self.last_gap_delta
+
+        # Gap duration node
+        # Normalize: 24 hours = 1.0
+        duration_hours = delta.duration_seconds / 3600
+        normalized = min(1.0, duration_hours / 24)
+        schema.nodes.append(SchemaNode(
+            node_id="meta_gap_duration",
+            node_type="meta",
+            label="Gap",
+            value=normalized,
+            raw_value={
+                "duration_seconds": delta.duration_seconds,
+                "duration_hours": duration_hours,
+            },
+        ))
+
+        # State delta magnitude (how much changed during gap)
+        if delta.anima_delta:
+            total_delta = sum(delta.anima_delta.values())
+            schema.nodes.append(SchemaNode(
+                node_id="meta_state_delta",
+                node_type="meta",
+                label="Delta",
+                value=min(1.0, total_delta),
+                raw_value=delta.anima_delta,
+            ))
+
+        # Clear gap delta after injection (one-time)
+        self.last_gap_delta = None
+
+        return schema
