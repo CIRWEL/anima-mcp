@@ -20,6 +20,8 @@ class MockSensors(SensorBackend):
         self._base_temp = 22.0
         self._base_humidity = 45.0
         self._base_light = 300.0
+        # Prime psutil cpu_percent so first real call returns meaningful data
+        psutil.cpu_percent(interval=None)
 
     def read(self) -> SensorReadings:
         """Read simulated sensors with realistic variation."""
@@ -36,7 +38,7 @@ class MockSensors(SensorBackend):
         self._base_light = max(0, min(1000, self._base_light))
 
         # Real system stats (these are actually from the Mac)
-        cpu_percent = psutil.cpu_percent(interval=0.1)
+        cpu_percent = psutil.cpu_percent(interval=None)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 

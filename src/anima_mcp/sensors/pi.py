@@ -39,6 +39,8 @@ class PiSensors(SensorBackend):
         self._bmp280 = None
         self._last_pressure = None
         self._init_sensors()
+        # Prime psutil cpu_percent so first real call returns meaningful data
+        psutil.cpu_percent(interval=None)
 
     def _init_sensors(self):
         """Initialize available sensors with retry logic."""
@@ -214,7 +216,7 @@ class PiSensors(SensorBackend):
                 self._last_pressure = pressure
 
         # System stats
-        cpu_percent = psutil.cpu_percent(interval=0.1)
+        cpu_percent = psutil.cpu_percent(interval=None)
         memory = psutil.virtual_memory()
         disk = psutil.disk_usage("/")
 

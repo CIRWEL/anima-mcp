@@ -49,6 +49,8 @@ class ComputationalNeuralSensor:
         self._last_disk_io = None
         self._last_sample_time: Optional[float] = None
         self.drawing_phase: Optional[str] = None  # Set by screen renderer
+        # Prime psutil cpu_percent so first real call returns meaningful data
+        psutil.cpu_percent(interval=None)
 
     def get_neural_state(self, cpu_percent: Optional[float] = None,
                         memory_percent: Optional[float] = None,
@@ -68,7 +70,7 @@ class ComputationalNeuralSensor:
 
         # Get current metrics
         if cpu_percent is None:
-            cpu_percent = psutil.cpu_percent(interval=0.1)
+            cpu_percent = psutil.cpu_percent(interval=None)
         if memory_percent is None:
             memory_percent = psutil.virtual_memory().percent
 
