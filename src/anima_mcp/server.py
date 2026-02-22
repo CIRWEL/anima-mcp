@@ -1,5 +1,5 @@
 """
-Anima MCP Server
+Anima MCP Server — Lumen's nervous system.
 
 Minimal tools for a persistent creature:
 - get_state: Current anima (self-sense) + identity
