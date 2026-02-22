@@ -1,7 +1,7 @@
 """Tests for SchemaHub - the unified self-model orchestrator."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta
 from anima_mcp.schema_hub import SchemaHub
 from anima_mcp.self_schema import SelfSchema
 
@@ -163,3 +163,66 @@ class TestIdentityEnrichment:
         age_nodes = [n for n in schema.nodes if n.node_id == "meta_age_days"]
         assert len(age_nodes) == 1
         assert abs(age_nodes[0].raw_value - 42) < 0.1
+
+
+class TestGapHandling:
+    """Test gap detection and texture nodes."""
+
+    def test_compute_gap_delta_returns_none_without_previous(self, tmp_path):
+        """compute_gap_delta returns None if no previous schema."""
+        persist_path = tmp_path / "last_schema.json"
+        hub = SchemaHub(persist_path=persist_path)
+        schema = hub.compose_schema()
+        delta = hub.compute_gap_delta(schema)
+        assert delta is None
+
+    def test_compute_gap_delta_calculates_duration(self, tmp_path):
+        """compute_gap_delta calculates gap duration."""
+        persist_path = tmp_path / "last_schema.json"
+        hub = SchemaHub(persist_path=persist_path)
+
+        # Create and persist a schema
+        hub.compose_schema()
+        hub.persist_schema()
+
+        # Simulate time passing by modifying persisted timestamp
+        import json
+        data = json.loads(persist_path.read_text())
+        old_time = datetime.fromisoformat(data["timestamp"]) - timedelta(hours=2)
+        data["timestamp"] = old_time.isoformat()
+        persist_path.write_text(json.dumps(data))
+
+        # New hub loads previous, computes delta
+        hub2 = SchemaHub(persist_path=persist_path)
+        hub2.load_previous_schema()  # Load into hub
+        current = hub2.compose_schema()
+
+        # The delta should be computed during on_wake
+        hub2.on_wake()
+        assert hub2.last_gap_delta is not None
+        assert hub2.last_gap_delta.duration_seconds > 7000  # ~2 hours
+
+    def test_on_wake_adds_gap_texture_nodes(self, tmp_path):
+        """on_wake adds gap_duration meta-node to next schema."""
+        persist_path = tmp_path / "last_schema.json"
+        hub = SchemaHub(persist_path=persist_path)
+
+        # Create and persist
+        hub.compose_schema()
+        hub.persist_schema()
+
+        # Modify timestamp to simulate gap
+        import json
+        data = json.loads(persist_path.read_text())
+        old_time = datetime.fromisoformat(data["timestamp"]) - timedelta(hours=1)
+        data["timestamp"] = old_time.isoformat()
+        persist_path.write_text(json.dumps(data))
+
+        # New hub wakes up
+        hub2 = SchemaHub(persist_path=persist_path)
+        hub2.on_wake()
+
+        # Next schema should have gap texture
+        schema = hub2.compose_schema()
+        gap_nodes = [n for n in schema.nodes if n.node_id == "meta_gap_duration"]
+        assert len(gap_nodes) == 1
