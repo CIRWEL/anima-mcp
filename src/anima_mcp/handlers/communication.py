@@ -220,7 +220,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                         agent_id="human",
                         agent_name="human",
                         positive=True,
-                        topic=message[:50] if len(message) > 10 else None
+                        topic=message[:50] if len(message) > 10 else None,
+                        source=source,
                     )
                 except Exception:
                     pass  # Non-fatal
@@ -280,17 +281,17 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     validated_question_id = responds_to
 
             msg = add_agent_message(message, agent_name, responds_to=validated_question_id or responds_to)
-            # Track relationship with agent
+            # Track relationship with agent (identity normalized inside record_interaction)
             if _growth:
                 try:
-                    # Use agent_name as ID (agents have consistent names)
                     is_gift = responds_to is not None  # Answering a question is a gift
                     _growth.record_interaction(
                         agent_id=agent_name,
                         agent_name=agent_name,
                         positive=True,
                         topic=message[:50] if len(message) > 10 else None,
-                        gift=is_gift
+                        gift=is_gift,
+                        source=source,
                     )
                 except Exception:
                     pass  # Non-fatal

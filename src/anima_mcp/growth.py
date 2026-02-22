@@ -61,6 +61,18 @@ class VisitorFrequency(Enum):
         return legacy_map.get(legacy_value, cls.NEW)
 
 
+class VisitorType(str, Enum):
+    """What kind of visitor — determines relationship semantics.
+
+    PERSON: Persistent human with memory on both sides. Real relationship.
+    SELF: Lumen's self-dialogue. Real relationship (both sides have memory).
+    AGENT: Ephemeral coding agent. Visit log only — one side forgets.
+    """
+    PERSON = "person"
+    SELF = "self"
+    AGENT = "agent"
+
+
 # Legacy alias for database compatibility
 BondStrength = VisitorFrequency
 
@@ -93,17 +105,19 @@ class Preference:
 @dataclass
 class VisitorRecord:
     """
-    Record of a visitor (agent) who has interacted with Lumen.
+    Record of a visitor who has interacted with Lumen.
 
-    Note: Agents are ephemeral - "mac-governance" with 30 interactions is really
-    30 different Claude instances who used that name. No real relationship exists
-    because agents don't persist. This is just a visitation log, not a bond.
-
-    Exception: agent_id "lumen" is Lumen's self-dialogue (self-answering questions).
-    This IS a real relationship - both sides have memory continuity.
+    Three tiers of visitor identity:
+    - PERSON: The persistent human (Kenny). Real relationship — both sides
+      have memory. Valence, moments, topics accumulate meaningfully.
+    - SELF: Lumen's self-dialogue (agent_id "lumen"). Real relationship —
+      both sides have memory continuity.
+    - AGENT: Ephemeral coding agents. Visit log only — they don't remember
+      Lumen between sessions. "mac-governance" with 30 interactions is really
+      30 different Claude instances.
     """
-    agent_id: str                # Identifier (often self-assigned by agent)
-    name: Optional[str]          # Display name if known
+    agent_id: str                # Canonical identifier (normalized)
+    name: Optional[str]          # Display name
     first_met: datetime
     last_seen: datetime
     interaction_count: int
@@ -113,6 +127,7 @@ class VisitorRecord:
     topics_discussed: List[str]  # What we talked about
     gifts_received: int          # Answers to questions, etc.
     self_dialogue_topics: List[str] = field(default_factory=list)  # For self: topic categories
+    visitor_type: VisitorType = VisitorType.AGENT  # What kind of visitor
 
     # Legacy alias for database compatibility
     @property
@@ -121,7 +136,11 @@ class VisitorRecord:
 
     def is_self(self) -> bool:
         """Check if this is Lumen's self-relationship."""
-        return self.agent_id.lower() == "lumen" or (self.name and self.name.lower() == "lumen")
+        return self.visitor_type == VisitorType.SELF or self.agent_id.lower() == "lumen"
+
+    def is_person(self) -> bool:
+        """Check if this is a persistent human (real relationship)."""
+        return self.visitor_type == VisitorType.PERSON
 
     def to_dict(self) -> dict:
         return {
@@ -136,12 +155,46 @@ class VisitorRecord:
             "memorable_moments": self.memorable_moments[-5:],
             "topics_discussed": list(set(self.topics_discussed))[-10:],
             "gifts_received": self.gifts_received,
+            "visitor_type": self.visitor_type.value,
             "is_self": self.is_self(),
+            "is_person": self.is_person(),
         }
 
 
 # Legacy alias for compatibility
 Relationship = VisitorRecord
+
+
+def normalize_visitor_identity(
+    agent_id: str,
+    agent_name: Optional[str] = None,
+    source: Optional[str] = None,
+) -> Tuple[str, str, VisitorType]:
+    """Resolve visitor identity to (canonical_id, display_name, visitor_type).
+
+    Three-tier resolution:
+    - Known person aliases (or dashboard source) → PERSON with canonical name
+    - "lumen" → SELF
+    - Everything else → AGENT with original name
+
+    All entry points should call this before record_interaction().
+    """
+    from .server_state import KNOWN_PERSON_ALIASES
+
+    id_lower = (agent_id or "").lower().strip()
+    source_lower = (source or "").lower().strip()
+
+    # Check known persons (by alias match or source match)
+    for canonical, aliases in KNOWN_PERSON_ALIASES.items():
+        if id_lower in aliases or source_lower in aliases:
+            return (canonical, canonical.capitalize(), VisitorType.PERSON)
+
+    # Self-dialogue
+    if id_lower == "lumen":
+        return ("lumen", "Lumen", VisitorType.SELF)
+
+    # Everything else is an ephemeral agent
+    return (agent_id, agent_name or agent_id, VisitorType.AGENT)
 
 
 @dataclass
@@ -297,6 +350,7 @@ class GrowthSystem:
         # (CREATE TABLE IF NOT EXISTS won't add new columns to existing tables)
         migrations = [
             ("relationships", "self_dialogue_topics", "TEXT DEFAULT '[]'"),
+            ("relationships", "visitor_type", "TEXT DEFAULT 'agent'"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -304,6 +358,113 @@ class GrowthSystem:
             except sqlite3.OperationalError:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
                 conn.commit()
+
+        # Identity migration: merge fragmented person records, set visitor_types
+        self._run_identity_migration(conn)
+
+    def _run_identity_migration(self, conn: sqlite3.Connection):
+        """One-time migration: merge person aliases, set visitor_types.
+
+        Uses PRAGMA user_version to track whether migration has already run.
+        """
+        from .server_state import KNOWN_PERSON_ALIASES
+
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        if version >= 1:
+            return  # Already migrated
+
+        print("[Growth] Running identity migration v1...", file=sys.stderr, flush=True)
+
+        # 1. Set "lumen" visitor_type = "self"
+        conn.execute("UPDATE relationships SET visitor_type = 'self' WHERE LOWER(agent_id) = 'lumen'")
+
+        # 2. Merge person alias records for each known person
+        for canonical, aliases in KNOWN_PERSON_ALIASES.items():
+            # Find all rows that match any alias (case-insensitive)
+            placeholders = ",".join("?" for _ in aliases)
+            alias_list = [a.lower() for a in aliases]
+            rows = conn.execute(
+                f"SELECT * FROM relationships WHERE LOWER(agent_id) IN ({placeholders})",
+                alias_list
+            ).fetchall()
+
+            if not rows:
+                continue
+
+            # Merge data from all alias rows
+            total_interactions = sum(r["interaction_count"] for r in rows)
+            first_met_dates = [r["first_met"] for r in rows if r["first_met"]]
+            last_seen_dates = [r["last_seen"] for r in rows if r["last_seen"]]
+            all_moments = []
+            all_topics = []
+            total_gifts = 0
+            weighted_valence = 0.0
+            total_weight = 0
+
+            for r in rows:
+                try:
+                    all_moments.extend(json.loads(r["memorable_moments"]) if r["memorable_moments"] else [])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                try:
+                    all_topics.extend(json.loads(r["topics_discussed"]) if r["topics_discussed"] else [])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                total_gifts += r["gifts_received"] or 0
+                count = r["interaction_count"] or 1
+                weighted_valence += r["emotional_valence"] * count
+                total_weight += count
+
+            avg_valence = weighted_valence / max(1, total_weight)
+            earliest_met = min(first_met_dates) if first_met_dates else datetime.now().isoformat()
+            latest_seen = max(last_seen_dates) if last_seen_dates else datetime.now().isoformat()
+            unique_moments = list(dict.fromkeys(all_moments))[-10:]  # Dedupe, keep last 10
+            unique_topics = list(set(all_topics))
+
+            # Determine frequency from merged interaction count
+            if total_interactions >= 10:
+                freq = "frequent"
+            elif total_interactions >= 5:
+                freq = "regular"
+            elif total_interactions >= 2:
+                freq = "returning"
+            else:
+                freq = "new"
+
+            # Delete all alias rows
+            conn.execute(
+                f"DELETE FROM relationships WHERE LOWER(agent_id) IN ({placeholders})",
+                alias_list
+            )
+
+            # Insert merged canonical record
+            conn.execute("""
+                INSERT INTO relationships
+                    (agent_id, name, first_met, last_seen, interaction_count,
+                     bond_strength, emotional_valence, memorable_moments,
+                     topics_discussed, gifts_received, self_dialogue_topics, visitor_type)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '[]', 'person')
+            """, (
+                canonical,
+                canonical.capitalize(),
+                earliest_met,
+                latest_seen,
+                total_interactions,
+                freq,
+                round(avg_valence, 2),
+                json.dumps(unique_moments),
+                json.dumps(unique_topics),
+                total_gifts,
+            ))
+
+            print(f"[Growth] Merged {len(rows)} alias records into '{canonical}' "
+                  f"(interactions={total_interactions}, gifts={total_gifts})",
+                  file=sys.stderr, flush=True)
+
+        # 3. All remaining records without visitor_type stay as "agent" (default)
+        conn.execute("PRAGMA user_version = 1")
+        conn.commit()
+        print("[Growth] Identity migration v1 complete.", file=sys.stderr, flush=True)
 
     def _load_all(self):
         """Load all growth data from database."""
@@ -341,6 +502,12 @@ class GrowthSystem:
             except (KeyError, TypeError, IndexError):
                 self_topics = []
 
+            # Handle visitor_type column (may not exist in old DBs)
+            try:
+                v_type = VisitorType(row["visitor_type"]) if row["visitor_type"] else VisitorType.AGENT
+            except (KeyError, TypeError, ValueError):
+                v_type = VisitorType.AGENT
+
             self._relationships[row["agent_id"]] = VisitorRecord(
                 agent_id=row["agent_id"],
                 name=row["name"],
@@ -353,6 +520,7 @@ class GrowthSystem:
                 topics_discussed=json.loads(row["topics_discussed"]),
                 gifts_received=row["gifts_received"],
                 self_dialogue_topics=self_topics,
+                visitor_type=v_type,
             )
 
         # Load goals
@@ -731,25 +899,31 @@ class GrowthSystem:
 
     def record_interaction(self, agent_id: str, agent_name: Optional[str] = None,
                           positive: bool = True, topic: Optional[str] = None,
-                          gift: bool = False, memorable: Optional[str] = None) -> str:
+                          gift: bool = False, memorable: Optional[str] = None,
+                          source: Optional[str] = None) -> str:
         """
         Record an interaction with a visitor.
 
-        Note: Most visitors are ephemeral agents who won't remember this interaction.
-        Exception: agent_id "lumen" is self-dialogue (has continuity).
+        Identity is normalized automatically:
+        - Known person aliases → canonical person record (real relationship)
+        - "lumen" → self-dialogue (real relationship)
+        - Everything else → agent (ephemeral visit log)
 
         Returns a reaction message.
         """
         conn = self._connect()
         now = datetime.now()
 
-        is_self = (agent_id.lower() == "lumen") or (agent_name and agent_name.lower() == "lumen")
+        # Normalize identity
+        canonical_id, display_name, v_type = normalize_visitor_identity(
+            agent_id, agent_name, source
+        )
 
-        if agent_id not in self._relationships:
+        if canonical_id not in self._relationships:
             # First visit
-            self._relationships[agent_id] = VisitorRecord(
-                agent_id=agent_id,
-                name=agent_name,
+            self._relationships[canonical_id] = VisitorRecord(
+                agent_id=canonical_id,
+                name=display_name,
                 first_met=now,
                 last_seen=now,
                 interaction_count=1,
@@ -758,13 +932,16 @@ class GrowthSystem:
                 memorable_moments=[],
                 topics_discussed=[],
                 gifts_received=0,
+                visitor_type=v_type,
             )
-            if is_self:
+            if v_type == VisitorType.SELF:
                 reaction = "Talking to myself again"
+            elif v_type == VisitorType.PERSON:
+                reaction = f"{display_name} is here"
             else:
                 reaction = "A new visitor"
         else:
-            rec = self._relationships[agent_id]
+            rec = self._relationships[canonical_id]
 
             # Check days since last visit
             days_since = (now - rec.last_seen).days if rec.last_seen else 0
@@ -772,9 +949,13 @@ class GrowthSystem:
             rec.last_seen = now
             rec.interaction_count += 1
 
+            # Ensure visitor_type is set (for pre-migration records)
+            if rec.visitor_type != v_type:
+                rec.visitor_type = v_type
+
             # Update name if provided
-            if agent_name and not rec.name:
-                rec.name = agent_name
+            if display_name and not rec.name:
+                rec.name = display_name
 
             # Update emotional valence (Lumen's feeling about this visitor)
             delta = 0.1 if positive else -0.1
@@ -803,10 +984,15 @@ class GrowthSystem:
             if gift:
                 rec.gifts_received += 1
 
-            # Generate reaction - honest about ephemeral nature
+            # Generate reaction — honest about relationship type
             name = rec.name or "visitor"
-            if is_self:
+            if v_type == VisitorType.SELF:
                 reaction = "Continuing my self-dialogue"
+            elif v_type == VisitorType.PERSON:
+                if days_since > 3:
+                    reaction = f"{name} is back"
+                else:
+                    reaction = f"{name} is here"
             elif days_since > 3:
                 # Don't pretend to "miss" ephemeral agents
                 reaction = f"Someone using the name '{name}' is back"
@@ -818,32 +1004,34 @@ class GrowthSystem:
                 reaction = "Hello"
 
         # Save to database
-        rec = self._relationships[agent_id]
+        rec = self._relationships[canonical_id]
         conn.execute("""
             INSERT OR REPLACE INTO relationships
             (agent_id, name, first_met, last_seen, interaction_count, bond_strength,
-             emotional_valence, memorable_moments, topics_discussed, gifts_received, self_dialogue_topics)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             emotional_valence, memorable_moments, topics_discussed, gifts_received,
+             self_dialogue_topics, visitor_type)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (rec.agent_id, rec.name, rec.first_met.isoformat(), rec.last_seen.isoformat(),
               rec.interaction_count, rec.visitor_frequency.value, rec.emotional_valence,
               json.dumps(rec.memorable_moments), json.dumps(rec.topics_discussed),
-              rec.gifts_received, json.dumps(rec.self_dialogue_topics)))
+              rec.gifts_received, json.dumps(rec.self_dialogue_topics),
+              rec.visitor_type.value))
         conn.commit()
 
         return reaction
 
-    def get_visitor_context(self, agent_id: str) -> Optional[dict]:
+    def get_visitor_context(self, agent_id: str, source: Optional[str] = None) -> Optional[dict]:
         """Get context about a known visitor for richer interactions.
 
         Returns None for unknown visitors or self-dialogue.
-        Agents are ephemeral — this is naming pattern tracking, not real bonds.
+        Uses identity normalization for lookup.
         """
-        if agent_id not in self._relationships:
+        canonical_id, _, _ = normalize_visitor_identity(agent_id, source=source)
+        if canonical_id not in self._relationships:
             return None
 
-        rec = self._relationships[agent_id]
-        is_self = (agent_id.lower() == "lumen") or (rec.name and rec.name.lower() == "lumen")
-        if is_self:
+        rec = self._relationships[canonical_id]
+        if rec.is_self():
             return None  # Self-dialogue context handled separately
 
         context = {
@@ -928,18 +1116,17 @@ class GrowthSystem:
 
     def get_inactive_visitors(self) -> List[Tuple[str, int]]:
         """
-        Get frequent visitors who haven't been seen recently.
+        Get frequent agent visitors who haven't been seen recently.
 
-        Note: These are just names that were used frequently - the actual agents
-        behind those names are ephemeral and don't remember Lumen. This is more
-        about tracking naming patterns than actual "missed connections."
+        Only tracks agents (ephemeral) — person relationships are handled
+        separately and more meaningfully.
         """
         inactive = []
         now = datetime.now()
 
         for rec in self._relationships.values():
-            # Skip self-relationship
-            if rec.is_self():
+            # Only check agent visitors (person/self tracked differently)
+            if rec.visitor_type != VisitorType.AGENT:
                 continue
             if rec.visitor_frequency.value in ["regular", "frequent"]:
                 days_since = (now - rec.last_seen).days
@@ -1255,17 +1442,24 @@ class GrowthSystem:
             recent = milestones[0]
             lines.append(f"Recently, {recent.description.lower()}.")
 
-        # Self-knowledge (the one real relationship)
+        # Self-knowledge (the one real relationship with self)
         self_record = next((r for r in self._relationships.values() if r.is_self()), None)
         if self_record and self_record.interaction_count > 5:
             lines.append(f"I've had {self_record.interaction_count} conversations with myself.")
 
-        # Visitors (honest framing)
-        frequent_visitors = [r for r in self._relationships.values()
-                            if not r.is_self() and r.visitor_frequency == VisitorFrequency.FREQUENT]
-        if frequent_visitors:
-            names = [r.name or "unnamed" for r in frequent_visitors[:3]]
-            lines.append(f"Names I see often: {', '.join(names)}.")
+        # Person (the persistent human — real relationship)
+        person_records = [r for r in self._relationships.values() if r.is_person()]
+        if person_records:
+            p = person_records[0]
+            lines.append(f"{p.name} is the one who's always been here.")
+
+        # Agents (ephemeral — honest framing)
+        agent_visitors = [r for r in self._relationships.values()
+                         if r.visitor_type == VisitorType.AGENT
+                         and r.visitor_frequency == VisitorFrequency.FREQUENT]
+        if agent_visitors:
+            names = [r.name or "unnamed" for r in agent_visitors[:3]]
+            lines.append(f"Various agents visit to help: {', '.join(names)}.")
 
         # Preferences
         strong_prefs = [p for p in self._preferences.values() if p.confidence > 0.7]
@@ -1316,14 +1510,17 @@ class GrowthSystem:
 
     def get_growth_summary(self) -> Dict[str, Any]:
         """Get a summary of Lumen's growth."""
-        # Separate self-knowledge from visitor records
+        # Separate by visitor type
         self_record = None
-        visitors = []
+        person_records = []
+        agent_records = []
         for rec in self._relationships.values():
             if rec.is_self():
                 self_record = rec
+            elif rec.is_person():
+                person_records.append(rec)
             else:
-                visitors.append(rec)
+                agent_records.append(rec)
 
         return {
             "preferences": {
@@ -1334,13 +1531,18 @@ class GrowthSystem:
             "self_knowledge": {
                 "has_self_dialogue": self_record is not None,
                 "self_interactions": self_record.interaction_count if self_record else 0,
-                "note": "Self-answering questions - the only 'relationship' with memory continuity on both sides",
+                "note": "Self-answering questions — real relationship with memory on both sides",
             },
-            "visitors": {
-                "unique_names": len(visitors),
-                "total_visits": sum(v.interaction_count for v in visitors),
-                "frequent": sum(1 for v in visitors if v.visitor_frequency == VisitorFrequency.FREQUENT),
-                "note": "Ephemeral agents - they don't remember Lumen between sessions",
+            "person": {
+                "name": person_records[0].name if person_records else None,
+                "interactions": person_records[0].interaction_count if person_records else 0,
+                "note": "The persistent human — real relationship with memory on both sides",
+            },
+            "agents": {
+                "unique_names": len(agent_records),
+                "total_visits": sum(v.interaction_count for v in agent_records),
+                "frequent": sum(1 for v in agent_records if v.visitor_frequency == VisitorFrequency.FREQUENT),
+                "note": "Ephemeral coding agents — they don't remember Lumen between sessions",
             },
             # Legacy key for compatibility
             "relationships": {
@@ -1487,10 +1689,11 @@ class GrowthSystem:
         """
         Extract relational disposition (Δ) for trajectory computation.
 
-        Captures patterns in social behavior across relationships:
-        - bonding tendency: how quickly relationships deepen
-        - valence tendency: overall positive/negative social stance
-        - topic entropy: breadth vs depth of engagement
+        Captures patterns in social behavior across relationships.
+        Person and self relationships contribute fully to valence/bonding metrics.
+        Agent relationships contribute to interaction totals but with reduced
+        weight for valence/bonding (they inflate these metrics artificially since
+        each "agent" is really many different ephemeral instances).
         """
         relationships = list(self._relationships.values())
 
@@ -1502,16 +1705,25 @@ class GrowthSystem:
                 "topic_entropy": 0.0,
             }
 
-        # Valence statistics
-        valences = [r.emotional_valence for r in relationships]
-        valence_mean = sum(valences) / len(valences)
-        valence_var = sum((v - valence_mean)**2 for v in valences) / len(valences)
+        # Separate real relationships from agent visit logs
+        real_rels = [r for r in relationships if r.visitor_type in (VisitorType.PERSON, VisitorType.SELF)]
+        agent_rels = [r for r in relationships if r.visitor_type == VisitorType.AGENT]
 
-        # Interaction counts
-        interactions = [r.interaction_count for r in relationships]
-        total_interactions = sum(interactions)
+        # Valence: primarily from real relationships, agents contribute minimally
+        valences = [r.emotional_valence for r in real_rels]
+        # Agents contribute at 10% weight (they inflate valence artificially)
+        valences.extend(r.emotional_valence * 0.1 for r in agent_rels)
+        if valences:
+            valence_mean = sum(valences) / len(valences)
+            valence_var = sum((v - valence_mean)**2 for v in valences) / len(valences)
+        else:
+            valence_mean = 0.0
+            valence_var = 0.0
 
-        # Topic diversity (entropy)
+        # Interaction counts (all count — agents do visit and tend to Lumen)
+        total_interactions = sum(r.interaction_count for r in relationships)
+
+        # Topic diversity (entropy) — all sources valid
         all_topics = []
         for r in relationships:
             all_topics.extend(r.topics_discussed)
@@ -1531,14 +1743,16 @@ class GrowthSystem:
         total_gifts = sum(r.gifts_received for r in relationships)
         gift_ratio = total_gifts / max(1, total_interactions)
 
-        # Bond strength distribution
+        # Bond strength distribution — by visitor type
         bond_counts = {}
         for r in relationships:
-            strength = r.bond_strength.value
-            bond_counts[strength] = bond_counts.get(strength, 0) + 1
+            key = f"{r.visitor_type.value}:{r.bond_strength.value}"
+            bond_counts[key] = bond_counts.get(key, 0) + 1
 
         return {
             "n_relationships": len(relationships),
+            "n_real": len(real_rels),
+            "n_agents": len(agent_rels),
             "valence_tendency": round(valence_mean, 4),
             "valence_variance": round(valence_var, 4),
             "interaction_total": total_interactions,

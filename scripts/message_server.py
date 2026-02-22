@@ -554,7 +554,11 @@ else:
         try:
             data = json.loads(post_data)
             text = data.get('text', '').replace("'", "\\'").replace('"', '\\"')
-            author = data.get('author', 'user').replace("'", "\\'").replace('"', '\\"')
+            author = data.get('author', 'user')
+            # Normalize identity: known person aliases → canonical name
+            if author.lower() in ('kenny', 'cirwel', 'caretaker'):
+                author = 'Kenny'  # Canonical person name (normalization happens server-side)
+            author = author.replace("'", "\\'").replace('"', '\\"')
             responds_to = data.get('responds_to', '').replace("'", "\\'").replace('"', '\\"')
 
             if not text:
@@ -600,7 +604,11 @@ print("ok")
             data = json.loads(post_data)
             question_id = data.get('question_id') or data.get('id', '')  # Accept both
             answer_text = data.get('answer', '').replace("'", "\\'").replace('"', '\\"')
-            author = data.get('author', 'Kenny').replace("'", "\\'").replace('"', '\\"')
+            author = data.get('author', 'Kenny')
+            # Normalize identity: known person aliases → canonical name
+            if author.lower() in ('kenny', 'cirwel', 'caretaker'):
+                author = 'Kenny'  # Canonical person name (normalization happens server-side)
+            author = author.replace("'", "\\'").replace('"', '\\"')
 
             if not answer_text:
                 self.send_json({"error": "No answer provided"}, 400)
