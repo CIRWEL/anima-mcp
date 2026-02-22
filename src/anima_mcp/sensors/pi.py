@@ -22,14 +22,23 @@ from .base import SensorBackend, SensorReadings
 class PiSensors(SensorBackend):
     """
     Real Raspberry Pi sensors via BrainCraft HAT.
-    
+
     BrainCraft HAT provides:
     - Display (240x240 TFT)
     - LEDs (3 DotStar)
     - Sensors: Temperature, humidity, light, pressure
-    
+
     Neural signals derived from Pi's own computational state (computational proprioception).
+
+    Includes automatic re-initialization of failed I2C sensors with exponential
+    backoff to recover from transient bus errors (e.g. power sags).
     """
+
+    # Re-initialization thresholds
+    _REINIT_FAILURE_THRESHOLD = 5    # Consecutive None reads before attempting re-init
+    _REINIT_INITIAL_BACKOFF = 10     # Seconds before first re-init attempt
+    _REINIT_MAX_BACKOFF = 300        # Max seconds between re-init attempts (5 min)
+    _REINIT_BACKOFF_FACTOR = 2.0     # Exponential backoff multiplier
 
     def __init__(self):
         """Initialize Pi sensors."""
@@ -38,6 +47,25 @@ class PiSensors(SensorBackend):
         self._light_sensor = None
         self._bmp280 = None
         self._last_pressure = None
+
+        # Consecutive failure tracking per sensor
+        self._failure_counts: dict[str, int] = {
+            "aht20": 0,
+            "veml7700": 0,
+            "bmp280": 0,
+        }
+        # Re-init attempt tracking for exponential backoff
+        self._reinit_attempts: dict[str, int] = {
+            "aht20": 0,
+            "veml7700": 0,
+            "bmp280": 0,
+        }
+        self._last_reinit_time: dict[str, float] = {
+            "aht20": 0.0,
+            "veml7700": 0.0,
+            "bmp280": 0.0,
+        }
+
         self._init_sensors()
         # Prime psutil cpu_percent so first real call returns meaningful data
         psutil.cpu_percent(interval=None)
@@ -112,6 +140,119 @@ class PiSensors(SensorBackend):
         # No physical EEG hardware exists. Neural signals come from computational proprioception.
         self._brain_hat = None
 
+    def _record_success(self, sensor_name: str) -> None:
+        """Reset failure tracking on successful sensor read."""
+        if self._failure_counts.get(sensor_name, 0) > 0:
+            self._failure_counts[sensor_name] = 0
+            self._reinit_attempts[sensor_name] = 0
+
+    def _record_failure(self, sensor_name: str) -> None:
+        """Record a sensor read failure and attempt re-init if threshold exceeded."""
+        import time as _time
+
+        self._failure_counts[sensor_name] = self._failure_counts.get(sensor_name, 0) + 1
+        count = self._failure_counts[sensor_name]
+
+        if count < self._REINIT_FAILURE_THRESHOLD:
+            return
+
+        # Check exponential backoff before attempting re-init
+        attempts = self._reinit_attempts.get(sensor_name, 0)
+        backoff = min(
+            self._REINIT_INITIAL_BACKOFF * (self._REINIT_BACKOFF_FACTOR ** attempts),
+            self._REINIT_MAX_BACKOFF,
+        )
+        now = _time.monotonic()
+        last = self._last_reinit_time.get(sensor_name, 0.0)
+        if now - last < backoff:
+            return  # Too soon, wait for backoff
+
+        self._last_reinit_time[sensor_name] = now
+        self._reinit_attempts[sensor_name] = attempts + 1
+        self._try_reinit_sensor(sensor_name)
+
+    def _try_reinit_sensor(self, sensor_name: str) -> None:
+        """Attempt to re-initialize a specific failed sensor."""
+        from ..error_recovery import retry_with_backoff, RetryConfig, safe_call
+
+        init_config = RetryConfig(max_attempts=2, initial_delay=0.5, max_delay=2.0)
+        attempt_num = self._reinit_attempts.get(sensor_name, 1)
+
+        print(
+            f"[PiSensors] Attempting re-init of {sensor_name} "
+            f"(attempt #{attempt_num}, after {self._failure_counts[sensor_name]} consecutive failures)",
+            file=sys.stderr, flush=True,
+        )
+
+        if self._i2c is None:
+            # I2C bus itself is gone -- try to re-create it first
+            def init_i2c():
+                import board
+                import busio
+                return busio.I2C(board.SCL, board.SDA)
+
+            self._i2c = safe_call(
+                lambda: retry_with_backoff(init_i2c, config=init_config),
+                default=None,
+            )
+            if self._i2c is None:
+                print("[PiSensors] I2C bus re-init failed, skipping sensor re-init",
+                      file=sys.stderr, flush=True)
+                return
+
+        if sensor_name == "aht20":
+            def init_aht():
+                import adafruit_ahtx0
+                return adafruit_ahtx0.AHTx0(self._i2c)
+
+            result = safe_call(
+                lambda: retry_with_backoff(init_aht, config=init_config),
+                default=None,
+            )
+            if result:
+                self._aht = result
+                self._failure_counts[sensor_name] = 0
+                self._reinit_attempts[sensor_name] = 0
+                print(f"[PiSensors] AHT20 re-initialized successfully", file=sys.stderr, flush=True)
+            else:
+                print(f"[PiSensors] AHT20 re-init failed", file=sys.stderr, flush=True)
+
+        elif sensor_name == "veml7700":
+            def init_light():
+                import adafruit_veml7700
+                return adafruit_veml7700.VEML7700(self._i2c)
+
+            result = safe_call(
+                lambda: retry_with_backoff(init_light, config=init_config),
+                default=None,
+            )
+            if result:
+                self._light_sensor = result
+                self._failure_counts[sensor_name] = 0
+                self._reinit_attempts[sensor_name] = 0
+                print(f"[PiSensors] VEML7700 re-initialized successfully", file=sys.stderr, flush=True)
+            else:
+                print(f"[PiSensors] VEML7700 re-init failed", file=sys.stderr, flush=True)
+
+        elif sensor_name == "bmp280":
+            def init_bmp():
+                import adafruit_bmp280
+                bmp = adafruit_bmp280.Adafruit_BMP280_I2C(self._i2c)
+                bmp.sea_level_pressure = 1013.25
+                return bmp
+
+            result = safe_call(
+                lambda: retry_with_backoff(init_bmp, config=init_config),
+                default=None,
+            )
+            if result:
+                self._bmp280 = result
+                self._failure_counts[sensor_name] = 0
+                self._reinit_attempts[sensor_name] = 0
+                print(f"[PiSensors] BMP280 re-initialized successfully", file=sys.stderr, flush=True)
+            else:
+                print(f"[PiSensors] BMP280 re-init failed", file=sys.stderr, flush=True)
+
     def _read_cpu_temp(self) -> float | None:
         """Read Pi CPU temperature from sysfs with retry."""
         from ..error_recovery import retry_with_backoff, RetryConfig, safe_call
@@ -166,47 +307,60 @@ class PiSensors(SensorBackend):
         # CPU temp (always available on Pi)
         cpu_temp = self._read_cpu_temp()
 
-        # AHT20 sensor (temperature + humidity) with retry
+        # AHT20 sensor (temperature + humidity) with retry + re-init
         ambient_temp = None
         humidity = None
         if self._aht:
             from ..error_recovery import retry_with_backoff, RetryConfig, safe_call
             read_config = RetryConfig(max_attempts=2, initial_delay=0.1, max_delay=0.5)
-            
+
             def read_aht():
                 return (self._aht.temperature, self._aht.relative_humidity)
-            
+
             result = safe_call(
                 lambda: retry_with_backoff(read_aht, config=read_config),
                 default=None
             )
             if result:
                 ambient_temp, humidity = result
+                self._record_success("aht20")
+            else:
+                self._record_failure("aht20")
+        else:
+            # Sensor object is None -- try periodic re-init
+            self._record_failure("aht20")
 
-        # Light sensor with retry
+        # Light sensor with retry + re-init
         light = None
         if self._light_sensor:
             from ..error_recovery import retry_with_backoff, RetryConfig, safe_call
             read_config = RetryConfig(max_attempts=2, initial_delay=0.1, max_delay=0.5)
-            
+
             def read_light():
                 return self._light_sensor.lux
-            
+
             light = safe_call(
                 lambda: retry_with_backoff(read_light, config=read_config),
                 default=None
             )
+            if light is not None:
+                self._record_success("veml7700")
+            else:
+                self._record_failure("veml7700")
+        else:
+            # Sensor object is None -- try periodic re-init
+            self._record_failure("veml7700")
 
-        # BMP280 pressure/temperature sensor with retry
+        # BMP280 pressure/temperature sensor with retry + re-init
         pressure = None
         pressure_temp = None
         if self._bmp280:
             from ..error_recovery import retry_with_backoff, RetryConfig, safe_call
             read_config = RetryConfig(max_attempts=2, initial_delay=0.1, max_delay=0.5)
-            
+
             def read_bmp():
                 return (self._bmp280.pressure, self._bmp280.temperature)
-            
+
             result = safe_call(
                 lambda: retry_with_backoff(read_bmp, config=read_config),
                 default=None
@@ -214,6 +368,12 @@ class PiSensors(SensorBackend):
             if result:
                 pressure, pressure_temp = result
                 self._last_pressure = pressure
+                self._record_success("bmp280")
+            else:
+                self._record_failure("bmp280")
+        else:
+            # Sensor object is None -- try periodic re-init
+            self._record_failure("bmp280")
 
         # System stats
         cpu_percent = psutil.cpu_percent(interval=None)

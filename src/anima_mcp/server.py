@@ -2367,6 +2367,12 @@ def sleep():
             except (ValueError, OSError):
                 # stdout/stderr might be closed - ignore
                 pass
+            # Checkpoint WAL to prevent large recovery on next startup
+            try:
+                if _store._conn:
+                    _store._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            except Exception:
+                pass  # Best-effort on shutdown
             _store.close()
         except Exception as e:
             # Don't crash on shutdown errors
