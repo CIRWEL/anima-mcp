@@ -3370,8 +3370,11 @@ def run_http_server(host: str, port: int):
             from starlette.middleware.authentication import AuthenticationMiddleware as _AuthMW
             from mcp.server.auth.routes import build_resource_metadata_url
             resource_metadata_url = build_resource_metadata_url(mcp.settings.auth.resource_server_url)
-            # Chain: AuthenticationMiddleware -> AuthContextMiddleware -> RequireAuthMiddleware -> MCP ASGI
-            mcp_endpoint = _AuthMW(
+
+            # Require OAuth only for external (ngrok) requests.
+            # Local and Tailscale clients (Cursor, Claude Code) skip auth.
+            _EXTERNAL_HOSTS = {"lumen-anima.ngrok.io"}
+            _auth_protected = _AuthMW(
                 _AuthCtx(
                     RequireAuthMiddleware(
                         streamable_mcp_asgi,
@@ -3381,6 +3384,16 @@ def run_http_server(host: str, port: int):
                 ),
                 backend=BearerAuthBackend(_oauth_token_verifier),
             )
+
+            async def mcp_endpoint(scope, receive, send):
+                """Route to auth or no-auth based on Host header."""
+                if scope.get("type") == "http":
+                    headers = dict(scope.get("headers", []))
+                    host = headers.get(b"host", b"").decode().split(":")[0]
+                    if host in _EXTERNAL_HOSTS:
+                        await _auth_protected(scope, receive, send)
+                        return
+                await streamable_mcp_asgi(scope, receive, send)
         else:
             mcp_endpoint = streamable_mcp_asgi
 
