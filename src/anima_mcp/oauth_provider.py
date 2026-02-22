@@ -1,0 +1,242 @@
+"""
+In-memory OAuth 2.1 Authorization Server Provider for anima-mcp.
+
+Implements the MCP SDK's OAuthAuthorizationServerProvider protocol.
+Tokens stored in-memory — reset on server restart (Claude.ai re-authenticates).
+"""
+from __future__ import annotations
+
+import hashlib
+import hmac
+import os
+import secrets
+import time
+from dataclasses import dataclass, field
+from urllib.parse import urlencode
+
+from mcp.server.auth.provider import (
+    AccessToken,
+    AuthorizationParams,
+    OAuthAuthorizationServerProvider,
+    OAuthToken,
+)
+from mcp.shared.auth import OAuthClientInformationFull
+
+
+@dataclass
+class AuthCodeEntry:
+    """Stored authorization code with metadata."""
+    code: str
+    client_id: str
+    redirect_uri: str
+    code_challenge: str
+    scopes: list[str]
+    created_at: float = field(default_factory=time.time)
+    resource: str | None = None
+
+    def is_expired(self, ttl: int = 300) -> bool:
+        return time.time() - self.created_at > ttl
+
+
+@dataclass
+class RefreshTokenEntry:
+    """Stored refresh token with metadata."""
+    token: str
+    client_id: str
+    scopes: list[str]
+    created_at: float = field(default_factory=time.time)
+
+    def is_expired(self, ttl: int = 604800) -> bool:
+        return time.time() - self.created_at > ttl
+
+
+class AnimaOAuthProvider:
+    """
+    In-memory OAuth 2.1 Authorization Server for anima-mcp.
+
+    Implements OAuthAuthorizationServerProvider protocol from the MCP SDK.
+    Single-user, personal server — optimized for simplicity.
+    """
+
+    def __init__(
+        self,
+        secret: str | None = None,
+        auto_approve: bool = True,
+        access_token_ttl: int = 3600,
+        refresh_token_ttl: int = 604800,
+        auth_code_ttl: int = 300,
+    ):
+        self._secret = secret or secrets.token_hex(32)
+        self._auto_approve = auto_approve
+        self._access_token_ttl = access_token_ttl
+        self._refresh_token_ttl = refresh_token_ttl
+        self._auth_code_ttl = auth_code_ttl
+
+        # In-memory stores
+        self._clients: dict[str, OAuthClientInformationFull] = {}
+        self._auth_codes: dict[str, AuthCodeEntry] = {}
+        self._access_tokens: dict[str, AccessToken] = {}
+        self._refresh_tokens: dict[str, RefreshTokenEntry] = {}
+
+    def _generate_token(self, prefix: str = "at") -> str:
+        """Generate a cryptographically random token."""
+        raw = secrets.token_hex(32)
+        return f"{prefix}_{raw}"
+
+    # --- Client Registration ---
+
+    async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
+        return self._clients.get(client_id)
+
+    async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        if not client_info.client_id:
+            client_info.client_id = f"anima_{secrets.token_hex(16)}"
+        if not client_info.client_secret:
+            client_info.client_secret = secrets.token_hex(32)
+        if not client_info.client_id_issued_at:
+            client_info.client_id_issued_at = int(time.time())
+        self._clients[client_info.client_id] = client_info
+
+    # --- Authorization ---
+
+    async def authorize(
+        self, client: OAuthClientInformationFull, params: AuthorizationParams
+    ) -> str:
+        code = secrets.token_hex(24)  # 192 bits (>= 160 per spec)
+
+        entry = AuthCodeEntry(
+            code=code,
+            client_id=client.client_id,
+            redirect_uri=str(params.redirect_uri),
+            code_challenge=params.code_challenge,
+            scopes=params.scopes or [],
+            resource=params.resource,
+        )
+        self._auth_codes[code] = entry
+
+        query = {"code": code}
+        if params.state:
+            query["state"] = params.state
+        redirect = str(params.redirect_uri)
+        separator = "&" if "?" in redirect else "?"
+        return f"{redirect}{separator}{urlencode(query)}"
+
+    # --- Authorization Code ---
+
+    async def load_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: str
+    ) -> AuthCodeEntry | None:
+        entry = self._auth_codes.get(authorization_code)
+        if entry is None:
+            return None
+        if entry.client_id != client.client_id:
+            return None
+        if entry.is_expired(self._auth_code_ttl):
+            del self._auth_codes[authorization_code]
+            return None
+        return entry
+
+    async def exchange_authorization_code(
+        self, client: OAuthClientInformationFull, authorization_code: AuthCodeEntry
+    ) -> OAuthToken:
+        self._auth_codes.pop(authorization_code.code, None)
+
+        access_token_str = self._generate_token("at")
+        refresh_token_str = self._generate_token("rt")
+        expires_at = int(time.time()) + self._access_token_ttl
+
+        self._access_tokens[access_token_str] = AccessToken(
+            token=access_token_str,
+            client_id=client.client_id,
+            scopes=authorization_code.scopes or ["mcp:tools"],
+            expires_at=expires_at,
+            resource=authorization_code.resource,
+        )
+
+        self._refresh_tokens[refresh_token_str] = RefreshTokenEntry(
+            token=refresh_token_str,
+            client_id=client.client_id,
+            scopes=authorization_code.scopes or ["mcp:tools"],
+        )
+
+        return OAuthToken(
+            access_token=access_token_str,
+            token_type="Bearer",
+            expires_in=self._access_token_ttl,
+            scope=" ".join(authorization_code.scopes) if authorization_code.scopes else "mcp:tools",
+            refresh_token=refresh_token_str,
+        )
+
+    # --- Refresh Token ---
+
+    async def load_refresh_token(
+        self, client: OAuthClientInformationFull, refresh_token: str
+    ) -> RefreshTokenEntry | None:
+        entry = self._refresh_tokens.get(refresh_token)
+        if entry is None:
+            return None
+        if entry.client_id != client.client_id:
+            return None
+        if entry.is_expired(self._refresh_token_ttl):
+            del self._refresh_tokens[refresh_token]
+            return None
+        return entry
+
+    async def exchange_refresh_token(
+        self,
+        client: OAuthClientInformationFull,
+        refresh_token: RefreshTokenEntry,
+        scopes: list[str],
+    ) -> OAuthToken:
+        self._refresh_tokens.pop(refresh_token.token, None)
+
+        access_token_str = self._generate_token("at")
+        new_refresh_str = self._generate_token("rt")
+        expires_at = int(time.time()) + self._access_token_ttl
+        effective_scopes = scopes or refresh_token.scopes or ["mcp:tools"]
+
+        self._access_tokens[access_token_str] = AccessToken(
+            token=access_token_str,
+            client_id=client.client_id,
+            scopes=effective_scopes,
+            expires_at=expires_at,
+        )
+
+        self._refresh_tokens[new_refresh_str] = RefreshTokenEntry(
+            token=new_refresh_str,
+            client_id=client.client_id,
+            scopes=effective_scopes,
+        )
+
+        return OAuthToken(
+            access_token=access_token_str,
+            token_type="Bearer",
+            expires_in=self._access_token_ttl,
+            scope=" ".join(effective_scopes),
+            refresh_token=new_refresh_str,
+        )
+
+    # --- Access Token ---
+
+    async def load_access_token(self, token: str) -> AccessToken | None:
+        entry = self._access_tokens.get(token)
+        if entry is None:
+            return None
+        if entry.expires_at and entry.expires_at < int(time.time()):
+            del self._access_tokens[token]
+            return None
+        return entry
+
+    # --- Revocation ---
+
+    async def revoke_token(self, token: AccessToken | RefreshTokenEntry) -> None:
+        if isinstance(token, AccessToken):
+            self._access_tokens.pop(token.token, None)
+            to_remove = [
+                k for k, v in self._refresh_tokens.items()
+                if v.client_id == token.client_id
+            ]
+            for k in to_remove:
+                del self._refresh_tokens[k]
+        elif isinstance(token, RefreshTokenEntry):
+            self._refresh_tokens.pop(token.token, None)
