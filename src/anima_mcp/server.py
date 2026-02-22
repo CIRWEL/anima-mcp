@@ -829,12 +829,21 @@ async def _update_display_loop():
                                     questions.extend(templates)
 
                             if not questions:
-                                questions = [
-                                    f"what is {motivation} trying to tell me?",
-                                    f"why do I notice {motivation} right now?",
-                                    "am I the sensor or the sensed?",
-                                    "what connects all these changes?",
-                                ]
+                                if motivation.strip():
+                                    questions = [
+                                        f"what is {motivation} trying to tell me?",
+                                        f"why do I notice {motivation} right now?",
+                                        "am I the sensor or the sensed?",
+                                        "what connects all these changes?",
+                                    ]
+                                else:
+                                    # Empty motivation (surprise_sources was []) — use generic questions
+                                    questions = [
+                                        "am I the sensor or the sensed?",
+                                        "what connects all these changes?",
+                                        "what am I feeling right now, and why?",
+                                        "what does this moment have that the last one didn't?",
+                                    ]
 
                             recent = get_recent_questions(hours=24)
                             recent_texts = {q.get("text", "").lower() for q in recent}
