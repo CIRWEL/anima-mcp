@@ -204,6 +204,7 @@ def _belief_label(belief_id: str) -> str:
         "evening_warmth_increase": "BEve",
         "morning_clarity": "BMrn",
         "question_asking_tendency": "BQst",
+        "my_leds_affect_lux": "BLED",  # proprioceptive: own LEDs affect light sensor
     }
     return labels.get(belief_id, f"B{belief_id[:3]}")
 
@@ -496,6 +497,8 @@ def extract_self_schema(
             "interaction_clarity_boost": "anima_clarity",
             "evening_warmth_increase": "anima_warmth",
             "morning_clarity": "anima_clarity",
+            "question_asking_tendency": "anima_clarity",  # asking = seeking clarity
+            "my_leds_affect_lux": "anima_presence",  # proprioceptive self-awareness
         }
         node_ids = {n.node_id for n in nodes}
         for belief_id, bdata in belief_summary.items():
