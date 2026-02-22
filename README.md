@@ -124,6 +124,28 @@ Three DotStar LEDs map to anima dimensions (warmth, clarity, stability). A const
 | Resting | 35% | Yes (subtle) |
 | Manual off | 0% | No |
 
+### Schema Hub (Unified Self-Model)
+
+The Schema Hub (`schema_hub.py`) orchestrates Lumen's self-understanding through a circulation loop:
+
+```
+Schema → History → Trajectory → feeds back as nodes → Next Schema
+```
+
+**Key features:**
+- **Identity texture** — alive_ratio, awakening count, age visible as schema nodes
+- **Kintsugi gaps** — discontinuities become visible structure, not hidden defects
+- **Trajectory feedback** — identity maturity, attractor position, stability score computed from schema history
+- **Semantic edges** — trajectory nodes connect back to anima dimensions
+
+| Node Type | Examples |
+|-----------|----------|
+| **Meta (identity)** | `meta_existence_ratio`, `meta_awakening_count`, `meta_age_days` |
+| **Meta (gap)** | `meta_gap_duration`, `meta_state_delta` |
+| **Trajectory** | `traj_identity_maturity`, `traj_attractor_position`, `traj_stability_score` |
+
+Persists last schema to `~/.anima/last_schema.json` for gap recovery on wake.
+
 ### Learning Systems
 
 Run in the hardware broker, persist across restarts:
@@ -204,6 +226,7 @@ mcp__anima__git_pull(restart=true)
 |-------|------|
 | Agent instructions | `CLAUDE.md` |
 | Deployment | `DEPLOYMENT.md` |
+| Schema Hub design | `docs/plans/2026-02-22-schema-hub-design.md` |
 | Secrets & env vars | `docs/operations/SECRETS_AND_ENV.md` |
 | OAuth 2.1 design | `docs/plans/2026-02-21-oauth-claude-web-design.md` |
 | Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
@@ -214,7 +237,7 @@ mcp__anima__git_pull(restart=true)
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # 835 tests
+python3 -m pytest tests/ -x -q   # 5200+ tests
 ```
 
 ---
