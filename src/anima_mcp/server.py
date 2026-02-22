@@ -97,6 +97,9 @@ _metacog_monitor: "MetacognitiveMonitor | None" = None  # Forward ref - predicti
 _unitares_bridge: "UnitaresBridge | None" = None  # Forward ref - singleton to avoid creating new sessions
 _growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
 _activity: ActivityManager | None = None  # Activity/wakefulness cycle (circadian LED dimming)
+# SchemaHub - central schema composition with trajectory feedback
+from .schema_hub import SchemaHub
+_schema_hub: SchemaHub | None = None
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
@@ -147,6 +150,13 @@ def _get_shm_client() -> SharedMemoryClient:
         # Use file backend to match broker (Redis caused hangs)
         _shm_client = SharedMemoryClient(mode="read", backend="file")
     return _shm_client
+
+def _get_schema_hub() -> SchemaHub:
+    """Get or create the SchemaHub singleton for schema composition."""
+    global _schema_hub
+    if _schema_hub is None:
+        _schema_hub = SchemaHub()
+    return _schema_hub
 
 def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
@@ -1956,24 +1966,22 @@ async def _update_display_loop():
             # Extracts Lumen's self-representation graph and optionally saves for offline analysis
             if loop_count % SCHEMA_EXTRACTION_INTERVAL == 0 and readings and anima and identity:
                 async def extract_and_validate_schema():
-                    """Extract G_t, save, and optionally run real VQA validation."""
+                    """Extract G_t via SchemaHub, save, and optionally run real VQA validation."""
                     try:
-                        from .self_schema import get_current_schema
                         from .self_schema_renderer import (
                             save_render_to_file, render_schema_to_pixels,
                             compute_visual_integrity_stub, evaluate_vqa
                         )
                         import os
 
-                        # Extract G_t (with preferences and self-beliefs)
+                        # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
                         from .self_model import get_self_model as _get_sm
-                        schema = get_current_schema(
+                        hub = _get_schema_hub()
+                        schema = hub.compose_schema(
                             identity=identity,
                             anima=anima,
                             readings=readings,
                             growth_system=_growth,
-                            include_preferences=True,
-                            force_refresh=True,
                             self_model=_get_sm(),
                         )
 
@@ -2270,6 +2278,17 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             except Exception as e:
                 print(f"[EISV] Bootstrap failed (non-fatal): {e}", file=sys.stderr, flush=True)
 
+            # Initialize SchemaHub and check for gap from previous session
+            try:
+                hub = _get_schema_hub()
+                gap_delta = hub.on_wake()
+                if gap_delta:
+                    print(f"[SchemaHub] Woke after {gap_delta.duration_seconds:.0f}s gap", file=sys.stderr, flush=True)
+                else:
+                    print(f"[SchemaHub] Initialized (no previous schema found)", file=sys.stderr, flush=True)
+            except Exception as she:
+                print(f"[SchemaHub] Init failed (non-fatal): {she}", file=sys.stderr, flush=True)
+
             return  # Success
         except Exception as e:
             is_lock_error = "database is locked" in str(e) or "database is locked" in repr(e)
@@ -2294,7 +2313,21 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
 def sleep():
     """Go to sleep. Call on server shutdown."""
-    global _store, _unitares_bridge, _voice_instance
+    global _store, _unitares_bridge, _voice_instance, _schema_hub
+
+    # Persist schema for gap recovery on next wake
+    if _schema_hub:
+        try:
+            if _schema_hub.persist_schema():
+                try:
+                    print(f"[Sleep] Schema persisted for gap recovery", file=sys.stderr, flush=True)
+                except (ValueError, OSError):
+                    pass
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error persisting schema: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
 
     # Close UnitaresBridge session (prevents "unclosed client session" warnings)
     if _unitares_bridge:
