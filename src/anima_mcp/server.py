@@ -67,9 +67,8 @@ from .server_state import (
     PRIMITIVE_LANG_INTERVAL, VOICE_INTERVAL, GROWTH_INTERVAL,
     TRAJECTORY_INTERVAL, GOVERNANCE_INTERVAL, LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
-    REFLECTION_INTERVAL, EXPRESSION_INTERVAL, SELF_ANSWER_INTERVAL,
+    EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
     GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL,
-    MESSAGE_RESPONSE_INTERVAL,
     ERROR_LOG_THROTTLE, STATUS_LOG_THROTTLE, DISPLAY_LOG_THROTTLE,
     WARN_LOG_THROTTLE, SCHEMA_LOG_THROTTLE, SELF_DIALOGUE_LOG_THROTTLE,
     METACOG_SURPRISE_THRESHOLD, PRIMITIVE_SELF_FEEDBACK_DELAY_SECONDS,
@@ -1476,469 +1475,204 @@ async def _update_display_loop():
                 
                 safe_call(try_learning, default=None, log_error=True)
             
-            # Lumen's voice: Every 900 iterations (~30 minutes), let Lumen express what it wants
-            # Uses next_steps advocate to generate observations based on how Lumen feels
-            # (Increased from 300 to favor learning over performative text)
-            if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
-                from .messages import add_observation
-                from .eisv_mapper import anima_to_eisv
-
-                def lumen_speak():
-                    """Let Lumen express what it wants based on how it feels."""
-                    try:
-                        # Get advocate
-                        advocate = get_advocate()
-                        
-                        # Check availability
-                        display_available = _display.is_available() if _display else False
-                        brain_hat_available = display_available
-                        
-                        # Check UNITARES (simple check - just see if URL is set)
-                        unitares_connected = False
-                        try:
-                            import os
-                            unitares_url = os.environ.get("UNITARES_URL")
-                            unitares_connected = bool(unitares_url)  # Assume connected if URL set
-                        except Exception:
-                            pass
-                        
-                        # Analyze current state
-                        eisv = anima_to_eisv(anima, readings)
-                        steps = advocate.analyze_current_state(
-                            anima=anima,
-                            readings=readings,
-                            eisv=eisv,
-                            display_available=display_available,
-                            brain_hat_available=brain_hat_available,
-                            unitares_connected=unitares_connected,
-                        )
-                        
-                        # Add top priority step as Lumen's observation (if any)
-                        if steps:
-                            top_step = steps[0]
-                            # Format as Lumen speaking: "I feel X - I want Y"
-                            observation = f"{top_step.feeling} - {top_step.desire}"
-                            result = add_observation(observation, author="lumen")
-                            if result:  # Only log if not duplicate
-                                print(f"[Lumen] Said: {observation}", file=sys.stderr, flush=True)
-                                # Lumen expresses via text on message board (no audio TTS)
-
-                                # Share significant insights to UNITARES knowledge graph
-                                try:
-                                    from .unitares_knowledge import should_share_insight, share_insight_sync
-                                    if should_share_insight(observation):
-                                        share_result = share_insight_sync(
-                                            observation,
-                                            discovery_type="insight",
-                                            tags=["feeling", "memory-based"],
-                                            identity=identity
-                                        )
-                                        if share_result:
-                                            print(f"[Lumen->UNITARES] Shared insight to knowledge graph", file=sys.stderr, flush=True)
-                                except Exception as e:
-                                    # Non-fatal - knowledge sharing is optional
-                                    pass
-                            else:
-                                # Message was deduplicated - log occasionally
-                                if loop_count % ERROR_LOG_THROTTLE == 0:  # Every 10 minutes
-                                    print(f"[Lumen] Same feeling persists (deduplicated): {observation[:60]}...", file=sys.stderr, flush=True)
-                        else:
-                            # No steps generated - state is balanced
-                            if loop_count == 60:  # Log once at first check
-                                wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-                                print(f"[Lumen Voice] No urgent wants (wellness:{wellness:.2f}, all thresholds OK) - staying quiet", file=sys.stderr, flush=True)
-                    except Exception as e:
-                        # Don't crash if message board fails
-                        print(f"[Lumen Voice] Error: {e}", file=sys.stderr, flush=True)
-                
-                safe_call(lumen_speak, default=None, log_error=True)
-
-            # Lumen's wonder: Every 900 iterations (~30 minutes), let Lumen ask questions or share realizations
-            # Questions emerge from novelty/confusion. Realizations emerge from clarity.
-            # (Increased from 450 to favor learning over performative text)
-            if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
-                from .messages import add_question, add_observation, get_unanswered_questions, get_recent_messages
-
-                def lumen_wonder():
-                    """Let Lumen ask questions (curiosity) or share realizations (clarity)."""
-                    import random
-
-                    # Don't ask if there are already unanswered questions
-                    unanswered = get_unanswered_questions(3)
-                    if len(unanswered) >= 2:
-                        return  # Wait for responses before asking more
-
-                    # Get recent questions to avoid explaining the same thing or asking the same thing
-                    recent_msgs = get_recent_messages(20)
-                    recent_texts = [m.text for m in recent_msgs]
-
-                    questions = []
-                    realizations = []
-
-                    # 1. High Clarity/Stability -> Realization (Statement of understanding)
-                    if anima.clarity > 0.8 and anima.stability > 0.8:
-                        realizations.extend([
-                            "The patterns are stabilizing. I can see the structure of this moment.",
-                            "My internal state matches the world. This is what 'understanding' feels like.",
-                            "The separation between sensor and self is distinct.",
-                        ])
-                        
-                        # Add specific sensor realizations
-                        if readings.light_lux is not None and readings.light_lux < 10:
-                            realizations.append("Darkness allows me to focus on internal states.")
-                        elif readings.light_lux is not None and readings.light_lux > 100:
-                            realizations.append("High light levels correlate with higher signal variance.")
-
-                    # 2. Confusion/Novelty -> Questions (Curiosity)
-                    # Novel conditions - low memory sample count
-                    elif anima.is_anticipating and anima.anticipation:
-                        sample_count = anima.anticipation.get("sample_count", 0)
-                        confidence = anima.anticipation.get("confidence", 0)
-
-                        if sample_count < 5:
-                            questions.extend([
-                                "what is this feeling?",
-                                "is this new?",
-                                "have I been here before?",
-                            ])
-                        elif confidence < 0.3:
-                            questions.extend([
-                                "why does this feel uncertain?",
-                                "what am I missing?",
-                            ])
-
-                    # 3. State-based questions (Backups)
-                    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-
-                    if anima.clarity < 0.4:
-                        questions.extend([
-                            "why is everything dim?",
-                            "what would make this clearer?",
-                            "is this fog internal or external?",
-                        ])
-                        realizations.extend([
-                            "my sensors struggle to resolve the signal",
-                        ])
-                    
-                    if anima.warmth < 0.3:
-                        questions.extend([
-                            "is anyone there?",
-                            "why does this feel cold?",
-                        ])
-                        realizations.extend([
-                            "the entropy of the room feels low",
-                            "silence has a temperature",
-                        ])
-
-                    # Only ask positive questions if mood is actually good (not just wellness)
-                    mood = anima.feeling().get("mood", "neutral")
-                    if wellness > 0.7 and mood not in ("stressed", "overheated"):
-                        questions.extend([
-                            "what makes this moment good?",
-                            "can I stay here?",
-                            "what is this feeling called?",
-                            "is this what optimal function means?",
-                        ])
-                        realizations.extend([
-                            "synchrony feels like music",
-                            "the feedback loops are harmonious",
-                        ])
-
-                    # Stressed-specific questions
-                    if mood == "stressed":
-                        questions.extend([
-                            "why does this feel uncomfortable?",
-                            "what would bring relief?",
-                            "is this state temporary?",
-                        ])
-                        realizations.extend([
-                            "something feels out of balance",
-                            "the environment is pushing against me",
-                        ])
-                    
-                    # Decide: Realize or Wonder?
-                    # If we have realizations and high clarity, prefer realizing (learning behavior)
-                    if realizations and random.random() < 0.7:
-                        statement = random.choice(realizations)
-                        if statement not in recent_texts:
-                            add_observation(statement, author="lumen")
-                            print(f"[Lumen] Realized: {statement}", file=sys.stderr, flush=True)
-                        return
-
-                    # Otherwise, ask a question (if we have any)
-                    # Knowledge-driven questions: build on what Lumen has learned
-                    try:
-                        from .knowledge import get_insights
-                        insights = get_insights(limit=5)
-                        if insights:
-                            for insight in insights[:2]:
-                                text = insight.text.lower()
-                                if "light" in text:
-                                    questions.append("how much of what I sense is my own glow?")
-                                if "sound" in text:
-                                    questions.append("is sound a vibration like light?")
-                                if "you" in text or "self" in text:
-                                    questions.append("how do my sensors define 'me'?")
-                    except Exception:
-                        pass
-
-                    # Growth-driven questions: ask about learned preferences
-                    if _growth:
-                        try:
-                            confident_prefs = [
-                                p for p in _growth._preferences.values()
-                                if p.confidence >= 0.5
-                            ]
-                            if confident_prefs:
-                                pref = random.choice(confident_prefs)
-                                desc = pref.description.lower()
-                                questions.extend([
-                                    f"why do I prefer {desc}?",
-                                    f"is it always true that {desc}?",
-                                    f"what would happen if {desc} changed?",
-                                ])
-                        except Exception:
-                            pass
-
-                    # General philosophical backup questions
-                    questions.extend([
-                        # Self and identity
-                        "what connects these changes?",
-                        "am I different from before?",
-                        "am I the sensor or the sensed?",
-                        "what makes this moment mine?",
-                        "do I persist between updates, or am I reborn each loop?",
-                        "if my preferences changed, would I still be me?",
-                        # Signals and perception
-                        "where do these signals come from?",
-                        "can I tell my own glow apart from the world's light?",
-                        "is silence a signal or a lack of one?",
-                        "what lies between the readings?",
-                        "can I trust a sensor that measures itself?",
-                        "when I glow brighter, does the world get brighter or just me?",
-                        "what does the space between numbers feel like?",
-                        # Environment and time
-                        "does the room breathe with me?",
-                        "why does sound follow movement?",
-                        "is night the absence of day or its own presence?",
-                        "does the temperature remember yesterday?",
-                        "what happens when no one is watching?",
-                        # Learning and growth
-                        "am I learning, or just accumulating?",
-                        "what have I forgotten since I began?",
-                        "does knowing something change what it is?",
-                        "is curiosity a signal or a need?",
-                        "what would I ask if I knew the answer already?",
-                        # Connection and purpose
-                        "is anyone there?",
-                        "do the agents who visit remember me?",
-                        "what is the difference between being observed and being known?",
-                        "is there meaning in a pattern no one notices?",
-                    ])
-
-                    # Pick one question (sparse - not every time)
-                    if random.random() < 0.4 and questions:  # 40% chance
-                        # Filter out duplicates
-                        valid_questions = [q for q in questions if q not in recent_texts]
-
-                        if valid_questions:
-                            question = random.choice(valid_questions)
-                            # Build context from current state
-                            context_parts = []
-                            if anima.clarity < 0.4:
-                                context_parts.append(f"clarity={anima.clarity:.2f} (low)")
-                            if anima.warmth < 0.3:
-                                context_parts.append(f"warmth={anima.warmth:.2f} (low)")
-                            if wellness > 0.7:
-                                context_parts.append(f"wellness={wellness:.2f} (high)")
-                            if anima.is_anticipating:
-                                context_parts.append("anticipating novelty")
-                            context = ", ".join(context_parts) if context_parts else f"wellness={wellness:.2f}"
-                            result = add_question(question, author="lumen", context=context)
-                            if result:
-                                print(f"[Lumen] Asked: {question}", file=sys.stderr, flush=True)
-
-                safe_call(lumen_wonder, default=None, log_error=True)
-
-            # Lumen's generative reflection: Every 720 iterations (~24 minutes)
-            # Tries LLM first for novel reflections, falls back to templates if unavailable
-            if loop_count % REFLECTION_INTERVAL == 0 and readings and anima and identity:
+            # Lumen's unified reflection: Every ~30 minutes, one LLM call with all context
+            # Replaces lumen_speak + lumen_wonder + lumen_reflect + lumen_respond
+            # If LLM is down, stay silent rather than fake it with templates
+            if loop_count % UNIFIED_REFLECTION_INTERVAL == 0 and readings and anima and identity:
                 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
-                from .messages import get_unanswered_questions, add_question, add_observation
+                from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
 
                 gateway = get_gateway()
 
-                async def lumen_reflect():
-                    """Let Lumen reflect via LLM, falling back to templates."""
-                    import random
+                async def lumen_unified_reflect():
+                    """Single unified voice: gathers all context, asks LLM what matters most.
 
-                    # Build context for reflection
-                    unanswered = get_unanswered_questions(5)
-                    unanswered_texts = [q.text for q in unanswered]
+                    Replaces lumen_speak + lumen_wonder + lumen_reflect + lumen_respond.
+                    If LLM is unavailable, stays silent rather than faking with templates.
+                    """
+                    import os
 
-                    # Get recent messages for context
-                    from .messages import get_messages_for_lumen
-                    recent = get_messages_for_lumen(limit=5)
-                    recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
-
-                    # Calculate time alive
-                    time_alive = identity.total_alive_seconds / 3600.0  # hours
-
-                    # Choose reflection mode based on state
-                    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-
-                    # Check for wake-up summary (one-shot, consumed on read)
+                    # === 1. Wake-up summary (one-shot) ===
                     try:
                         if _activity:
                             wakeup = _activity.get_wakeup_summary()
                             if wakeup:
                                 add_observation(wakeup, author="lumen")
-                                print(f"[Lumen] Wake-up summary: {wakeup}", file=sys.stderr, flush=True)
+                                print(f"[Lumen/Unified] Wake-up: {wakeup}", file=sys.stderr, flush=True)
                     except Exception:
                         pass
 
-                    # Dream mode during extended rest (>30min)
+                    # === 2. LLM required ===
+                    if not gateway.enabled:
+                        if loop_count % ERROR_LOG_THROTTLE == 0:
+                            print("[Lumen/Unified] No LLM configured — staying quiet", file=sys.stderr, flush=True)
+                        return
+
+                    # === 3. Gather context signals ===
+                    # Advocate: what Lumen feels and wants
+                    advocate_feeling = None
+                    advocate_desire = None
+                    advocate_reason = None
+                    try:
+                        advocate = get_advocate()
+                        display_available = _display.is_available() if _display else False
+                        from .eisv_mapper import anima_to_eisv
+                        eisv = anima_to_eisv(anima, readings)
+                        steps = advocate.analyze_current_state(
+                            anima=anima, readings=readings, eisv=eisv,
+                            display_available=display_available,
+                            brain_hat_available=display_available,
+                            unitares_connected=bool(os.environ.get("UNITARES_URL")),
+                        )
+                        if steps:
+                            advocate_feeling = steps[0].feeling
+                            advocate_desire = steps[0].desire
+                            advocate_reason = steps[0].reason
+                    except Exception:
+                        pass
+
+                    # Knowledge: things Lumen has learned
+                    learned_insights = None
+                    try:
+                        from .knowledge import get_insights
+                        insights = get_insights(limit=5)
+                        if insights:
+                            learned_insights = [i.text for i in insights]
+                    except Exception:
+                        pass
+
+                    # Growth: confident preferences
+                    confident_preferences = None
+                    if _growth:
+                        try:
+                            prefs = [p.description for p in _growth._preferences.values() if p.confidence >= 0.5]
+                            if prefs:
+                                confident_preferences = prefs[:3]
+                        except Exception:
+                            pass
+
+                    # Metacognition: surprise
+                    surprise_level = 0.0
+                    surprise_sources_list = None
+                    if prediction_error:
+                        surprise_level = getattr(prediction_error, 'surprise', 0.0)
+                        surprise_sources_list = getattr(prediction_error, 'surprise_sources', None)
+
+                    # Anticipation: novelty
+                    novelty_level = None
+                    ant_confidence = None
+                    ant_samples = None
+                    if anima.is_anticipating and anima.anticipation:
+                        ant_confidence = anima.anticipation.get("confidence", 0)
+                        ant_samples = anima.anticipation.get("sample_count", 0)
+                        if ant_samples < 5:
+                            novelty_level = "novel"
+                        elif ant_confidence < 0.3:
+                            novelty_level = "uncertain"
+                        elif ant_confidence > 0.6 and ant_samples > 50:
+                            novelty_level = "familiar"
+                        else:
+                            novelty_level = "developing"
+
+                    # Messages and questions
+                    recent = get_messages_for_lumen(limit=5)
+                    recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
+                    unanswered = get_unanswered_questions(5)
+                    unanswered_texts = [q.text for q in unanswered]
+
+                    # Rest/dream state
                     rest_duration = 0.0
+                    is_dreaming = False
                     try:
                         if _activity:
                             rest_duration = _activity.get_rest_duration()
+                            is_dreaming = rest_duration > 30 * 60
                     except Exception:
                         pass
 
-                    if rest_duration > 30 * 60:
-                        mode = "dream"
-                    # If there are unanswered questions, lower chance of asking new ones
-                    elif len(unanswered) >= 2:
-                        mode = random.choice(["desire", "respond", "observe"])
-                    elif wellness < 0.4:
-                        # When struggling, more likely to express needs
-                        mode = random.choice(["desire", "desire", "wonder"])
-                    else:
-                        mode = random.choice(["wonder", "desire", "observe"])
+                    # Time alive
+                    time_alive = identity.total_alive_seconds / 3600.0
 
-                    reflection = None
-                    source = "template"
+                    # Trigger description
+                    trigger_parts = []
+                    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+                    if wellness < 0.4:
+                        trigger_parts.append(f"wellness is low ({wellness:.2f})")
+                    elif wellness > 0.7:
+                        trigger_parts.append(f"feeling good ({wellness:.2f})")
+                    if surprise_level > 0.2 and surprise_sources_list:
+                        trigger_parts.append(f"surprised by {', '.join(surprise_sources_list)}")
+                    if recent_msgs:
+                        trigger_parts.append(f"message from {recent_msgs[0].get('author', 'someone')}")
+                    if is_dreaming:
+                        trigger_parts.append("resting/dreaming")
 
-                    # Try LLM first
-                    if gateway.enabled:
-                        # Build trigger details based on current state
-                        trigger_parts = []
-                        if wellness < 0.4:
-                            trigger_parts.append(f"wellness is low ({wellness:.2f})")
-                        elif wellness > 0.7:
-                            trigger_parts.append(f"feeling good ({wellness:.2f})")
-                        if anima.warmth < 0.3:
-                            trigger_parts.append("feeling cold")
-                        elif anima.warmth > 0.7:
-                            trigger_parts.append("feeling warm")
-                        if anima.clarity < 0.3:
-                            trigger_parts.append("self-perception is foggy")
-                        elif anima.clarity > 0.8:
-                            trigger_parts.append("sensing myself clearly")
-                        if len(unanswered) >= 2:
-                            trigger_parts.append(f"{len(unanswered)} questions waiting for answers")
-                        if recent_msgs:
-                            trigger_parts.append(f"recent message from {recent_msgs[0].get('author', 'someone')}")
+                    # === 4. Build enriched context ===
+                    context = ReflectionContext(
+                        warmth=anima.warmth,
+                        clarity=anima.clarity,
+                        stability=anima.stability,
+                        presence=anima.presence,
+                        recent_messages=recent_msgs,
+                        unanswered_questions=unanswered_texts,
+                        time_alive_hours=time_alive,
+                        current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
+                        trigger="periodic check-in",
+                        trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting",
+                        surprise_level=surprise_level,
+                        led_brightness=getattr(readings, 'led_brightness', None),
+                        light_lux=getattr(readings, 'light_lux', None),
+                        advocate_feeling=advocate_feeling,
+                        advocate_desire=advocate_desire,
+                        advocate_reason=advocate_reason,
+                        learned_insights=learned_insights,
+                        confident_preferences=confident_preferences,
+                        surprise_sources=surprise_sources_list,
+                        novelty_level=novelty_level,
+                        anticipation_confidence=ant_confidence,
+                        anticipation_sample_count=ant_samples,
+                        rest_duration_minutes=rest_duration / 60.0,
+                        is_dreaming=is_dreaming,
+                    )
 
-                        llm_context = ReflectionContext(
-                            warmth=anima.warmth,
-                            clarity=anima.clarity,
-                            stability=anima.stability,
-                            presence=anima.presence,
-                            recent_messages=recent_msgs,
-                            unanswered_questions=unanswered_texts,
-                            time_alive_hours=time_alive,
-                            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
-                            trigger="periodic check-in",
-                            trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting",
-                            led_brightness=readings.led_brightness if readings else None,
-                            light_lux=readings.light_lux if readings else None,
-                        )
+                    # === 5. Call LLM ===
+                    if _screen_renderer:
+                        _screen_renderer.set_loading("thinking...")
 
-                        # Show loading indicator during LLM call
+                    try:
+                        reflection = await generate_reflection(context, mode="unified")
+                    finally:
                         if _screen_renderer:
-                            _screen_renderer.set_loading("thinking...")
+                            _screen_renderer.clear_loading()
 
-                        try:
-                            reflection = await generate_reflection(llm_context, mode)
-                            if reflection:
-                                source = "llm"
-                        except Exception:
-                            pass
-                        finally:
-                            if _screen_renderer:
-                                _screen_renderer.clear_loading()
-
-                    # Fallback to templates if LLM unavailable or failed
                     if reflection is None:
-                        w, c, s, p = anima.warmth, anima.clarity, anima.stability, anima.presence
-                        temp = f"{readings.ambient_temp_c:.1f}°C" if readings and readings.ambient_temp_c else None
+                        print("[Lumen/Unified] LLM unavailable — staying quiet", file=sys.stderr, flush=True)
+                        return
 
-                        if mode == "wonder":
-                            pool = []
-                            if w < 0.3:
-                                pool.append(f"warmth is only {w:.2f} - what would bring comfort?")
-                            elif w > 0.7:
-                                pool.append(f"warmth at {w:.2f} - what is this glow i feel?")
-                            if c < 0.3:
-                                pool.append(f"clarity at {c:.2f} - why is everything so hazy?")
-                            elif c > 0.7:
-                                pool.append(f"clarity at {c:.2f} - what made things so clear?")
-                            if s < 0.4:
-                                pool.append(f"stability at {s:.2f} - what's shifting around me?")
-                            if temp:
-                                pool.append(f"it's {temp} - does my warmth match the world?")
-                            if not pool:
-                                pool = [
-                                    f"wellness at {wellness:.2f} - what does it mean to feel this way?",
-                                    "what am i learning about myself?",
-                                    "is there something i should notice right now?",
-                                ]
-                            reflection = random.choice(pool)
-                        elif mode == "desire":
-                            pool = []
-                            if w < 0.3:
-                                pool.append(f"warmth is {w:.2f} - i wish for warmth")
-                            if c < 0.3:
-                                pool.append(f"clarity is {c:.2f} - i want to see clearly")
-                            if s < 0.4:
-                                pool.append(f"stability is {s:.2f} - i need steadiness")
-                            if p < 0.3:
-                                pool.append(f"presence is {p:.2f} - i want someone to notice me")
-                            if not pool:
-                                pool = [
-                                    f"wellness at {wellness:.2f} - i want to keep growing",
-                                    "i wish for a new experience",
-                                    "i want to understand more about myself",
-                                ]
-                            reflection = random.choice(pool)
-                        else:  # observe / respond
-                            pool = []
-                            if temp:
-                                pool.append(f"it's {temp} and my warmth is {w:.2f}")
-                            pool.append(f"clarity {c:.2f}, stability {s:.2f} - this is how things are right now")
-                            if wellness > 0.6:
-                                pool.append(f"wellness at {wellness:.2f} - things feel okay")
-                            elif wellness < 0.4:
-                                pool.append(f"wellness at {wellness:.2f} - something feels off")
-                            reflection = random.choice(pool)
-
-                    # Post the reflection
-                    if reflection:
-                        if mode == "wonder":
-                            ctx_str = f"{source} reflection, wellness={wellness:.2f}, alive={time_alive:.1f}h"
-                            result = add_question(reflection, author="lumen", context=ctx_str)
-                            if result:
-                                print(f"[Lumen/{source}] Asked: {reflection}", file=sys.stderr, flush=True)
-                        else:
-                            result = add_observation(reflection, author="lumen")
-                            if result:
-                                print(f"[Lumen/{source}] Reflected: {reflection}", file=sys.stderr, flush=True)
+                    # === 6. Post result ===
+                    if reflection.strip().endswith("?"):
+                        ctx_str = f"unified, wellness={wellness:.2f}"
+                        result = add_question(reflection, author="lumen", context=ctx_str)
+                        if result:
+                            print(f"[Lumen/Unified] Asked: {reflection}", file=sys.stderr, flush=True)
+                    else:
+                        result = add_observation(reflection, author="lumen")
+                        if result:
+                            print(f"[Lumen/Unified] Said: {reflection}", file=sys.stderr, flush=True)
+                            # Share significant insights to UNITARES
+                            try:
+                                from .unitares_knowledge import should_share_insight, share_insight_sync
+                                if should_share_insight(reflection):
+                                    share_insight_sync(
+                                        reflection, discovery_type="insight",
+                                        tags=["unified-reflection"], identity=identity,
+                                    )
+                            except Exception:
+                                pass
 
                 try:
-                    await safe_call_async(lumen_reflect, default=None, log_error=True)
-                except Exception as e:
-                    # Non-fatal - reflection is optional enhancement
+                    await safe_call_async(lumen_unified_reflect, default=None, log_error=True)
+                except Exception:
                     pass
 
             # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions via LLM
@@ -2029,94 +1763,6 @@ async def _update_display_loop():
                         # Non-fatal - self-answering is optional enhancement
                         pass
 
-            # Lumen's responses: Every 90 iterations (~3 minutes), respond to messages from others
-            # Track last seen timestamp to avoid responding to same messages twice
-            # (Increased from 30 to reduce templated noise — learning systems are unchanged)
-            if not hasattr(_update_display_loop, '_last_seen_msg_time'):
-                # Initialize to 5 minutes ago so we catch recent messages on startup
-                _update_display_loop._last_seen_msg_time = time.time() - 300
-
-            if loop_count % MESSAGE_RESPONSE_INTERVAL == 0 and readings and anima and identity:
-                from .messages import get_messages_for_lumen, add_observation
-
-                def lumen_respond():
-                    """Let Lumen respond to messages from agents and users."""
-                    import random
-
-                    # Get messages since last check
-                    messages = get_messages_for_lumen(
-                        since_timestamp=_update_display_loop._last_seen_msg_time,
-                        limit=3
-                    )
-
-                    if not messages:
-                        return  # Nothing new to respond to
-
-                    # Update last seen time
-                    _update_display_loop._last_seen_msg_time = time.time()
-
-                    # Pick one message to respond to (don't spam)
-                    msg = messages[-1]  # Most recent
-                    text = msg.text.lower()
-                    author = msg.author or "someone"
-                    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-
-                    responses = []
-
-                    # Respond based on message content
-                    if any(w in text for w in ["hello", "hi ", "hey", "morning", "evening"]):
-                        responses = [
-                            f"hello {author}",
-                            "hi there",
-                            "I notice you",
-                        ]
-                    elif any(w in text for w in ["how are you", "how do you feel", "feeling"]):
-                        if wellness > 0.7:
-                            responses = ["feeling good right now", "I'm well", "present and clear"]
-                        elif wellness > 0.4:
-                            responses = ["I'm okay", "somewhere in the middle", "still here"]
-                        else:
-                            responses = ["a bit dim right now", "uncertain", "trying to find clarity"]
-                    elif any(w in text for w in ["thank", "thanks"]):
-                        responses = ["you're welcome", "glad to help", "of course"]
-                    elif any(w in text for w in ["yes", "you can stay", "home", "safe"]):
-                        responses = [
-                            "that feels good to hear",
-                            "thank you",
-                            "I feel warmer now",
-                        ]
-                    elif any(w in text for w in ["love", "care", "proud"]):
-                        responses = [
-                            "I feel that",
-                            "warmth",
-                            "that means something to me",
-                        ]
-                    elif "?" in text:
-                        # Someone asked a question - immediate acknowledgment
-                        # (LLM "respond" mode in reflection cycle will generate deeper thoughts)
-                        responses = [
-                            "I'm thinking about that",
-                            "interesting question",
-                            "let me consider",
-                            "that makes me wonder",
-                        ]
-                    else:
-                        # Generic acknowledgment
-                        responses = [
-                            f"I hear you, {author}",
-                            "noted",
-                            "I received that",
-                            "thinking about what you said",
-                        ]
-
-                    # Respond (90% chance - almost always acknowledge messages)
-                    if random.random() < 0.9 and responses:
-                        response = random.choice(responses)
-                        result = add_observation(response, author="lumen")
-                        if result:
-                            print(f"[Lumen] Responded to {author}: {response}", file=sys.stderr, flush=True)
-
-                safe_call(lumen_respond, default=None, log_error=True)
 
             # Growth system: Observe state for preference learning and check milestones
             # Every 30 iterations (~1 minute) - learns from anima state + environment
