@@ -168,11 +168,30 @@
             font-style: italic;
         }
 
+        .layer-header {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: #666;
+            margin-top: 14px;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .layer-header span {
+            font-size: 0.65rem;
+            color: #444;
+            font-style: italic;
+            text-transform: none;
+            letter-spacing: normal;
+        }
+
         /* EISV mini bars */
         .eisv-row {
             display: flex;
             gap: 8px;
-            margin-top: 10px;
+            margin-top: 4px;
             padding: 8px 10px;
             background: #0d0d12;
             border-radius: 6px;
@@ -293,6 +312,25 @@
         }
 
         .msg-item:last-child { border-bottom: none; }
+
+        .msg-id {
+            font-family: 'DM Mono', monospace;
+            font-size: 0.65rem;
+            color: #555;
+            background: rgba(255,255,255,0.04);
+            padding: 1px 5px;
+            border-radius: 3px;
+            cursor: pointer;
+            user-select: all;
+            transition: color 0.2s, background 0.2s;
+        }
+        .msg-id:hover {
+            color: var(--accent-cyan);
+            background: rgba(0,255,255,0.08);
+        }
+        .msg-id.copied {
+            color: var(--accent-green);
+        }
 
         .msg-meta {
             font-size: 0.7rem;
@@ -546,6 +584,151 @@
             to { transform: translateX(0); opacity: 1; }
         }
 
+        /* Self-Knowledge */
+        .insight-grid {
+            display: grid;
+            gap: 8px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .insight-item {
+            background: #0d0d12;
+            border-radius: 6px;
+            padding: 10px 12px;
+            border: 1px solid #222;
+            font-size: 0.85rem;
+        }
+        .insight-desc { color: var(--text-secondary); }
+        .insight-meta {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 6px;
+            font-size: 0.7rem;
+            color: #555;
+        }
+        .insight-confidence {
+            height: 3px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 2px;
+            width: 60px;
+        }
+        .insight-confidence-fill {
+            height: 100%;
+            border-radius: 2px;
+            background: var(--accent-purple);
+        }
+        .category-tabs {
+            display: flex;
+            gap: 6px;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+        }
+        .category-tab {
+            font-size: 0.7rem;
+            padding: 3px 10px;
+            border-radius: 12px;
+            border: 1px solid #333;
+            background: transparent;
+            color: var(--text-secondary);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .category-tab.active {
+            border-color: var(--accent-purple);
+            color: var(--accent-purple);
+            background: rgba(187,134,252,0.08);
+        }
+        .category-tab:hover { border-color: #555; }
+
+        /* Growth */
+        .autobiography {
+            background: #0d0d12;
+            border-radius: 8px;
+            padding: 14px 16px;
+            border-left: 3px solid var(--accent-purple);
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.5;
+            font-style: italic;
+            margin-bottom: 12px;
+        }
+        .goal-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 0;
+            font-size: 0.85rem;
+        }
+        .goal-bar {
+            width: 60px;
+            height: 4px;
+            background: rgba(255,255,255,0.06);
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+        .goal-bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            background: var(--accent-green);
+        }
+        .goal-desc { color: var(--text-secondary); flex: 1; }
+        .goal-pct { font-size: 0.7rem; color: #555; width: 32px; text-align: right; }
+        .memory-item {
+            display: flex;
+            gap: 10px;
+            padding: 6px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+            font-size: 0.8rem;
+        }
+        .memory-date {
+            color: #555;
+            font-family: 'DM Mono', monospace;
+            font-size: 0.7rem;
+            flex-shrink: 0;
+            width: 70px;
+        }
+        .memory-desc { color: var(--text-secondary); }
+        .pref-tag {
+            display: inline-block;
+            font-size: 0.75rem;
+            padding: 3px 8px;
+            border-radius: 10px;
+            background: rgba(0,255,255,0.06);
+            border: 1px solid rgba(0,255,255,0.15);
+            color: var(--accent-cyan);
+            margin: 3px 3px 3px 0;
+        }
+
+        /* System Health */
+        .health-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 8px;
+        }
+        .health-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: #0d0d12;
+            border-radius: 6px;
+            border: 1px solid #222;
+            font-size: 0.8rem;
+        }
+        .health-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .health-ok { background: var(--accent-green); box-shadow: 0 0 6px rgba(3,218,198,0.4); }
+        .health-warn { background: var(--accent-yellow); box-shadow: 0 0 6px rgba(255,204,0,0.4); }
+        .health-err { background: var(--accent-orange); box-shadow: 0 0 6px rgba(207,102,121,0.4); }
+        .health-off { background: #444; }
+        .health-name { color: var(--text-secondary); }
+        .health-detail { font-size: 0.65rem; color: #555; margin-left: auto; }
+
         /* Gallery */
         .gallery-grid {
             display: grid;
@@ -714,6 +897,44 @@
             </div>
         </div>
 
+        <!-- Self-Knowledge -->
+        <div class="section-title">Self-Knowledge</div>
+        <div class="card">
+            <h3 class="card-title">
+                Discovered Insights
+                <button class="refresh-btn" onclick="fetchSelfKnowledge()" title="Refresh">&#x21bb;</button>
+                <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+            </h3>
+            <div id="insightTabs" class="category-tabs"></div>
+            <div id="insightContent" class="insight-grid">
+                <div class="no-data">Loading insights...</div>
+            </div>
+        </div>
+
+        <!-- Growth -->
+        <div class="section-title">Growth</div>
+        <div class="card">
+            <h3 class="card-title">
+                Lumen's Journey
+                <button class="refresh-btn" onclick="fetchGrowth()" title="Refresh">&#x21bb;</button>
+            </h3>
+            <div id="growthContent">
+                <div class="no-data">Loading growth data...</div>
+            </div>
+        </div>
+
+        <!-- System Health -->
+        <div class="section-title">System Health</div>
+        <div class="card">
+            <h3 class="card-title">
+                Subsystems
+                <button class="refresh-btn" onclick="fetchHealth()" title="Refresh">&#x21bb;</button>
+            </h3>
+            <div id="healthContent" class="health-grid">
+                <div class="no-data">Loading health...</div>
+            </div>
+        </div>
+
         <!-- Gallery -->
         <div class="section-title">Lumen's Gallery</div>
         <div class="card">
@@ -847,18 +1068,21 @@
                     <div class="mood-text">${moodEmoji}</div>
                     <div class="mood-name">${data.name} is ${data.mood}</div>
                 </div>
-                <div class="state-grid" style="margin-top: 12px;">
+                <div class="layer-header">Anima <span>— how Lumen feels</span></div>
+                <div class="state-grid">
                     ${renderStateItem('Warmth', data.warmth, '#ff6b6b', f.warmth)}
                     ${renderStateItem('Clarity', data.clarity, '#4ecdc4', f.clarity)}
                     ${renderStateItem('Stability', data.stability, '#45b7d1', f.stability)}
                     ${renderStateItem('Presence', data.presence, '#96ceb4', f.presence)}
                 </div>
-                <div style="margin-top: 12px; font-size: 0.8rem; color: var(--text-secondary);">
+                <div class="layer-header">Environment <span>— raw sensor inputs</span></div>
+                <div style="font-size: 0.8rem; color: var(--text-secondary); padding: 6px 0;">
                     ${data.ambient_temp != null ? `🌡️ ${data.ambient_temp.toFixed(1)}°C` : ''}
                     ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
                     ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
                     ${data.pressure ? ` · 🔵 ${data.pressure.toFixed(0)} hPa` : ''}
                 </div>
+                <div class="layer-header">Governance <span>— system health metrics (EISV)</span></div>
                 ${eisvHtml}
                 ${govHtml}
             `;
@@ -970,9 +1194,10 @@
 
             const html = questions.map(q => {
                 const age = formatAge(q.timestamp);
+                const idBadge = q.id ? `<span class="msg-id" onclick="copyId('${q.id}', this)" title="Click to copy ID for responds_to">${q.id}</span>` : '';
                 return `
                 <div class="qa-item ${q.answered ? '' : 'unanswered'}">
-                    <div class="qa-question">? ${escapeHtml(q.question)}</div>
+                    <div class="qa-question">${idBadge} ? ${escapeHtml(q.question)}</div>
                     ${q.answer ? `
                         <div class="qa-answer">${escapeHtml(q.answer.text)}</div>
                         <div class="qa-meta">Answered by ${escapeHtml(q.answer.author)} · ${formatAge(q.answer.timestamp)}</div>
@@ -1095,9 +1320,11 @@
             let html = sorted.map(m => {
                 const age = formatAge(m.timestamp);
                 const author = m.author || m.type;
+                const idBadge = m.id ? `<span class="msg-id" onclick="copyId('${m.id}', this)" title="Click to copy">${m.id}</span>` : '';
+                const replyTag = m.responds_to ? `<span style="color: var(--accent-purple); font-size: 0.65rem;">↩ ${m.responds_to}</span>` : '';
                 return `
                     <div class="msg-item type-${m.type}">
-                        <div class="msg-meta">${escapeHtml(author)} &middot; ${age}</div>
+                        <div class="msg-meta">${idBadge} ${escapeHtml(author)} &middot; ${age} ${replyTag}</div>
                         <div class="msg-text">${escapeHtml(m.text)}</div>
                     </div>`;
             }).join('');
@@ -1250,11 +1477,207 @@
             return Math.floor(secs / 86400) + 'd ago';
         }
 
+        function copyId(id, el) {
+            navigator.clipboard.writeText(id).then(() => {
+                el.classList.add('copied');
+                const orig = el.textContent;
+                el.textContent = 'copied!';
+                setTimeout(() => { el.textContent = orig; el.classList.remove('copied'); }, 1200);
+            });
+        }
+
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // ---- Self-Knowledge ----
+        let allInsights = [];
+        let insightFilter = 'all';
+
+        async function fetchSelfKnowledge() {
+            try {
+                const response = await fetch(`${API_BASE}/self-knowledge?limit=50`);
+                const data = await response.json();
+                if (data.error) {
+                    document.getElementById('insightContent').innerHTML = `<div class="no-data">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                allInsights = data.insights || [];
+                document.getElementById('insightCount').textContent = `(${data.total_insights} total)`;
+                renderInsightTabs();
+                renderInsights();
+            } catch (e) {
+                document.getElementById('insightContent').innerHTML = `<div class="no-data">Could not load self-knowledge</div>`;
+            }
+        }
+
+        function renderInsightTabs() {
+            const cats = new Set(allInsights.map(i => i.category || 'unknown'));
+            let html = `<button class="category-tab ${insightFilter === 'all' ? 'active' : ''}" onclick="filterInsights('all')">All</button>`;
+            for (const cat of cats) {
+                html += `<button class="category-tab ${insightFilter === cat ? 'active' : ''}" onclick="filterInsights('${cat}')">${cat}</button>`;
+            }
+            document.getElementById('insightTabs').innerHTML = html;
+        }
+
+        function filterInsights(cat) {
+            insightFilter = cat;
+            renderInsightTabs();
+            renderInsights();
+        }
+
+        function renderInsights() {
+            const filtered = insightFilter === 'all' ? allInsights : allInsights.filter(i => i.category === insightFilter);
+            if (filtered.length === 0) {
+                document.getElementById('insightContent').innerHTML = `<div class="no-data">No insights in this category</div>`;
+                return;
+            }
+            const html = filtered.map(i => {
+                const conf = i.confidence || 0;
+                const confPct = Math.round(conf * 100);
+                const samples = i.sample_count || i.observations || 0;
+                return `
+                    <div class="insight-item">
+                        <div class="insight-desc">${escapeHtml(i.description || i.insight || '')}</div>
+                        <div class="insight-meta">
+                            <span>${samples} samples</span>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <span>${confPct}%</span>
+                                <div class="insight-confidence">
+                                    <div class="insight-confidence-fill" style="width: ${confPct}%;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+            }).join('');
+            document.getElementById('insightContent').innerHTML = html;
+        }
+
+        // ---- Growth ----
+        async function fetchGrowth() {
+            try {
+                const response = await fetch(`${API_BASE}/growth`);
+                const data = await response.json();
+                if (data.error) {
+                    document.getElementById('growthContent').innerHTML = `<div class="no-data">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                renderGrowth(data);
+            } catch (e) {
+                document.getElementById('growthContent').innerHTML = `<div class="no-data">Could not load growth data</div>`;
+            }
+        }
+
+        function renderGrowth(data) {
+            let html = '';
+
+            // Autobiography
+            if (data.autobiography) {
+                html += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
+            }
+
+            // Goals
+            const goals = data.goals;
+            if (goals && goals.current && goals.current.length > 0) {
+                html += `<div class="layer-header">Goals <span>— ${goals.active} active, ${goals.achieved} achieved</span></div>`;
+                html += goals.current.map(g => {
+                    const pct = Math.round((g.progress || 0) * 100);
+                    return `
+                        <div class="goal-item">
+                            <div class="goal-bar"><div class="goal-bar-fill" style="width: ${pct}%;"></div></div>
+                            <div class="goal-desc">${escapeHtml(g.description)}</div>
+                            <div class="goal-pct">${pct}%</div>
+                        </div>`;
+                }).join('');
+            }
+
+            // Memories
+            const memories = data.memories;
+            if (memories && memories.recent && memories.recent.length > 0) {
+                html += `<div class="layer-header">Memories <span>— ${memories.count} total</span></div>`;
+                html += memories.recent.map(m => `
+                    <div class="memory-item">
+                        <div class="memory-date">${m.when || ''}</div>
+                        <div class="memory-desc">${escapeHtml(m.description)}</div>
+                    </div>`).join('');
+            }
+
+            // Preferences
+            const prefs = data.preferences;
+            if (prefs && prefs.learned && prefs.learned.length > 0) {
+                html += `<div class="layer-header">Preferences <span>— ${prefs.count} learned</span></div>`;
+                html += `<div style="padding: 4px 0;">`;
+                html += prefs.learned.map(p =>
+                    `<span class="pref-tag" title="${escapeHtml(p.description || '')}">${escapeHtml(p.name)}</span>`
+                ).join('');
+                html += `</div>`;
+            }
+
+            // Curiosities
+            const curiosities = data.curiosities;
+            if (curiosities && curiosities.questions && curiosities.questions.length > 0) {
+                html += `<div class="layer-header">Curiosities <span>— ${curiosities.count} questions</span></div>`;
+                html += `<div style="font-size: 0.8rem; color: var(--text-secondary); padding: 4px 0;">`;
+                html += curiosities.questions.map(q => `<div style="padding: 2px 0;">• ${escapeHtml(typeof q === 'string' ? q : q.question || q.text || '')}</div>`).join('');
+                html += `</div>`;
+            }
+
+            if (!html) {
+                html = '<div class="no-data">No growth data yet</div>';
+            }
+
+            document.getElementById('growthContent').innerHTML = html;
+        }
+
+        // ---- System Health ----
+        async function fetchHealth() {
+            try {
+                const response = await fetch(`${API_BASE}/health/detailed`);
+                const data = await response.json();
+                if (data.error) {
+                    document.getElementById('healthContent').innerHTML = `<div class="no-data">${escapeHtml(data.error)}</div>`;
+                    return;
+                }
+                renderHealth(data);
+            } catch (e) {
+                document.getElementById('healthContent').innerHTML = `<div class="no-data">Could not load health data</div>`;
+            }
+        }
+
+        function renderHealth(data) {
+            const subsystems = data.subsystems || data;
+            if (typeof subsystems !== 'object') {
+                document.getElementById('healthContent').innerHTML = `<div class="no-data">Unexpected health format</div>`;
+                return;
+            }
+
+            // Handle both formats: {subsystems: {name: {status, ...}}} or flat {name: {status, ...}}
+            const entries = Object.entries(subsystems).filter(([k]) => k !== 'overall' && k !== 'timestamp');
+
+            if (entries.length === 0) {
+                document.getElementById('healthContent').innerHTML = `<div class="no-data">No subsystem data</div>`;
+                return;
+            }
+
+            const html = entries.map(([name, info]) => {
+                const status = typeof info === 'object' ? (info.status || info.state || 'unknown') : info;
+                const isOk = status === 'ok' || status === 'healthy' || status === 'active' || status === true;
+                const isWarn = status === 'degraded' || status === 'warning' || status === 'slow';
+                const isErr = status === 'error' || status === 'failed' || status === 'down' || status === false;
+                const dotClass = isOk ? 'health-ok' : isWarn ? 'health-warn' : isErr ? 'health-err' : 'health-off';
+                const detail = typeof info === 'object' && info.detail ? info.detail : '';
+                return `
+                    <div class="health-item">
+                        <div class="health-dot ${dotClass}"></div>
+                        <span class="health-name">${escapeHtml(name)}</span>
+                        ${detail ? `<span class="health-detail">${escapeHtml(detail)}</span>` : ''}
+                    </div>`;
+            }).join('');
+
+            document.getElementById('healthContent').innerHTML = html;
         }
 
         // ---- Keyboard (only close lightbox if not typing) ----
@@ -1273,14 +1696,20 @@
         setTimeout(fetchLearning, 200);
         setTimeout(fetchVoice, 300);
         setTimeout(fetchGallery, 400);
+        setTimeout(fetchSelfKnowledge, 500);
+        setTimeout(fetchGrowth, 600);
+        setTimeout(fetchHealth, 700);
 
         // ---- Auto-refresh ----
-        setInterval(fetchState, 10000);      // 10s
-        setInterval(fetchQA, 20000);         // 20s (merged notification check - was 2 timers hitting /qa)
-        setInterval(fetchMessages, 30000);   // 30s
-        setInterval(fetchLearning, 60000);   // 60s
-        setInterval(fetchVoice, 15000);      // 15s (was 5s - too aggressive)
-        setInterval(fetchGallery, 120000);   // 2min
+        setInterval(fetchState, 10000);           // 10s
+        setInterval(fetchQA, 20000);              // 20s
+        setInterval(fetchMessages, 30000);        // 30s
+        setInterval(fetchLearning, 60000);        // 60s
+        setInterval(fetchVoice, 15000);           // 15s
+        setInterval(fetchGallery, 120000);        // 2min
+        setInterval(fetchSelfKnowledge, 120000);  // 2min
+        setInterval(fetchGrowth, 120000);         // 2min
+        setInterval(fetchHealth, 30000);          // 30s
     </script>
 </body>
 
