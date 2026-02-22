@@ -311,7 +311,8 @@ Things agents keep re-discovering. Read this so you don't waste time.
 
 | Fact | Detail |
 |------|--------|
-| **Transport** | Streamable HTTP only at `/mcp/`. SSE was removed. No `/sse` endpoint exists. |
+| **Transport** | Streamable HTTP only at `/mcp/`. SSE was removed. No `/sse` endpoint exists. OAuth 2.1 required via ngrok (`lumen-anima.ngrok.io`); LAN/Tailscale/localhost are open. |
+| **OAuth env vars** | `ANIMA_OAUTH_ISSUER_URL`, `ANIMA_OAUTH_AUTO_APPROVE`, `ANIMA_OAUTH_SECRET` (optional). Tokens in-memory, reset on restart. See `docs/operations/SECRETS_AND_ENV.md`. |
 | **Ports** | anima-mcp = **8766**, UNITARES governance = **8767**. Never guess. |
 | **Pi restart time** | 30-60 seconds after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. |
 | **Tailscale IPs** | Pi: `100.103.208.117`, Mac: `100.96.201.46`. These are stable. |

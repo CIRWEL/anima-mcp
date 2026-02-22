@@ -88,7 +88,7 @@
 | `operations/QUICK_START_PI.md` | Quick Pi setup reference |
 | `operations/REFLASH_RECOVERY.md` | Post-reflash restore (broker+anima, anima.env, DB corruption) |
 | `operations/RESILIENCE_ANALYSIS.md` | Gaps, bottlenecks, bugs, resilience opportunities |
-| `operations/SECRETS_AND_ENV.md` | API keys — GROQ_API_KEY, UNITARES_AUTH (never in git) |
+| `operations/SECRETS_AND_ENV.md` | API keys & OAuth — GROQ_API_KEY, UNITARES_AUTH, ANIMA_OAUTH_* (never in git) |
 | `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
 
 **Network access:**

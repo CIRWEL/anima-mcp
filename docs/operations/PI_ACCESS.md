@@ -63,7 +63,7 @@ ssh lumen.local 'journalctl -u anima.service -n 50 --no-pager'
 
 ## Secrets (API Keys)
 
-Edit `~/.anima/anima.env` on Pi for GROQ_API_KEY, UNITARES_AUTH. See `docs/operations/SECRETS_AND_ENV.md`.
+Edit `~/.anima/anima.env` on Pi for GROQ_API_KEY, UNITARES_AUTH, and ANIMA_OAUTH_* vars. See `docs/operations/SECRETS_AND_ENV.md`.
 
 ## Check Processes
 ```bash

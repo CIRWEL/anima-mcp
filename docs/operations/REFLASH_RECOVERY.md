@@ -72,7 +72,7 @@ Lumen stores everything in `~/.anima/` on the Pi:
 
 **Canonical path on Pi:** `/home/unitares-anima/.anima/anima.db` (systemd uses this)
 
-**Secrets:** `~/.anima/anima.env` — GROQ_API_KEY, UNITARES_AUTH. See `docs/operations/SECRETS_AND_ENV.md`.
+**Secrets:** `~/.anima/anima.env` — GROQ_API_KEY, UNITARES_AUTH, ANIMA_OAUTH_* (for Claude.ai web). See `docs/operations/SECRETS_AND_ENV.md`.
 
 ---
 
