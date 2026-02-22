@@ -485,6 +485,13 @@ class SchemaHub:
                 raw_value={"center": center},
             ))
 
+            # Add edge from attractor to primary anima dimension (warmth)
+            schema.edges.append(SchemaEdge(
+                source_id="traj_attractor_position",
+                target_id="anima_warmth",
+                weight=center_magnitude,
+            ))
+
         # Stability (inverse of variance)
         if traj.attractor and traj.attractor.get("variance"):
             variance = traj.attractor["variance"]
@@ -496,6 +503,13 @@ class SchemaHub:
                 label="Stable",
                 value=stability,
                 raw_value={"variance": variance},
+            ))
+
+            # Add edge from trajectory stability to anima stability
+            schema.edges.append(SchemaEdge(
+                source_id="traj_stability_score",
+                target_id="anima_stability",
+                weight=stability,
             ))
 
         return schema
