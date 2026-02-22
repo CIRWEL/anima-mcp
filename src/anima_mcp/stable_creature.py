@@ -38,6 +38,7 @@ import os
 import signal
 import sys
 import asyncio
+import concurrent.futures
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -233,9 +234,30 @@ def run_creature():
     print(f"[StableCreature] Creature '{identity.name or '(unnamed)'}' is alive.")
     print("[StableCreature] Entering main loop...")
 
-    # Initialize event loop for async calls
+    # Initialize event loop for async calls (used by background thread)
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    # Background thread executor for non-blocking governance/cognitive calls.
+    # Single worker prevents concurrency issues; the main loop submits work
+    # and checks results on the next iteration instead of blocking.
+    _bg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="creature-bg")
+
+    def _run_async_in_background(coro, timeout=5.0):
+        """Run an async coroutine in the background thread's event loop with timeout.
+
+        Returns the result of the coroutine. Exceptions propagate to the Future.
+        """
+        bg_loop = asyncio.new_event_loop()
+        try:
+            return bg_loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
+        finally:
+            bg_loop.close()
+
+    # Track background futures so the main loop can skip if still running
+    _governance_future = None   # type: Optional[concurrent.futures.Future]
+    _cognitive_future = None    # type: Optional[concurrent.futures.Future]
+    _memory_future = None       # type: Optional[concurrent.futures.Future]
 
     # Initialize Metacognition Monitor
     metacog = get_metacognitive_monitor()
@@ -368,6 +390,32 @@ def run_creature():
                     time.sleep(UPDATE_INTERVAL)
                     continue
 
+            # 2b-pre. Collect results from background futures (non-blocking)
+            if _cognitive_future is not None and _cognitive_future.done():
+                try:
+                    cog_result = _cognitive_future.result()
+                    if cog_result and "synthesis" in cog_result:
+                        print(f"[Cognitive] SYNTHESIS: {cog_result['synthesis']}", file=sys.stderr, flush=True)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                except Exception as e:
+                    print(f"[Cognitive] Error: {e}", file=sys.stderr, flush=True)
+                _cognitive_future = None
+
+            if _memory_future is not None and _memory_future.done():
+                try:
+                    mem_result = _memory_future.result()
+                    if mem_result:
+                        relevant_memories = mem_result
+                        if memory_retriever:
+                            memory_context = memory_retriever.format_for_context(relevant_memories)
+                        print(f"[Memory] Retrieved: {len(relevant_memories)} relevant memories", file=sys.stderr, flush=True)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    pass
+                except Exception as e:
+                    print(f"[Learning] Memory retrieval error: {e}", file=sys.stderr, flush=True)
+                _memory_future = None
+
             # 2b. Metacognition: Compare prediction to reality
             pred_error = metacog.observe(readings, anima)
             
@@ -380,42 +428,36 @@ def run_creature():
                     print(f"[Metacog] DISCREPANCY: {reflection.discrepancy_description}", file=sys.stderr, flush=True)
 
                 # Dialectic synthesis for high surprise (rate limited to once per 60s)
+                # Runs in background thread to avoid blocking the sensor loop
                 current_time = time.time()
                 if cognitive and cognitive.enabled and pred_error.surprise > 0.3:
-                    if current_time - last_dialectic_time > 60:
+                    if current_time - last_dialectic_time > 60 and _cognitive_future is None:
                         last_dialectic_time = current_time
-                        try:
-                            # Build thesis from the surprise
-                            thesis = f"I expected {', '.join(pred_error.surprise_sources or ['stability'])} but experienced significant deviation"
-                            context = f"Current state: warmth={anima.warmth:.2f}, clarity={anima.clarity:.2f}, surprise={pred_error.surprise:.0%}"
+                        # Build thesis from the surprise
+                        _cog_thesis = f"I expected {', '.join(pred_error.surprise_sources or ['stability'])} but experienced significant deviation"
+                        _cog_context = f"Current state: warmth={anima.warmth:.2f}, clarity={anima.clarity:.2f}, surprise={pred_error.surprise:.0%}"
+                        _cog_sources = list(pred_error.surprise_sources or [])
 
-                            # Run dialectic synthesis (non-blocking via timeout)
-                            synthesis = loop.run_until_complete(
-                                asyncio.wait_for(
-                                    cognitive.dialectic_synthesis(thesis, context=context),
-                                    timeout=5.0
-                                )
+                        def _do_cognitive():
+                            synthesis = _run_async_in_background(
+                                cognitive.dialectic_synthesis(_cog_thesis, context=_cog_context),
+                                timeout=5.0
                             )
                             if synthesis and "synthesis" in synthesis:
-                                print(f"[Cognitive] SYNTHESIS: {synthesis['synthesis']}", file=sys.stderr, flush=True)
-
                                 # Store insight in UNITARES knowledge graph
                                 if unitares_cog and unitares_cog.enabled:
-                                    loop.run_until_complete(
-                                        asyncio.wait_for(
-                                            unitares_cog.store_knowledge(
-                                                summary=synthesis.get("synthesis", ""),
-                                                discovery_type="insight",
-                                                tags=["lumen", "dialectic", "surprise"] + (pred_error.surprise_sources or []),
-                                                content={"thesis": thesis, "full_synthesis": synthesis}
-                                            ),
-                                            timeout=3.0
-                                        )
+                                    _run_async_in_background(
+                                        unitares_cog.store_knowledge(
+                                            summary=synthesis.get("synthesis", ""),
+                                            discovery_type="insight",
+                                            tags=["lumen", "dialectic", "surprise"] + _cog_sources,
+                                            content={"thesis": _cog_thesis, "full_synthesis": synthesis}
+                                        ),
+                                        timeout=3.0
                                     )
-                        except asyncio.TimeoutError:
-                            pass  # Cognitive inference timed out - continue
-                        except Exception as e:
-                            print(f"[Cognitive] Error: {e}", file=sys.stderr, flush=True)
+                            return synthesis
+
+                        _cognitive_future = _bg_executor.submit(_do_cognitive)
 
             # ==================== ENHANCED LEARNING INTEGRATION ====================
 
@@ -499,30 +541,27 @@ def run_creature():
                 except Exception as e:
                     print(f"[Learning] Preference error: {e}", file=sys.stderr, flush=True)
 
-            # 2b-iv. Memory Retrieval: Let past inform present
+            # 2b-iv. Memory Retrieval: Let past inform present (background thread)
             relevant_memories = []
-            if memory_retriever and should_reflect:
-                try:
-                    # Retrieve memories relevant to current surprise
-                    relevant_memories = loop.run_until_complete(
-                        asyncio.wait_for(
-                            retrieve_relevant_memories(
-                                surprise_sources=pred_error.surprise_sources,
-                                warmth=anima.warmth,
-                                clarity=anima.clarity,
-                                stability=anima.stability,
-                                limit=2
-                            ),
-                            timeout=2.0
-                        )
+            if memory_retriever and should_reflect and _memory_future is None:
+                _mem_sources = list(pred_error.surprise_sources or [])
+                _mem_warmth = anima.warmth
+                _mem_clarity = anima.clarity
+                _mem_stability = anima.stability
+
+                def _do_memory():
+                    return _run_async_in_background(
+                        retrieve_relevant_memories(
+                            surprise_sources=_mem_sources,
+                            warmth=_mem_warmth,
+                            clarity=_mem_clarity,
+                            stability=_mem_stability,
+                            limit=2
+                        ),
+                        timeout=2.0
                     )
-                    if relevant_memories:
-                        memory_context = memory_retriever.format_for_context(relevant_memories)
-                        print(f"[Memory] Retrieved: {len(relevant_memories)} relevant memories", file=sys.stderr, flush=True)
-                except asyncio.TimeoutError:
-                    pass
-                except Exception as e:
-                    print(f"[Learning] Memory retrieval error: {e}", file=sys.stderr, flush=True)
+
+                _memory_future = _bg_executor.submit(_do_memory)
 
             # 2b-v. Action Selection: Choose what to do based on state and preferences
             selected_action = None
@@ -658,42 +697,57 @@ def run_creature():
                 except Exception as e:
                     print(f"[StableCreature] Voice update error: {e}", file=sys.stderr, flush=True)
 
-            # 3. Governance Check-in (if bridge available) - do BEFORE shared memory write
+            # 3. Governance Check-in (if bridge available) - runs in background thread
             # Rate limited to every GOVERNANCE_INTERVAL seconds to avoid overwhelming server
             # First check-in always happens (to sync identity), then rate limited
             current_time = time.time()
             should_check_governance = first_check_in or (current_time - last_governance_time >= GOVERNANCE_INTERVAL)
 
-            if bridge and should_check_governance:
+            # Collect results from previous governance future (non-blocking)
+            if _governance_future is not None and _governance_future.done():
                 try:
-                    # Add timeout to prevent freezing if UNITARES is slow
-                    is_available = loop.run_until_complete(
-                        asyncio.wait_for(bridge.check_availability(), timeout=2.0)
-                    )
-                    if is_available or bridge._url is None: # local fallback works even if url is None
-                        decision = loop.run_until_complete(
-                            asyncio.wait_for(
-                                bridge.check_in(anima, readings, identity=identity, is_first_check_in=first_check_in),
-                                timeout=2.0
-                            )
-                        )
-                        last_decision = decision
-                        last_governance_time = current_time
-                        first_check_in = False  # Only sync identity metadata once
-                        # Record interaction if governance indicates human involvement
-                        if activity_manager and decision and decision.get("action") == "wait_for_input":
+                    gov_result = _governance_future.result()
+                    if gov_result is not None:
+                        last_decision = gov_result["decision"]
+                        last_governance_time = gov_result["time"]
+                        if gov_result.get("first"):
+                            first_check_in = False
+                        if activity_manager and last_decision and last_decision.get("action") == "wait_for_input":
                             activity_manager.record_interaction()
                 except asyncio.TimeoutError:
-                    # Governance timeout is normal if network is slow - continue silently
-                    last_governance_time = current_time  # Still count as a check to avoid retry spam
+                    last_governance_time = current_time
                 except asyncio.CancelledError:
-                    # Task cancelled - don't propagate, just continue
                     pass
                 except Exception as e:
-                    # Log but never crash - governance is optional
-                    last_governance_time = current_time  # Avoid retry spam on errors
+                    last_governance_time = current_time
                     if "Connection refused" not in str(e) and "Cannot connect" not in str(e):
                         print(f"[StableCreature] Governance error (non-fatal): {e}", file=sys.stderr, flush=True)
+                _governance_future = None
+
+            # Submit new governance check-in if due and no background task running
+            if bridge and should_check_governance and _governance_future is None:
+                # Capture current values for the closure (avoid stale references)
+                _gov_anima = anima
+                _gov_readings = readings
+                _gov_identity = identity
+                _gov_first = first_check_in
+                _gov_time = current_time
+
+                def _do_governance():
+                    # check_in internally calls check_availability via circuit breaker,
+                    # so no need for a separate check_availability() call.
+                    decision = _run_async_in_background(
+                        bridge.check_in(
+                            _gov_anima, _gov_readings,
+                            identity=_gov_identity,
+                            is_first_check_in=_gov_first
+                        ),
+                        timeout=5.0  # total budget for availability check + check-in
+                    )
+                    return {"decision": decision, "time": _gov_time, "first": _gov_first}
+
+                _governance_future = _bg_executor.submit(_do_governance)
+                last_governance_time = current_time  # Prevent re-submit while running
 
             # 3b. Write to Shared Memory (Broker) - includes governance and metacognition
             shm_data = {
@@ -857,6 +911,15 @@ def run_creature():
                 voice.stop()
             except Exception:
                 pass
+
+        # Shut down background executor (wait up to 3s for in-flight tasks)
+        try:
+            _bg_executor.shutdown(wait=True, cancel_futures=True)
+        except TypeError:
+            # Python <3.9 doesn't have cancel_futures
+            _bg_executor.shutdown(wait=False)
+        except Exception:
+            pass
 
         # Close UNITARES bridge session (connection pooling cleanup)
         if bridge:
