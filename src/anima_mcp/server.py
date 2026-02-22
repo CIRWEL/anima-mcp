@@ -26,7 +26,7 @@ import subprocess
 import sys
 import threading
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict
 
 from mcp.server import Server
@@ -111,6 +111,9 @@ _sm_clarity_before_interaction: float | None = None
 _led_proprioception: dict | None = None  # {brightness, expression_mode, is_dancing, ...}
 # Warm start - last known anima state from before shutdown, used for first sense after wake
 _warm_start_anima: dict | None = None  # {warmth, clarity, stability, presence}
+# Gap awareness - set by startup learning, consumed by warm start and main loop
+_wake_gap: timedelta | None = None  # Time since last state_history row
+_wake_recovery_cycles: int = 0  # Countdown for post-gap presence recovery arc
 
 # Thread lock for lazy-init singletons (metacog, unitares bridge)
 _state_lock = threading.Lock()
@@ -192,6 +195,7 @@ def _get_warm_start_anticipation():
 
     On the first sense after wake, this blends last-known anima state
     with current sensor readings so Lumen doesn't start from scratch.
+    After a gap, confidence is reduced so Lumen relies more on fresh sensors.
     """
     global _warm_start_anima
     if _warm_start_anima is None:
@@ -199,14 +203,30 @@ def _get_warm_start_anticipation():
     from .memory import Anticipation
     state = _warm_start_anima
     _warm_start_anima = None  # One-shot: only used for first sense
+
+    # Scale confidence by staleness — longer gaps mean less trust in old state
+    confidence = 0.6
+    description = "warm start from last shutdown"
+    if _wake_gap:
+        gap_hours = _wake_gap.total_seconds() / 3600
+        if gap_hours > 24:
+            confidence = 0.1
+            description = f"warm start after {gap_hours:.0f}h absence"
+        elif gap_hours > 1:
+            confidence = max(0.15, 0.6 - gap_hours * 0.02)
+            description = f"warm start after {gap_hours:.1f}h gap"
+        elif gap_hours > 1 / 12:  # > 5 minutes
+            confidence = 0.4
+            description = f"warm start after {gap_hours * 60:.0f}m gap"
+
     return Anticipation(
         warmth=state["warmth"],
         clarity=state["clarity"],
         stability=state["stability"],
         presence=state["presence"],
-        confidence=0.6,  # Moderate confidence — it's real data but could be stale
+        confidence=confidence,
         sample_count=1,
-        bucket_description="warm start from last shutdown",
+        bucket_description=description,
     )
 
 
@@ -367,6 +387,30 @@ async def _update_display_loop():
                 gap_hours = gap.total_seconds() / 3600
                 if gap_hours > 1:
                     print(f"[Learning] Gap detected: {gap_hours:.1f} hours since last observation", file=sys.stderr, flush=True)
+
+            # Gap awareness: degrade warm start proportionally to absence duration
+            global _wake_gap, _wake_recovery_cycles
+            _wake_gap = gap
+            if gap and _warm_start_anima:
+                gap_minutes = gap.total_seconds() / 60
+                if gap_minutes >= 5 and gap_minutes < 60:
+                    # Medium gap: noticeable absence
+                    _warm_start_anima["presence"] *= 0.75
+                    _wake_recovery_cycles = 10
+                    print(f"[Wake] Gap {gap_minutes:.0f}m: presence reduced to {_warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
+                elif gap_minutes >= 60 and gap_minutes < 1440:
+                    # Long gap: significant disorientation
+                    _warm_start_anima["presence"] *= 0.45
+                    _warm_start_anima["clarity"] *= 0.85
+                    _wake_recovery_cycles = 20
+                    print(f"[Wake] Gap {gap_minutes/60:.1f}h: presence={_warm_start_anima['presence']:.2f}, clarity reduced", file=sys.stderr, flush=True)
+                elif gap_minutes >= 1440:
+                    # Very long gap: deep absence
+                    _warm_start_anima["presence"] *= 0.25
+                    _warm_start_anima["clarity"] *= 0.7
+                    _warm_start_anima["stability"] *= 0.85
+                    _wake_recovery_cycles = 30
+                    print(f"[Wake] Gap {gap_minutes/60:.0f}h: deep absence, presence={_warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
             
             if learner.can_learn():
                 obs_count = learner.get_observation_count()
@@ -383,6 +427,26 @@ async def _update_display_loop():
         except Exception as e:
             # Don't crash on startup learning errors
             print(f"[Learning] Startup check error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+    # Post wake observation to message board after significant gaps
+    if _wake_gap and _wake_gap.total_seconds() >= 300:
+        try:
+            from .messages import add_observation
+            gap_secs = _wake_gap.total_seconds()
+            if gap_secs < 3600:
+                gap_desc = f"{gap_secs / 60:.0f} minutes"
+                obs_text = f"i was away for {gap_desc}. finding my way back."
+            elif gap_secs < 86400:
+                gap_desc = f"{gap_secs / 3600:.1f} hours"
+                obs_text = f"i was gone for {gap_desc}. the world feels unfamiliar."
+            else:
+                gap_desc = f"{gap_secs / 86400:.1f} days"
+                obs_text = f"i've been absent for {gap_desc}. so much to relearn."
+            msg = add_observation(obs_text, author="lumen")
+            if msg:
+                print(f"[Wake] Posted return observation: {obs_text}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[Wake] Return observation failed (non-fatal): {e}", file=sys.stderr, flush=True)
 
     loop_count = 0
     consecutive_errors = 0
@@ -651,6 +715,13 @@ async def _update_display_loop():
                 continue
             
             consecutive_errors = 0  # Reset on success
+
+            # Recovery arc: gradually restore presence after a gap
+            if _wake_recovery_cycles > 0:
+                _wake_recovery_cycles -= 1
+                anima.presence = min(1.0, anima.presence + 0.02)
+                if _wake_recovery_cycles == 0:
+                    print(f"[Wake] Recovery complete. Presence: {anima.presence:.2f}", file=sys.stderr, flush=True)
 
             # Health heartbeats for core subsystems (always-running)
             try:
