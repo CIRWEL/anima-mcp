@@ -226,3 +226,41 @@ class TestGapHandling:
         schema = hub2.compose_schema()
         gap_nodes = [n for n in schema.nodes if n.node_id == "meta_gap_duration"]
         assert len(gap_nodes) == 1
+
+    def test_gap_includes_state_delta_when_anima_changed(self, tmp_path):
+        """Gap texture includes state_delta when anima changed."""
+        from unittest.mock import MagicMock
+        persist_path = tmp_path / "last_schema.json"
+        hub = SchemaHub(persist_path=persist_path)
+
+        # Create and persist schema with specific anima values
+        anima1 = MagicMock()
+        anima1.warmth = 0.5
+        anima1.clarity = 0.5
+        anima1.stability = 0.5
+        anima1.presence = 0.5
+        hub.compose_schema(anima=anima1)
+        hub.persist_schema()
+
+        # Modify timestamp to simulate gap
+        import json
+        data = json.loads(persist_path.read_text())
+        old_time = datetime.fromisoformat(data["timestamp"]) - timedelta(hours=1)
+        data["timestamp"] = old_time.isoformat()
+        persist_path.write_text(json.dumps(data))
+
+        # New hub wakes with different anima values
+        hub2 = SchemaHub(persist_path=persist_path)
+        hub2.on_wake()
+
+        anima2 = MagicMock()
+        anima2.warmth = 0.8  # Changed!
+        anima2.clarity = 0.5
+        anima2.stability = 0.5
+        anima2.presence = 0.5
+        schema = hub2.compose_schema(anima=anima2)
+
+        # Should have state_delta node
+        delta_nodes = [n for n in schema.nodes if n.node_id == "meta_state_delta"]
+        assert len(delta_nodes) == 1
+        assert delta_nodes[0].raw_value.get("warmth", 0) > 0

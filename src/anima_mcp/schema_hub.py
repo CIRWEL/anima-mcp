@@ -65,6 +65,7 @@ class SchemaHub:
         self.last_trajectory: Optional['TrajectorySignature'] = None
         self.persist_path = persist_path or Path.home() / ".anima" / "last_schema.json"
         self.last_gap_delta: Optional[GapDelta] = None
+        self._previous_schema: Optional[SelfSchema] = None
         self._trajectory_compute_interval = 20  # Recompute every N schemas
 
     def compose_schema(
@@ -293,7 +294,10 @@ class SchemaHub:
         previous = self.load_previous_schema()
         if previous is None:
             self.last_gap_delta = None
+            self._previous_schema = None
             return None
+
+        self._previous_schema = previous  # Store for anima_delta computation
 
         # Create a temporary current schema just for delta computation
         temp_schema = SelfSchema(timestamp=datetime.now(), nodes=[], edges=[])
@@ -303,11 +307,12 @@ class SchemaHub:
 
         if duration < 60:  # Less than 1 minute isn't really a gap
             self.last_gap_delta = None
+            self._previous_schema = None
             return None
 
         self.last_gap_delta = GapDelta(
             duration_seconds=duration,
-            anima_delta={},  # Will be filled on first real compose
+            anima_delta={},  # Will be populated in _inject_gap_texture
             beliefs_decayed=[],
             was_gap=True,
         )
@@ -325,6 +330,14 @@ class SchemaHub:
             return schema
 
         delta = self.last_gap_delta
+
+        # Populate anima_delta now that we have current schema
+        if self._previous_schema and not delta.anima_delta:
+            for dim in ["warmth", "clarity", "stability", "presence"]:
+                prev_node = next((n for n in self._previous_schema.nodes if n.node_id == f"anima_{dim}"), None)
+                curr_node = next((n for n in schema.nodes if n.node_id == f"anima_{dim}"), None)
+                if prev_node and curr_node:
+                    delta.anima_delta[dim] = abs(curr_node.value - prev_node.value)
 
         # Gap duration node
         # Normalize: 24 hours = 1.0
@@ -352,7 +365,8 @@ class SchemaHub:
                 raw_value=delta.anima_delta,
             ))
 
-        # Clear gap delta after injection (one-time)
+        # Clear after injection
         self.last_gap_delta = None
+        self._previous_schema = None
 
         return schema
