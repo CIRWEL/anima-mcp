@@ -810,6 +810,7 @@ async def _update_display_loop():
                                     f"stability at {stability_val} - what's causing this fluctuation?",
                                     f"stability is {stability_val} - am I adapting to something new?",
                                     "what would help me feel more grounded?",
+                                    "what is the relationship between pressure and neural stability within me?",
                                 ],
                                 "presence": [
                                     f"presence at {presence_val} - do I feel fully here right now?",
@@ -823,9 +824,22 @@ async def _update_display_loop():
                                 ],
                             }
 
+                            # Map raw sensor names to template keys
+                            # surprise_sources can be sensor names (ambient_temp, pressure, humidity)
+                            # or anima dimensions (warmth, clarity, stability, presence)
+                            sensor_to_template = {
+                                "ambient_temp": "warmth",
+                                "pressure": "stability",
+                                "humidity": "stability",
+                            }
+                            mapped_motivation = motivation
+                            for sensor, template_key in sensor_to_template.items():
+                                if sensor in mapped_motivation:
+                                    mapped_motivation += f", {template_key}"
+
                             questions = []
                             for key, templates in question_templates.items():
-                                if key in motivation:
+                                if key in mapped_motivation:
                                     questions.extend(templates)
 
                             if not questions:
