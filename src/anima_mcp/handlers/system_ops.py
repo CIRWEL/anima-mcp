@@ -28,6 +28,40 @@ async def _delayed_restart():
         os._exit(1)
 
 
+def _sync_systemd_services(repo_root: Path) -> list[str]:
+    """Sync systemd service files from repo to /etc/systemd/system/ if changed."""
+    synced = []
+    systemd_dir = repo_root / "systemd"
+    target_dir = Path("/etc/systemd/system")
+    if not systemd_dir.exists():
+        return synced
+
+    for service_file in systemd_dir.glob("*.service"):
+        target = target_dir / service_file.name
+        # Only sync if target exists (don't install new services automatically)
+        if not target.exists():
+            continue
+        try:
+            repo_content = service_file.read_text()
+            target_content = target.read_text()
+            if repo_content != target_content:
+                result = subprocess.run(
+                    ["sudo", "cp", str(service_file), str(target)],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode == 0:
+                    synced.append(service_file.name)
+        except Exception:
+            continue
+
+    if synced:
+        subprocess.run(
+            ["sudo", "systemctl", "daemon-reload"],
+            capture_output=True, timeout=10
+        )
+    return synced
+
+
 async def handle_git_pull(arguments: dict) -> list[TextContent]:
     """
     Pull latest code from git and optionally restart.
@@ -71,7 +105,12 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                     shutil.copy2(item, dst)
             shutil.rmtree(ext_path, ignore_errors=True)
 
+            # Sync systemd service files if changed
+            synced_services = _sync_systemd_services(repo_root)
+
             output = {"success": True, "bootstrap": "Deployed from GitHub zip", "repo": str(repo_root)}
+            if synced_services:
+                output["synced_services"] = synced_services
             if restart:
                 output["restart"] = "Restarting server..."
                 asyncio.create_task(_delayed_restart())
@@ -137,6 +176,11 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 timeout=10
             )
             output["latest_commit"] = diff_result.stdout.strip()
+
+            # Sync systemd service files if changed
+            synced_services = _sync_systemd_services(repo_root)
+            if synced_services:
+                output["synced_services"] = synced_services
 
             if restart:
                 output["restart"] = "Restarting server..."

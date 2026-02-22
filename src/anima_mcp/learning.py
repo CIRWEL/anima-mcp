@@ -198,23 +198,26 @@ class AdaptiveLearner:
             True if adaptation is significant enough
         """
         # Check if pressure changed significantly
-        pressure_change = abs(
+        # Use absolute threshold (5 hPa) — percentage-based is too coarse for pressure
+        # since a 20 hPa shift (only 2.5%) significantly affects stability
+        pressure_abs_change = abs(
             learned_calibration.pressure_ideal - current_calibration.pressure_ideal
-        ) / max(1, current_calibration.pressure_ideal)
-        
+        )
+        pressure_changed = pressure_abs_change > 5.0  # 5 hPa absolute threshold
+
         # Check if ambient temp range changed significantly
         temp_range_current = current_calibration.ambient_temp_max - current_calibration.ambient_temp_min
         temp_range_learned = learned_calibration.ambient_temp_max - learned_calibration.ambient_temp_min
         temp_change = abs(temp_range_learned - temp_range_current) / max(1, temp_range_current)
-        
+
         # Check if humidity ideal changed significantly
         humidity_change = abs(
             learned_calibration.humidity_ideal - current_calibration.humidity_ideal
         ) / max(1, current_calibration.humidity_ideal)
-        
+
         # Adapt if any change is significant
-        return (pressure_change > threshold or 
-                temp_change > threshold or 
+        return (pressure_changed or
+                temp_change > threshold or
                 humidity_change > threshold)
     
     def get_last_adaptation_time(self, config_manager: Optional[ConfigManager] = None) -> Optional[datetime]:
