@@ -87,7 +87,7 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
                     })
             result["preferences"] = {
                 "count": len(_growth._preferences),
-                "learned": prefs[:10],
+                "learned": sorted(prefs, key=lambda p: -p["observations"]),
             }
 
         if "relationships" in include:

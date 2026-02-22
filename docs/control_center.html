@@ -690,14 +690,12 @@
         }
         .memory-desc { color: var(--text-secondary); }
         .pref-tag {
-            display: inline-block;
             font-size: 0.75rem;
-            padding: 3px 8px;
-            border-radius: 10px;
+            padding: 6px 10px;
+            border-radius: 8px;
             background: rgba(0,255,255,0.06);
             border: 1px solid rgba(0,255,255,0.15);
             color: var(--accent-cyan);
-            margin: 3px 3px 3px 0;
         }
 
         /* System Health */
@@ -1609,10 +1607,14 @@
             const prefs = data.preferences;
             if (prefs && prefs.learned && prefs.learned.length > 0) {
                 html += `<div class="layer-header">Preferences <span>— ${prefs.count} learned</span></div>`;
-                html += `<div style="padding: 4px 0;">`;
-                html += prefs.learned.map(p =>
-                    `<span class="pref-tag" title="${escapeHtml(p.description || '')}">${escapeHtml(p.name)}</span>`
-                ).join('');
+                html += `<div style="padding: 4px 0; display: flex; flex-wrap: wrap; gap: 6px;">`;
+                html += prefs.learned.map(p => {
+                    const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
+                    return `<div class="pref-tag" style="display: flex; flex-direction: column; gap: 2px;">
+                        <span style="font-weight: 500;">${escapeHtml(p.name)}</span>
+                        <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: normal;">${escapeHtml(p.description || '')}${obs ? ' · ' + obs : ''}</span>
+                    </div>`;
+                }).join('');
                 html += `</div>`;
             }
 
