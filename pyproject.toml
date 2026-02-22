@@ -89,5 +89,18 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 
+[tool.coverage.run]
+source = ["anima_mcp"]
+omit = ["*/tests/*", "*/art_movements/*"]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__",
+    "if TYPE_CHECKING",
+    "raise NotImplementedError",
+]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/anima_mcp"]
