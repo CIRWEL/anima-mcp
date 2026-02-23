@@ -137,8 +137,8 @@ class ValueTensionTracker:
             d: deque(maxlen=100) for d in DIMENSIONS
         }
 
-        # Track actions and whether they caused conflicts
-        self._action_conflict_log: Dict[str, List[bool]] = {}
+        # Track actions and whether they caused conflicts (bounded per action type)
+        self._action_conflict_log: Dict[str, deque] = {}
 
         # Observation counter
         self._obs_count: int = 0
@@ -309,7 +309,7 @@ class ValueTensionTracker:
     def _record_action(self, action_type: str, caused_conflict: bool) -> None:
         """Track whether an action caused a conflict for rate calculation."""
         if action_type not in self._action_conflict_log:
-            self._action_conflict_log[action_type] = []
+            self._action_conflict_log[action_type] = deque(maxlen=self._buffer_size)
         self._action_conflict_log[action_type].append(caused_conflict)
 
     def get_active_conflicts(self, last_n: int = 50) -> List[ConflictEvent]:

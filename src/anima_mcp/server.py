@@ -890,15 +890,19 @@ async def _update_display_loop():
             except Exception as e:
                 if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
 
-            # Feed value tension tracker with current anima and last action taken
+            # Feed value tension tracker with RAW (pre-drift) anima values.
+            # Design principle: tension detection operates on raw dimension values
+            # so calibration drift cannot mask physical tensions in the body.
             global _last_action, _last_state_before
-            if _tension_tracker and anima:
+            if _tension_tracker and readings:
                 try:
+                    from .anima import sense_self
+                    _raw_anima_obj = sense_self(readings, get_calibration())
                     raw_anima = {
-                        "warmth": anima.warmth,
-                        "clarity": anima.clarity,
-                        "stability": anima.stability,
-                        "presence": anima.presence,
+                        "warmth": _raw_anima_obj.warmth,
+                        "clarity": _raw_anima_obj.clarity,
+                        "stability": _raw_anima_obj.stability,
+                        "presence": _raw_anima_obj.presence,
                     }
                     last_action_key = _last_action.action_type.value if _last_action else None
                     _tension_tracker.observe(raw_anima, last_action_key)
