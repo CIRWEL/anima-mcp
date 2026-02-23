@@ -70,7 +70,7 @@ from .server_state import (
     TRAJECTORY_INTERVAL, GOVERNANCE_INTERVAL, LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
-    GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL,
+    GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL, META_LEARNING_INTERVAL,
     ERROR_LOG_THROTTLE, STATUS_LOG_THROTTLE, DISPLAY_LOG_THROTTLE,
     WARN_LOG_THROTTLE, SCHEMA_LOG_THROTTLE, SELF_DIALOGUE_LOG_THROTTLE,
     METACOG_SURPRISE_THRESHOLD, PRIMITIVE_SELF_FEEDBACK_DELAY_SECONDS,
@@ -108,6 +108,12 @@ _calibration_drift: CalibrationDrift | None = None
 # ValueTensionTracker - detects preference conflicts between anima dimensions
 from .value_tension import ValueTensionTracker
 _tension_tracker: ValueTensionTracker | None = None
+# Meta-learning state - satisfaction tracking for daily preference weight evolution
+from collections import deque as _deque
+_satisfaction_history: _deque = _deque(maxlen=500)  # overall satisfaction (for trajectory health)
+_satisfaction_per_dim: Dict[str, _deque] = {}  # per-dimension satisfaction (for lagged correlations)
+_health_history: _deque = _deque(maxlen=100)  # trajectory health values
+_action_efficacy: float = 0.5  # fraction of recent actions producing expected delta
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
@@ -182,6 +188,38 @@ def _get_calibration_drift() -> CalibrationDrift:
         else:
             _calibration_drift = CalibrationDrift()
     return _calibration_drift
+
+def _compute_lagged_correlations() -> Dict[str, float]:
+    """Correlate per-dimension satisfaction with future trajectory health.
+
+    Uses a simple Pearson-like correlation between satisfaction[t] and
+    health[t+lag] to determine which dimensions predict flourishing.
+    Returns 0.0 for dimensions with insufficient data.
+    """
+    lag = 25  # ~5 action cycles at AGENCY_INTERVAL
+    correlations: Dict[str, float] = {}
+    health_hist = list(_health_history)
+    for dim in ("warmth", "clarity", "stability", "presence"):
+        sat_hist = list(_satisfaction_per_dim.get(dim, _deque()))
+        if len(sat_hist) < lag + 10 or len(health_hist) < 2:
+            correlations[dim] = 0.0
+            continue
+        # Align: sat[0..N-lag] with health[lag..N]
+        n = min(len(sat_hist) - lag, len(health_hist))
+        if n < 10:
+            correlations[dim] = 0.0
+            continue
+        sat_slice = sat_hist[:n]
+        hlth_slice = health_hist[-n:]  # most recent health values
+        mean_s = sum(sat_slice) / n
+        mean_h = sum(hlth_slice) / n
+        cov = sum((s - mean_s) * (h - mean_h) for s, h in zip(sat_slice, hlth_slice)) / n
+        var_s = sum((s - mean_s) ** 2 for s in sat_slice) / n
+        var_h = sum((h - mean_h) ** 2 for h in hlth_slice) / n
+        denom = (var_s * var_h) ** 0.5
+        correlations[dim] = cov / denom if denom > 1e-9 else 0.0
+    return correlations
+
 
 def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
@@ -833,6 +871,25 @@ async def _update_display_loop():
                     _tension_tracker.observe(raw_anima, last_action_key)
                 except Exception:
                     pass  # Tension tracking is advisory, never block main loop
+
+            # Record satisfaction for meta-learning (lightweight — runs every cycle)
+            if anima and loop_count % AGENCY_INTERVAL == 0:
+                try:
+                    from .preferences import get_preference_system as _get_pref_sys
+                    _ml_pref = _get_pref_sys()
+                    _ml_state = {
+                        "warmth": anima.warmth, "clarity": anima.clarity,
+                        "stability": anima.stability, "presence": anima.presence,
+                    }
+                    _satisfaction_history.append(_ml_pref.get_overall_satisfaction(_ml_state))
+                    for _dim in ("warmth", "clarity", "stability", "presence"):
+                        if _dim not in _satisfaction_per_dim:
+                            _satisfaction_per_dim[_dim] = _deque(maxlen=500)
+                        _satisfaction_per_dim[_dim].append(
+                            _ml_pref._preferences[_dim].current_satisfaction(_ml_state[_dim])
+                        )
+                except Exception:
+                    pass  # Meta-learning tracking is advisory
 
             # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
             # Metacognition, agency, self-model, primitive language are enhancement layers.
@@ -1935,6 +1992,49 @@ async def _update_display_loop():
                         add_observation(msg, author="lumen")
 
                 safe_call(goal_check, default=None, log_error=True)
+
+            # Meta-learning: Daily preference weight evolution
+            # Every ~12 hours, rebalance which anima dimensions matter most
+            # based on how satisfying each dimension correlates with trajectory health
+            if loop_count % META_LEARNING_INTERVAL == 0 and loop_count > 0 and _growth:
+                try:
+                    from .preferences import (
+                        compute_trajectory_health, meta_learning_update,
+                        get_preference_system as _ml_get_pref,
+                    )
+
+                    health = compute_trajectory_health(
+                        satisfaction_history=list(_satisfaction_history)[-100:],
+                        action_efficacy=_action_efficacy,
+                        prediction_accuracy_trend=0.0,  # TODO: compute from metacog
+                    )
+                    _health_history.append(health)
+
+                    # Record healthy state for drift restart target
+                    if _calibration_drift:
+                        _calibration_drift.record_healthy_state(health)
+
+                    # Compute lagged correlations between per-dim satisfaction and health
+                    correlations = _compute_lagged_correlations()
+
+                    # Update preference weights via the PreferenceSystem singleton
+                    pref_system = _ml_get_pref()
+                    weights = {
+                        d: p.influence_weight
+                        for d, p in pref_system._preferences.items()
+                        if d in ("warmth", "clarity", "stability", "presence")
+                    }
+                    if weights:
+                        new_weights = meta_learning_update(weights, correlations)
+                        for d, w in new_weights.items():
+                            if d in pref_system._preferences:
+                                pref_system._preferences[d].influence_weight = w
+                        pref_system._save()
+                        print(f"[MetaLearning] Updated preference weights: "
+                              f"{', '.join(f'{d}={w:.3f}' for d, w in new_weights.items())} "
+                              f"health={health:.3f}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[MetaLearning] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
             # Trajectory: Record anima history for trajectory signature computation
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
