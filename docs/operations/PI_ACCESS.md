@@ -4,12 +4,12 @@
 ```bash
 ssh lumen.local
 # or via Tailscale
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.103.208.117
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83
 ```
 
 ## Details
 - **Hostname**: lumen.local (mDNS) or via Tailscale
-- **IP**: 192.168.1.165 (LAN) or 100.103.208.117 (Tailscale)
+- **IP**: 192.168.1.165 (LAN) or 100.79.215.83 (Tailscale)
 - **Port**: 22 (standard)
 - **User**: unitares-anima
 - **Key**: ~/.ssh/id_ed25519_pi

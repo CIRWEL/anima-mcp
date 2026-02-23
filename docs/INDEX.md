@@ -92,7 +92,7 @@
 | `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
 
 **Network access:**
-- **Tailscale** (recommended): Direct Pi access via 100.103.208.117
+- **Tailscale** (recommended): Direct Pi access via 100.79.215.83
 - **Local**: lumen.local or 192.168.1.165
 - **ngrok** (legacy): See `archive/2026-02/NGROK_*.md`
 

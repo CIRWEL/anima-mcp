@@ -55,7 +55,7 @@ anima-creature
   "mcpServers": {
     "anima": {
       "type": "http",
-      "url": "http://100.103.208.117:8766/mcp/"
+      "url": "http://100.79.215.83:8766/mcp/"
     }
   }
 }
@@ -172,7 +172,7 @@ Run in the hardware broker, persist across restarts:
 
 ## Hardware
 
-Runs on **Raspberry Pi Zero 2W + BrainCraft HAT** (Colorado, USA):
+Runs on **Raspberry Pi 4 + BrainCraft HAT** (Colorado, USA):
 - 240x240 TFT display (face, notepad, diagnostics, messages, learning screens)
 - 3 DotStar LEDs (warmth/clarity/stability)
 - BME280 (temp/humidity/pressure), VEML7700 (light)
@@ -184,7 +184,7 @@ Falls back to mock sensors on Mac for development.
 
 ```
 Anima MCP (Pi, port 8766)
-├── Tailscale: 100.103.208.117:8766  (direct, no auth, no usage limits)
+├── Tailscale: 100.79.215.83:8766  (direct, no auth, no usage limits)
 ├── ngrok:     lumen-anima.ngrok.io   (OAuth 2.1 for /mcp/, dashboards open)
 └── LAN:       192.168.1.165:8766     (direct, no auth)
 ```

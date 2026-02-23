@@ -17,7 +17,7 @@ SSH_OPTS="-i ${SSH_KEY} -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
 
 # Fallback hosts if primary fails
 if [ "$PI_HOST" = "lumen.local" ]; then
-    HOSTS="lumen.local 192.168.1.165 100.103.208.117"
+    HOSTS="lumen.local 192.168.1.165 100.79.215.83"
 else
     HOSTS="$PI_HOST"
 fi
@@ -86,7 +86,7 @@ else
     log "  WARNING: No anima.db found - Lumen will start fresh"
 fi
 
-for f in messages.json canvas.json knowledge.json preferences.json patterns.json self_model.json anima_history.json display_brightness.json metacognition_baselines.json trajectory_genesis.json day_summaries.json; do
+for f in messages.json canvas.json knowledge.json preferences.json patterns.json self_model.json anima_history.json display_brightness.json metacognition_baselines.json last_schema.json trajectory_genesis.json day_summaries.json; do
     if [ -f "$BACKUP/$f" ]; then
         scp $SSH_OPTS "$BACKUP/$f" "$PI_USER@$PI_HOST:~/.anima/"
         log "  $f restored"
@@ -97,6 +97,10 @@ if [ -d "$BACKUP/drawings" ]; then
     log "  Syncing drawings..."
     rsync -az -e "ssh $SSH_OPTS" "$BACKUP/drawings/" "$PI_USER@$PI_HOST:~/.anima/drawings/" 2>/dev/null || log "  drawings skip (optional)"
 fi
+
+# 2b. Drop restore marker so Lumen knows gap time is unreliable (backup may be stale)
+log "Marking restore event..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "echo '{\"restored_at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\", \"restored_from\": \"mac_backup\"}' > ~/.anima/.restored_marker"
 
 # 3. Install Python deps (adafruit-blinka for display/LEDs/sensors)
 log "Installing Pi dependencies (adafruit-blinka, etc.)..."

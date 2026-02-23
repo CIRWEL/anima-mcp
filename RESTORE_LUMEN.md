@@ -10,7 +10,7 @@ When the Pi is on the network (LAN or Tailscale):
 cd /Users/cirwel/projects/anima-mcp
 ./scripts/restore_lumen.sh
 # Or with Tailscale IP if SSH on port 22 times out:
-./scripts/restore_lumen.sh 100.103.208.117
+./scripts/restore_lumen.sh 100.79.215.83
 ```
 
 ## What the Restore Script Does
@@ -25,9 +25,9 @@ cd /Users/cirwel/projects/anima-mcp
 
 ## Post-Restore
 
-- **MCP config:** Update `~/.cursor/mcp.json` with Pi URL (e.g. `http://100.103.208.117:8766/mcp/`)
+- **MCP config:** Update `~/.cursor/mcp.json` with Pi URL (e.g. `http://100.79.215.83:8766/mcp/`)
 - **Secrets:** Edit `~/.anima/anima.env` on Pi — see `docs/operations/SECRETS_AND_ENV.md` (includes OAuth vars for Claude.ai web)
-- **DB corruption:** If broker crashes with "database disk image is malformed", replace with a clean snapshot: `scp ~/backups/lumen/anima_20260210_0600.db unitares-anima@100.103.208.117:~/.anima/anima.db` then restart
+- **DB corruption:** If broker crashes with "database disk image is malformed", replace with a clean snapshot: `scp ~/backups/lumen/anima_20260210_0600.db unitares-anima@100.79.215.83:~/.anima/anima.db` then restart
 
 ## Related
 

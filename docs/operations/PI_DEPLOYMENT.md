@@ -323,7 +323,7 @@ On Mac, edit `~/.cursor/mcp.json` or `~/.claude.json`:
   "mcpServers": {
     "anima": {
       "type": "http",
-      "url": "http://100.103.208.117:8766/mcp/"
+      "url": "http://100.79.215.83:8766/mcp/"
     }
   }
 }

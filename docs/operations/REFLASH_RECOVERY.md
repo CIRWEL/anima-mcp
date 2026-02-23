@@ -34,9 +34,9 @@ This script:
 - Creates `~/.anima/anima.env` from example if missing (add GROQ_API_KEY, UNITARES_AUTH)
 - Installs and starts anima-broker + anima
 
-**Hosts tried:** lumen.local, 192.168.1.165, 100.103.208.117 (Tailscale). Use Tailscale IP if SSH on port 22 times out:
+**Hosts tried:** lumen.local, 192.168.1.165, 100.79.215.83 (Tailscale). Use Tailscale IP if SSH on port 22 times out:
 ```bash
-./scripts/restore_lumen.sh 100.103.208.117
+./scripts/restore_lumen.sh 100.79.215.83
 ```
 
 **HTTP deploy (no SSH):** If Pi's HTTP (8766) is reachable but Pi has old code, run on Pi: `curl -s https://raw.githubusercontent.com/CIRWEL/anima-mcp/main/scripts/bootstrap_deploy.py | python3`
@@ -45,7 +45,7 @@ After restore, update Cursor MCP config (~/.cursor/mcp.json) with the Pi's IP:
 ```json
 "url": "http://192.168.1.165:8766/mcp/"
 ```
-Or Tailscale: `http://100.103.208.117:8766/mcp/`
+Or Tailscale: `http://100.79.215.83:8766/mcp/`
 
 **Credentials envelope:** Pi password and SSH key path live in `scripts/envelope.pi` (gitignored). Copy from `scripts/envelope.pi.example` and fill in. Used by `setup_pi_ssh_key.sh` and ssh-copy-id workflows.
 

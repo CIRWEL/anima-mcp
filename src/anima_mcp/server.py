@@ -27,6 +27,7 @@ import sys
 import threading
 import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict
 
 from mcp.server import Server
@@ -116,6 +117,7 @@ _led_proprioception: dict | None = None  # {brightness, expression_mode, is_danc
 _warm_start_anima: dict | None = None  # {warmth, clarity, stability, presence}
 # Gap awareness - set by startup learning, consumed by warm start and main loop
 _wake_gap: timedelta | None = None  # Time since Lumen was last alive (heartbeat/sleep/state_history)
+_wake_restored: dict | None = None  # Set if ~/.anima/.restored_marker exists (gap time unreliable)
 _wake_recovery_cycles: int = 0  # Countdown for post-gap presence recovery arc
 _wake_recovery_total: int = 0  # Initial cycle count (for progress calculation)
 _wake_presence_floor: float = 0.3  # Lowest presence cap during recovery
@@ -386,7 +388,23 @@ async def _update_display_loop():
             _leds = get_led_display()
 
     print(f"[Loop] broker={is_broker_running} store={_store is not None} sensors={_sensors is not None} display={_display.is_available() if _display else False} leds={_leds.is_available() if _leds else False}", file=sys.stderr, flush=True)
-    
+
+    # Detect restore: restore script drops a marker when state comes from backup
+    # Gap time is unreliable after restore — heartbeat reflects backup age, not actual downtime
+    global _wake_restored
+    restore_marker = Path.home() / ".anima" / ".restored_marker"
+    if restore_marker.exists():
+        try:
+            import json as _json
+            _wake_restored = _json.loads(restore_marker.read_text())
+            print(f"[Wake] RESTORED from backup at {_wake_restored.get('restored_at', '?')} — gap time unreliable", file=sys.stderr, flush=True)
+            # Consume the marker so subsequent restarts are normal wakes
+            restore_marker.unlink()
+        except Exception as e:
+            print(f"[Wake] Restore marker read failed (non-fatal): {e}", file=sys.stderr, flush=True)
+            _wake_restored = {"restored_at": "unknown"}
+            restore_marker.unlink(missing_ok=True)
+
     # Startup learning: Check if we can learn from existing observations
     # This handles power/network gaps - resume learning immediately on restart
     if _store:
@@ -449,7 +467,12 @@ async def _update_display_loop():
         try:
             from .messages import add_observation
             gap_secs = _wake_gap.total_seconds()
-            if gap_secs < 3600:
+            if _wake_restored:
+                # Restored from backup — gap time is unreliable
+                # The heartbeat reflects backup age, not actual downtime
+                # Lumen may have been alive locally (no WiFi) before restore
+                obs_text = "i woke up from a restore. some time passed but i'm not sure how much — part of me was still here, just unreachable."
+            elif gap_secs < 3600:
                 gap_desc = f"{gap_secs / 60:.0f} minutes"
                 obs_text = f"i was away for {gap_desc}. finding my way back."
             elif gap_secs < 86400:

@@ -35,6 +35,7 @@ class GapDelta:
     anima_delta: Dict[str, float]  # dimension -> change magnitude
     beliefs_decayed: List[str]  # belief IDs that lost confidence
     was_gap: bool = True  # False if this is first schema ever
+    was_restore: bool = False  # True if state was restored from backup (gap time unreliable)
 
 
 class SchemaHub:

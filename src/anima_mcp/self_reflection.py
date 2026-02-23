@@ -89,7 +89,9 @@ class SelfReflectionSystem:
     validates existing insights, and surfaces new self-knowledge.
     """
 
-    def __init__(self, db_path: str = "anima.db"):
+    def __init__(self, db_path: str = ""):
+        if not db_path:
+            db_path = str(Path.home() / ".anima" / "anima.db")
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
         self._insights: Dict[str, Insight] = {}
@@ -850,7 +852,7 @@ class SelfReflectionSystem:
 _reflection_system: Optional[SelfReflectionSystem] = None
 
 
-def get_reflection_system(db_path: str = "anima.db") -> SelfReflectionSystem:
+def get_reflection_system(db_path: str = "") -> SelfReflectionSystem:
     """Get or create the singleton reflection system."""
     global _reflection_system
     if _reflection_system is None:
