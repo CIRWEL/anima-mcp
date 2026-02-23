@@ -189,6 +189,39 @@ def _get_calibration_drift() -> CalibrationDrift:
             _calibration_drift = CalibrationDrift()
     return _calibration_drift
 
+def _get_selfhood_context() -> Dict[str, Any] | None:
+    """Get read-only selfhood context for LLM narrator.
+
+    Returns a dict with current state of drift, tensions, and preference
+    weights — or None if no selfhood systems are active.  LLM output NEVER
+    feeds back into drift rates, conflict thresholds, or preference weights.
+    """
+    context: Dict[str, Any] = {}
+
+    if _calibration_drift:
+        context["drift_offsets"] = _calibration_drift.get_offsets()
+
+    if _tension_tracker:
+        active = _tension_tracker.get_active_conflicts(last_n=5)
+        context["active_tensions"] = [
+            {"dim_a": c.dim_a, "dim_b": c.dim_b, "category": c.category}
+            for c in active
+        ]
+
+    # Preference weights (read-only snapshot)
+    try:
+        from .preferences import get_preference_system
+        pref = get_preference_system()
+        if pref and hasattr(pref, '_preferences'):
+            context["weight_changes"] = {
+                d: p.influence_weight for d, p in pref._preferences.items()
+                if d in ("warmth", "clarity", "stability", "presence")
+            }
+    except Exception:
+        pass
+
+    return context if context else None
+
 def _compute_lagged_correlations() -> Dict[str, float]:
     """Correlate per-dimension satisfaction with future trajectory health.
 
