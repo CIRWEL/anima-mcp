@@ -102,6 +102,9 @@ _activity: ActivityManager | None = None  # Activity/wakefulness cycle (circadia
 # SchemaHub - central schema composition with trajectory feedback
 from .schema_hub import SchemaHub
 _schema_hub: SchemaHub | None = None
+# CalibrationDrift - endogenous midpoint drift via experience
+from .calibration_drift import CalibrationDrift
+_calibration_drift: CalibrationDrift | None = None
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
@@ -160,6 +163,22 @@ def _get_schema_hub() -> SchemaHub:
     if _schema_hub is None:
         _schema_hub = SchemaHub()
     return _schema_hub
+
+def _get_calibration_drift() -> CalibrationDrift:
+    """Get or create the CalibrationDrift singleton."""
+    global _calibration_drift
+    if _calibration_drift is None:
+        drift_path = Path.home() / ".anima" / "calibration_drift.json"
+        if drift_path.exists():
+            try:
+                _calibration_drift = CalibrationDrift.load(str(drift_path))
+                print(f"[CalDrift] Loaded drift state from {drift_path}", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[CalDrift] Failed to load drift (using fresh): {e}", file=sys.stderr, flush=True)
+                _calibration_drift = CalibrationDrift()
+        else:
+            _calibration_drift = CalibrationDrift()
+    return _calibration_drift
 
 def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
@@ -300,7 +319,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             anticipation = _get_warm_start_anticipation() or anticipate_state(shm_data.get("readings", {}))
 
             # Recompute anima from readings with memory influence
-            anima = sense_self_with_memory(readings, anticipation, calibration)
+            drift = _get_calibration_drift()
+            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
 
             return readings, anima
         except Exception as e:
@@ -338,11 +358,12 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             # Use warm start anticipation (first sense after wake) or memory
             anticipation = _get_warm_start_anticipation() or anticipate_state(readings.to_dict() if readings else {})
 
-            anima = sense_self_with_memory(readings, anticipation, calibration)
+            drift = _get_calibration_drift()
+            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
             if anima is None:
                 print("[Server] Failed to create anima from readings", file=sys.stderr, flush=True)
                 return None, None
-            
+
             return readings, anima
         except Exception as e:
             print(f"[Server] Error reading sensors directly: {e}", file=sys.stderr, flush=True)
@@ -2001,13 +2022,26 @@ async def _update_display_loop():
                         # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
                         from .self_model import get_self_model as _get_sm
                         hub = _get_schema_hub()
+                        drift = _get_calibration_drift()
                         schema = hub.compose_schema(
                             identity=identity,
                             anima=anima,
                             readings=readings,
                             growth_system=_growth,
                             self_model=_get_sm(),
+                            drift_offsets=drift.get_offsets(),
                         )
+
+                        # Update calibration drift with current attractor center
+                        if hub.last_trajectory and hub.last_trajectory.attractor:
+                            center = hub.last_trajectory.attractor.get("center")
+                            if center and len(center) == 4:
+                                drift.update({
+                                    "warmth": center[0],
+                                    "clarity": center[1],
+                                    "stability": center[2],
+                                    "presence": center[3],
+                                })
 
                         # Render and compute stub integrity score
                         pixels = render_schema_to_pixels(schema)
@@ -2313,6 +2347,23 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             except Exception as she:
                 print(f"[SchemaHub] Init failed (non-fatal): {she}", file=sys.stderr, flush=True)
 
+            # Initialize CalibrationDrift (load from disk or create fresh)
+            try:
+                drift = _get_calibration_drift()
+                midpoints = drift.get_midpoints()
+                any_drift = any(abs(m - 0.5) > 0.001 for m in midpoints.values())
+                if any_drift:
+                    print(f"[CalDrift] Loaded with drift: {', '.join(f'{k}={v:.3f}' for k, v in midpoints.items() if abs(v - 0.5) > 0.001)}", file=sys.stderr, flush=True)
+                    # Apply restart decay if there was a significant gap
+                    if _wake_gap and _wake_gap.total_seconds() >= 86400:  # 24h+
+                        gap_hours = _wake_gap.total_seconds() / 3600
+                        drift.apply_restart_decay(gap_hours)
+                        print(f"[CalDrift] Applied restart decay for {gap_hours:.0f}h gap", file=sys.stderr, flush=True)
+                else:
+                    print(f"[CalDrift] Initialized (no prior drift)", file=sys.stderr, flush=True)
+            except Exception as cde:
+                print(f"[CalDrift] Init failed (non-fatal): {cde}", file=sys.stderr, flush=True)
+
             return  # Success
         except Exception as e:
             is_lock_error = "database is locked" in str(e) or "database is locked" in repr(e)
@@ -2337,7 +2388,23 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
 def sleep():
     """Go to sleep. Call on server shutdown."""
-    global _store, _unitares_bridge, _voice_instance, _schema_hub
+    global _store, _unitares_bridge, _voice_instance, _schema_hub, _calibration_drift
+
+    # Persist calibration drift state
+    if _calibration_drift:
+        try:
+            drift_path = Path.home() / ".anima" / "calibration_drift.json"
+            drift_path.parent.mkdir(parents=True, exist_ok=True)
+            _calibration_drift.save(str(drift_path))
+            try:
+                print(f"[Sleep] Calibration drift saved", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error saving calibration drift: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
 
     # Persist schema for gap recovery on next wake
     if _schema_hub:

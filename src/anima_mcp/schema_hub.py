@@ -77,6 +77,7 @@ class SchemaHub:
         readings: Optional[Any] = None,
         growth_system: Optional['GrowthSystem'] = None,
         self_model: Optional['SelfModel'] = None,
+        drift_offsets: Optional[Dict[str, float]] = None,
     ) -> SelfSchema:
         """
         Compose unified schema from all source systems.
@@ -119,6 +120,9 @@ class SchemaHub:
 
         # 6. Inject trajectory feedback nodes
         schema = self._inject_trajectory_feedback(schema)
+
+        # 7. Inject calibration drift nodes (if drift is active)
+        schema = self._inject_drift_offsets(schema, drift_offsets)
 
         return schema
 
@@ -512,6 +516,50 @@ class SchemaHub:
                 source_id="traj_stability_score",
                 target_id="anima_stability",
                 weight=stability,
+            ))
+
+        return schema
+
+    def _inject_drift_offsets(
+        self,
+        schema: SelfSchema,
+        drift_offsets: Optional[Dict[str, float]],
+    ) -> SelfSchema:
+        """
+        Inject calibration drift offset nodes into the schema.
+
+        Drift offsets show how Lumen's sense of "normal" has shifted from
+        hardware defaults. Positive = experienced higher-than-default,
+        negative = experienced lower-than-default.
+        """
+        if not drift_offsets:
+            return schema
+
+        # Only inject if at least one dimension has meaningful drift
+        if all(abs(v) < 0.001 for v in drift_offsets.values()):
+            return schema
+
+        for dim_name, offset in drift_offsets.items():
+            if abs(offset) < 0.001:
+                continue
+
+            # Normalize offset to 0-1 range for display
+            # Max possible offset is ~0.1 (10% of 0.5 default), so scale by 5
+            normalized = max(0.0, min(1.0, 0.5 + offset * 5))
+
+            schema.nodes.append(SchemaNode(
+                node_id=f"drift_{dim_name}",
+                node_type="drift",
+                label=f"Drift:{dim_name[:4]}",
+                value=normalized,
+                raw_value={"offset": offset, "dimension": dim_name},
+            ))
+
+            # Connect drift to its anima dimension
+            schema.edges.append(SchemaEdge(
+                source_id=f"drift_{dim_name}",
+                target_id=f"anima_{dim_name}",
+                weight=abs(offset) * 5,  # Stronger edge for larger drift
             ))
 
         return schema
