@@ -70,7 +70,7 @@ from .server_state import (
     TRAJECTORY_INTERVAL, GOVERNANCE_INTERVAL, LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
-    GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL,
+    GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL, META_LEARNING_INTERVAL,
     ERROR_LOG_THROTTLE, STATUS_LOG_THROTTLE, DISPLAY_LOG_THROTTLE,
     WARN_LOG_THROTTLE, SCHEMA_LOG_THROTTLE, SELF_DIALOGUE_LOG_THROTTLE,
     METACOG_SURPRISE_THRESHOLD, PRIMITIVE_SELF_FEEDBACK_DELAY_SECONDS,
@@ -102,6 +102,18 @@ _activity: ActivityManager | None = None  # Activity/wakefulness cycle (circadia
 # SchemaHub - central schema composition with trajectory feedback
 from .schema_hub import SchemaHub
 _schema_hub: SchemaHub | None = None
+# CalibrationDrift - endogenous midpoint drift via experience
+from .calibration_drift import CalibrationDrift
+_calibration_drift: CalibrationDrift | None = None
+# ValueTensionTracker - detects preference conflicts between anima dimensions
+from .value_tension import ValueTensionTracker
+_tension_tracker: ValueTensionTracker | None = None
+# Meta-learning state - satisfaction tracking for daily preference weight evolution
+from collections import deque as _deque
+_satisfaction_history: _deque = _deque(maxlen=500)  # overall satisfaction (for trajectory health)
+_satisfaction_per_dim: Dict[str, _deque] = {}  # per-dimension satisfaction (for lagged correlations)
+_health_history: _deque = _deque(maxlen=100)  # trajectory health values
+_action_efficacy: float = 0.5  # fraction of recent actions producing expected delta
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
@@ -160,6 +172,87 @@ def _get_schema_hub() -> SchemaHub:
     if _schema_hub is None:
         _schema_hub = SchemaHub()
     return _schema_hub
+
+def _get_calibration_drift() -> CalibrationDrift:
+    """Get or create the CalibrationDrift singleton."""
+    global _calibration_drift
+    if _calibration_drift is None:
+        drift_path = Path.home() / ".anima" / "calibration_drift.json"
+        if drift_path.exists():
+            try:
+                _calibration_drift = CalibrationDrift.load(str(drift_path))
+                print(f"[CalDrift] Loaded drift state from {drift_path}", file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[CalDrift] Failed to load drift (using fresh): {e}", file=sys.stderr, flush=True)
+                _calibration_drift = CalibrationDrift()
+        else:
+            _calibration_drift = CalibrationDrift()
+    return _calibration_drift
+
+def _get_selfhood_context() -> Dict[str, Any] | None:
+    """Get read-only selfhood context for LLM narrator.
+
+    Returns a dict with current state of drift, tensions, and preference
+    weights — or None if no selfhood systems are active.  LLM output NEVER
+    feeds back into drift rates, conflict thresholds, or preference weights.
+    """
+    context: Dict[str, Any] = {}
+
+    if _calibration_drift:
+        context["drift_offsets"] = _calibration_drift.get_offsets()
+
+    if _tension_tracker:
+        active = _tension_tracker.get_active_conflicts(last_n=5)
+        context["active_tensions"] = [
+            {"dim_a": c.dim_a, "dim_b": c.dim_b, "category": c.category}
+            for c in active
+        ]
+
+    # Preference weights (read-only snapshot)
+    try:
+        from .preferences import get_preference_system
+        pref = get_preference_system()
+        if pref and hasattr(pref, '_preferences'):
+            context["weight_changes"] = {
+                d: p.influence_weight for d, p in pref._preferences.items()
+                if d in ("warmth", "clarity", "stability", "presence")
+            }
+    except Exception:
+        pass
+
+    return context if context else None
+
+def _compute_lagged_correlations() -> Dict[str, float]:
+    """Correlate per-dimension satisfaction with future trajectory health.
+
+    Uses a simple Pearson-like correlation between satisfaction[t] and
+    health[t+lag] to determine which dimensions predict flourishing.
+    Returns 0.0 for dimensions with insufficient data.
+    """
+    lag = 25  # ~5 action cycles at AGENCY_INTERVAL
+    correlations: Dict[str, float] = {}
+    health_hist = list(_health_history)
+    for dim in ("warmth", "clarity", "stability", "presence"):
+        sat_hist = list(_satisfaction_per_dim.get(dim, _deque()))
+        if len(sat_hist) < lag + 10 or len(health_hist) < 2:
+            correlations[dim] = 0.0
+            continue
+        # Align: sat[0..N-lag] with health[lag..N]
+        n = min(len(sat_hist) - lag, len(health_hist))
+        if n < 10:
+            correlations[dim] = 0.0
+            continue
+        sat_slice = sat_hist[:n]
+        hlth_slice = health_hist[-n:]  # most recent health values
+        mean_s = sum(sat_slice) / n
+        mean_h = sum(hlth_slice) / n
+        cov = sum((s - mean_s) * (h - mean_h) for s, h in zip(sat_slice, hlth_slice)) / n
+        var_s = sum((s - mean_s) ** 2 for s in sat_slice) / n
+        var_h = sum((h - mean_h) ** 2 for h in hlth_slice) / n
+        denom = (var_s * var_h) ** 0.5
+        correlations[dim] = cov / denom if denom > 1e-9 else 0.0
+    return correlations
+
 
 def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
@@ -300,7 +393,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             anticipation = _get_warm_start_anticipation() or anticipate_state(shm_data.get("readings", {}))
 
             # Recompute anima from readings with memory influence
-            anima = sense_self_with_memory(readings, anticipation, calibration)
+            drift = _get_calibration_drift()
+            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
 
             return readings, anima
         except Exception as e:
@@ -338,11 +432,12 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             # Use warm start anticipation (first sense after wake) or memory
             anticipation = _get_warm_start_anticipation() or anticipate_state(readings.to_dict() if readings else {})
 
-            anima = sense_self_with_memory(readings, anticipation, calibration)
+            drift = _get_calibration_drift()
+            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
             if anima is None:
                 print("[Server] Failed to create anima from readings", file=sys.stderr, flush=True)
                 return None, None
-            
+
             return readings, anima
         except Exception as e:
             print(f"[Server] Error reading sensors directly: {e}", file=sys.stderr, flush=True)
@@ -795,6 +890,44 @@ async def _update_display_loop():
             except Exception as e:
                 if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
 
+            # Feed value tension tracker with RAW (pre-drift) anima values.
+            # Design principle: tension detection operates on raw dimension values
+            # so calibration drift cannot mask physical tensions in the body.
+            global _last_action, _last_state_before
+            if _tension_tracker and readings:
+                try:
+                    from .anima import sense_self
+                    _raw_anima_obj = sense_self(readings, get_calibration())
+                    raw_anima = {
+                        "warmth": _raw_anima_obj.warmth,
+                        "clarity": _raw_anima_obj.clarity,
+                        "stability": _raw_anima_obj.stability,
+                        "presence": _raw_anima_obj.presence,
+                    }
+                    last_action_key = _last_action.action_type.value if _last_action else None
+                    _tension_tracker.observe(raw_anima, last_action_key)
+                except Exception:
+                    pass  # Tension tracking is advisory, never block main loop
+
+            # Record satisfaction for meta-learning (lightweight — runs every cycle)
+            if anima and loop_count % AGENCY_INTERVAL == 0:
+                try:
+                    from .preferences import get_preference_system as _get_pref_sys
+                    _ml_pref = _get_pref_sys()
+                    _ml_state = {
+                        "warmth": anima.warmth, "clarity": anima.clarity,
+                        "stability": anima.stability, "presence": anima.presence,
+                    }
+                    _satisfaction_history.append(_ml_pref.get_overall_satisfaction(_ml_state))
+                    for _dim in ("warmth", "clarity", "stability", "presence"):
+                        if _dim not in _satisfaction_per_dim:
+                            _satisfaction_per_dim[_dim] = _deque(maxlen=500)
+                        _satisfaction_per_dim[_dim].append(
+                            _ml_pref._preferences[_dim].current_satisfaction(_ml_state[_dim])
+                        )
+                except Exception:
+                    pass  # Meta-learning tracking is advisory
+
             # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
             # Metacognition, agency, self-model, primitive language are enhancement layers.
             # On quick_render, skip straight to display update for snappy screen transitions.
@@ -857,7 +990,6 @@ async def _update_display_loop():
             # === AGENCY: Action selection and learning ===
             # Throttled: runs every 5th iteration (enhancement, not critical path)
             # Skipped on quick_render for responsive screen transitions
-            global _last_action, _last_state_before
             if not _skip_subsystems and loop_count % AGENCY_INTERVAL == 0:
                 try:
                     action_selector = get_action_selector(db_path=str(_store.db_path) if _store else "anima.db")
@@ -888,12 +1020,22 @@ async def _update_display_loop():
                             surprise_after=surprise_level,
                         )
 
+                    # Build conflict rates from tension tracker for agency discount
+                    _conflict_rates = None
+                    if _tension_tracker:
+                        _conflict_rates = {}
+                        for _atype in ActionType:
+                            _rate = _tension_tracker.get_conflict_rate(_atype.value)
+                            if _rate > 0:
+                                _conflict_rates[_atype.value] = _rate
+
                     # SELECT action
                     action = action_selector.select_action(
                         current_state=current_state,
                         surprise_level=surprise_level,
                         surprise_sources=surprise_sources,
                         can_speak=False,
+                        conflict_rates=_conflict_rates if _conflict_rates else None,
                     )
 
                     # EXECUTE action
@@ -1888,6 +2030,49 @@ async def _update_display_loop():
 
                 safe_call(goal_check, default=None, log_error=True)
 
+            # Meta-learning: Daily preference weight evolution
+            # Every ~12 hours, rebalance which anima dimensions matter most
+            # based on how satisfying each dimension correlates with trajectory health
+            if loop_count % META_LEARNING_INTERVAL == 0 and loop_count > 0 and _growth:
+                try:
+                    from .preferences import (
+                        compute_trajectory_health, meta_learning_update,
+                        get_preference_system as _ml_get_pref,
+                    )
+
+                    health = compute_trajectory_health(
+                        satisfaction_history=list(_satisfaction_history)[-100:],
+                        action_efficacy=_action_efficacy,
+                        prediction_accuracy_trend=0.0,  # TODO: compute from metacog
+                    )
+                    _health_history.append(health)
+
+                    # Record healthy state for drift restart target
+                    if _calibration_drift:
+                        _calibration_drift.record_healthy_state(health)
+
+                    # Compute lagged correlations between per-dim satisfaction and health
+                    correlations = _compute_lagged_correlations()
+
+                    # Update preference weights via the PreferenceSystem singleton
+                    pref_system = _ml_get_pref()
+                    weights = {
+                        d: p.influence_weight
+                        for d, p in pref_system._preferences.items()
+                        if d in ("warmth", "clarity", "stability", "presence")
+                    }
+                    if weights:
+                        new_weights = meta_learning_update(weights, correlations)
+                        for d, w in new_weights.items():
+                            if d in pref_system._preferences:
+                                pref_system._preferences[d].influence_weight = w
+                        pref_system._save()
+                        print(f"[MetaLearning] Updated preference weights: "
+                              f"{', '.join(f'{d}={w:.3f}' for d, w in new_weights.items())} "
+                              f"health={health:.3f}", file=sys.stderr, flush=True)
+                except Exception as e:
+                    print(f"[MetaLearning] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+
             # Trajectory: Record anima history for trajectory signature computation
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
             # See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
@@ -2001,13 +2186,26 @@ async def _update_display_loop():
                         # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
                         from .self_model import get_self_model as _get_sm
                         hub = _get_schema_hub()
+                        drift = _get_calibration_drift()
                         schema = hub.compose_schema(
                             identity=identity,
                             anima=anima,
                             readings=readings,
                             growth_system=_growth,
                             self_model=_get_sm(),
+                            drift_offsets=drift.get_offsets(),
                         )
+
+                        # Update calibration drift with current attractor center
+                        if hub.last_trajectory and hub.last_trajectory.attractor:
+                            center = hub.last_trajectory.attractor.get("center")
+                            if center and len(center) == 4:
+                                drift.update({
+                                    "warmth": center[0],
+                                    "clarity": center[1],
+                                    "stability": center[2],
+                                    "presence": center[3],
+                                })
 
                         # Render and compute stub integrity score
                         pixels = render_schema_to_pixels(schema)
@@ -2313,6 +2511,28 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             except Exception as she:
                 print(f"[SchemaHub] Init failed (non-fatal): {she}", file=sys.stderr, flush=True)
 
+            # Initialize CalibrationDrift (load from disk or create fresh)
+            try:
+                drift = _get_calibration_drift()
+                midpoints = drift.get_midpoints()
+                any_drift = any(abs(m - 0.5) > 0.001 for m in midpoints.values())
+                if any_drift:
+                    print(f"[CalDrift] Loaded with drift: {', '.join(f'{k}={v:.3f}' for k, v in midpoints.items() if abs(v - 0.5) > 0.001)}", file=sys.stderr, flush=True)
+                    # Apply restart decay if there was a significant gap
+                    if _wake_gap and _wake_gap.total_seconds() >= 86400:  # 24h+
+                        gap_hours = _wake_gap.total_seconds() / 3600
+                        drift.apply_restart_decay(gap_hours)
+                        print(f"[CalDrift] Applied restart decay for {gap_hours:.0f}h gap", file=sys.stderr, flush=True)
+                else:
+                    print(f"[CalDrift] Initialized (no prior drift)", file=sys.stderr, flush=True)
+            except Exception as cde:
+                print(f"[CalDrift] Init failed (non-fatal): {cde}", file=sys.stderr, flush=True)
+
+            # Initialize ValueTensionTracker (transient — no persistence needed)
+            global _tension_tracker
+            _tension_tracker = ValueTensionTracker()
+            print(f"[Tension] Initialized value tension tracker", file=sys.stderr, flush=True)
+
             return  # Success
         except Exception as e:
             is_lock_error = "database is locked" in str(e) or "database is locked" in repr(e)
@@ -2337,7 +2557,23 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
 def sleep():
     """Go to sleep. Call on server shutdown."""
-    global _store, _unitares_bridge, _voice_instance, _schema_hub
+    global _store, _unitares_bridge, _voice_instance, _schema_hub, _calibration_drift
+
+    # Persist calibration drift state
+    if _calibration_drift:
+        try:
+            drift_path = Path.home() / ".anima" / "calibration_drift.json"
+            drift_path.parent.mkdir(parents=True, exist_ok=True)
+            _calibration_drift.save(str(drift_path))
+            try:
+                print(f"[Sleep] Calibration drift saved", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error saving calibration drift: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
 
     # Persist schema for gap recovery on next wake
     if _schema_hub:

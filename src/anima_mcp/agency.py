@@ -209,6 +209,7 @@ class ActionSelector:
         surprise_sources: Optional[List[str]] = None,
         can_speak: bool = False,
         self_predictions: Optional[Dict[str, float]] = None,
+        conflict_rates: Optional[Dict[str, float]] = None,
     ) -> Action:
         """
         Select an action based on current context.
@@ -342,6 +343,16 @@ class ActionSelector:
         # Select action with highest value (with some noise for stochasticity)
         if not candidates:
             return Action(ActionType.STAY_QUIET, motivation="No action selected")
+
+        # Apply value tension discount: actions that frequently cause conflicts
+        # between anima dimensions get their expected value reduced.
+        # discount = 0.9^rate — e.g. 50% conflict rate => ~5% reduction, 100% => 10%
+        if conflict_rates:
+            for i, (action, value) in enumerate(candidates):
+                action_key = action.action_type.value
+                rate = conflict_rates.get(action_key, 0.0)
+                if rate > 0:
+                    candidates[i] = (action, value * (0.9 ** rate))
 
         # Add noise for stochasticity
         noisy_candidates = [

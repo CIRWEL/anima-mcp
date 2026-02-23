@@ -41,6 +41,7 @@ UNIFIED_REFLECTION_INTERVAL = 900  # ~30 min — single unified voice
 SELF_ANSWER_INTERVAL = 1800
 GOAL_SUGGEST_INTERVAL = 3600   # ~2 hours — suggest new goals
 GOAL_CHECK_INTERVAL = 300      # ~10 minutes — check goal progress
+META_LEARNING_INTERVAL = 21600  # iterations — ~daily at ~2s/iter
 
 # === Identity resolution ===
 # Maps canonical person name → set of aliases (case-insensitive matching)

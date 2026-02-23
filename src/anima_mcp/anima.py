@@ -12,8 +12,9 @@ The creature knows "I feel warm" not "E=0.4"
 """
 
 import math
+from copy import copy
 from dataclasses import dataclass, field
-from typing import Optional, TYPE_CHECKING
+from typing import Dict, Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
 from .config import get_calibration, NervousSystemCalibration, LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
 from .computational_neural import get_computational_neural_state
@@ -83,7 +84,35 @@ class Anima:
         }
 
 
-def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCalibration] = None) -> Anima:
+def _apply_drift_to_calibration(
+    cal: NervousSystemCalibration,
+    drift_midpoints: Dict[str, float],
+) -> NervousSystemCalibration:
+    """
+    Create a modified calibration with drifted midpoints.
+
+    When Lumen's experience shifts what "normal" means, the calibration
+    ranges shift accordingly. A warmth midpoint that drifted from 0.5 to
+    0.55 shifts temperature ranges by the same fraction of their span.
+    """
+    drifted = copy(cal)
+
+    # Warmth drift: shift temperature ranges
+    warmth_offset = drift_midpoints.get("warmth", 0.5) - 0.5
+    if abs(warmth_offset) > 0.001:
+        temp_range = cal.ambient_temp_max - cal.ambient_temp_min
+        shift = warmth_offset * temp_range
+        drifted.ambient_temp_min += shift
+        drifted.ambient_temp_max += shift
+        cpu_range = cal.cpu_temp_max - cal.cpu_temp_min
+        cpu_shift = warmth_offset * cpu_range
+        drifted.cpu_temp_min += cpu_shift
+        drifted.cpu_temp_max += cpu_shift
+
+    return drifted
+
+
+def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCalibration] = None, drift_midpoints: Optional[Dict[str, float]] = None) -> Anima:
     """
     The creature senses itself.
 
@@ -92,9 +121,15 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
     Args:
         readings: Sensor readings
         calibration: Nervous system calibration (uses default if None)
+        drift_midpoints: Drifted midpoints from CalibrationDrift (optional).
+            When provided, shifts calibration ranges so that "normal" reflects
+            Lumen's accumulated experience rather than fixed defaults.
     """
     if calibration is None:
         calibration = get_calibration()
+
+    if drift_midpoints:
+        calibration = _apply_drift_to_calibration(calibration, drift_midpoints)
 
     warmth = _sense_warmth(readings, calibration)
     clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy())
@@ -130,7 +165,8 @@ def sense_self_with_memory(
     calibration: Optional[NervousSystemCalibration] = None,
     blend_factor: Optional[float] = None,
     use_adaptive_blend: bool = True,
-    enable_exploration: bool = True
+    enable_exploration: bool = True,
+    drift_midpoints: Optional[Dict[str, float]] = None,
 ) -> Anima:
     """
     The creature senses itself, informed by memory and exploration.
@@ -153,12 +189,16 @@ def sense_self_with_memory(
         use_adaptive_blend: If True and blend_factor is None, use adaptive blend
                            factor that adjusts based on prediction accuracy
         enable_exploration: If True, occasionally explore beyond predictions
+        drift_midpoints: Drifted midpoints from CalibrationDrift (optional)
 
     Returns:
         Anima with potential anticipation influence and exploration
     """
     if calibration is None:
         calibration = get_calibration()
+
+    if drift_midpoints:
+        calibration = _apply_drift_to_calibration(calibration, drift_midpoints)
 
     # Base sensed state (raw, before memory influence)
     raw_warmth = _sense_warmth(readings, calibration)

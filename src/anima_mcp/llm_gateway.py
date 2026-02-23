@@ -454,6 +454,36 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
         except Exception:
             pass
 
+        # Computational selfhood context (read-only — never feeds back)
+        try:
+            from .server import _get_selfhood_context
+            selfhood = _get_selfhood_context()
+            if selfhood:
+                parts = []
+                if selfhood.get("drift_offsets"):
+                    notable = [(d, o) for d, o in selfhood["drift_offsets"].items() if abs(o) > 0.02]
+                    if notable:
+                        parts.append("How my baseline has shifted: " + ", ".join(
+                            f"{d} {'up' if o > 0 else 'down'} {abs(o):.0%}" for d, o in notable
+                        ))
+                if selfhood.get("active_tensions"):
+                    tensions = selfhood["active_tensions"]
+                    if tensions:
+                        parts.append("Tensions I'm experiencing: " + ", ".join(
+                            f"{t['dim_a']} vs {t['dim_b']}" for t in tensions[:3]
+                        ))
+                if selfhood.get("weight_changes"):
+                    changes = selfhood["weight_changes"]
+                    notable_w = [(d, w) for d, w in changes.items() if abs(w - 1.0) > 0.05]
+                    if notable_w:
+                        parts.append("How my values have shifted: " + ", ".join(
+                            f"I care {'more' if w > 1.0 else 'less'} about {d}" for d, w in notable_w
+                        ))
+                if parts:
+                    state_desc += "\n\n" + "\n".join(parts)
+        except Exception:
+            pass  # Non-fatal — narrator context is supplementary
+
         if mode == "wonder":
             recent_q = "\n".join(f"- {q}" for q in context.unanswered_questions[:3]) if context.unanswered_questions else "(none)"
 
