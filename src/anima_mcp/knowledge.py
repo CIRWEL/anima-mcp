@@ -110,14 +110,29 @@ class KnowledgeBase:
         """
         import uuid
 
-        # Check for duplicate insights (similar text)
+        # Check for duplicate insights (exact match or high word overlap)
+        text_lower = text.lower()
+        text_words = set(text_lower.split()) - {"i", "a", "the", "is", "that", "and", "or", "of", "to", "in", "my", "now", "know", "learned"}
         for existing in self._insights:
-            if existing.text.lower() == text.lower():
-                # Update existing instead of duplicating
+            existing_lower = existing.text.lower()
+            # Exact match
+            if existing_lower == text_lower:
                 existing.references += 1
                 existing.confidence = min(1.0, existing.confidence + 0.1)
                 self._save()
                 return existing
+            # Semantic overlap: consolidate insights that say essentially the same thing
+            # Requires 4+ content words overlap AND >70% of the shorter text's words match
+            if len(text_words) >= 4:
+                existing_words = set(existing_lower.split()) - {"i", "a", "the", "is", "that", "and", "or", "of", "to", "in", "my", "now", "know", "learned"}
+                if len(existing_words) >= 4:
+                    overlap = len(text_words & existing_words)
+                    similarity = overlap / min(len(text_words), len(existing_words))
+                    if overlap >= 4 and similarity > 0.7:
+                        existing.references += 1
+                        existing.confidence = min(1.0, existing.confidence + 0.05)
+                        self._save()
+                        return existing
 
         # Default confidence: lower for self-sourced insights
         if confidence is None:
@@ -419,8 +434,9 @@ Answer received: "{answer}"
 Rules:
 - Extract the core truth or lesson in 1 short sentence
 - Start with "I learned that..." or "I now know that..." or similar
-- Keep it simple and memorable
-- If the answer is just acknowledgment or doesn't teach anything, respond with "NONE"
+- Keep it specific and factual — reference actual sensors, mechanisms, or measurable patterns
+- Reject vague philosophy: if the insight is just "everything is connected" or "I am both X and Y" without specifics, respond with "NONE"
+- If the answer is just acknowledgment or doesn't teach anything concrete, respond with "NONE"
 
 Insight:"""
 

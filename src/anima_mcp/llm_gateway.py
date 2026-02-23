@@ -590,8 +590,9 @@ What pattern or feeling surfaces from these memories? Share one dream-like refle
 
 A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{day_context}
 
-Based on what I've experienced and learned, how would I answer my own question?
-Give a thoughtful answer from my own perspective (2-4 sentences)."""
+What do my actual sensor readings, patterns, and history tell me about this question?
+If my data answers it, explain how. If it doesn't, say what I don't know and what I'd need to find out.
+Be specific and honest — refer to actual numbers, sensors, or patterns rather than speaking in metaphor (2-4 sentences)."""
 
         elif mode == "unified":
             # Single unified voice: all context signals, LLM decides what matters
@@ -719,8 +720,8 @@ def build_follow_up_prompt(question: str, answer: str) -> str:
     return f"""I asked myself: "{question}"
 I answered: "{answer}"
 
-What follow-up question would help me understand this better?
-Generate one short, specific follow-up question (1 sentence)."""
+What follow-up question would help me test or verify this answer using my actual sensors and experience?
+Generate one short, specific, answerable follow-up question (1 sentence). It should be something my sensor data, patterns, or history could actually address — not an abstract philosophical question."""
 
 
 async def generate_follow_up(question: str, answer: str) -> Optional[str]:
