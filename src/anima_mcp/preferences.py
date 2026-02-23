@@ -55,6 +55,9 @@ class Preference:
     # Number of experiences that shaped this
     experience_count: int = 0
 
+    # Meta-learning: how much satisfying this preference predicts flourishing
+    influence_weight: float = 1.0
+
     def current_satisfaction(self, value: float) -> float:
         """How satisfied is this preference given current value?"""
         if self.optimal_low <= value <= self.optimal_high:
@@ -100,6 +103,35 @@ class Preference:
 
         # Update confidence
         self.confidence = min(1.0, self.experience_count / 20)
+
+    def enforce_floor(self, floor: float = 0.3):
+        """Ensure influence_weight never drops below a minimum."""
+        self.influence_weight = max(floor, self.influence_weight)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize preference to a dictionary."""
+        return {
+            "dimension": self.dimension,
+            "valence": self.valence,
+            "optimal_low": self.optimal_low,
+            "optimal_high": self.optimal_high,
+            "confidence": self.confidence,
+            "experience_count": self.experience_count,
+            "influence_weight": self.influence_weight,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Preference":
+        """Deserialize preference from a dictionary."""
+        return cls(
+            dimension=data["dimension"],
+            valence=data.get("valence", 0.0),
+            optimal_low=data.get("optimal_low", 0.3),
+            optimal_high=data.get("optimal_high", 0.7),
+            confidence=data.get("confidence", 0.0),
+            experience_count=data.get("experience_count", 0),
+            influence_weight=data.get("influence_weight", 1.0),
+        )
 
 
 class PreferenceSystem:
@@ -151,6 +183,7 @@ class PreferenceSystem:
                             p.optimal_high = pdata.get("optimal_high", 0.7)
                             p.confidence = pdata.get("confidence", 0.0)
                             p.experience_count = pdata.get("experience_count", 0)
+                            p.influence_weight = pdata.get("influence_weight", 1.0)
             except Exception as e:
                 print(f"[Preferences] Could not load: {e}", file=sys.stderr, flush=True)
 
@@ -166,6 +199,7 @@ class PreferenceSystem:
                         "optimal_high": p.optimal_high,
                         "confidence": p.confidence,
                         "experience_count": p.experience_count,
+                        "influence_weight": p.influence_weight,
                     }
                     for dim, p in self._preferences.items()
                 },
@@ -240,6 +274,20 @@ class PreferenceSystem:
                 self._preferences[dim].update_from_experience(
                     value, exp.valence, learning_rate
                 )
+
+    def enforce_weight_conservation(self, target: float = 4.0):
+        """Normalize influence weights of core dimensions to sum to target.
+
+        This ensures that boosting one preference necessarily reduces
+        others -- attention is a conserved resource.
+        """
+        dims = [p for p in self._preferences.values()
+                if p.dimension in ("warmth", "clarity", "stability", "presence")]
+        total = sum(p.influence_weight for p in dims)
+        if total > 0:
+            scale = target / total
+            for p in dims:
+                p.influence_weight *= scale
 
     def get_overall_satisfaction(self, current_state: Dict[str, float]) -> float:
         """
@@ -334,6 +382,56 @@ class PreferenceSystem:
             return "Still developing preferences through experience."
 
         return "Lumen " + ", ".join(descriptions) + "."
+
+
+def compute_trajectory_health(
+    satisfaction_history: list,
+    action_efficacy: float,
+    prediction_accuracy_trend: float,
+) -> float:
+    """Compute overall trajectory health from recent experience.
+
+    Combines mean satisfaction, satisfaction stability (low variance),
+    action efficacy, and prediction accuracy trend into a single
+    bounded [0, 1] score.
+    """
+    if not satisfaction_history:
+        return 0.5
+    mean_sat = sum(satisfaction_history) / len(satisfaction_history)
+    variance = sum((s - mean_sat) ** 2 for s in satisfaction_history) / len(satisfaction_history)
+    return (
+        0.30 * mean_sat
+        + 0.25 * (1.0 - min(1.0, variance * 4.0))
+        + 0.25 * min(1.0, max(0.0, action_efficacy))
+        + 0.20 * min(1.0, max(0.0, prediction_accuracy_trend + 0.5))
+    )
+
+
+def meta_learning_update(
+    weights: dict, correlations: dict, beta: float = 0.005
+) -> dict:
+    """Update influence weights based on correlation with trajectory health.
+
+    Each weight is adjusted proportionally to how much satisfying that
+    preference correlates with overall flourishing.  A floor of 0.3
+    prevents any dimension from being silenced, and weights are
+    re-normalized to conserve total attention (sum = 4.0).
+    """
+    new_weights = {}
+    for dim, w in weights.items():
+        corr = correlations.get(dim, 0.0)
+        new_w = w * (1.0 + beta * corr)
+        new_w = max(0.3, new_w)  # Floor
+        new_weights[dim] = new_w
+    # Conservation: normalize to sum=4.0
+    total = sum(new_weights.values())
+    if total > 0:
+        scale = 4.0 / total
+        new_weights = {d: w * scale for d, w in new_weights.items()}
+    # Re-enforce floors after normalization
+    for d in new_weights:
+        new_weights[d] = max(0.3, new_weights[d])
+    return new_weights
 
 
 # Singleton instance
