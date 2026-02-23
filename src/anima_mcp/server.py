@@ -105,6 +105,9 @@ _schema_hub: SchemaHub | None = None
 # CalibrationDrift - endogenous midpoint drift via experience
 from .calibration_drift import CalibrationDrift
 _calibration_drift: CalibrationDrift | None = None
+# ValueTensionTracker - detects preference conflicts between anima dimensions
+from .value_tension import ValueTensionTracker
+_tension_tracker: ValueTensionTracker | None = None
 # Agency state - for learning from action outcomes
 _last_action: Action | None = None
 _last_state_before: Dict[str, float] | None = None
@@ -816,6 +819,21 @@ async def _update_display_loop():
             except Exception as e:
                 if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
 
+            # Feed value tension tracker with current anima and last action taken
+            global _last_action, _last_state_before
+            if _tension_tracker and anima:
+                try:
+                    raw_anima = {
+                        "warmth": anima.warmth,
+                        "clarity": anima.clarity,
+                        "stability": anima.stability,
+                        "presence": anima.presence,
+                    }
+                    last_action_key = _last_action.action_type.value if _last_action else None
+                    _tension_tracker.observe(raw_anima, last_action_key)
+                except Exception:
+                    pass  # Tension tracking is advisory, never block main loop
+
             # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
             # Metacognition, agency, self-model, primitive language are enhancement layers.
             # On quick_render, skip straight to display update for snappy screen transitions.
@@ -878,7 +896,6 @@ async def _update_display_loop():
             # === AGENCY: Action selection and learning ===
             # Throttled: runs every 5th iteration (enhancement, not critical path)
             # Skipped on quick_render for responsive screen transitions
-            global _last_action, _last_state_before
             if not _skip_subsystems and loop_count % AGENCY_INTERVAL == 0:
                 try:
                     action_selector = get_action_selector(db_path=str(_store.db_path) if _store else "anima.db")
@@ -909,12 +926,22 @@ async def _update_display_loop():
                             surprise_after=surprise_level,
                         )
 
+                    # Build conflict rates from tension tracker for agency discount
+                    _conflict_rates = None
+                    if _tension_tracker:
+                        _conflict_rates = {}
+                        for _atype in ActionType:
+                            _rate = _tension_tracker.get_conflict_rate(_atype.value)
+                            if _rate > 0:
+                                _conflict_rates[_atype.value] = _rate
+
                     # SELECT action
                     action = action_selector.select_action(
                         current_state=current_state,
                         surprise_level=surprise_level,
                         surprise_sources=surprise_sources,
                         can_speak=False,
+                        conflict_rates=_conflict_rates if _conflict_rates else None,
                     )
 
                     # EXECUTE action
@@ -2363,6 +2390,11 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                     print(f"[CalDrift] Initialized (no prior drift)", file=sys.stderr, flush=True)
             except Exception as cde:
                 print(f"[CalDrift] Init failed (non-fatal): {cde}", file=sys.stderr, flush=True)
+
+            # Initialize ValueTensionTracker (transient — no persistence needed)
+            global _tension_tracker
+            _tension_tracker = ValueTensionTracker()
+            print(f"[Tension] Initialized value tension tracker", file=sys.stderr, flush=True)
 
             return  # Success
         except Exception as e:
