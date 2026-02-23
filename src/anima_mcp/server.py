@@ -2185,8 +2185,15 @@ async def _update_display_loop():
 
                         # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
                         from .self_model import get_self_model as _get_sm
+                        from .value_tension import detect_structural_conflicts
                         hub = _get_schema_hub()
                         drift = _get_calibration_drift()
+
+                        # Gather tension conflicts (structural + transient)
+                        _tension_conflicts = list(detect_structural_conflicts())
+                        if _tension_tracker:
+                            _tension_conflicts.extend(_tension_tracker.get_active_conflicts(last_n=20))
+
                         schema = hub.compose_schema(
                             identity=identity,
                             anima=anima,
@@ -2194,6 +2201,7 @@ async def _update_display_loop():
                             growth_system=_growth,
                             self_model=_get_sm(),
                             drift_offsets=drift.get_offsets(),
+                            tension_conflicts=_tension_conflicts,
                         )
 
                         # Update calibration drift with current attractor center

@@ -78,6 +78,7 @@ class SchemaHub:
         growth_system: Optional['GrowthSystem'] = None,
         self_model: Optional['SelfModel'] = None,
         drift_offsets: Optional[Dict[str, float]] = None,
+        tension_conflicts: Optional[list] = None,
     ) -> SelfSchema:
         """
         Compose unified schema from all source systems.
@@ -123,6 +124,9 @@ class SchemaHub:
 
         # 7. Inject calibration drift nodes (if drift is active)
         schema = self._inject_drift_offsets(schema, drift_offsets)
+
+        # 8. Inject value tension nodes (structural + transient conflicts)
+        schema = self._inject_tension_nodes(schema, tension_conflicts)
 
         return schema
 
@@ -560,6 +564,73 @@ class SchemaHub:
                 source_id=f"drift_{dim_name}",
                 target_id=f"anima_{dim_name}",
                 weight=abs(offset) * 5,  # Stronger edge for larger drift
+            ))
+
+        return schema
+
+    def _inject_tension_nodes(
+        self,
+        schema: SelfSchema,
+        tension_conflicts: Optional[list],
+    ) -> SelfSchema:
+        """
+        Inject value tension nodes into the schema.
+
+        Tensions show where improving one dimension necessarily worsens another.
+        Three categories: structural (permanent), environmental (transient),
+        volitional (action-caused).
+        """
+        if not tension_conflicts:
+            return schema
+
+        # De-duplicate: keep latest conflict per (category, dim_a, dim_b)
+        seen: dict = {}
+        for conflict in tension_conflicts:
+            key = (conflict.category, conflict.dim_a, conflict.dim_b)
+            seen[key] = conflict
+
+        for (category, dim_a, dim_b), conflict in seen.items():
+            node_id = f"tension_{category}_{dim_a}_{dim_b}"
+
+            # Compute normalized value based on category
+            if category == "structural":
+                value = 0.5  # always present, constant
+                label = f"T:{dim_a[:3]}/{dim_b[:3]}"
+            elif category == "environmental":
+                value = max(0.0, min(1.0, conflict.duration / 10.0))
+                label = f"T:env:{dim_a[:3]}/{dim_b[:3]}"
+            elif category == "volitional":
+                value = max(0.0, min(1.0, abs(conflict.grad_a - conflict.grad_b)))
+                label = f"T:vol:{dim_a[:3]}/{dim_b[:3]}"
+            else:
+                continue
+
+            schema.nodes.append(SchemaNode(
+                node_id=node_id,
+                node_type="tension",
+                label=label,
+                value=value,
+                raw_value={
+                    "category": category,
+                    "dim_a": dim_a,
+                    "dim_b": dim_b,
+                    "duration": conflict.duration,
+                    "action_type": conflict.action_type,
+                },
+            ))
+
+            # Two edges per conflict: tension -> each dimension
+            # Negative weight signifies opposing force
+            edge_weight = -value * 0.5
+            schema.edges.append(SchemaEdge(
+                source_id=node_id,
+                target_id=f"anima_{dim_a}",
+                weight=edge_weight,
+            ))
+            schema.edges.append(SchemaEdge(
+                source_id=node_id,
+                target_id=f"anima_{dim_b}",
+                weight=edge_weight,
             ))
 
         return schema
