@@ -144,7 +144,7 @@ class DimensionDrift:
         else:
             self._deviation_count = max(0, self._deviation_count - 1)
 
-        if self._deviation_count > SURPRISE_TRIGGER_COUNT and not self._surprise_active:
+        if self._deviation_count >= SURPRISE_TRIGGER_COUNT and not self._surprise_active:
             # Activate surprise acceleration
             self._surprise_active = True
             self.outer_alpha = OUTER_ALPHA * SURPRISE_ACCELERATION
@@ -287,7 +287,7 @@ class CalibrationDrift:
         Args:
             gap_hours: Hours since last shutdown.
         """
-        if gap_hours <= 0:
+        if gap_hours < 24.0:
             return
 
         # decay_factor: 0.5 at halflife, approaches 1.0 for very long gaps

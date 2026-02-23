@@ -81,6 +81,73 @@ class TestCalibrationDrift:
         d = drift.dimensions["warmth"]
         normal_alpha = d.outer_alpha
         d.inner_ema = d.hardware_default + 0.3
-        d._deviation_count = 101
+        d._deviation_count = 100
         d.check_surprise_acceleration()
         assert d.outer_alpha > normal_alpha
+
+    def test_get_midpoints_returns_all_dimensions(self):
+        drift = CalibrationDrift()
+        midpoints = drift.get_midpoints()
+        assert set(midpoints.keys()) == {"warmth", "clarity", "stability", "presence"}
+        for v in midpoints.values():
+            assert v == 0.5  # Initial = hardware default
+
+    def test_get_offsets_zero_initially(self):
+        drift = CalibrationDrift()
+        offsets = drift.get_offsets()
+        assert set(offsets.keys()) == {"warmth", "clarity", "stability", "presence"}
+        for v in offsets.values():
+            assert abs(v) < 0.001
+
+    def test_get_offsets_nonzero_after_drift(self):
+        drift = CalibrationDrift()
+        drift.dimensions["warmth"].outer_ema = 0.55
+        drift.dimensions["warmth"].apply_drift()
+        offsets = drift.get_offsets()
+        assert offsets["warmth"] > 0.0
+
+    def test_record_healthy_state_when_healthy(self):
+        drift = CalibrationDrift()
+        drift.dimensions["warmth"].current_midpoint = 0.55
+        drift.record_healthy_state(health=0.8)
+        assert drift.dimensions["warmth"].last_healthy_midpoint == 0.55
+
+    def test_record_healthy_state_skips_when_unhealthy(self):
+        drift = CalibrationDrift()
+        drift.dimensions["warmth"].current_midpoint = 0.55
+        original = drift.dimensions["warmth"].last_healthy_midpoint
+        drift.record_healthy_state(health=0.3)
+        assert drift.dimensions["warmth"].last_healthy_midpoint == original
+
+    def test_surprise_decay_back_to_normal(self):
+        from anima_mcp.calibration_drift import OUTER_ALPHA
+        drift = CalibrationDrift()
+        d = drift.dimensions["warmth"]
+        d.inner_ema = d.hardware_default + 0.3
+        d._deviation_count = 100
+        d.check_surprise_acceleration()
+        assert d.outer_alpha > OUTER_ALPHA
+        # Run many cycles with deviation gone
+        d.inner_ema = d.hardware_default
+        for _ in range(300):
+            d.check_surprise_acceleration()
+        assert abs(d.outer_alpha - OUTER_ALPHA) < 0.001
+
+    def test_restart_decay_moves_toward_healthy(self):
+        drift = CalibrationDrift()
+        drift.dimensions["warmth"].outer_ema = 0.55
+        drift.dimensions["warmth"].apply_drift()
+        initial_midpoint = drift.dimensions["warmth"].current_midpoint
+        drift.dimensions["warmth"].last_healthy_midpoint = 0.5
+        drift.apply_restart_decay(gap_hours=48)
+        # Should move toward 0.5, not stay at initial
+        assert drift.dimensions["warmth"].current_midpoint < initial_midpoint
+        assert drift.dimensions["warmth"].current_midpoint >= 0.5
+
+    def test_restart_decay_skips_short_gaps(self):
+        drift = CalibrationDrift()
+        drift.dimensions["warmth"].outer_ema = 0.55
+        drift.dimensions["warmth"].apply_drift()
+        initial = drift.dimensions["warmth"].current_midpoint
+        drift.apply_restart_decay(gap_hours=12)  # Less than 24h
+        assert drift.dimensions["warmth"].current_midpoint == initial
