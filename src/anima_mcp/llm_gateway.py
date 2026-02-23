@@ -425,6 +425,15 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
 - my LED glow: {my_glow:.0f} lux (from my own lights at {context.led_brightness:.0%} brightness)
 - world light: {world_light:.0f} lux (what's actually out there beyond my glow)"""
 
+        # Add proprioceptive belief about LED-sensor relationship if learned
+        try:
+            from .self_model import get_self_model
+            led_belief = get_self_model().beliefs.get("my_leds_affect_lux")
+            if led_belief and led_belief.supporting_count > 0:
+                state_desc += f"\n- proprioceptive sense: {led_belief.get_belief_strength()} that my lights affect my sensor ({led_belief.supporting_count}+ / {led_belief.contradicting_count}- observations)"
+        except Exception:
+            pass
+
         # Add trigger context if available (makes reflection grounded, not arbitrary)
         if context.trigger:
             trigger_desc = f"\n\nWhat just happened: {context.trigger}"

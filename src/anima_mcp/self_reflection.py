@@ -627,7 +627,10 @@ class SelfReflectionSystem:
 
         for bid, belief in sm.beliefs.items():
             total_evidence = belief.supporting_count + belief.contradicting_count
-            if total_evidence < 10 or belief.confidence < 0.7:
+            is_proprioceptive = bid in ("my_leds_affect_lux",)
+            min_evidence = 5 if is_proprioceptive else 10
+            min_confidence = 0.55 if is_proprioceptive else 0.7
+            if total_evidence < min_evidence or belief.confidence < min_confidence:
                 continue
 
             insight_id = f"belief_{bid}"

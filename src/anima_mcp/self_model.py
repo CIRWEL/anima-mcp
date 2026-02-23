@@ -332,7 +332,7 @@ class SelfModel:
         if self._prev_led_brightness is not None:
             led_change = led_brightness - self._prev_led_brightness
 
-            if abs(led_change) > 0.1:  # Significant brightness change
+            if abs(led_change) > 0.05:  # Capture subtle brightness shifts too
                 # Look at recent lux data to see if lux changed similarly
                 led_lux_data = list(self._correlation_data["led_lux"])
                 if len(led_lux_data) >= 3:
