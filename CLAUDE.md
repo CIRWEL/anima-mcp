@@ -290,7 +290,6 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 | `display/eras/pointillist.py` | Pointillist era (dot accumulation) |
 | `display/eras/field.py` | Field era (vector-field flow) |
 | `display/eras/geometric.py` | Geometric era (16 shape templates, adapted from capsule) |
-| `art_movements/geometric.py` | Original geometric capsule (preserved snapshot, not imported) |
 
 **Era switching:**
 - **Art eras screen**: Joystick up/down to browse, button to select. Auto-rotate toggle at bottom.

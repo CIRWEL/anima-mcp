@@ -86,7 +86,7 @@ else
     log "  WARNING: No anima.db found - Lumen will start fresh"
 fi
 
-for f in messages.json canvas.json knowledge.json preferences.json patterns.json self_model.json anima_history.json display_brightness.json metacognition_baselines.json; do
+for f in messages.json canvas.json knowledge.json preferences.json patterns.json self_model.json anima_history.json display_brightness.json metacognition_baselines.json trajectory_genesis.json day_summaries.json; do
     if [ -f "$BACKUP/$f" ]; then
         scp $SSH_OPTS "$BACKUP/$f" "$PI_USER@$PI_HOST:~/.anima/"
         log "  $f restored"
