@@ -18,6 +18,28 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 
 
+# === Declarative belief-to-edge modulation maps ===
+#
+# Correlation beliefs: a specific belief modulates a specific sensor→anima edge.
+# Value 0.5 = neutral, >0.5 = positive, <0.5 = negative influence.
+# Formula: learned = (value - 0.5) * 2 -> weight = learned * 0.4
+
+BELIEF_EDGE_MODULATIONS: Dict[str, Tuple[str, str]] = {
+    "temp_clarity_correlation": ("sensor_temp", "anima_clarity"),
+    "light_warmth_correlation": ("sensor_light", "anima_warmth"),
+    "my_leds_affect_lux": ("sensor_light", "anima_presence"),
+}
+
+# Sensitivity beliefs: modulate the MAGNITUDE of ALL edges from a given sensor.
+# Value 0.5 = default sensitivity (1.0x), 1.0 = amplified (1.5x), 0.0 = dampened (0.5x).
+# Formula: multiplier = 0.5 + value
+
+BELIEF_SENSITIVITY_MODULATIONS: Dict[str, str] = {
+    "temp_sensitive": "sensor_temp",
+    "light_sensitive": "sensor_light",
+}
+
+
 @dataclass
 class SchemaNode:
     """A node in Lumen's self-schema graph."""
@@ -404,8 +426,8 @@ def extract_self_schema(
             if total_evidence < 1 or confidence < 0.3:
                 continue  # Untested or not confident enough
 
-            # Track correlation beliefs for edge modulation
-            if belief_id in ("temp_clarity_correlation", "light_warmth_correlation"):
+            # Track beliefs that modulate sensor→anima edges
+            if belief_id in BELIEF_EDGE_MODULATIONS or belief_id in BELIEF_SENSITIVITY_MODULATIONS:
                 _correlation_beliefs[belief_id] = bdata.get("value", 0.5)
 
             nodes.append(SchemaNode(
@@ -433,22 +455,22 @@ def extract_self_schema(
     # Correlation beliefs modulate these weights: learned knowledge overrides static config
     sensor_weights = _get_sensor_anima_weights()
 
-    # Apply learned correlation beliefs to sensor→anima edges
+    # Apply learned beliefs to sensor→anima edges (declarative map replaces hardcoded blocks)
     if _correlation_beliefs:
-        # temp_clarity_correlation: value 0.5 = no effect, >0.5 = positive, <0.5 = negative
-        if "temp_clarity_correlation" in _correlation_beliefs:
-            learned = (_correlation_beliefs["temp_clarity_correlation"] - 0.5) * 2  # Map 0..1 → -1..1
-            if ("sensor_temp", "anima_clarity") in sensor_weights:
-                sensor_weights[("sensor_temp", "anima_clarity")] = learned * 0.4
-            elif abs(learned) > 0.2:
-                sensor_weights[("sensor_temp", "anima_clarity")] = learned * 0.4
+        # Direct modulations: specific belief → specific sensor→anima edge
+        for belief_id, (source, target) in BELIEF_EDGE_MODULATIONS.items():
+            if belief_id in _correlation_beliefs:
+                learned = (_correlation_beliefs[belief_id] - 0.5) * 2  # Map 0..1 → -1..1
+                if (source, target) in sensor_weights or abs(learned) > 0.2:
+                    sensor_weights[(source, target)] = learned * 0.4
 
-        if "light_warmth_correlation" in _correlation_beliefs:
-            learned = (_correlation_beliefs["light_warmth_correlation"] - 0.5) * 2
-            if ("sensor_light", "anima_warmth") in sensor_weights:
-                sensor_weights[("sensor_light", "anima_warmth")] = learned * 0.4
-            elif abs(learned) > 0.2:
-                sensor_weights[("sensor_light", "anima_warmth")] = learned * 0.4
+        # Sensitivity modulations: scale ALL edges from a sensor
+        for belief_id, sensor_source in BELIEF_SENSITIVITY_MODULATIONS.items():
+            if belief_id in _correlation_beliefs:
+                multiplier = 0.5 + _correlation_beliefs[belief_id]  # 0.5x to 1.5x
+                for key in list(sensor_weights.keys()):
+                    if key[0] == sensor_source:
+                        sensor_weights[key] *= multiplier
     node_ids = {n.node_id for n in nodes}
     for (source_id, target_id), weight in sensor_weights.items():
         if source_id in node_ids and target_id in node_ids:
