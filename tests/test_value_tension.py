@@ -12,6 +12,14 @@ class TestStructuralConflicts:
         pairs = [(c.dim_a, c.dim_b) for c in conflicts]
         assert ("warmth", "presence") in pairs or ("presence", "warmth") in pairs
 
+    def test_detects_clarity_stability_neural_conflict(self):
+        # Reset cached conflicts so we get fresh ones
+        import anima_mcp.value_tension as vt
+        vt._STRUCTURAL_CONFLICTS = None
+        conflicts = detect_structural_conflicts()
+        pairs = [(c.dim_a, c.dim_b) for c in conflicts]
+        assert ("clarity", "stability") in pairs or ("stability", "clarity") in pairs
+
     def test_structural_conflicts_are_permanent(self):
         c1 = detect_structural_conflicts()
         c2 = detect_structural_conflicts()

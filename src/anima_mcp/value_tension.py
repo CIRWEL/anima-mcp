@@ -96,11 +96,11 @@ def detect_structural_conflicts() -> List[ConflictEvent]:
         ),
         ConflictEvent(
             timestamp=now,
-            dim_a="stability",
-            dim_b="presence",
+            dim_a="clarity",
+            dim_b="stability",
             grad_a=0.0,
             grad_b=0.0,
-            duration=-1,
+            duration=-1,  # permanent — neural alpha helps clarity, reduces stability
             category="structural",
         ),
     ]
@@ -134,7 +134,7 @@ class ValueTensionTracker:
 
         # Gradient history per dimension for adaptive noise threshold
         self._gradient_history: Dict[str, deque] = {
-            d: deque(maxlen=50) for d in DIMENSIONS
+            d: deque(maxlen=100) for d in DIMENSIONS
         }
 
         # Track actions and whether they caused conflicts
