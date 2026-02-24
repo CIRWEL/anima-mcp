@@ -773,6 +773,73 @@ class UnitaresBridge:
             logger.warning("Identity sync error: %s", e)
             return False
 
+    async def report_outcome(
+        self,
+        outcome_type: str,
+        outcome_score: Optional[float] = None,
+        is_bad: Optional[bool] = None,
+        detail: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Report an outcome event to UNITARES for EISV validation.
+
+        Fire-and-forget, non-blocking. Non-fatal on failure.
+
+        Args:
+            outcome_type: e.g. "drawing_completed", "task_completed"
+            outcome_score: 0.0-1.0 quality metric
+            is_bad: Whether negative outcome (inferred from type if None)
+            detail: Type-specific metadata
+
+        Returns:
+            True if reported successfully, False otherwise
+        """
+        if not self._url or not self._agent_id:
+            return False
+
+        try:
+            arguments = {
+                "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
+                "outcome_type": outcome_type,
+            }
+            if outcome_score is not None:
+                arguments["outcome_score"] = outcome_score
+            if is_bad is not None:
+                arguments["is_bad"] = is_bad
+            if detail:
+                arguments["detail"] = detail
+
+            mcp_request = {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "outcome_event",
+                    "arguments": arguments,
+                }
+            }
+
+            mcp_url = self._get_mcp_url()
+            headers = {
+                "Content-Type": "application/json",
+                "X-Session-ID": self._session_id or "anima-creature",
+                "Accept": "application/json, text/event-stream",
+            }
+            if self._agent_id:
+                headers["X-Agent-Id"] = self._agent_id
+
+            session = await self._get_session()
+            async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
+                if response.status == 200:
+                    result = await response.json()
+                    if "result" in result and "error" not in result:
+                        logger.info("Outcome reported: %s score=%.2f", outcome_type, outcome_score or 0)
+                        return True
+            return False
+        except Exception as e:
+            logger.debug("Outcome report failed (non-fatal): %s", e)
+            return False
+
 
 # Convenience function for common use case
 async def check_governance(

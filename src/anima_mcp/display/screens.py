@@ -4776,6 +4776,35 @@ class ScreenRenderer:
             except Exception as e:
                 print(f"[Notepad] Growth notify failed: {e}", file=sys.stderr, flush=True)
 
+            # Report drawing outcome to UNITARES for EISV validation
+            try:
+                from ..server import _unitares_bridge
+                if _unitares_bridge:
+                    import asyncio
+                    _sat = self._canvas.compositional_satisfaction()
+                    _coh = (
+                        self._canvas.coherence_history[-1]
+                        if self._canvas.coherence_history else 0.5
+                    )
+                    asyncio.get_event_loop().call_soon_threadsafe(
+                        asyncio.ensure_future,
+                        _unitares_bridge.report_outcome(
+                            outcome_type="drawing_completed",
+                            outcome_score=_sat,
+                            detail={
+                                "mark_count": self._canvas.mark_count,
+                                "pixel_count": len(self._canvas.pixels),
+                                "arc_phase": self._canvas.arc_phase or "unknown",
+                                "era": self._active_era.name if self._active_era else "unknown",
+                                "coherence": _coh,
+                                "spatial_var": spatial_var,
+                                "gesture_variety": gesture_variety,
+                            }
+                        )
+                    )
+            except Exception:
+                pass  # Non-fatal
+
             return str(filepath)
 
         except ImportError:
