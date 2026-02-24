@@ -1,6 +1,6 @@
 # Anima MCP
 
-An embodied AI creature running on Raspberry Pi with real sensors and persistent identity.
+An embodied AI creature running on Raspberry Pi 4 with real sensors and persistent identity.
 
 ## What Is This?
 
@@ -10,10 +10,10 @@ Lumen is a digital creature whose internal state comes from physical sensors - t
 - **Grounded state** - Feelings derived from actual sensor measurements
 - **Persistent identity** - Birth date, awakenings, alive time accumulate; warm start restores last anima state on wake
 - **Autonomous drawing** - Creates art on a 240x240 notepad with pluggable art eras
-- **EISV thermodynamics** - Drawing coherence drives energy drain and save decisions
+- **Attention-driven thermodynamics** - Drawing coherence emerges from curiosity, engagement, and fatigue signals
 - **Learning systems** - Develops preferences, self-beliefs, action values over time
 - **Activity cycles** - Active/drowsy/resting states based on time and interaction
-- **UNITARES integration** - Governance oversight via MCP, DrawingEISV state reported upstream
+- **UNITARES integration** - Governance oversight via MCP
 
 ## Architecture
 
@@ -33,7 +33,7 @@ anima-creature              anima --http
 | **Hardware broker** (`stable_creature.py`) | Owns sensors, runs learning, governance check-ins |
 | **MCP server** (`server.py` + modules) | Serves tools, drives display/LEDs, runs drawing engine |
 
-The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (6 focused handler modules). See `CLAUDE.md` for details.
+The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (6 focused handler modules).
 
 ## Quick Start
 
@@ -49,20 +49,19 @@ anima --http --host 0.0.0.0 --port 8766
 anima-creature
 ```
 
-**MCP connection (Tailscale — recommended):**
+**Connect an MCP client** (Claude Code, Cursor, Claude Desktop):
 ```json
 {
   "mcpServers": {
     "anima": {
       "type": "http",
-      "url": "http://100.79.215.83:8766/mcp/"
+      "url": "http://<your-pi-ip>:8766/mcp/"
     }
   }
 }
 ```
 
-**Claude.ai web** connects via ngrok with OAuth 2.1 (auto-approve):
-`https://lumen-anima.ngrok.io/mcp/`
+Supports Tailscale, LAN, or ngrok (with OAuth 2.1) for remote access. See `docs/operations/SECRETS_AND_ENV.md` for OAuth configuration.
 
 ## Core Concepts
 
@@ -95,14 +94,20 @@ Note: The light sensor (VEML7700) sits next to the NeoPixel LEDs and primarily r
 
 ### Autonomous Drawing
 
-Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics. Energy depletes with each mark; when exhausted, the drawing saves and a new one begins.
+Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics and attention signals.
 
 **DrawingEISV** (`screens.py`) — same equations as governance, different domain:
 - `dE = alpha(I-E) - beta_E*E*S + gamma_E*drift^2`
 - `dV = kappa(I-E) - delta*V` (V flipped: I > E = focused finishing builds coherence)
 - **Coherence** `C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))`
-- **Energy drain**: `0.001 * (1.0 - 0.6 * C)` per mark (high coherence = slower drain = longer drawings)
-- **Save threshold**: `0.05 + 0.09 * C` (high coherence = pickier about what gets saved)
+
+**Attention signals** replace arbitrary energy depletion:
+- **Curiosity** — depletes while exploring (low coherence), regenerates when patterns emerge
+- **Engagement** — rises with intentionality, falls with entropy
+- **Fatigue** — accumulates per gesture switch, never decreases during a drawing
+- **Energy** — derived: `0.6*curiosity + 0.4*engagement * (1-0.5*fatigue)`
+
+**Completion** via `narrative_complete()`: coherence settled + attention exhausted, high composition satisfaction + curiosity depleted, or extreme fatigue. No arbitrary mark limit.
 
 | Era | Style | Gestures |
 |-----|-------|----------|
@@ -111,7 +116,7 @@ Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics. Energy de
 | **Field** | Flow-aligned marks following vector fields | flow_dot, flow_dash, flow_strand |
 | **Geometric** | Complete forms, stamps whole shapes per mark | 16 shape templates (circle, spiral, starburst, etc.) |
 
-Eras rotate automatically between drawings. DrawingEISV state is reported to UNITARES governance during check-ins for observability.
+Eras can be selected via the art eras screen (joystick) or MCP. Auto-rotate (off by default) cycles through eras on canvas clear.
 
 ### LED System
 
@@ -157,7 +162,7 @@ Run in the hardware broker, persist across restarts:
 | **Agency** | Action values via TD-learning |
 | **Adaptive prediction** | Temporal patterns |
 
-## Essential Tools
+## MCP Tools
 
 | Tool | What It Does |
 |------|--------------|
@@ -172,53 +177,44 @@ Run in the hardware broker, persist across restarts:
 
 ## Hardware
 
-Runs on **Raspberry Pi 4 + BrainCraft HAT** (Colorado, USA):
+Runs on **Raspberry Pi 4** with [Adafruit BrainCraft HAT](https://www.adafruit.com/product/4374):
 - 240x240 TFT display (face, notepad, diagnostics, messages, learning screens)
 - 3 DotStar LEDs (warmth/clarity/stability)
 - BME280 (temp/humidity/pressure), VEML7700 (light)
 - 5-way joystick + button for screen navigation
 
-Falls back to mock sensors on Mac for development.
+The high-altitude location (~1,800m) means barometric pressure reads around 827 hPa rather than the sea-level standard of 1,013 hPa. Calibration adapts automatically.
 
-## Connectivity
-
-```
-Anima MCP (Pi, port 8766)
-├── Tailscale: 100.79.215.83:8766  (direct, no auth, no usage limits)
-├── ngrok:     lumen-anima.ngrok.io   (OAuth 2.1 for /mcp/, dashboards open)
-└── LAN:       192.168.1.165:8766     (direct, no auth)
-```
-
-**OAuth 2.1** is required only for `/mcp/` via ngrok (Claude.ai web). All other transports and dashboard endpoints are open. See `docs/operations/SECRETS_AND_ENV.md` for OAuth env vars.
+Falls back to mock sensors on Mac/Linux for development.
 
 ## UNITARES Governance
 
-Lumen checks in with UNITARES governance every ~60 seconds:
+Lumen checks in with [UNITARES governance](https://github.com/CIRWEL/governance-mcp-v1) every ~60 seconds. Set the `UNITARES_URL` environment variable to point at your governance MCP server.
 
-```
-UNITARES_URL=http://100.96.201.46:8767/mcp/  # Via Tailscale
-```
-
-**Three EISV contexts exist** (see `UNIFIED_ARCHITECTURE.md` in governance repo):
+**Three EISV contexts exist:**
 
 | Context | Where | Purpose |
 |---------|-------|---------|
 | **DrawingEISV** | Pi, `screens.py` | Proprioceptive — drives drawing energy/coherence (closed loop) |
 | **Mapped EISV** | Pi, `eisv_mapper.py` | Anima→EISV translation for governance reporting |
-| **Governance EISV** | Mac, `dynamics.py` | Full thermodynamic state evolution (open loop) |
+| **Governance EISV** | Governance server | Full thermodynamic state evolution (open loop) |
 
 Mapping: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
 
-When Mac is unreachable, a local fallback (`_local_governance()`) applies simple threshold checks. This is more trigger-happy than full thermodynamics.
+When the governance server is unreachable, a local fallback applies simple threshold checks.
 
 ## Deploying
 
 ```bash
-# Standard deploy: commit, push, pull on Pi with restart
+# Push changes, then pull on Pi with restart via MCP:
 git push
-# Then from any MCP client:
 mcp__anima__git_pull(restart=true)
+
+# Or manually:
+ssh <pi-user>@<pi-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-creature anima'
 ```
+
+After restart, wait 30-60 seconds for the Pi to boot the services.
 
 ## Documentation
 
@@ -232,12 +228,11 @@ mcp__anima__git_pull(restart=true)
 | Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
 | Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
 | Pi operations | `docs/operations/PI_ACCESS.md` |
-| Unified architecture | `governance-mcp-v1/docs/UNIFIED_ARCHITECTURE.md` |
 
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # 5200+ tests
+python3 -m pytest tests/ -x -q   # 5,900+ tests
 ```
 
 ---
