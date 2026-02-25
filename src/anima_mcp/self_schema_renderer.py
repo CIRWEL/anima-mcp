@@ -44,6 +44,10 @@ RING_2_RADIUS = 82   # Physical sensor nodes (tighter to fit more)
 RING_2B_RADIUS = 102  # System resource nodes
 RING_3_RADIUS = 112  # Preference nodes (outer ring)
 RING_4_RADIUS = 118  # Belief nodes (outermost)
+RING_META_RADIUS = 30     # Meta nodes (inner ring, between identity and anima)
+RING_TRAJ_RADIUS = 65     # Trajectory nodes (between anima and sensors)
+RING_DRIFT_RADIUS = 95    # Drift nodes (between resources and preferences)
+RING_TENSION_RADIUS = 108 # Tension nodes (between preferences and beliefs)
 
 # Node sizes (radius)
 IDENTITY_RADIUS = 14
@@ -52,6 +56,10 @@ SENSOR_RADIUS = 9
 RESOURCE_RADIUS = 8
 PREFERENCE_RADIUS = 7
 BELIEF_RADIUS = 6
+META_RADIUS = 6
+TRAJECTORY_RADIUS = 7
+DRIFT_RADIUS = 5
+TENSION_RADIUS = 5
 
 # Colors (RGB)
 COLORS = {
@@ -63,6 +71,10 @@ COLORS = {
     "resource": (80, 180, 180),       # Teal for system resources
     "preference": (255, 150, 0),      # Orange for preferences
     "belief": (180, 180, 255),        # Lavender for beliefs
+    "meta": (200, 180, 140),          # Warm gray for meta/identity texture
+    "trajectory": (180, 220, 140),    # Soft lime for trajectory
+    "drift": (220, 140, 140),         # Soft red for drift
+    "tension": (220, 180, 100),       # Amber for tension
     "edge_positive": (100, 150, 100), # Green-gray for positive edges
     "edge_negative": (150, 100, 100), # Red-gray for negative edges
     "background": (20, 20, 30),       # Dark background
@@ -230,22 +242,60 @@ def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int)
         y = cy + int(RING_4_RADIUS * math.sin(angle_rad))
         return x, y
 
+    elif node.node_type == "meta":
+        # Inner ring: meta nodes evenly spaced
+        angle_step = 360.0 / total_in_ring if total_in_ring > 0 else 120
+        angle = 45 + angle_step * index_in_ring  # Start at 45° to avoid overlapping anima cardinals
+        angle_rad = math.radians(angle)
+        x = cx + int(RING_META_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_META_RADIUS * math.sin(angle_rad))
+        return x, y
+
+    elif node.node_type == "trajectory":
+        # Between anima and sensors
+        angle_step = 360.0 / total_in_ring if total_in_ring > 0 else 120
+        angle = 30 + angle_step * index_in_ring  # Offset to avoid sensor positions
+        angle_rad = math.radians(angle)
+        x = cx + int(RING_TRAJ_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_TRAJ_RADIUS * math.sin(angle_rad))
+        return x, y
+
+    elif node.node_type == "drift":
+        # Between resources and preferences
+        angle_step = 360.0 / total_in_ring if total_in_ring > 0 else 90
+        angle = 20 + angle_step * index_in_ring
+        angle_rad = math.radians(angle)
+        x = cx + int(RING_DRIFT_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_DRIFT_RADIUS * math.sin(angle_rad))
+        return x, y
+
+    elif node.node_type == "tension":
+        # Between preferences and beliefs
+        angle_step = 360.0 / total_in_ring if total_in_ring > 0 else 60
+        angle = 15 + angle_step * index_in_ring
+        angle_rad = math.radians(angle)
+        x = cx + int(RING_TENSION_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_TENSION_RADIUS * math.sin(angle_rad))
+        return x, y
+
     return cx, cy
 
 
 def _build_node_positions(schema: SelfSchema) -> Dict[str, Tuple[int, int]]:
     """Build position lookup for all nodes in the schema."""
     node_positions: Dict[str, Tuple[int, int]] = {}
-    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0, "belief": 0}
-    preference_count = sum(1 for n in schema.nodes if n.node_type == "preference")
-    belief_count = sum(1 for n in schema.nodes if n.node_type == "belief")
+    type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0, "belief": 0,
+                    "meta": 0, "trajectory": 0, "drift": 0, "tension": 0}
+    type_counts = {t: sum(1 for n in schema.nodes if n.node_type == t) for t in type_indices}
+    preference_count = type_counts["preference"]
+    belief_count = type_counts["belief"]
 
     for node in schema.nodes:
         if node.node_type == "identity":
             pos = _get_node_position(node, 0, 1)
         elif node.node_type in type_indices:
             idx = type_indices[node.node_type]
-            total = preference_count if node.node_type == "preference" else belief_count if node.node_type == "belief" else 0
+            total = type_counts.get(node.node_type, 0)
             pos = _get_node_position(node, idx, total)
             type_indices[node.node_type] += 1
         else:
@@ -394,6 +444,14 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             _draw_glow(pixels, x, y, PREFERENCE_RADIUS, COLORS["preference"], 0.6)
         elif node.node_type == "belief":
             _draw_glow(pixels, x, y, BELIEF_RADIUS, COLORS["belief"], 0.5)
+        elif node.node_type == "meta":
+            _draw_glow(pixels, x, y, META_RADIUS, COLORS["meta"], node.value)
+        elif node.node_type == "trajectory":
+            _draw_glow(pixels, x, y, TRAJECTORY_RADIUS, COLORS["trajectory"], node.value)
+        elif node.node_type == "drift":
+            _draw_glow(pixels, x, y, DRIFT_RADIUS, COLORS["drift"], node.value)
+        elif node.node_type == "tension":
+            _draw_glow(pixels, x, y, TENSION_RADIUS, COLORS["tension"], node.value)
 
     # Draw nodes
     for node in schema.nodes:
@@ -417,6 +475,14 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             _draw_filled_circle(pixels, x, y, PREFERENCE_RADIUS, COLORS["preference"])
         elif node.node_type == "belief":
             _draw_filled_circle(pixels, x, y, BELIEF_RADIUS, COLORS["belief"])
+        elif node.node_type == "meta":
+            _draw_filled_circle(pixels, x, y, META_RADIUS, COLORS["meta"])
+        elif node.node_type == "trajectory":
+            _draw_filled_circle(pixels, x, y, TRAJECTORY_RADIUS, COLORS["trajectory"])
+        elif node.node_type == "drift":
+            _draw_filled_circle(pixels, x, y, DRIFT_RADIUS, COLORS["drift"])
+        elif node.node_type == "tension":
+            _draw_filled_circle(pixels, x, y, TENSION_RADIUS, COLORS["tension"])
 
     return pixels
 

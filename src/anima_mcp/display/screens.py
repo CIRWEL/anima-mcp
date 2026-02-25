@@ -3405,29 +3405,27 @@ class ScreenRenderer:
     ):
         """Render Lumen's self-schema graph G_t.
 
-        Uses get_current_schema() directly — this produces the base schema
-        (identity, anima, sensor, resource, preference, belief nodes) whose
-        node types the 240x240 renderer knows how to lay out on rings.
-
-        The SchemaHub's enriched schema (trajectory, drift, tension nodes)
-        is for the web dashboard and trajectory computation, not the LCD.
+        Uses the same enriched schema as the web dashboard — one source of truth.
+        Reads hub.schema_history[-1] (no side effects). Falls back to
+        get_current_schema() if hub has no history yet.
         """
         from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
-        from ..growth import get_growth_system
-        from ..self_model import get_self_model
+        from ..server import _get_schema_hub
 
-        growth_system = get_growth_system()
-        self_model = get_self_model()
-
-        schema = get_current_schema(
-            identity=identity,
-            anima=anima,
-            readings=readings,
-            growth_system=growth_system,
-            include_preferences=True,
-            self_model=self_model,
-        )
+        # Same schema the dashboard serves at /schema-data
+        hub = _get_schema_hub()
+        if hub.schema_history:
+            schema = hub.schema_history[-1]
+        else:
+            # Fallback before first compose_schema() runs
+            from ..growth import get_growth_system
+            from ..self_model import get_self_model
+            schema = get_current_schema(
+                identity=identity, anima=anima, readings=readings,
+                growth_system=get_growth_system(), include_preferences=True,
+                self_model=get_self_model(),
+            )
 
         if not hasattr(self._display, '_create_canvas'):
             core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
