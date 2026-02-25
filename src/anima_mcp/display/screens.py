@@ -3444,10 +3444,8 @@ class ScreenRenderer:
 
             pixels = render_schema_to_pixels(schema)
             for (x, y), color in pixels.items():
-                nx = int((x - 120) * 0.80 + 120)
-                ny = int((y - 120) * 0.80 + 114)
-                if 0 <= nx < WIDTH and 0 <= ny < HEIGHT:
-                    image.putpixel((nx, ny), color)
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    image.putpixel((x, y), color)
 
             draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
 

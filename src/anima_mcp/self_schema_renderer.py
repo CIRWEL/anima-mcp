@@ -38,28 +38,29 @@ WIDTH = 240
 HEIGHT = 240
 CENTER = (WIDTH // 2, HEIGHT // 2)
 
-# Ring radii
-RING_1_RADIUS = 50   # Anima nodes
-RING_2_RADIUS = 82   # Physical sensor nodes (tighter to fit more)
-RING_2B_RADIUS = 102  # System resource nodes
-RING_3_RADIUS = 112  # Preference nodes (outer ring)
-RING_4_RADIUS = 118  # Belief nodes (outermost)
-RING_META_RADIUS = 30     # Meta nodes (inner ring, between identity and anima)
-RING_TRAJ_RADIUS = 65     # Trajectory nodes (between anima and sensors)
-RING_DRIFT_RADIUS = 95    # Drift nodes (between resources and preferences)
-RING_TENSION_RADIUS = 108 # Tension nodes (between preferences and beliefs)
+# Ring radii — 9 rings evenly spaced from center to edge
+# Inner to outer: meta → anima → trajectory → sensor → resource → drift → preference → tension → belief
+RING_META_RADIUS = 24     # Identity texture (Exist%, Wakes, Age)
+RING_1_RADIUS = 40        # Anima dimensions (warmth, clarity, stability, presence)
+RING_TRAJ_RADIUS = 56     # Trajectory (maturity, rest point, stability score)
+RING_2_RADIUS = 72        # Physical sensors (light, temp, humidity, pressure)
+RING_2B_RADIUS = 84       # System resources (memory, cpu, disk)
+RING_DRIFT_RADIUS = 92    # Calibration drift per dimension
+RING_3_RADIUS = 100       # Learned preferences
+RING_TENSION_RADIUS = 108 # Value tensions between dimensions
+RING_4_RADIUS = 115       # Learned beliefs
 
-# Node sizes (radius)
-IDENTITY_RADIUS = 14
-ANIMA_RADIUS = 11
-SENSOR_RADIUS = 9
-RESOURCE_RADIUS = 8
-PREFERENCE_RADIUS = 7
-BELIEF_RADIUS = 6
-META_RADIUS = 6
-TRAJECTORY_RADIUS = 7
-DRIFT_RADIUS = 5
-TENSION_RADIUS = 5
+# Node sizes (radius) — smaller for outer/enriched nodes to reduce overlap
+IDENTITY_RADIUS = 12
+ANIMA_RADIUS = 9
+SENSOR_RADIUS = 7
+RESOURCE_RADIUS = 6
+PREFERENCE_RADIUS = 5
+BELIEF_RADIUS = 5
+META_RADIUS = 5
+TRAJECTORY_RADIUS = 6
+DRIFT_RADIUS = 4
+TENSION_RADIUS = 4
 
 # Colors (RGB)
 COLORS = {

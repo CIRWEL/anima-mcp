@@ -20,6 +20,11 @@ from anima_mcp.self_schema_renderer import (
     WIDTH,
     HEIGHT,
     COLORS,
+    RING_1_RADIUS,
+    RING_2_RADIUS,
+    RING_2B_RADIUS,
+    RING_3_RADIUS,
+    RING_4_RADIUS,
 )
 from anima_mcp.self_schema import SelfSchema, SchemaNode, SchemaEdge
 
@@ -184,31 +189,31 @@ class TestGetNodePosition:
             pos = _get_node_position(node, i, 4)
             # Should be on ring 1, not at center
             dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
-            assert dist == pytest.approx(50, abs=1)
+            assert dist == pytest.approx(RING_1_RADIUS, abs=1)
 
     def test_sensor_ring2(self):
         node = SchemaNode("sensor_light", "sensor", "Light", 0.5, 0.5)
         pos = _get_node_position(node, 0, 4)
         dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
-        assert dist == pytest.approx(82, abs=2)
+        assert dist == pytest.approx(RING_2_RADIUS, abs=2)
 
     def test_resource_ring2b(self):
         node = SchemaNode("resource_mem", "resource", "Mem", 0.5, 0.5)
         pos = _get_node_position(node, 0, 3)
         dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
-        assert dist == pytest.approx(102, abs=2)
+        assert dist == pytest.approx(RING_2B_RADIUS, abs=2)
 
     def test_preference_ring3(self):
         node = SchemaNode("pref_warmth", "preference", "PW", 0.5, 0.5)
         pos = _get_node_position(node, 0, 2)
         dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
-        assert dist == pytest.approx(112, abs=2)
+        assert dist == pytest.approx(RING_3_RADIUS, abs=2)
 
     def test_belief_ring4(self):
         node = SchemaNode("belief_light", "belief", "BLit", 0.5, 0.5)
         pos = _get_node_position(node, 0, 3)
         dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
-        assert dist == pytest.approx(118, abs=2)
+        assert dist == pytest.approx(RING_4_RADIUS, abs=2)
 
     def test_unknown_type_at_center(self):
         node = SchemaNode("foo", "unknown_type", "Foo", 0.5, 0.5)
