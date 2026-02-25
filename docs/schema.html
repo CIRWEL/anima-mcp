@@ -21,7 +21,7 @@
         }
 
         .container {
-            max-width: 640px;
+            max-width: 960px;
             width: 100%;
             padding: 32px 24px 48px;
         }
@@ -122,13 +122,13 @@
         .legend-item {
             display: flex;
             align-items: center;
-            gap: 5px;
-            font-size: 9px;
-            color: rgba(255,255,255,0.3);
+            gap: 6px;
+            font-size: 10px;
+            color: rgba(255,255,255,0.35);
             font-family: var(--mono);
         }
         .legend-dot {
-            width: 7px; height: 7px;
+            width: 9px; height: 9px;
             border-radius: 50%;
             opacity: 0.8;
         }
@@ -511,7 +511,7 @@
 
         /* ── Skeleton ── */
         .skeleton-graph {
-            height: 320px;
+            height: 480px;
             border-radius: 8px;
             background: linear-gradient(90deg,
                 rgba(255,255,255,0.015) 25%,
@@ -548,7 +548,7 @@
             --c-tension: #e87c7c;
         }
 
-        @media (max-width: 500px) {
+        @media (max-width: 680px) {
             .container { padding: 20px 16px 40px; }
             .traj-grid { grid-template-columns: 1fr; }
             .section { padding: 16px; }
@@ -736,7 +736,7 @@
         if (!canvas) return;
         const dpr = window.devicePixelRatio || 1;
         const w = canvas.clientWidth;
-        const h = 480;
+        const h = Math.max(600, Math.min(w * 0.85, 760));
         canvas.width = w * dpr;
         canvas.height = h * dpr;
         canvas.style.height = h + 'px';
@@ -745,7 +745,7 @@
 
         const cx = w / 2;
         const cy = h / 2;
-        const maxR = Math.min(cx, cy) - 50;
+        const maxR = Math.min(cx, cy) - 60;
 
         // Subtle radial gradient background
         const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR + 40);
@@ -755,7 +755,7 @@
         ctx.fillStyle = bg;
         ctx.fillRect(0, 0, w, h);
 
-        const ringRadii = [0, maxR * 0.18, maxR * 0.40, maxR * 0.64, maxR * 0.88];
+        const ringRadii = [0, maxR * 0.16, maxR * 0.38, maxR * 0.62, maxR * 0.86];
 
         // Group by ring
         const rings = [[], [], [], [], []];
@@ -780,7 +780,7 @@
                     x = cx + radius * Math.cos(angle);
                     y = cy + radius * Math.sin(angle);
                 }
-                const nr = ri === 0 ? 14 : 5 + (n.value || 0) * 9;
+                const nr = ri === 0 ? 18 : 7 + (n.value || 0) * 12;
                 posMap[n.id] = { x, y, r: nr };
                 nodePositions.push({ x, y, r: nr, node: n });
             });
@@ -855,9 +855,9 @@
             // Outer glow
             if (isSel || isHov) {
                 ctx.beginPath();
-                ctx.arc(x, y, r + 8, 0, 2 * Math.PI);
+                ctx.arc(x, y, r + 10, 0, 2 * Math.PI);
                 ctx.fillStyle = color;
-                ctx.globalAlpha = 0.12;
+                ctx.globalAlpha = 0.14;
                 ctx.fill();
                 ctx.globalAlpha = 1;
             }
@@ -893,10 +893,21 @@
             ctx.globalAlpha = 1;
         });
 
-        // Labels (separate pass, on top)
+        // Labels (separate pass, on top) — with collision avoidance
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
-        nodePositions.forEach(({ x, y, r, node }) => {
+        const placedLabels = []; // {x, y, w, h} rects for collision check
+
+        // Sort: selected first, then connected, then rest — so important labels get priority
+        const labelOrder = nodePositions.map((p, i) => ({ ...p, idx: i })).sort((a, b) => {
+            const aS = selId === a.node.id ? 0 : (selId && schema.edges.some(e =>
+                (e.source === selId && e.target === a.node.id) || (e.target === selId && e.source === a.node.id))) ? 1 : 2;
+            const bS = selId === b.node.id ? 0 : (selId && schema.edges.some(e =>
+                (e.source === selId && e.target === b.node.id) || (e.target === selId && e.source === b.node.id))) ? 1 : 2;
+            return aS - bS;
+        });
+
+        labelOrder.forEach(({ x, y, r, node }) => {
             const isSel = selId === node.id;
             const isConn = selId && schema.edges.some(e =>
                 (e.source === selId && e.target === node.id) ||
@@ -905,24 +916,45 @@
 
             if (isDim) return; // Hide labels for dimmed nodes
 
-            const label = truncLabel(node.label, 18);
-            const ly = y + r + 6;
-            ctx.font = isSel ? 'bold 10px "DM Mono", monospace' : '10px "DM Mono", monospace';
+            const label = truncLabel(node.label, 24);
+            const fontSize = isSel ? 12 : (node.type === 'identity' || node.type === 'anima' ? 11 : 10);
+            ctx.font = isSel ? `bold ${fontSize}px "DM Mono", monospace` : `${fontSize}px "DM Mono", monospace`;
+
+            const tm = ctx.measureText(label);
+            const pw = tm.width + 12;
+            const ph = 16;
+            let ly = y + r + 7;
+
+            // Try positions: below, above, right, left
+            const candidates = [
+                { lx: x, ly: y + r + 7 },                    // below
+                { lx: x, ly: y - r - ph - 3 },               // above
+                { lx: x + r + pw/2 + 4, ly: y - ph/2 },      // right
+                { lx: x - r - pw/2 - 4, ly: y - ph/2 },      // left
+            ];
+            let bestPos = candidates[0];
+            for (const c of candidates) {
+                const rect = { x: c.lx - pw/2, y: c.ly - 1, w: pw, h: ph };
+                const collides = placedLabels.some(p =>
+                    rect.x < p.x + p.w && rect.x + rect.w > p.x &&
+                    rect.y < p.y + p.h && rect.y + rect.h > p.y);
+                if (!collides) { bestPos = c; break; }
+            }
+
+            const lRect = { x: bestPos.lx - pw/2, y: bestPos.ly - 1, w: pw, h: ph };
+            placedLabels.push(lRect);
 
             // Background pill
-            const tm = ctx.measureText(label);
-            const pw = tm.width + 10;
-            const ph = 14;
-            ctx.fillStyle = 'rgba(10,10,14,0.85)';
+            ctx.fillStyle = 'rgba(10,10,14,0.88)';
             ctx.beginPath();
-            ctx.roundRect(x - pw/2, ly - 1, pw, ph, 4);
+            ctx.roundRect(lRect.x, lRect.y, pw, ph, 4);
             ctx.fill();
 
             // Text
             ctx.fillStyle = isSel ? 'rgba(255,255,255,0.95)' :
-                            isConn ? 'rgba(255,255,255,0.7)' :
-                            'rgba(255,255,255,0.5)';
-            ctx.fillText(label, x, ly + 1);
+                            isConn ? 'rgba(255,255,255,0.75)' :
+                            'rgba(255,255,255,0.55)';
+            ctx.fillText(label, bestPos.lx, bestPos.ly + 1);
         });
 
         // Interaction
@@ -933,7 +965,7 @@
             let hit = null, minD = Infinity;
             nodePositions.forEach(p => {
                 const d = Math.hypot(mx - p.x, my - p.y);
-                if (d < p.r + 12 && d < minD) { minD = d; hit = p.node.id; }
+                if (d < p.r + 16 && d < minD) { minD = d; hit = p.node.id; }
             });
             if (hit !== hoveredNode) {
                 hoveredNode = hit;
@@ -948,7 +980,7 @@
             let hit = null, minD = Infinity;
             nodePositions.forEach(p => {
                 const d = Math.hypot(mx - p.x, my - p.y);
-                if (d < p.r + 12 && d < minD) { minD = d; hit = p.node; }
+                if (d < p.r + 16 && d < minD) { minD = d; hit = p.node; }
             });
             selectedNode = hit && selectedNode && selectedNode.id === hit.id ? null : hit;
             render(data);
