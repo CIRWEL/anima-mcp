@@ -9,32 +9,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lumen Control Center</title>
+    <link rel="stylesheet" href="/static/shared.css">
     <style>
-        :root {
-            --bg-color: #0d0d12;
-            --card-bg: #1a1a23;
-            --text-primary: #e0e0e0;
-            --text-secondary: #a0a0b0;
-            --accent-cyan: #00ffff;
-            --accent-purple: #bb86fc;
-            --accent-green: #03dac6;
-            --accent-orange: #cf6679;
-            --accent-yellow: #ffcc00;
-            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-color);
-            color: var(--text-primary);
-            font-family: var(--font-family);
-            margin: 0;
-            padding: 20px 40px;
-            min-height: 100vh;
-        }
+        body { padding: 0; }
 
         .container {
             max-width: 1200px;
             margin: 0 auto;
+            padding: 20px 40px;
         }
 
         header {
@@ -69,17 +51,6 @@
             color: var(--text-secondary);
         }
 
-        .status-dot {
-            width: 10px;
-            height: 10px;
-            border-radius: 50%;
-            background-color: #666;
-            transition: all 0.3s;
-        }
-
-        .status-online { background-color: var(--accent-green); box-shadow: 0 0 8px var(--accent-green); }
-        .status-offline { background-color: var(--accent-orange); box-shadow: 0 0 8px var(--accent-orange); }
-
         .grid {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -89,24 +60,7 @@
 
         @media (max-width: 900px) {
             .grid { grid-template-columns: 1fr; }
-            body { padding: 12px 16px; }
-        }
-
-        .card {
-            background-color: var(--card-bg);
-            border-radius: 12px;
-            padding: 20px;
-            border: 1px solid #333;
-        }
-
-        .card-title {
-            font-size: 1.1rem;
-            font-weight: 600;
-            margin: 0 0 15px 0;
-            color: var(--accent-cyan);
-            display: flex;
-            align-items: center;
-            gap: 8px;
+            .container { padding: 12px 16px; }
         }
 
         /* State Display */
@@ -201,7 +155,7 @@
         .eisv-label {
             font-size: 0.65rem;
             color: var(--text-secondary);
-            font-family: 'DM Mono', monospace;
+            font-family: var(--mono);
             display: flex;
             justify-content: space-between;
         }
@@ -236,7 +190,7 @@
             flex-shrink: 0;
         }
         .gov-decision {
-            font-family: 'DM Mono', monospace;
+            font-family: var(--mono);
             font-weight: 600;
             letter-spacing: 0.05em;
         }
@@ -245,7 +199,6 @@
             font-size: 0.7rem;
             margin-left: auto;
         }
-
 
         /* Neural card */
         .eeg-row {
@@ -259,7 +212,7 @@
             color: var(--text-secondary);
             width: 50px;
             text-align: right;
-            font-family: 'DM Mono', monospace, monospace;
+            font-family: var(--mono);
         }
         .eeg-row-track {
             flex: 1;
@@ -275,7 +228,7 @@
         }
         .eeg-row-val {
             font-size: 0.7rem;
-            font-family: 'DM Mono', monospace, monospace;
+            font-family: var(--mono);
             width: 32px;
             text-align: right;
             color: var(--text-secondary);
@@ -296,7 +249,7 @@
         }
         .sys-metric-value {
             font-size: 0.85rem;
-            font-family: 'DM Mono', monospace, monospace;
+            font-family: var(--mono);
         }
 
         /* Message Feed */
@@ -314,7 +267,7 @@
         .msg-item:last-child { border-bottom: none; }
 
         .msg-id {
-            font-family: 'DM Mono', monospace;
+            font-family: var(--mono);
             font-size: 0.65rem;
             color: #555;
             background: rgba(255,255,255,0.04);
@@ -439,81 +392,16 @@
             border-color: var(--accent-cyan);
         }
 
-        .btn {
-            display: inline-block;
-            background: linear-gradient(135deg, #2a2a35, #3a3a45);
-            color: white;
-            padding: 10px 15px;
-            border-radius: 6px;
-            font-weight: 500;
-            text-align: center;
-            transition: all 0.2s;
-            border: 1px solid #444;
-            cursor: pointer;
-            font-size: 0.9rem;
-        }
-
-        .btn:hover {
-            background: linear-gradient(135deg, #3a3a45, #4a4a55);
-            border-color: var(--accent-cyan);
-            color: var(--accent-cyan);
-        }
-
-        .btn-small { padding: 6px 12px; font-size: 0.8rem; }
-
-        .btn-primary {
-            background: linear-gradient(135deg, rgba(0, 255, 255, 0.15), rgba(187, 134, 252, 0.15));
-            border-color: var(--accent-cyan);
-            color: var(--accent-cyan);
-        }
-
         #messageStatus, #answerStatus {
             font-size: 0.85em;
             min-height: 1.2em;
         }
-
-        .status-success { color: var(--accent-green); }
-        .status-error { color: var(--accent-orange); }
-        .status-sending { color: var(--accent-cyan); }
 
         .section-title {
             font-size: 1.3rem;
             margin-top: 30px;
             margin-bottom: 10px;
             color: var(--text-primary);
-        }
-
-        .quick-links {
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-        }
-
-        .quick-link {
-            color: var(--text-secondary);
-            text-decoration: none;
-            font-size: 0.9rem;
-            transition: color 0.2s;
-        }
-
-        .quick-link:hover { color: var(--accent-cyan); }
-
-        .refresh-btn {
-            background: none;
-            border: none;
-            color: var(--text-secondary);
-            cursor: pointer;
-            padding: 4px;
-            font-size: 1rem;
-        }
-
-        .refresh-btn:hover { color: var(--accent-cyan); }
-
-        .no-data {
-            color: var(--text-secondary);
-            font-style: italic;
-            text-align: center;
-            padding: 20px;
         }
 
         /* Learning Stats */
@@ -561,7 +449,7 @@
         /* Notification badge */
         .notification-badge {
             position: fixed;
-            top: 20px;
+            top: 60px;
             right: 20px;
             background: var(--accent-yellow);
             color: #000;
@@ -683,7 +571,7 @@
         }
         .memory-date {
             color: #555;
-            font-family: 'DM Mono', monospace;
+            font-family: var(--mono);
             font-size: 0.7rem;
             flex-shrink: 0;
             width: 70px;
@@ -764,39 +652,6 @@
             margin-top: 6px;
             text-align: center;
         }
-
-        /* Lightbox */
-        .lightbox {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.9);
-            z-index: 2000;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
-        }
-
-        .lightbox.show { display: flex; }
-
-        .lightbox img {
-            max-width: 90%;
-            max-height: 90%;
-            border-radius: 8px;
-            box-shadow: 0 0 40px rgba(0, 255, 255, 0.2);
-        }
-
-        .lightbox-close {
-            position: absolute;
-            top: 20px;
-            right: 30px;
-            font-size: 2rem;
-            color: white;
-            cursor: pointer;
-        }
     </style>
 </head>
 
@@ -804,7 +659,6 @@
     <div class="container">
         <header>
             <div class="header-left">
-                <div style="width: 40px; height: 40px; background: linear-gradient(135deg, #00ffff, #bb86fc); border-radius: 50%; opacity: 0.8;"></div>
                 <h1>Lumen Control Center</h1>
             </div>
             <div class="connection-status">
@@ -818,40 +672,73 @@
             New question from Lumen!
         </div>
 
-        <!-- Lightbox -->
-        <div id="lightbox" class="lightbox" onclick="closeLightbox()">
-            <span class="lightbox-close">&times;</span>
-            <img id="lightboxImg" src="" alt="Drawing">
-        </div>
-
         <div class="grid">
             <!-- Live State -->
             <div class="card">
-                <h3 class="card-title">
-                    Live State
-                    <button class="refresh-btn" onclick="fetchState()" title="Refresh">&#x21bb;</button>
-                </h3>
-                <!-- Voice Status -->
-                <div id="voiceStatus" class="voice-status" style="display: none;">
-                    <span class="voice-icon"></span>
-                    <div class="voice-text">
-                        <div id="voiceState">Idle</div>
-                    </div>
+                <div class="card-header-collapsible" data-card-id="live-state">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Live State
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh">&#x21bb;</button>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
                 </div>
-                <div id="stateContent">
-                    <div class="no-data">Loading...</div>
+                <div class="card-body-collapsible">
+                    <!-- Voice Status -->
+                    <div id="voiceStatus" class="voice-status" style="display: none; margin-top: 15px;">
+                        <span class="voice-icon"></span>
+                        <div class="voice-text">
+                            <div id="voiceState">Idle</div>
+                        </div>
+                    </div>
+                    <!-- Sparklines (persistent, outside innerHTML area) -->
+                    <div id="sparklineRow" class="sparkline-row" style="margin-top: 10px;">
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">W</span>
+                            <div class="sparkline"><canvas id="sparkWarmth" width="80" height="24"></canvas></div>
+                        </div>
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">C</span>
+                            <div class="sparkline"><canvas id="sparkClarity" width="80" height="24"></canvas></div>
+                        </div>
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">S</span>
+                            <div class="sparkline"><canvas id="sparkStability" width="80" height="24"></canvas></div>
+                        </div>
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">P</span>
+                            <div class="sparkline"><canvas id="sparkPresence" width="80" height="24"></canvas></div>
+                        </div>
+                    </div>
+                    <div id="stateContent">
+                        <div class="skeleton" style="padding: 20px;">
+                            <div class="skeleton skeleton-block" style="height: 60px; margin-bottom: 12px;"></div>
+                            <div class="skeleton skeleton-line" style="width: 80%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 60%;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
             <!-- Q&A -->
             <div class="card" id="qaCard">
-                <h3 class="card-title">
-                    Questions & Answers
-                    <button class="refresh-btn" onclick="fetchQA()" title="Refresh">&#x21bb;</button>
-                    <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-                </h3>
-                <div id="qaContent" class="qa-list">
-                    <div class="no-data">Loading...</div>
+                <div class="card-header-collapsible" data-card-id="qa">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Questions & Answers
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh">&#x21bb;</button>
+                        <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="qaContent" class="qa-list" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 12px;">
+                            <div class="skeleton skeleton-line" style="width: 90%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 70%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 50%;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -859,91 +746,164 @@
         <!-- Internals row: Neural + System -->
         <div class="grid" style="margin-top: 20px;">
             <div class="card">
-                <h3 class="card-title">
-                    Neural Activity
-                    <a href="/architecture" style="font-size: 0.75rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: auto; opacity: 0.7;">Full stack &rarr;</a>
-                </h3>
-                <div id="neuralContent">
-                    <div class="no-data">Loading...</div>
+                <div class="card-header-collapsible" data-card-id="neural">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Neural Activity
+                        <a href="/architecture" style="font-size: 0.75rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: auto; opacity: 0.7;" onclick="event.stopPropagation()">Full stack &rarr;</a>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="neuralContent" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 8px;">
+                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px;"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
             <div class="card">
-                <h3 class="card-title">System</h3>
-                <div id="systemContent">
-                    <div class="no-data">Loading...</div>
+                <div class="card-header-collapsible" data-card-id="system">
+                    <h3 class="card-title" style="margin-bottom: 0;">System</h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="systemContent" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 8px;">
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                            <div class="skeleton skeleton-line"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
 
         <!-- Message Feed -->
         <div class="card" style="margin-top: 20px;">
-            <h3 class="card-title">
-                Message Board
-                <button class="refresh-btn" onclick="fetchMessages()" title="Refresh">&#x21bb;</button>
-                <span id="msgCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-            </h3>
-            <div id="msgContent" class="msg-feed">
-                <div class="no-data">Loading...</div>
+            <div class="card-header-collapsible" data-card-id="messages">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Message Board
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchMessages()" title="Refresh">&#x21bb;</button>
+                    <span id="msgCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="msgContent" class="msg-feed" style="margin-top: 15px;">
+                    <div class="skeleton" style="padding: 12px;">
+                        <div class="skeleton skeleton-line" style="width: 40%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 85%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 40%; margin-top: 12px;"></div>
+                        <div class="skeleton skeleton-line" style="width: 70%;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- Learning Stats -->
         <div class="section-title">Learning Progress</div>
         <div class="card">
-            <div id="learningContent">
-                <div class="no-data">Loading learning stats...</div>
+            <div class="card-header-collapsible" data-card-id="learning">
+                <h3 class="card-title" style="margin-bottom: 0;">Learning</h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="learningContent" style="margin-top: 15px;">
+                    <div class="skeleton" style="padding: 12px;">
+                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                            <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                            <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                            <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- Self-Knowledge -->
         <div class="section-title">Self-Knowledge</div>
         <div class="card">
-            <h3 class="card-title">
-                Discovered Insights
-                <button class="refresh-btn" onclick="fetchSelfKnowledge()" title="Refresh">&#x21bb;</button>
-                <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-            </h3>
-            <div id="insightTabs" class="category-tabs"></div>
-            <div id="insightContent" class="insight-grid">
-                <div class="no-data">Loading insights...</div>
+            <div class="card-header-collapsible" data-card-id="self-knowledge">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Discovered Insights
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchSelfKnowledge()" title="Refresh">&#x21bb;</button>
+                    <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="insightTabs" class="category-tabs" style="margin-top: 15px;"></div>
+                <div id="insightContent" class="insight-grid">
+                    <div class="skeleton" style="padding: 12px;">
+                        <div class="skeleton skeleton-line" style="width: 90%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 60%;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- Growth -->
         <div class="section-title">Growth</div>
         <div class="card">
-            <h3 class="card-title">
-                Lumen's Journey
-                <button class="refresh-btn" onclick="fetchGrowth()" title="Refresh">&#x21bb;</button>
-            </h3>
-            <div id="growthContent">
-                <div class="no-data">Loading growth data...</div>
+            <div class="card-header-collapsible" data-card-id="growth">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Lumen's Journey
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchGrowth()" title="Refresh">&#x21bb;</button>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="growthContent" style="margin-top: 15px;">
+                    <div class="skeleton" style="padding: 12px;">
+                        <div class="skeleton skeleton-block" style="height: 50px; margin-bottom: 12px;"></div>
+                        <div class="skeleton skeleton-line" style="width: 80%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 60%;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- System Health -->
         <div class="section-title">System Health</div>
         <div class="card">
-            <h3 class="card-title">
-                Subsystems
-                <button class="refresh-btn" onclick="fetchHealth()" title="Refresh">&#x21bb;</button>
-            </h3>
-            <div id="healthContent" class="health-grid">
-                <div class="no-data">Loading health...</div>
+            <div class="card-header-collapsible" data-card-id="health">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Subsystems
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchHealth()" title="Refresh">&#x21bb;</button>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="healthContent" class="health-grid" style="margin-top: 15px;">
+                    <div class="skeleton" style="padding: 8px;">
+                        <div class="skeleton skeleton-line" style="width: 70%;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
         <!-- Gallery -->
         <div class="section-title">Lumen's Gallery</div>
         <div class="card">
-            <h3 class="card-title">
-                Drawings
-                <button class="refresh-btn" onclick="fetchGallery()" title="Refresh">&#x21bb;</button>
-                <span id="galleryCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-                <a href="/gallery-page" style="font-size: 0.8rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: 8px; opacity: 0.8;">View all &rarr;</a>
-            </h3>
-            <div id="galleryContent" class="gallery-grid">
-                <div class="no-data">Loading gallery...</div>
+            <div class="card-header-collapsible" data-card-id="gallery">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Drawings
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchGallery()" title="Refresh">&#x21bb;</button>
+                    <span id="galleryCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                    <a href="/gallery-page" style="font-size: 0.8rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: 8px; opacity: 0.8;" onclick="event.stopPropagation()">View all &rarr;</a>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="galleryContent" class="gallery-grid" style="margin-top: 15px;">
+                    <div class="skeleton" style="padding: 8px;">
+                        <div class="skeleton skeleton-block" style="height: 80px;"></div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -962,20 +922,18 @@
                 </div>
             </div>
         </div>
-
-        <!-- Quick Links -->
-        <div class="section-title">Quick Links</div>
-        <div class="quick-links">
-            <a href="/architecture" class="quick-link">Architecture</a>
-            <a href="/gallery-page" class="quick-link">Drawing Gallery</a>
-            <span class="quick-link" style="cursor: text; user-select: all;">ssh unitares-anima@lumen</span>
-        </div>
     </div>
 
+    <script src="/static/shared.js"></script>
     <script>
-        const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:8768' : '';
         let lastUnansweredCount = 0;
         let msgLimit = 20;
+
+        // ---- Sparklines (persistent instances) ----
+        const sparkWarmth = new Sparkline(document.getElementById('sparkWarmth'), { color: '#ff6b6b' });
+        const sparkClarity = new Sparkline(document.getElementById('sparkClarity'), { color: '#4ecdc4' });
+        const sparkStability = new Sparkline(document.getElementById('sparkStability'), { color: '#45b7d1' });
+        const sparkPresence = new Sparkline(document.getElementById('sparkPresence'), { color: '#96ceb4' });
 
         // ---- Notification ----
         function showNotification(message) {
@@ -1011,6 +969,12 @@
                 renderState(data);
                 renderNeural(data);
                 renderSystem(data);
+
+                // Push to sparklines
+                if (data.warmth != null) sparkWarmth.push(data.warmth);
+                if (data.clarity != null) sparkClarity.push(data.clarity);
+                if (data.stability != null) sparkStability.push(data.stability);
+                if (data.presence != null) sparkPresence.push(data.presence);
             } catch (e) {
                 updateConnection(false, 'Offline');
             }
@@ -1061,7 +1025,8 @@
                     </div>`;
             }
 
-            document.getElementById('stateContent').innerHTML = `
+            const stateEl = document.getElementById('stateContent');
+            stateEl.innerHTML = `
                 <div class="mood-display">
                     <div class="mood-text">${moodEmoji}</div>
                     <div class="mood-name">${data.name} is ${data.mood}</div>
@@ -1084,6 +1049,15 @@
                 ${eisvHtml}
                 ${govHtml}
             `;
+
+            // Value flash on state items
+            stateEl.querySelectorAll('.state-value').forEach(el => {
+                const label = el.closest('.state-item')?.querySelector('.state-label')?.textContent;
+                if (label) {
+                    el.dataset.metric = label;
+                    flashOnChange(el, el.textContent);
+                }
+            });
         }
 
         function renderStateItem(label, value, color, feeling) {
@@ -1160,7 +1134,7 @@
             `).join('');
         }
 
-        // ---- Q&A (merged notification check - was separate duplicate fetch) ----
+        // ---- Q&A ----
         async function fetchQA() {
             try {
                 const response = await fetch(`${API_BASE}/qa`);
@@ -1170,7 +1144,6 @@
                     return;
                 }
 
-                // Notification check (was a separate checkNewQuestions timer hitting /qa again)
                 if (data.unanswered > lastUnansweredCount && lastUnansweredCount > 0) {
                     showNotification('Lumen asked a new question!');
                 }
@@ -1426,61 +1399,37 @@
                 }
                 document.getElementById('galleryCount').textContent =
                     data.total > 0 ? `(${data.total} drawings)` : '';
-                renderGallery(data.drawings);
+                renderGalleryPreview(data.drawings);
             } catch (e) {
                 document.getElementById('galleryContent').innerHTML = `<div class="no-data">Could not load gallery</div>`;
             }
         }
 
-        function renderGallery(drawings) {
+        function renderGalleryPreview(drawings) {
             if (!drawings || drawings.length === 0) {
                 document.getElementById('galleryContent').innerHTML = `<div class="no-data">No drawings yet</div>`;
                 return;
             }
-            const html = drawings.map(d => {
+
+            // Initialize lightbox with simple items
+            Lightbox.init(drawings, {
+                getUrl: d => `${API_BASE}/gallery/${d.filename}`,
+                getMeta: (d, i) => {
+                    const date = new Date(d.timestamp * 1000);
+                    return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                }
+            });
+
+            const html = drawings.map((d, i) => {
                 const date = new Date(d.timestamp * 1000);
                 const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                 return `
-                    <div class="gallery-item" onclick="openLightbox('${d.filename}')">
+                    <div class="gallery-item" onclick="Lightbox.open(${i})">
                         <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
                         <div class="gallery-item-meta">${dateStr}</div>
                     </div>`;
             }).join('');
             document.getElementById('galleryContent').innerHTML = html;
-        }
-
-        function openLightbox(filename) {
-            document.getElementById('lightboxImg').src = `${API_BASE}/gallery/${filename}`;
-            document.getElementById('lightbox').classList.add('show');
-        }
-
-        function closeLightbox() {
-            document.getElementById('lightbox').classList.remove('show');
-        }
-
-        // ---- Utilities ----
-        function formatAge(ts) {
-            const secs = (Date.now() / 1000) - ts;
-            if (secs < 60) return 'now';
-            if (secs < 3600) return Math.floor(secs / 60) + 'm ago';
-            if (secs < 86400) return Math.floor(secs / 3600) + 'h ago';
-            return Math.floor(secs / 86400) + 'd ago';
-        }
-
-        function copyId(id, el) {
-            navigator.clipboard.writeText(id).then(() => {
-                el.classList.add('copied');
-                const orig = el.textContent;
-                el.textContent = 'copied!';
-                setTimeout(() => { el.textContent = orig; el.classList.remove('copied'); }, 1200);
-            });
-        }
-
-        function escapeHtml(text) {
-            if (!text) return '';
-            const div = document.createElement('div');
-            div.textContent = text;
-            return div.innerHTML;
         }
 
         // ---- Self-Knowledge ----
@@ -1564,12 +1513,10 @@
         function renderGrowth(data) {
             let html = '';
 
-            // Autobiography
             if (data.autobiography) {
                 html += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
             }
 
-            // Goals
             const goals = data.goals;
             if (goals && goals.current && goals.current.length > 0) {
                 html += `<div class="layer-header">Goals <span>— ${goals.active} active, ${goals.achieved} achieved</span></div>`;
@@ -1584,7 +1531,6 @@
                 }).join('');
             }
 
-            // Memories
             const memories = data.memories;
             if (memories && memories.recent && memories.recent.length > 0) {
                 html += `<div class="layer-header">Memories <span>— ${memories.count} total</span></div>`;
@@ -1595,7 +1541,6 @@
                     </div>`).join('');
             }
 
-            // Preferences
             const prefs = data.preferences;
             if (prefs && prefs.learned && prefs.learned.length > 0) {
                 html += `<div class="layer-header">Preferences <span>— ${prefs.count} learned</span></div>`;
@@ -1610,7 +1555,6 @@
                 html += `</div>`;
             }
 
-            // Curiosities
             const curiosities = data.curiosities;
             if (curiosities && curiosities.questions && curiosities.questions.length > 0) {
                 html += `<div class="layer-header">Curiosities <span>— ${curiosities.count} questions</span></div>`;
@@ -1648,7 +1592,6 @@
                 return;
             }
 
-            // Handle both formats: {subsystems: {name: {status, ...}}} or flat {name: {status, ...}}
             const entries = Object.entries(subsystems).filter(([k]) => k !== 'overall' && k !== 'timestamp');
 
             if (entries.length === 0) {
@@ -1674,16 +1617,10 @@
             document.getElementById('healthContent').innerHTML = html;
         }
 
-        // ---- Keyboard (only close lightbox if not typing) ----
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                const el = document.activeElement;
-                if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) return;
-                closeLightbox();
-            }
-        });
+        // ---- Initialize ----
+        initNav('dashboard');
+        initCollapsibleCards();
 
-        // ---- Initialize (staggered to avoid thundering herd) ----
         fetchState();
         fetchQA();
         setTimeout(fetchMessages, 100);
@@ -1695,15 +1632,15 @@
         setTimeout(fetchHealth, 700);
 
         // ---- Auto-refresh ----
-        setInterval(fetchState, 10000);           // 10s
-        setInterval(fetchQA, 20000);              // 20s
-        setInterval(fetchMessages, 30000);        // 30s
-        setInterval(fetchLearning, 60000);        // 60s
-        setInterval(fetchVoice, 15000);           // 15s
-        setInterval(fetchGallery, 120000);        // 2min
-        setInterval(fetchSelfKnowledge, 120000);  // 2min
-        setInterval(fetchGrowth, 120000);         // 2min
-        setInterval(fetchHealth, 30000);          // 30s
+        setInterval(fetchState, 10000);
+        setInterval(fetchQA, 20000);
+        setInterval(fetchMessages, 30000);
+        setInterval(fetchLearning, 60000);
+        setInterval(fetchVoice, 15000);
+        setInterval(fetchGallery, 120000);
+        setInterval(fetchSelfKnowledge, 120000);
+        setInterval(fetchGrowth, 120000);
+        setInterval(fetchHealth, 30000);
     </script>
 </body>
 

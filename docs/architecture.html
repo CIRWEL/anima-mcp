@@ -10,42 +10,21 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lumen Architecture</title>
+    <link rel="stylesheet" href="/static/shared.css">
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Inter:wght@300;400;500;600&display=swap');
-
-        :root {
-            --bg: #0c0c0f;
-            --card-bg: rgba(255,255,255,0.02);
-            --card-border: rgba(255,255,255,0.06);
-            --text-bright: rgba(255,255,255,0.9);
-            --text-mid: rgba(255,255,255,0.6);
-            --text-dim: rgba(255,255,255,0.35);
-            --text-faint: rgba(255,255,255,0.2);
-            --text-ghost: rgba(255,255,255,0.08);
-            --mono: 'DM Mono', monospace;
-            --sans: 'Inter', 'Helvetica Neue', sans-serif;
-            --accent-physical: #8bb8e8;
-            --accent-neural: #c49be8;
-            --accent-anima: #f0b87a;
-            --accent-eisv: #7ecf8b;
-            --accent-gov: #7ecf8b;
-            --accent-schema: #e8c87c;
-        }
-
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-
         body {
-            min-height: 100vh;
-            background: var(--bg);
-            color: white;
-            font-family: var(--sans);
-            padding: 32px 24px;
+            background: #0c0c0f;
+            padding: 0;
             display: flex;
             flex-direction: column;
             align-items: center;
         }
 
-        .container { max-width: 520px; width: 100%; }
+        .container {
+            max-width: 520px;
+            width: 100%;
+            padding: 32px 24px;
+        }
 
         /* Header */
         .header { margin-bottom: 28px; text-align: center; }
@@ -63,6 +42,21 @@
         }
         .header-status-text {
             font-size: 10px; color: var(--text-dim); font-family: var(--mono);
+        }
+
+        /* Architecture-specific tokens */
+        :root {
+            --text-bright: rgba(255,255,255,0.9);
+            --text-mid: rgba(255,255,255,0.6);
+            --text-dim: rgba(255,255,255,0.35);
+            --text-faint: rgba(255,255,255,0.2);
+            --text-ghost: rgba(255,255,255,0.08);
+            --accent-physical: #8bb8e8;
+            --accent-neural: #c49be8;
+            --accent-anima: #f0b87a;
+            --accent-eisv: #7ecf8b;
+            --accent-gov: #7ecf8b;
+            --accent-schema: #e8c87c;
         }
 
         /* Pulse dot */
@@ -89,8 +83,8 @@
 
         /* Layer card */
         .layer-card {
-            background: var(--card-bg);
-            border: 1px solid var(--card-border);
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
             border-radius: 12px;
             padding: 16px 20px;
             position: relative; overflow: hidden; width: 100%;
@@ -201,14 +195,6 @@
         .footer-text {
             font-size: 9px; color: rgba(255,255,255,0.15); font-family: var(--mono);
         }
-        .footer-nav {
-            margin-top: 10px;
-        }
-        .footer-nav a {
-            font-size: 10px; color: rgba(255,255,255,0.3); font-family: var(--mono);
-            text-decoration: none; transition: color 0.2s;
-        }
-        .footer-nav a:hover { color: rgba(255,255,255,0.6); }
 
         /* Schema Hub circulation */
         .schema-circulation {
@@ -233,10 +219,27 @@
             font-size: 11px; color: var(--accent-schema); font-family: var(--mono);
         }
 
-        /* Error / loading */
-        .loading-state {
-            text-align: center; padding: 60px 20px; color: var(--text-dim);
-            font-family: var(--mono); font-size: 12px;
+        /* Skeleton for loading */
+        .skeleton-layers {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .skeleton-layer-card {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid rgba(255,255,255,0.06);
+            border-radius: 12px;
+            padding: 16px 20px;
+        }
+        .skeleton-flow {
+            display: flex;
+            justify-content: center;
+            padding: 4px 0;
+        }
+        .skeleton-flow-line {
+            width: 2px;
+            height: 32px;
+            border-radius: 1px;
         }
 
         /* Animations */
@@ -253,7 +256,7 @@
 
         /* Responsive */
         @media (max-width: 500px) {
-            body { padding: 20px 16px; }
+            .container { padding: 20px 16px; }
             .metrics-grid { gap: 8px; }
             .gov-row { gap: 10px; }
         }
@@ -273,21 +276,42 @@
         </div>
 
         <div id="content">
-            <div class="loading-state">Connecting to Lumen...</div>
+            <div class="skeleton-layers">
+                <div class="skeleton-layer-card">
+                    <div class="skeleton skeleton-line" style="width: 40%;"></div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+                        <div class="skeleton skeleton-bar" style="height: 3px;"></div>
+                        <div class="skeleton skeleton-bar" style="height: 3px;"></div>
+                        <div class="skeleton skeleton-bar" style="height: 3px;"></div>
+                        <div class="skeleton skeleton-bar" style="height: 3px;"></div>
+                    </div>
+                </div>
+                <div class="skeleton-flow"><div class="skeleton skeleton-flow-line"></div></div>
+                <div class="skeleton-layer-card">
+                    <div class="skeleton skeleton-line" style="width: 35%;"></div>
+                    <div class="skeleton skeleton-bar" style="height: 8px; margin-top: 12px;"></div>
+                    <div class="skeleton skeleton-bar" style="height: 8px;"></div>
+                    <div class="skeleton skeleton-bar" style="height: 8px;"></div>
+                </div>
+                <div class="skeleton-flow"><div class="skeleton skeleton-flow-line"></div></div>
+                <div class="skeleton-layer-card">
+                    <div class="skeleton skeleton-line" style="width: 30%;"></div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+                        <div class="skeleton skeleton-bar" style="height: 3px;"></div>
+                        <div class="skeleton skeleton-bar" style="height: 3px;"></div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- Footer -->
         <div class="footer">
             <div class="footer-text">4E Cognition &middot; Embodied &middot; Embedded &middot; Enactive &middot; Extended</div>
-            <div class="footer-nav">
-                <a href="/dashboard">Control Center</a> &nbsp;&middot;&nbsp;
-                <a href="/gallery-page">Gallery</a>
-            </div>
         </div>
     </div>
 
+    <script src="/static/shared.js"></script>
     <script>
-        const API_BASE = window.location.origin;
         let data = null;
 
         async function fetchLayers() {
@@ -296,20 +320,14 @@
                 data = await response.json();
                 if (data.error) {
                     document.getElementById('content').innerHTML =
-                        `<div class="loading-state">Error: ${escapeHtml(data.error)}</div>`;
+                        `<div class="no-data" style="padding: 60px 20px; font-family: var(--mono); font-size: 12px;">Error: ${escapeHtml(data.error)}</div>`;
                     return;
                 }
                 render(data);
             } catch (e) {
                 document.getElementById('content').innerHTML =
-                    `<div class="loading-state">Connection lost. Is Lumen running?</div>`;
+                    `<div class="no-data" style="padding: 60px 20px; font-family: var(--mono); font-size: 12px;">Connection lost. Is Lumen running?</div>`;
             }
-        }
-
-        function escapeHtml(str) {
-            const d = document.createElement('div');
-            d.textContent = str;
-            return d.innerHTML;
         }
 
         function render(d) {
@@ -448,7 +466,6 @@
             if (!sh && !identity) return '';
             const c = 'var(--accent-schema)';
 
-            // Circulation diagram
             const circulation = `
                 <div class="schema-circulation">
                     <span>Schema</span>
@@ -461,10 +478,8 @@
                     <span class="schema-arrow">\u21ba</span>
                 </div>`;
 
-            // Build nodes from available data
             const nodes = [];
 
-            // Identity texture nodes
             if (identity) {
                 if (identity.alive_ratio !== undefined) {
                     nodes.push({ label: 'exist%', value: (identity.alive_ratio * 100).toFixed(0) + '%' });
@@ -477,7 +492,6 @@
                 }
             }
 
-            // Trajectory feedback nodes
             if (sh && sh.trajectory) {
                 const t = sh.trajectory;
                 if (t.identity_maturity !== undefined) {
@@ -491,7 +505,6 @@
                 }
             }
 
-            // History info
             if (sh && sh.history_size !== undefined) {
                 nodes.push({ label: 'history', value: `${sh.history_size}/${sh.history_max}` });
             }
@@ -550,7 +563,8 @@
             return layerCard('\u2696', 'Governance', 'self-regulation', 'var(--accent-gov)', content);
         }
 
-        // Initial fetch + auto-refresh
+        // Initialize
+        initNav('architecture');
         fetchLayers();
         setInterval(fetchLayers, 5000);
     </script>

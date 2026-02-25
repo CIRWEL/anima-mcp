@@ -2856,9 +2856,12 @@ def run_http_server(host: str, port: int):
                 print(f"[REST API] Error: {e}", file=sys.stderr, flush=True)
                 return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-        # Dashboard endpoint - serves the Lumen Control Center
+        # Static files + Dashboard endpoint
         from starlette.responses import HTMLResponse, FileResponse
+        from starlette.staticfiles import StaticFiles
         from pathlib import Path
+        _project_root = Path(__file__).parent.parent.parent
+        _static_dir = _project_root / "docs" / "static"
 
         async def dashboard(request):
             """Serve the Lumen Control Center dashboard."""
@@ -3451,6 +3454,7 @@ def run_http_server(host: str, port: int):
         all_routes = [
             *_oauth_auth_routes,
             Mount("/mcp", app=mcp_endpoint),
+            Mount("/static", app=StaticFiles(directory=str(_static_dir)), name="static"),
             Route("/health", health_check, methods=["GET"]),
             Route("/health/detailed", rest_health_detailed, methods=["GET"]),
             Route("/v1/tools/call", rest_tool_call, methods=["POST"]),

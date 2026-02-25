@@ -10,30 +10,14 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lumen Gallery</title>
+    <link rel="stylesheet" href="/static/shared.css">
     <style>
-        :root {
-            --bg-color: #0d0d12;
-            --card-bg: #1a1a23;
-            --text-primary: #e0e0e0;
-            --text-secondary: #a0a0b0;
-            --accent-cyan: #00ffff;
-            --accent-purple: #bb86fc;
-            --accent-green: #03dac6;
-            --font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-        }
-
-        body {
-            background-color: var(--bg-color);
-            color: var(--text-primary);
-            font-family: var(--font-family);
-            margin: 0;
-            padding: 20px 40px;
-            min-height: 100vh;
-        }
+        body { padding: 0; }
 
         .container {
             max-width: 1400px;
             margin: 0 auto;
+            padding: 20px 40px;
         }
 
         header {
@@ -85,6 +69,16 @@
             color: var(--accent-cyan);
         }
 
+        .era-badge.pointillist {
+            background: rgba(3, 218, 198, 0.12);
+            color: var(--accent-green);
+        }
+
+        .era-badge.field {
+            background: rgba(255, 204, 0, 0.12);
+            color: var(--accent-yellow);
+        }
+
         .manual-badge {
             display: inline-block;
             font-size: 0.6rem;
@@ -94,18 +88,6 @@
             letter-spacing: 0.03em;
             background: rgba(3, 218, 198, 0.15);
             color: var(--accent-green);
-        }
-
-        .header-right a {
-            color: var(--accent-cyan);
-            text-decoration: none;
-            font-size: 0.9rem;
-            opacity: 0.8;
-            transition: opacity 0.2s;
-        }
-
-        .header-right a:hover {
-            opacity: 1;
         }
 
         /* Date group headers */
@@ -211,90 +193,22 @@
             line-height: 1.5;
         }
 
-        /* Lightbox */
-        .lightbox {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.92);
-            z-index: 2000;
-            justify-content: center;
-            align-items: center;
-            cursor: pointer;
+        /* Skeleton grid for loading */
+        .skeleton-gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 16px;
         }
 
-        .lightbox.show {
-            display: flex;
-        }
-
-        .lightbox img {
-            max-width: 90%;
-            max-height: 85%;
-            border-radius: 8px;
-            box-shadow: 0 0 40px rgba(0, 255, 255, 0.15);
-            cursor: default;
-        }
-
-        .lightbox-close {
-            position: absolute;
-            top: 20px;
-            right: 30px;
-            font-size: 2rem;
-            color: white;
-            cursor: pointer;
-            opacity: 0.7;
-            transition: opacity 0.2s;
-        }
-
-        .lightbox-close:hover {
-            opacity: 1;
-        }
-
-        .lightbox-nav {
-            position: absolute;
-            top: 50%;
-            transform: translateY(-50%);
-            font-size: 2.5rem;
-            color: white;
-            cursor: pointer;
-            opacity: 0.5;
-            transition: opacity 0.2s;
-            user-select: none;
-            padding: 20px;
-        }
-
-        .lightbox-nav:hover {
-            opacity: 1;
-        }
-
-        .lightbox-prev { left: 20px; }
-        .lightbox-next { right: 20px; }
-
-        .lightbox-meta {
-            position: absolute;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: var(--text-secondary);
-            font-size: 0.85rem;
-            background: rgba(0, 0, 0, 0.6);
-            padding: 6px 16px;
-            border-radius: 20px;
-        }
-
-        /* Loading */
-        .loading {
-            text-align: center;
-            padding: 60px;
-            color: var(--text-secondary);
-            font-size: 1rem;
+        .skeleton-gallery-item {
+            border-radius: 10px;
+            padding: 10px;
+            border: 1px solid #222;
+            background: var(--card-bg);
         }
 
         @media (max-width: 600px) {
-            body { padding: 12px 16px; }
+            .container { padding: 12px 16px; }
             h1 { font-size: 1.4rem; }
             .gallery-grid {
                 grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -312,33 +226,29 @@
                 <h1>Lumen Gallery</h1>
                 <span id="drawingCount" class="drawing-count"></span>
             </div>
-            <div class="header-right">
-                <a href="/dashboard">Control Center</a>
-            </div>
         </header>
 
+        <!-- Era filter chips -->
+        <div id="eraFilters" class="filter-chips" style="display: none;"></div>
+
         <div id="galleryContent">
-            <div class="loading">Loading drawings...</div>
+            <div class="skeleton-gallery-grid">
+                <div class="skeleton-gallery-item"><div class="skeleton skeleton-block" style="height: 180px;"></div><div class="skeleton skeleton-line" style="width: 60%; margin-top: 8px;"></div></div>
+                <div class="skeleton-gallery-item"><div class="skeleton skeleton-block" style="height: 180px;"></div><div class="skeleton skeleton-line" style="width: 60%; margin-top: 8px;"></div></div>
+                <div class="skeleton-gallery-item"><div class="skeleton skeleton-block" style="height: 180px;"></div><div class="skeleton skeleton-line" style="width: 60%; margin-top: 8px;"></div></div>
+                <div class="skeleton-gallery-item"><div class="skeleton skeleton-block" style="height: 180px;"></div><div class="skeleton skeleton-line" style="width: 60%; margin-top: 8px;"></div></div>
+            </div>
         </div>
     </div>
 
-    <!-- Lightbox -->
-    <div id="lightbox" class="lightbox" onclick="closeLightbox(event)">
-        <span class="lightbox-close" onclick="closeLightbox(event)">&times;</span>
-        <span class="lightbox-nav lightbox-prev" onclick="navigateLightbox(event, -1)">&#8249;</span>
-        <img id="lightboxImg" src="" alt="Drawing">
-        <span class="lightbox-nav lightbox-next" onclick="navigateLightbox(event, 1)">&#8250;</span>
-        <div id="lightboxMeta" class="lightbox-meta"></div>
-    </div>
-
+    <script src="/static/shared.js"></script>
     <script>
-        const API_BASE = window.location.origin;
         const PAGE_SIZE = 50;
         let drawings = [];
         let totalDrawings = 0;
         let hasMore = false;
         let loading = false;
-        let currentIndex = -1;
+        let currentEraFilter = 'all';
 
         async function fetchGallery(append) {
             if (loading) return;
@@ -369,6 +279,19 @@
                     drawings = data.drawings || [];
                 }
 
+                // Update lightbox with all drawings
+                Lightbox.init(drawings, {
+                    getUrl: d => `${API_BASE}/gallery/${d.filename}`,
+                    getMeta: (d, i) => {
+                        const date = new Date(d.timestamp * 1000);
+                        const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                        const eraLabel = d.era ? ` — ${d.era} era` : '';
+                        const manualLabel = d.manual ? ' (manual save)' : '';
+                        return `${dateStr}${eraLabel}${manualLabel} — ${i + 1} of ${totalDrawings}`;
+                    }
+                });
+
+                renderEraFilters();
                 renderGallery();
             } catch (e) {
                 if (!append) {
@@ -377,6 +300,27 @@
                 }
             }
             loading = false;
+        }
+
+        function renderEraFilters() {
+            const eras = new Set(drawings.map(d => d.era).filter(Boolean));
+            if (eras.size === 0) {
+                document.getElementById('eraFilters').style.display = 'none';
+                return;
+            }
+
+            document.getElementById('eraFilters').style.display = 'flex';
+            let html = `<button class="filter-chip ${currentEraFilter === 'all' ? 'active' : ''}" onclick="filterByEra('all')">All</button>`;
+            for (const era of [...eras].sort()) {
+                html += `<button class="filter-chip ${currentEraFilter === era ? 'active' : ''}" onclick="filterByEra('${era}')">${era}</button>`;
+            }
+            document.getElementById('eraFilters').innerHTML = html;
+        }
+
+        function filterByEra(era) {
+            currentEraFilter = era;
+            renderEraFilters();
+            renderGallery();
         }
 
         function formatDate(timestamp) {
@@ -395,12 +339,15 @@
         }
 
         function renderGallery() {
-            if (!drawings || drawings.length === 0) {
-                document.getElementById('galleryContent').innerHTML =
-                    `<div class="empty-state">
-                        <h2>No drawings yet</h2>
-                        <p>Lumen creates drawings autonomously when the notepad screen is active. Check back later!</p>
-                    </div>`;
+            const filtered = currentEraFilter === 'all'
+                ? drawings
+                : drawings.filter(d => d.era === currentEraFilter);
+
+            if (!filtered || filtered.length === 0) {
+                const msg = currentEraFilter === 'all'
+                    ? '<h2>No drawings yet</h2><p>Lumen creates drawings autonomously when the notepad screen is active. Check back later!</p>'
+                    : `<h2>No ${currentEraFilter} drawings</h2><p>Try a different era filter.</p>`;
+                document.getElementById('galleryContent').innerHTML = `<div class="empty-state">${msg}</div>`;
                 return;
             }
 
@@ -409,14 +356,16 @@
             let currentDay = null;
             let currentGroup = null;
 
-            drawings.forEach((d, i) => {
+            filtered.forEach((d) => {
+                // Find original index in full drawings array for lightbox navigation
+                const globalIndex = drawings.indexOf(d);
                 const dk = dayKey(d.timestamp);
                 if (dk !== currentDay) {
                     currentDay = dk;
                     currentGroup = { date: formatDate(d.timestamp), items: [] };
                     groups.push(currentGroup);
                 }
-                currentGroup.items.push({ ...d, globalIndex: i });
+                currentGroup.items.push({ ...d, globalIndex });
             });
 
             let html = groups.map(group => {
@@ -426,7 +375,7 @@
                     const eraBadge = d.era ? `<span class="era-badge ${d.era}">${d.era}</span>` : '';
                     const manualBadge = d.manual ? `<span class="manual-badge">saved</span>` : '';
                     return `
-                        <div class="gallery-item" onclick="openLightbox(${d.globalIndex})">
+                        <div class="gallery-item" onclick="Lightbox.open(${d.globalIndex})">
                             <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
                             <div class="gallery-item-meta">
                                 <span>${timeStr} ${eraBadge} ${manualBadge}</span>
@@ -444,7 +393,7 @@
                 `;
             }).join('');
 
-            if (hasMore) {
+            if (hasMore && currentEraFilter === 'all') {
                 const remaining = totalDrawings - drawings.length;
                 html += `
                     <div class="load-more-container">
@@ -464,50 +413,11 @@
             fetchGallery(true);
         }
 
-        function openLightbox(index) {
-            if (index < 0 || index >= drawings.length) return;
-            currentIndex = index;
-            const d = drawings[index];
-            const img = document.getElementById('lightboxImg');
-            img.src = `${API_BASE}/gallery/${d.filename}`;
-
-            const date = new Date(d.timestamp * 1000);
-            const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-            const eraLabel = d.era ? ` — ${d.era} era` : '';
-            const manualLabel = d.manual ? ' (manual save)' : '';
-            document.getElementById('lightboxMeta').textContent = `${dateStr}${eraLabel}${manualLabel} — ${index + 1} of ${totalDrawings}`;
-
-            document.getElementById('lightbox').classList.add('show');
-            document.body.style.overflow = 'hidden';
-        }
-
-        function closeLightbox(event) {
-            if (event && event.target.tagName === 'IMG') return;
-            if (event && event.target.classList.contains('lightbox-nav')) return;
-            document.getElementById('lightbox').classList.remove('show');
-            document.body.style.overflow = '';
-            currentIndex = -1;
-        }
-
-        function navigateLightbox(event, direction) {
-            event.stopPropagation();
-            const newIndex = currentIndex + direction;
-            if (newIndex >= 0 && newIndex < drawings.length) {
-                openLightbox(newIndex);
-            }
-        }
-
-        document.addEventListener('keydown', (e) => {
-            if (currentIndex === -1) return;
-            if (e.key === 'Escape') closeLightbox(e);
-            if (e.key === 'ArrowLeft') navigateLightbox(e, -1);
-            if (e.key === 'ArrowRight') navigateLightbox(e, 1);
-        });
-
         // Initialize
+        initNav('gallery');
         fetchGallery(false);
 
-        // Check for new drawings every 60 seconds (refresh first page)
+        // Check for new drawings every 60 seconds
         setInterval(() => fetchGallery(false), 60000);
     </script>
 </body>
