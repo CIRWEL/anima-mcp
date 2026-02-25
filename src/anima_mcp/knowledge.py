@@ -284,19 +284,20 @@ def apply_insight(insight) -> dict:
         try:
             from .self_model import get_self_model
             sm = get_self_model()
-            if sm and hasattr(sm, '_beliefs'):
-                if "sensitive" in text_lower and "light" in text_lower:
-                    sm._beliefs["light_sensitive"].update_from_evidence(supports=True, strength=0.5)
+            beliefs = getattr(sm, 'beliefs', {})
+            if beliefs:
+                if "sensitive" in text_lower and "light" in text_lower and "light_sensitive" in beliefs:
+                    beliefs["light_sensitive"].update_from_evidence(supports=True, strength=0.5)
                     effects["belief"] = "light_sensitive"
-                elif "sensitive" in text_lower and "temperature" in text_lower:
-                    sm._beliefs["temp_sensitive"].update_from_evidence(supports=True, strength=0.5)
+                elif "sensitive" in text_lower and "temperature" in text_lower and "temp_sensitive" in beliefs:
+                    beliefs["temp_sensitive"].update_from_evidence(supports=True, strength=0.5)
                     effects["belief"] = "temp_sensitive"
-                elif "recover" in text_lower and ("stability" in text_lower or "stable" in text_lower):
+                elif "recover" in text_lower and ("stability" in text_lower or "stable" in text_lower) and "stability_recovery" in beliefs:
                     fast = "quickly" in text_lower or "fast" in text_lower
-                    sm._beliefs["stability_recovery"].update_from_evidence(supports=fast, strength=0.5)
+                    beliefs["stability_recovery"].update_from_evidence(supports=fast, strength=0.5)
                     effects["belief"] = "stability_recovery"
-                elif "clarity" in text_lower and ("interact" in text_lower or "visitor" in text_lower):
-                    sm._beliefs["interaction_clarity_boost"].update_from_evidence(supports=True, strength=0.5)
+                elif "clarity" in text_lower and ("interact" in text_lower or "visitor" in text_lower) and "interaction_clarity_boost" in beliefs:
+                    beliefs["interaction_clarity_boost"].update_from_evidence(supports=True, strength=0.5)
                     effects["belief"] = "interaction_clarity_boost"
                 elif "growth" in text_lower or "change" in text_lower or "different" in text_lower:
                     # General self-awareness — no specific belief to update, but still valuable

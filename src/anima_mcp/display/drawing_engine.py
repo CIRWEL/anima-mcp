@@ -1387,7 +1387,7 @@ class DrawingEngine:
                     environment = {
                         "light_lux": _world_light,
                         "temp_c": readings.ambient_temp_c or 22,
-                        "humidity": readings.humidity_pct or 50,
+                        "humidity_pct": readings.humidity_pct or 50,
                     }
                     phase = self.canvas.drawing_phase or "resting"
                     growth = get_growth_system()

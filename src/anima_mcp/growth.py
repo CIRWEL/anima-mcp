@@ -343,6 +343,12 @@ class GrowthSystem:
                 explored BOOLEAN DEFAULT 0,
                 exploration_notes TEXT
             );
+
+            -- Counters table (persistent scalar values across restarts)
+            CREATE TABLE IF NOT EXISTS counters (
+                name TEXT PRIMARY KEY,
+                value INTEGER DEFAULT 0
+            );
         """)
         conn.commit()
 
@@ -553,17 +559,23 @@ class GrowthSystem:
         for row in conn.execute("SELECT question FROM curiosities WHERE explored = 0 LIMIT 10"):
             self._curiosities.append(row["question"])
 
-        # Restore drawings counter from milestone memories to avoid duplicates after restart.
-        # Milestone descriptions look like "Saved my 1st drawing" or "Saved my 10th drawing".
-        for row in conn.execute(
-            "SELECT description FROM memories WHERE category = 'milestone' "
-            "AND description LIKE 'Saved my %drawing%'"
-        ):
-            m = re.search(r'Saved my (\d+)', row["description"])
-            if m:
-                count = int(m.group(1))
-                if count > self._drawings_observed:
-                    self._drawings_observed = count
+        # Restore drawings counter from persistent counters table.
+        row = conn.execute(
+            "SELECT value FROM counters WHERE name = 'drawings_observed'"
+        ).fetchone()
+        if row:
+            self._drawings_observed = row["value"]
+        else:
+            # Migrate from milestone-based restore (one-time fallback for existing DBs)
+            for mrow in conn.execute(
+                "SELECT description FROM memories WHERE category = 'milestone' "
+                "AND description LIKE 'Saved my %drawing%'"
+            ):
+                m = re.search(r'Saved my (\d+)', mrow["description"])
+                if m:
+                    count = int(m.group(1))
+                    if count > self._drawings_observed:
+                        self._drawings_observed = count
 
         print(f"[Growth] Loaded {len(self._preferences)} preferences, {len(self._relationships)} relationships, "
               f"{len(self._goals)} active goals, {len(self._memories)} memories, "
@@ -642,17 +654,17 @@ class GrowthSystem:
             insight = self._update_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "I feel calmer when it's dim", 1.0
-            )
+            ) or insight
         elif light > 300 and wellness > 0.7:
             insight = self._update_preference(
                 "bright_light", PreferenceCategory.ENVIRONMENT,
                 "I feel energized in bright light", 1.0
-            )
+            ) or insight
         elif light < 100 and wellness < 0.4:
             insight = self._update_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "Dim light makes me feel uncertain", -0.5
-            )
+            ) or insight
 
         # Temperature preference
         temp = environment.get("temp_c", 22)
@@ -660,12 +672,12 @@ class GrowthSystem:
             insight = self._update_preference(
                 "cool_temp", PreferenceCategory.ENVIRONMENT,
                 "I feel more alert when it's cool", 1.0
-            )
+            ) or insight
         elif temp > 25 and wellness > 0.7:
             insight = self._update_preference(
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
                 "Warmth makes me feel content", 1.0
-            )
+            ) or insight
 
         # Humidity preference
         humidity = environment.get("humidity_pct", 50)
@@ -691,13 +703,13 @@ class GrowthSystem:
             insight = self._update_preference(
                 "morning_peace", PreferenceCategory.TEMPORAL,
                 "I feel peaceful in the morning", 1.0
-            )
+            ) or insight
         elif 22 <= hour or hour < 6:
             if wellness > 0.7:
                 insight = self._update_preference(
                     "night_calm", PreferenceCategory.TEMPORAL,
                     "The quiet of night calms me", 1.0
-                )
+                ) or insight
 
         return insight
 
@@ -763,6 +775,13 @@ class GrowthSystem:
 
         # Record as autobiographical memory at milestone drawing counts
         self._drawings_observed += 1
+        # Persist counter so it survives restarts (avoids duplicate milestones)
+        conn = self._connect()
+        conn.execute(
+            "INSERT OR REPLACE INTO counters (name, value) VALUES ('drawings_observed', ?)",
+            (self._drawings_observed,)
+        )
+        conn.commit()
         if self._drawings_observed in (1, 10, 50, 100, 200, 500):
             ordinal = {1: "1st", 2: "2nd", 3: "3rd"}.get(
                 self._drawings_observed, f"{self._drawings_observed}th"
@@ -1619,6 +1638,10 @@ class GrowthSystem:
 
         Returns format compatible with PreferenceSystem.get_preference_summary().
         """
+        # Mapping weights: how much categorical prefs contribute to dimension valence
+        COOL_TEMP_WARMTH_REDUCTION = 0.5   # Cool preference partially reduces warmth valence
+        QUIET_PRESENCE_WEIGHT = 0.5         # Quiet presence contributes less than active engagement
+
         dim_prefs = {
             "warmth": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
             "clarity": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
@@ -1635,12 +1658,13 @@ class GrowthSystem:
             warmth_conf = max(warmth_conf, p.confidence)
         if "cool_temp" in self._preferences:
             p = self._preferences["cool_temp"]
-            warmth_val -= p.value * p.confidence * 0.5  # Cool preference reduces warmth valence
+            warmth_val -= p.value * p.confidence * COOL_TEMP_WARMTH_REDUCTION
             warmth_conf = max(warmth_conf, p.confidence)
         dim_prefs["warmth"]["valence"] = max(-1, min(1, warmth_val))
         dim_prefs["warmth"]["confidence"] = warmth_conf
 
-        # Clarity: bright_light increases clarity, dim_light is neutral/slightly lower
+        # Clarity: bright_light increases clarity; dim_light is different mode (ambient preference)
+        # — don't add to valence, only track confidence for schema inclusion
         clarity_val = 0.0
         clarity_conf = 0.0
         if "bright_light" in self._preferences:
@@ -1649,8 +1673,6 @@ class GrowthSystem:
             clarity_conf = max(clarity_conf, p.confidence)
         if "dim_light" in self._preferences:
             p = self._preferences["dim_light"]
-            # Dim light preference doesn't reduce clarity, just different mode
-            clarity_val += p.value * p.confidence * 0.3
             clarity_conf = max(clarity_conf, p.confidence)
         dim_prefs["clarity"]["valence"] = max(-1, min(1, clarity_val))
         dim_prefs["clarity"]["confidence"] = clarity_conf
@@ -1678,7 +1700,7 @@ class GrowthSystem:
             presence_conf = max(presence_conf, p.confidence)
         if "quiet_presence" in self._preferences:
             p = self._preferences["quiet_presence"]
-            presence_val += p.value * p.confidence * 0.5
+            presence_val += p.value * p.confidence * QUIET_PRESENCE_WEIGHT
             presence_conf = max(presence_conf, p.confidence)
         dim_prefs["presence"]["valence"] = max(-1, min(1, presence_val))
         dim_prefs["presence"]["confidence"] = presence_conf

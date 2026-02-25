@@ -178,6 +178,7 @@ class SelfModel:
 
         # Tracking data for belief testing
         self._stability_episodes: deque = deque(maxlen=20)  # (drop_time, recovery_time)
+        self._warmth_episodes: deque = deque(maxlen=20)  # (drop_time, recovery_time)
         self._correlation_data: Dict[str, deque] = {
             "temp_clarity": deque(maxlen=50),  # (temp, clarity) pairs
             "light_warmth": deque(maxlen=50),  # (light, warmth) pairs
@@ -256,37 +257,71 @@ class SelfModel:
                 strength=surprise_level,
             )
 
-    def observe_stability_change(self, stability_before: float, stability_after: float, duration_seconds: float):
-        """Record stability change for recovery belief testing."""
-        if stability_before > stability_after:
-            # Stability dropped - record episode start
-            self._stability_episodes.append({
+    def _observe_recovery(self, before: float, after: float,
+                          episodes: deque, belief_id: str):
+        """Shared recovery-belief observer for any anima dimension.
+
+        Tracks drop/recovery episodes and tests the named belief.
+        Fast recovery (< 600 s per unit recovered) = supporting evidence.
+        """
+        if before > after:
+            episodes.append({
                 "drop_time": datetime.now(),
-                "initial": stability_before,
-                "dropped_to": stability_after,
+                "initial": before,
+                "dropped_to": after,
                 "recovered": False,
             })
-        elif stability_after > stability_before and self._stability_episodes:
-            # Stability recovering - check if this completes an episode
-            for episode in reversed(self._stability_episodes):
+        elif after > before and episodes:
+            for episode in reversed(episodes):
                 if not episode.get("recovered"):
                     recovery_time = (datetime.now() - episode["drop_time"]).total_seconds()
-                    recovery_amount = stability_after - episode["dropped_to"]
+                    recovery_amount = after - episode["dropped_to"]
 
-                    if recovery_amount > 0.1:  # Significant recovery
+                    if recovery_amount > 0.1:
                         episode["recovered"] = True
                         episode["recovery_seconds"] = recovery_time
 
-                        # Test recovery belief
-                        # Fast recovery = under 60 seconds for 0.1 unit
                         is_fast = recovery_time / max(0.1, recovery_amount) < 600
-
-                        self._beliefs["stability_recovery"].update_from_evidence(
+                        self._beliefs[belief_id].update_from_evidence(
                             supports=is_fast,
                             strength=recovery_amount,
                         )
                         self._maybe_save()
                     break
+
+    def observe_stability_change(self, stability_before: float, stability_after: float,
+                                 duration_seconds: float = 0.0):
+        """Record stability change for recovery belief testing."""
+        self._observe_recovery(stability_before, stability_after,
+                               self._stability_episodes, "stability_recovery")
+
+    def observe_warmth_change(self, warmth_before: float, warmth_after: float,
+                              duration_seconds: float = 0.0):
+        """Record warmth change for warmth_recovery belief testing."""
+        self._observe_recovery(warmth_before, warmth_after,
+                               self._warmth_episodes, "warmth_recovery")
+
+    def observe_question_asked(self, surprise_level: float):
+        """Record that a curiosity question was generated after surprise.
+
+        Tests whether Lumen tends to ask questions when surprised.
+        High surprise + question asked = supporting evidence.
+        """
+        self._beliefs["question_asking_tendency"].update_from_evidence(
+            supports=True,
+            strength=min(1.0, surprise_level),
+        )
+
+    def observe_surprise_no_question(self, surprise_level: float):
+        """Record that surprise occurred but no question was generated.
+
+        Contradicting evidence for the question_asking_tendency belief.
+        """
+        if surprise_level > 0.2:  # Only count meaningful surprises
+            self._beliefs["question_asking_tendency"].update_from_evidence(
+                supports=False,
+                strength=min(1.0, surprise_level * 0.5),  # Weaker signal
+            )
 
     def observe_correlation(self, sensor_values: Dict[str, float], anima_values: Dict[str, float]):
         """Record data for correlation beliefs."""

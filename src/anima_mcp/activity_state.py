@@ -386,7 +386,7 @@ class ActivityManager:
         # Use self-model beliefs to inform peak hours
         if self_model:
             try:
-                beliefs = self_model._beliefs if hasattr(self_model, '_beliefs') else {}
+                beliefs = getattr(self_model, 'beliefs', {})
 
                 # Morning clarity belief → boost morning activity
                 morning = beliefs.get("morning_clarity")

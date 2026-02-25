@@ -793,22 +793,22 @@ def run_creature():
                                 "stability": anima.stability, "presence": anima.presence
                             }),
                         }
-                    except:
+                    except Exception:
                         pass
                 if self_model:
                     try:
                         learning_state["self_beliefs"] = self_model.get_belief_summary()
-                    except:
+                    except Exception:
                         pass
                 if action_selector:
                     try:
                         learning_state["agency"] = action_selector.get_action_stats()
-                    except:
+                    except Exception:
                         pass
                 if adaptive_model:
                     try:
                         learning_state["prediction_accuracy"] = adaptive_model.get_accuracy_stats()
-                    except:
+                    except Exception:
                         pass
                 if learning_state:
                     shm_data["learning"] = learning_state

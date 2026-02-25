@@ -468,7 +468,7 @@ else:
         if m:
             try:
                 return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
-            except:
+            except Exception:
                 pass
         return f.stat().st_mtime
 

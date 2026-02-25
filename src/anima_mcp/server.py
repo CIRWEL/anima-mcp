@@ -2075,10 +2075,21 @@ async def _update_display_loop():
                         get_preference_system as _ml_get_pref,
                     )
 
+                    # Prediction accuracy trend: -0.5 (poor) to 0.5 (good), from adaptive model
+                    pred_trend = 0.0
+                    try:
+                        from .adaptive_prediction import get_adaptive_prediction_model
+                        stats = get_adaptive_prediction_model().get_accuracy_stats()
+                        if not stats.get("insufficient_data") and "overall_mean_error" in stats:
+                            err = stats["overall_mean_error"]
+                            pred_trend = max(-0.5, min(0.5, (1.0 - min(1.0, err)) * 2.0 - 1.0))
+                    except Exception:
+                        pass
+
                     health = compute_trajectory_health(
                         satisfaction_history=list(_satisfaction_history)[-100:],
                         action_efficacy=_action_efficacy,
-                        prediction_accuracy_trend=0.0,  # TODO: compute from metacog
+                        prediction_accuracy_trend=pred_trend,
                     )
                     _health_history.append(health)
 
@@ -3507,6 +3518,25 @@ def run_http_server(host: str, port: int):
 
                 # Single source of truth: hub.schema_history (seeded on wake)
                 schema = hub.schema_history[-1].to_dict() if hub.schema_history else None
+
+                # Fallback when hub has no history yet (same as LCD screen fallback)
+                if schema is None:
+                    try:
+                        from .self_schema import get_current_schema
+                        from .growth import get_growth_system
+                        from .self_model import get_self_model
+                        identity = _store.get_identity() if _store else None
+                        readings, anima = _get_readings_and_anima()
+                        schema = get_current_schema(
+                            identity=identity,
+                            anima=anima,
+                            readings=readings,
+                            growth_system=_growth,
+                            include_preferences=True,
+                            self_model=get_self_model(),
+                        ).to_dict()
+                    except Exception:
+                        pass
 
                 # Trajectory with component detail
                 trajectory = None

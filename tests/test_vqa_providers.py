@@ -43,23 +43,23 @@ def sample_ground_truth():
 
 @pytest.fixture
 def sample_schema():
-    """Create a sample self-schema for testing."""
+    """Create a sample self-schema for testing (matches extract_self_schema ID convention)."""
     from datetime import datetime
 
     nodes = [
         SchemaNode(node_id="identity", node_type="identity", label="Lumen", value=1.0),
-        SchemaNode(node_id="warmth", node_type="anima", label="warmth", value=0.7),
-        SchemaNode(node_id="clarity", node_type="anima", label="clarity", value=0.8),
-        SchemaNode(node_id="stability", node_type="anima", label="stability", value=0.6),
-        SchemaNode(node_id="presence", node_type="anima", label="presence", value=0.9),
-        SchemaNode(node_id="light", node_type="sensor", label="light", value=0.5),
-        SchemaNode(node_id="temp", node_type="sensor", label="temp", value=0.6),
-        SchemaNode(node_id="humidity", node_type="sensor", label="humidity", value=0.4),
+        SchemaNode(node_id="anima_warmth", node_type="anima", label="Warmth", value=0.7),
+        SchemaNode(node_id="anima_clarity", node_type="anima", label="Clarity", value=0.8),
+        SchemaNode(node_id="anima_stability", node_type="anima", label="Stability", value=0.6),
+        SchemaNode(node_id="anima_presence", node_type="anima", label="Presence", value=0.9),
+        SchemaNode(node_id="sensor_light", node_type="sensor", label="Light", value=0.5),
+        SchemaNode(node_id="sensor_temp", node_type="sensor", label="Temp", value=0.6),
+        SchemaNode(node_id="sensor_humidity", node_type="sensor", label="Humid", value=0.4),
     ]
     edges = [
-        SchemaEdge(source_id="identity", target_id="warmth", weight=1.0),
-        SchemaEdge(source_id="identity", target_id="clarity", weight=1.0),
-        SchemaEdge(source_id="light", target_id="clarity", weight=0.5),
+        SchemaEdge(source_id="identity", target_id="anima_warmth", weight=1.0),
+        SchemaEdge(source_id="identity", target_id="anima_clarity", weight=1.0),
+        SchemaEdge(source_id="sensor_light", target_id="anima_clarity", weight=0.5),
     ]
     return SelfSchema(timestamp=datetime.now(), nodes=nodes, edges=edges)
 

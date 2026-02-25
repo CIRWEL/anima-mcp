@@ -67,7 +67,7 @@ def call_git_pull(url: str, stash: bool = True, restart: bool = True):
         try:
             error_body = e.read().decode()
             print(f"Response: {error_body}")
-        except:
+        except Exception:
             pass
         return False
     except urllib.error.URLError as e:

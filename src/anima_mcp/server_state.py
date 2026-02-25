@@ -49,7 +49,7 @@ META_LEARNING_INTERVAL = 21600  # iterations — ~daily at ~2s/iter
 # Note: "cirwel" excluded — agents often inherit this macOS username.
 # Only dashboard source reliably identifies the human.
 KNOWN_PERSON_ALIASES = {
-    "kenny": {"kenny", "caretaker", "dashboard"},
+    "kenny": {"kenny", "caretaker", "dashboard", "human"},
 }
 
 # === Error/status logging throttle intervals ===

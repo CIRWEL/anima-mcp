@@ -42,7 +42,7 @@ def make_schema():
             SchemaNode("anima_stability", "anima", "Stability", 0.6, 0.6),
             SchemaNode("anima_presence", "anima", "Presence", 0.4, 0.4),
             SchemaNode("sensor_light", "sensor", "Light", 0.8, 300),
-            SchemaNode("resource_memory", "resource", "Memory", 0.6, 60),
+            SchemaNode("sensor_memory", "resource", "Mem", 0.6, 60),
         ],
         edges=[
             SchemaEdge("sensor_light", "anima_clarity", 0.5),
@@ -198,13 +198,13 @@ class TestGetNodePosition:
         assert dist == pytest.approx(RING_2_RADIUS, abs=2)
 
     def test_resource_ring2b(self):
-        node = SchemaNode("resource_mem", "resource", "Mem", 0.5, 0.5)
+        node = SchemaNode("sensor_memory", "resource", "Mem", 0.5, 0.5)
         pos = _get_node_position(node, 0, 3)
         dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
         assert dist == pytest.approx(RING_2B_RADIUS, abs=2)
 
     def test_preference_ring3(self):
-        node = SchemaNode("pref_warmth", "preference", "PW", 0.5, 0.5)
+        node = SchemaNode("pref_warmth", "preference", "Pref warmth", 0.5, 0.5)
         pos = _get_node_position(node, 0, 2)
         dist = math.sqrt((pos[0] - CENTER[0]) ** 2 + (pos[1] - CENTER[1]) ** 2)
         assert dist == pytest.approx(RING_3_RADIUS, abs=2)
@@ -310,11 +310,11 @@ class TestBuildNodePositions:
     def test_mixed_types(self):
         """Schema with preference and belief nodes also included."""
         schema = make_schema()
-        schema.nodes.append(SchemaNode("pref_warmth", "preference", "PW", 0.6, 0.6))
-        schema.nodes.append(SchemaNode("belief_light", "belief", "BLit", 0.5, 0.5))
+        schema.nodes.append(SchemaNode("pref_warmth", "preference", "Pref warmth", 0.6, 0.6))
+        schema.nodes.append(SchemaNode("belief_light_sensitive", "belief", "Light sensitive", 0.5, 0.5))
         positions = _build_node_positions(schema)
         assert "pref_warmth" in positions
-        assert "belief_light" in positions
+        assert "belief_light_sensitive" in positions
         assert len(positions) == len(schema.nodes)
 
     def test_empty_schema(self):

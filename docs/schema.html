@@ -647,9 +647,10 @@
         meta: 'Meta', drift: 'Drift', tension: 'Tension',
     };
     const TYPE_ORDER = ['identity','anima','sensor','resource','preference','belief','trajectory','meta','drift','tension'];
+    // Aligned with LCD renderer: meta→anima→trajectory→sensor→resource→drift→preference→tension→belief
     const TYPE_RINGS = {
-        identity: 0, anima: 1, sensor: 2, resource: 2,
-        preference: 3, belief: 3, trajectory: 4, meta: 4, drift: 4, tension: 4,
+        identity: 0, meta: 1, anima: 2, trajectory: 3, sensor: 4, resource: 5,
+        drift: 6, preference: 7, tension: 8, belief: 9,
     };
 
     // ── State ──
@@ -842,12 +843,13 @@
         ctx.fillStyle = bg;
         ctx.fillRect(0, 0, w, h);
 
-        const ringRadii = [0, maxR * 0.16, maxR * 0.38, maxR * 0.62, maxR * 0.86];
+        // Proportional to LCD: 0, 0.21, 0.35, 0.48, 0.63, 0.73, 0.80, 0.87, 0.93, 1.0
+        const ringRadii = [0, maxR * 0.21, maxR * 0.35, maxR * 0.48, maxR * 0.63, maxR * 0.73, maxR * 0.80, maxR * 0.87, maxR * 0.93, maxR];
 
-        // Group by ring
-        const rings = [[], [], [], [], []];
+        // Group by ring (10 rings to match LCD layout)
+        const rings = [[], [], [], [], [], [], [], [], [], []];
         schema.nodes.forEach(n => {
-            const ri = TYPE_RINGS[n.type] ?? 4;
+            const ri = Math.min(TYPE_RINGS[n.type] ?? 9, 9);
             rings[ri].push(n);
         });
 

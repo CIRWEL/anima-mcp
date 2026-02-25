@@ -212,17 +212,17 @@ class SelfReflectionSystem:
         patterns = []
 
         # Analyze light level correlations
-        light_pattern = self._analyze_sensor_correlation(rows, "light_level", "Light")
+        light_pattern = self._analyze_sensor_correlation(rows, "light_lux", "Light")
         if light_pattern:
             patterns.append(light_pattern)
 
         # Analyze temperature correlations
-        temp_pattern = self._analyze_sensor_correlation(rows, "ambient_temp", "Temperature")
+        temp_pattern = self._analyze_sensor_correlation(rows, "ambient_temp_c", "Temperature")
         if temp_pattern:
             patterns.append(temp_pattern)
 
         # Analyze humidity correlations
-        humidity_pattern = self._analyze_sensor_correlation(rows, "humidity", "Humidity")
+        humidity_pattern = self._analyze_sensor_correlation(rows, "humidity_pct", "Humidity")
         if humidity_pattern:
             patterns.append(humidity_pattern)
 

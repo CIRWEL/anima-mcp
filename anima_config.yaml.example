@@ -23,24 +23,24 @@ nervous_system:
   neural_weight: 0.3
   physical_weight: 0.7
   
-  # Component weights for anima dimensions
+  # Component weights for anima dimensions (should sum to ~1.0)
   warmth_weights:
-    cpu_temp: 0.3
-    cpu_usage: 0.25
-    ambient_temp: 0.25
-    neural: 0.2
+    cpu_temp: 0.4
+    ambient_temp: 0.33
+    neural: 0.27
   
   clarity_weights:
-    light: 0.4
-    sensor_coverage: 0.3
-    neural: 0.3
+    prediction_accuracy: 0.45
+    neural: 0.25
+    sensor_coverage: 0.15
+    world_light: 0.15   # Environmental light (self-glow subtracted)
   
   stability_weights:
-    humidity_dev: 0.20
-    memory: 0.25
-    missing_sensors: 0.15
-    pressure_dev: 0.20  # Pressure sensor contribution
-    neural: 0.20
+    humidity_dev: 0.25
+    memory: 0.3
+    missing_sensors: 0.2
+    pressure_dev: 0.15
+    neural: 0.1
   
   presence_weights:
     disk: 0.25
