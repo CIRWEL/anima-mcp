@@ -2794,9 +2794,26 @@ def run_http_server(host: str, port: int):
                 except RuntimeError:
                     pass
 
+        # Bearer token auth for REST endpoints
+        _ANIMA_HTTP_API_TOKEN = os.environ.get("ANIMA_HTTP_API_TOKEN")
+
+        def _check_rest_auth(request) -> bool:
+            """Optional bearer token auth for REST endpoints."""
+            if not _ANIMA_HTTP_API_TOKEN:
+                return True  # Auth disabled if no token configured
+            auth = request.headers.get("authorization") or request.headers.get("Authorization")
+            if not auth or not isinstance(auth, str):
+                return False
+            if not auth.lower().startswith("bearer "):
+                return False
+            token = auth.split(" ", 1)[1].strip()
+            return token == _ANIMA_HTTP_API_TOKEN
+
         # Health check endpoint for monitoring
         async def health_check(request):
             """Simple health check - returns 200 if server is running."""
+            if not _check_rest_auth(request):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
             status = "ok" if SERVER_READY else "starting"
             return PlainTextResponse(f"{status}\n")
 
@@ -2864,6 +2881,8 @@ def run_http_server(host: str, port: int):
 
         async def rest_state(request):
             """GET /state - Format matching message_server.py."""
+            if not _check_rest_auth(request):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
             try:
                 # Use internal functions (same as MCP get_state)
                 readings, anima = _get_readings_and_anima()
@@ -3126,6 +3145,8 @@ def run_http_server(host: str, port: int):
 
         async def rest_gallery(request):
             """GET /gallery - Get Lumen's drawings."""
+            if not _check_rest_auth(request):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
             try:
                 import re
                 from pathlib import Path
@@ -3195,6 +3216,8 @@ def run_http_server(host: str, port: int):
 
         async def rest_gallery_image(request):
             """GET /gallery/{filename} - Serve a drawing image."""
+            if not _check_rest_auth(request):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
             from starlette.responses import Response
             from pathlib import Path
             filename = request.path_params.get("filename", "")
