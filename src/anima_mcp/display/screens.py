@@ -832,7 +832,7 @@ class ScreenRenderer:
                 elif mode == ScreenMode.SENSORS:
                     self._render_sensors(readings)
                 elif mode == ScreenMode.IDENTITY:
-                    self._render_identity(identity)
+                    self._render_identity(identity, anima)
                 elif mode == ScreenMode.DIAGNOSTICS:
                     self._render_diagnostics(anima, readings, governance)
                 elif mode == ScreenMode.NEURAL:
@@ -1204,8 +1204,8 @@ class ScreenRenderer:
             if len(points) >= 2:
                 draw.line(points, fill=color, width=1)
 
-    def _render_identity(self, identity: Optional[CreatureIdentity]):
-        """Render identity screen with colors and nav dots."""
+    def _render_identity(self, identity: Optional[CreatureIdentity], anima: Optional[Anima] = None):
+        """Render identity screen with colors, anima bars, and nav dots."""
         if not identity:
             self._display.render_text("who am i?\n(unknown)", (10, 10), color=COLORS.TEXT_DIM)
             return
@@ -1315,6 +1315,24 @@ class ScreenRenderer:
                               pct_text, fill=COLORS.TEXT_PRIMARY, font=fonts['small'])
                 except Exception:
                     pass  # Non-fatal
+
+                # Anima dimension bars on left edge
+                if anima is not None:
+                    bar_colors = [ORANGE, CYAN, GREEN, PURPLE]
+                    values = [anima.warmth, anima.clarity, anima.stability, anima.presence]
+                    bar_width = 3
+                    bar_height = 60
+                    y_top = 40
+                    for i, (val, color) in enumerate(zip(values, bar_colors)):
+                        x_left = 4 + i * 5
+                        x_right = x_left + bar_width
+                        # Dim background
+                        dim = tuple(c // 6 for c in color)
+                        draw.rectangle([x_left, y_top, x_right, y_top + bar_height], fill=dim)
+                        # Filled portion (bottom-up)
+                        fill_h = int(bar_height * max(0.0, min(1.0, val)))
+                        if fill_h > 0:
+                            draw.rectangle([x_left, y_top + bar_height - fill_h, x_right, y_top + bar_height], fill=color)
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)

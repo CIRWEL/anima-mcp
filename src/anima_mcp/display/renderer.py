@@ -407,9 +407,7 @@ class PilRenderer(DisplayRenderer):
                     fill=WHITE,
                     font=font
                 )
-            # Draw anima dimension bars on left edge (if anima provided)
-            if anima is not None:
-                self._draw_anima_bars(draw, anima)
+            # Anima bars removed from face — shown on identity screen instead
 
             t4 = time.time()
 
