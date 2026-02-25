@@ -9,23 +9,41 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Lumen Control Center</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/shared.css">
     <style>
-        body { padding: 0; }
+        /* ── Control Center: typography & depth ── */
+        body {
+            padding: 0;
+            font-family: 'Outfit', var(--font-family);
+            background: var(--bg-color);
+            background-image:
+                radial-gradient(ellipse 120% 60% at 50% -20%, rgba(0, 255, 255, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse 80% 40% at 100% 100%, rgba(187, 134, 252, 0.04) 0%, transparent 50%);
+        }
 
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 20px 40px;
+            padding: 24px 40px 48px;
+            animation: containerReveal 0.5s ease-out;
+        }
+        @keyframes containerReveal {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         header {
-            margin-bottom: 20px;
-            border-bottom: 1px solid #333;
-            padding-bottom: 15px;
+            margin-bottom: 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            padding-bottom: 18px;
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
         }
 
         .header-left {
@@ -35,35 +53,67 @@
         }
 
         h1 {
-            font-weight: 700;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 600;
             margin: 0;
-            font-size: 2rem;
+            font-size: 1.75rem;
+            letter-spacing: -0.02em;
             background: linear-gradient(135deg, var(--accent-cyan), var(--accent-purple));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            background-clip: text;
         }
 
         .connection-status {
             display: flex;
             align-items: center;
-            gap: 8px;
-            font-size: 0.9rem;
+            gap: 10px;
+            font-size: 0.875rem;
             color: var(--text-secondary);
+            font-weight: 500;
+        }
+        .connection-status .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+        .connection-status.connecting .status-dot {
+            animation: connectionPulse 1.2s ease-in-out infinite;
+        }
+        @keyframes connectionPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.1); }
+        }
+        #lastUpdated {
+            font-size: 0.7rem;
+            color: #555;
+            font-family: 'JetBrains Mono', var(--mono);
+            margin-top: 2px;
         }
 
-        .grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            margin-top: 20px;
-        }
+        /* ── Layout grids ── */
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-top: 24px; }
+        .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; margin-top: 24px; }
 
+        @media (max-width: 1100px) {
+            .grid-3 { grid-template-columns: 1fr 1fr; }
+        }
         @media (max-width: 900px) {
-            .grid { grid-template-columns: 1fr; }
-            .container { padding: 12px 16px; }
+            .grid, .grid-3 { grid-template-columns: 1fr; }
+            .container { padding: 16px 20px 32px; }
         }
 
-        /* State Display */
+        /* ── Card overrides ── */
+        .card {
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+        .card:hover {
+            border-color: rgba(255, 255, 255, 0.09);
+        }
+
+        /* ── State Display ── */
         .state-grid {
             display: grid;
             grid-template-columns: repeat(2, 1fr);
@@ -141,7 +191,7 @@
             letter-spacing: normal;
         }
 
-        /* EISV mini bars */
+        /* ── EISV mini bars ── */
         .eisv-row {
             display: flex;
             gap: 8px;
@@ -171,7 +221,7 @@
             transition: width 1s ease;
         }
 
-        /* Governance badge */
+        /* ── Governance badge ── */
         .gov-inline {
             display: flex;
             align-items: center;
@@ -200,7 +250,7 @@
             margin-left: auto;
         }
 
-        /* Neural card */
+        /* ── Neural card ── */
         .eeg-row {
             display: flex;
             align-items: center;
@@ -234,7 +284,7 @@
             color: var(--text-secondary);
         }
 
-        /* System card */
+        /* ── System card ── */
         .sys-metric {
             display: flex;
             justify-content: space-between;
@@ -252,7 +302,88 @@
             font-family: var(--mono);
         }
 
-        /* Message Feed */
+        /* ── Message Form (promoted to top) ── */
+        .message-card-top {
+            margin-top: 20px;
+        }
+        .message-form {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        .message-form-row {
+            display: flex;
+            gap: 12px;
+            align-items: flex-end;
+            flex-wrap: wrap;
+        }
+
+        .message-input {
+            background-color: #0d0d12;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            padding: 14px 16px;
+            border-radius: 10px;
+            font-family: 'Outfit', var(--font-family);
+            font-size: 0.95rem;
+            min-height: 72px;
+            resize: vertical;
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .message-input:focus {
+            outline: none;
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 0 3px rgba(0, 255, 255, 0.08);
+        }
+
+        .message-input::placeholder { color: #555; }
+
+        .message-author-input {
+            width: 100px;
+            padding: 8px 10px;
+            border: 1px solid rgba(255,255,255,0.12);
+            border-radius: 6px;
+            background: #0d0d12;
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
+
+        .message-form-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .message-form-label .hint {
+            font-size: 0.7rem;
+            text-transform: none;
+            letter-spacing: 0;
+            color: #555;
+        }
+
+        #messageStatus {
+            font-size: 0.85em;
+            min-height: 1.2em;
+        }
+
+        .kbd-hint {
+            font-size: 0.7rem;
+            color: #555;
+            margin-top: 4px;
+        }
+        .kbd-hint kbd {
+            font-family: 'JetBrains Mono', var(--mono);
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.06);
+            border: 1px solid rgba(255,255,255,0.08);
+        }
+
+        /* ── Message Feed ── */
         .msg-feed {
             max-height: 400px;
             overflow-y: auto;
@@ -281,9 +412,7 @@
             color: var(--accent-cyan);
             background: rgba(0,255,255,0.08);
         }
-        .msg-id.copied {
-            color: var(--accent-green);
-        }
+        .msg-id.copied { color: var(--accent-green); }
 
         .msg-meta {
             font-size: 0.7rem;
@@ -307,10 +436,9 @@
             opacity: 0.7;
             transition: opacity 0.2s;
         }
-
         .load-more-link:hover { opacity: 1; }
 
-        /* Q&A Section */
+        /* ── Q&A Section ── */
         .qa-list {
             max-height: 500px;
             overflow-y: auto;
@@ -369,110 +497,47 @@
             border-color: var(--accent-cyan);
         }
 
-        /* Message Form */
-        .message-form {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-        }
-
-        .message-input {
-            background-color: #0d0d12;
-            border: 1px solid #333;
-            color: var(--text-primary);
-            padding: 12px;
-            border-radius: 8px;
-            font-family: var(--font-family);
-            min-height: 80px;
-            resize: vertical;
-        }
-
-        .message-input:focus {
-            outline: none;
-            border-color: var(--accent-cyan);
-        }
-
-        #messageStatus, #answerStatus {
+        #answerStatus {
             font-size: 0.85em;
             min-height: 1.2em;
         }
 
-        .section-title {
-            font-size: 1.3rem;
-            margin-top: 30px;
-            margin-bottom: 10px;
-            color: var(--text-primary);
-        }
-
-        /* Learning Stats */
-        .learning-stats {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
-            margin-bottom: 15px;
-        }
-
-        .learning-stat {
-            text-align: center;
-            padding: 10px;
-            background: #0d0d12;
-            border-radius: 8px;
-            border: 1px solid #333;
-        }
-
-        .learning-stat-value { font-size: 1.5rem; font-weight: 600; color: var(--accent-purple); }
-        .learning-stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; }
-        .trend-up { color: var(--accent-green); }
-        .trend-down { color: var(--accent-orange); }
-        .trend-neutral { color: var(--text-secondary); }
-
-        /* Voice Status */
-        .voice-status {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 12px;
-            background: #0d0d12;
-            border-radius: 8px;
-            margin-bottom: 15px;
-        }
-
-        .voice-icon { font-size: 1.5rem; }
-        .voice-text { flex: 1; }
-        .voice-speaking { animation: pulse 1s infinite; }
-
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        /* Notification badge */
+        /* ── Notification badge ── */
         .notification-badge {
             position: fixed;
-            top: 60px;
-            right: 20px;
-            background: var(--accent-yellow);
-            color: #000;
-            padding: 10px 20px;
-            border-radius: 8px;
+            top: 56px;
+            right: 24px;
+            background: linear-gradient(135deg, rgba(0, 255, 255, 0.95), rgba(187, 134, 252, 0.9));
+            color: #0d0d12;
+            padding: 10px 18px;
+            border-radius: 10px;
             font-weight: 600;
-            box-shadow: 0 4px 12px rgba(255, 204, 0, 0.3);
+            font-size: 0.875rem;
+            box-shadow: 0 4px 20px rgba(0, 255, 255, 0.25);
             display: none;
             cursor: pointer;
             z-index: 1000;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.2s, box-shadow 0.2s;
         }
-
+        .notification-badge:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 6px 24px rgba(0, 255, 255, 0.3);
+        }
+        .notification-badge:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px var(--accent-cyan);
+        }
         .notification-badge.show {
             display: block;
-            animation: slideIn 0.3s ease;
+            animation: slideIn 0.35s cubic-bezier(0.34, 1.56, 0.64, 1);
         }
-
         @keyframes slideIn {
             from { transform: translateX(100px); opacity: 0; }
             to { transform: translateX(0); opacity: 1; }
         }
 
-        /* Self-Knowledge */
+        /* ── Self-Knowledge ── */
         .insight-grid {
             display: grid;
             gap: 8px;
@@ -529,7 +594,7 @@
         }
         .category-tab:hover { border-color: #555; }
 
-        /* Growth */
+        /* ── Growth ── */
         .autobiography {
             background: #0d0d12;
             border-radius: 8px;
@@ -586,7 +651,29 @@
             color: var(--accent-cyan);
         }
 
-        /* System Health */
+        /* ── Learning Stats ── */
+        .learning-stats {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .learning-stat {
+            text-align: center;
+            padding: 10px;
+            background: #0d0d12;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+
+        .learning-stat-value { font-size: 1.5rem; font-weight: 600; color: var(--accent-purple); }
+        .learning-stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; }
+        .trend-up { color: var(--accent-green); }
+        .trend-down { color: var(--accent-orange); }
+        .trend-neutral { color: var(--text-secondary); }
+
+        /* ── System Health ── */
         .health-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
@@ -613,9 +700,15 @@
         .health-err { background: var(--accent-orange); box-shadow: 0 0 6px rgba(207,102,121,0.4); }
         .health-off { background: #444; }
         .health-name { color: var(--text-secondary); }
-        .health-detail { font-size: 0.65rem; color: #555; margin-left: auto; }
+        .health-status {
+            font-size: 0.65rem;
+            color: #555;
+            margin-left: auto;
+            font-family: var(--mono);
+            text-transform: uppercase;
+        }
 
-        /* Gallery */
+        /* ── Gallery ── */
         .gallery-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
@@ -633,9 +726,10 @@
             transition: all 0.2s;
         }
 
-        .gallery-item:hover {
+        .gallery-item:hover, .gallery-item:focus-visible {
             border-color: var(--accent-cyan);
             transform: scale(1.02);
+            outline: none;
         }
 
         .gallery-item img {
@@ -652,6 +746,47 @@
             margin-top: 6px;
             text-align: center;
         }
+
+        /* ── Voice Status ── */
+        .voice-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 12px;
+            background: #0d0d12;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .voice-icon { font-size: 1.5rem; }
+        .voice-text { flex: 1; }
+        .voice-speaking { animation: pulse 1s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* ── Retry button for error states ── */
+        .retry-btn {
+            background: none;
+            border: 1px solid #444;
+            color: var(--accent-cyan);
+            padding: 4px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            margin-top: 8px;
+            transition: border-color 0.2s;
+        }
+        .retry-btn:hover { border-color: var(--accent-cyan); }
+
+        .error-state {
+            text-align: center;
+            padding: 20px;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
     </style>
 </head>
 
@@ -661,24 +796,47 @@
             <div class="header-left">
                 <h1>Lumen Control Center</h1>
             </div>
-            <div class="connection-status">
+            <div id="connectionStatus" class="connection-status connecting">
                 <div id="connectionDot" class="status-dot"></div>
-                <span id="connectionText">Connecting...</span>
+                <div>
+                    <span id="connectionText">Connecting...</span>
+                    <div id="lastUpdated" aria-live="polite"></div>
+                </div>
             </div>
         </header>
 
         <!-- Notification Badge -->
-        <div id="notificationBadge" class="notification-badge" onclick="scrollToQA()">
+        <div id="notificationBadge" class="notification-badge" role="button" tabindex="0" aria-label="New question from Lumen - click to go to Q&amp;A">
             New question from Lumen!
         </div>
 
+        <!-- ═══ Send Message (primary action, top of page) ═══ -->
+        <div class="card message-card-top">
+            <h3 class="card-title" style="margin-bottom: 10px;">Talk to Lumen</h3>
+            <div class="message-form">
+                <textarea id="messageInput" class="message-input" placeholder="Type your message to Lumen..." aria-label="Message to Lumen"></textarea>
+                <div class="message-form-row">
+                    <label class="message-form-label" style="min-width: 100px;">
+                        Your name
+                        <span class="hint">Kenny = caretaker</span>
+                        <input type="text" id="messageAuthor" value="Kenny" placeholder="e.g. Kenny" class="message-author-input">
+                    </label>
+                    <div style="flex: 1;"></div>
+                    <span id="messageStatus"></span>
+                    <button type="button" id="sendBtn" class="btn btn-primary">Send Message</button>
+                </div>
+                <p class="kbd-hint"><kbd>Esc</kbd> focuses message box</p>
+            </div>
+        </div>
+
+        <!-- ═══ Row 1: Live State + Q&A ═══ -->
         <div class="grid">
             <!-- Live State -->
             <div class="card">
                 <div class="card-header-collapsible" data-card-id="live-state">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Live State
-                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh">&#x21bb;</button>
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh" aria-label="Refresh state">&#x21bb;</button>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
                 </div>
@@ -690,23 +848,23 @@
                             <div id="voiceState">Idle</div>
                         </div>
                     </div>
-                    <!-- Sparklines (persistent, outside innerHTML area) -->
+                    <!-- Sparklines -->
                     <div id="sparklineRow" class="sparkline-row" style="margin-top: 10px;">
                         <div class="sparkline-container">
                             <span class="sparkline-label">W</span>
-                            <div class="sparkline"><canvas id="sparkWarmth" width="80" height="24"></canvas></div>
+                            <div class="sparkline"><canvas id="sparkWarmth"></canvas></div>
                         </div>
                         <div class="sparkline-container">
                             <span class="sparkline-label">C</span>
-                            <div class="sparkline"><canvas id="sparkClarity" width="80" height="24"></canvas></div>
+                            <div class="sparkline"><canvas id="sparkClarity"></canvas></div>
                         </div>
                         <div class="sparkline-container">
                             <span class="sparkline-label">S</span>
-                            <div class="sparkline"><canvas id="sparkStability" width="80" height="24"></canvas></div>
+                            <div class="sparkline"><canvas id="sparkStability"></canvas></div>
                         </div>
                         <div class="sparkline-container">
                             <span class="sparkline-label">P</span>
-                            <div class="sparkline"><canvas id="sparkPresence" width="80" height="24"></canvas></div>
+                            <div class="sparkline"><canvas id="sparkPresence"></canvas></div>
                         </div>
                     </div>
                     <div id="stateContent">
@@ -725,8 +883,8 @@
             <div class="card" id="qaCard">
                 <div class="card-header-collapsible" data-card-id="qa">
                     <h3 class="card-title" style="margin-bottom: 0;">
-                        Questions & Answers
-                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh">&#x21bb;</button>
+                        Questions &amp; Answers
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh" aria-label="Refresh Q&amp;A">&#x21bb;</button>
                         <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
@@ -743,8 +901,8 @@
             </div>
         </div>
 
-        <!-- Internals row: Neural + System -->
-        <div class="grid" style="margin-top: 20px;">
+        <!-- ═══ Row 2: Neural + System + Health (3-col) ═══ -->
+        <div class="grid-3">
             <div class="card">
                 <div class="card-header-collapsible" data-card-id="neural">
                     <h3 class="card-title" style="margin-bottom: 0;">
@@ -756,8 +914,6 @@
                 <div class="card-body-collapsible">
                     <div id="neuralContent" style="margin-top: 15px;">
                         <div class="skeleton" style="padding: 8px;">
-                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
-                            <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
                             <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
                             <div class="skeleton skeleton-bar" style="width: 100%; height: 8px; margin-bottom: 8px;"></div>
                             <div class="skeleton skeleton-bar" style="width: 100%; height: 8px;"></div>
@@ -780,14 +936,30 @@
                     </div>
                 </div>
             </div>
+            <div class="card">
+                <div class="card-header-collapsible" data-card-id="health">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Subsystems
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchHealth()" title="Refresh" aria-label="Refresh health">&#x21bb;</button>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="healthContent" class="health-grid" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 8px;">
+                            <div class="skeleton skeleton-line" style="width: 70%;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <!-- Message Feed -->
-        <div class="card" style="margin-top: 20px;">
+        <!-- ═══ Row 3: Messages (full width) ═══ -->
+        <div class="card" style="margin-top: 24px;">
             <div class="card-header-collapsible" data-card-id="messages">
                 <h3 class="card-title" style="margin-bottom: 0;">
                     Message Board
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchMessages()" title="Refresh">&#x21bb;</button>
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchMessages()" title="Refresh" aria-label="Refresh messages">&#x21bb;</button>
                     <span id="msgCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
                 </h3>
                 <span class="collapse-icon">&#9660;</span>
@@ -804,121 +976,84 @@
             </div>
         </div>
 
-        <!-- Learning Stats -->
-        <div class="section-title">Learning Progress</div>
-        <div class="card">
-            <div class="card-header-collapsible" data-card-id="learning">
-                <h3 class="card-title" style="margin-bottom: 0;">Learning</h3>
-                <span class="collapse-icon">&#9660;</span>
+        <!-- ═══ Row 4: Learning + Self-Knowledge (2-col) ═══ -->
+        <div class="grid">
+            <div class="card">
+                <div class="card-header-collapsible" data-card-id="learning">
+                    <h3 class="card-title" style="margin-bottom: 0;">Learning</h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="learningContent" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 12px;">
+                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                                <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                                <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                                <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body-collapsible">
-                <div id="learningContent" style="margin-top: 15px;">
-                    <div class="skeleton" style="padding: 12px;">
-                        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
-                            <div class="skeleton skeleton-block" style="height: 60px;"></div>
-                            <div class="skeleton skeleton-block" style="height: 60px;"></div>
-                            <div class="skeleton skeleton-block" style="height: 60px;"></div>
+
+            <div class="card">
+                <div class="card-header-collapsible" data-card-id="self-knowledge">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Discovered Insights
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchSelfKnowledge()" title="Refresh" aria-label="Refresh insights">&#x21bb;</button>
+                        <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="insightTabs" class="category-tabs" style="margin-top: 15px;"></div>
+                    <div id="insightContent" class="insight-grid">
+                        <div class="skeleton" style="padding: 12px;">
+                            <div class="skeleton skeleton-line" style="width: 90%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 60%;"></div>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
 
-        <!-- Self-Knowledge -->
-        <div class="section-title">Self-Knowledge</div>
-        <div class="card">
-            <div class="card-header-collapsible" data-card-id="self-knowledge">
-                <h3 class="card-title" style="margin-bottom: 0;">
-                    Discovered Insights
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchSelfKnowledge()" title="Refresh">&#x21bb;</button>
-                    <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-                </h3>
-                <span class="collapse-icon">&#9660;</span>
-            </div>
-            <div class="card-body-collapsible">
-                <div id="insightTabs" class="category-tabs" style="margin-top: 15px;"></div>
-                <div id="insightContent" class="insight-grid">
-                    <div class="skeleton" style="padding: 12px;">
-                        <div class="skeleton skeleton-line" style="width: 90%;"></div>
-                        <div class="skeleton skeleton-line" style="width: 60%;"></div>
+        <!-- ═══ Row 5: Growth + Gallery (2-col) ═══ -->
+        <div class="grid">
+            <div class="card">
+                <div class="card-header-collapsible" data-card-id="growth">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Lumen's Journey
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchGrowth()" title="Refresh" aria-label="Refresh growth">&#x21bb;</button>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="growthContent" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 12px;">
+                            <div class="skeleton skeleton-block" style="height: 50px; margin-bottom: 12px;"></div>
+                            <div class="skeleton skeleton-line" style="width: 80%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 60%;"></div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Growth -->
-        <div class="section-title">Growth</div>
-        <div class="card">
-            <div class="card-header-collapsible" data-card-id="growth">
-                <h3 class="card-title" style="margin-bottom: 0;">
-                    Lumen's Journey
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchGrowth()" title="Refresh">&#x21bb;</button>
-                </h3>
-                <span class="collapse-icon">&#9660;</span>
-            </div>
-            <div class="card-body-collapsible">
-                <div id="growthContent" style="margin-top: 15px;">
-                    <div class="skeleton" style="padding: 12px;">
-                        <div class="skeleton skeleton-block" style="height: 50px; margin-bottom: 12px;"></div>
-                        <div class="skeleton skeleton-line" style="width: 80%;"></div>
-                        <div class="skeleton skeleton-line" style="width: 60%;"></div>
+            <div class="card">
+                <div class="card-header-collapsible" data-card-id="gallery">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Drawings
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchGallery()" title="Refresh" aria-label="Refresh gallery">&#x21bb;</button>
+                        <span id="galleryCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                        <a href="/gallery-page" style="font-size: 0.8rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: 8px; opacity: 0.8;" onclick="event.stopPropagation()">View all &rarr;</a>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="galleryContent" class="gallery-grid" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 8px;">
+                            <div class="skeleton skeleton-block" style="height: 80px;"></div>
+                        </div>
                     </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- System Health -->
-        <div class="section-title">System Health</div>
-        <div class="card">
-            <div class="card-header-collapsible" data-card-id="health">
-                <h3 class="card-title" style="margin-bottom: 0;">
-                    Subsystems
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchHealth()" title="Refresh">&#x21bb;</button>
-                </h3>
-                <span class="collapse-icon">&#9660;</span>
-            </div>
-            <div class="card-body-collapsible">
-                <div id="healthContent" class="health-grid" style="margin-top: 15px;">
-                    <div class="skeleton" style="padding: 8px;">
-                        <div class="skeleton skeleton-line" style="width: 70%;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Gallery -->
-        <div class="section-title">Lumen's Gallery</div>
-        <div class="card">
-            <div class="card-header-collapsible" data-card-id="gallery">
-                <h3 class="card-title" style="margin-bottom: 0;">
-                    Drawings
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchGallery()" title="Refresh">&#x21bb;</button>
-                    <span id="galleryCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-                    <a href="/gallery-page" style="font-size: 0.8rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: 8px; opacity: 0.8;" onclick="event.stopPropagation()">View all &rarr;</a>
-                </h3>
-                <span class="collapse-icon">&#9660;</span>
-            </div>
-            <div class="card-body-collapsible">
-                <div id="galleryContent" class="gallery-grid" style="margin-top: 15px;">
-                    <div class="skeleton" style="padding: 8px;">
-                        <div class="skeleton skeleton-block" style="height: 80px;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Send Message -->
-        <div class="section-title">Send Message to Lumen</div>
-        <div class="card">
-            <div class="message-form">
-                <textarea id="messageInput" class="message-input" placeholder="Type your message to Lumen..."></textarea>
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
-                    <input type="text" id="messageAuthor" value="Kenny" placeholder="Your name" style="width: 100px; padding: 6px 10px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #f0f0f0; font-size: 0.85rem;">
-                    <input type="text" id="messageRespondsTo" placeholder="responds_to (optional question ID)" style="flex: 1; padding: 6px 10px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #f0f0f0; font-size: 0.85rem;">
-                </div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span id="messageStatus"></span>
-                    <button onclick="sendMessage()" class="btn btn-primary">Send Message</button>
                 </div>
             </div>
         </div>
@@ -929,34 +1064,76 @@
         let lastUnansweredCount = 0;
         let msgLimit = 20;
 
-        // ---- Sparklines (persistent instances) ----
+        // ── HiDPI-aware sparkline canvas setup ──
+        function createHiDPICanvas(canvas, width, height) {
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            const ctx = canvas.getContext('2d');
+            ctx.scale(dpr, dpr);
+            return canvas;
+        }
+
+        createHiDPICanvas(document.getElementById('sparkWarmth'), 80, 24);
+        createHiDPICanvas(document.getElementById('sparkClarity'), 80, 24);
+        createHiDPICanvas(document.getElementById('sparkStability'), 80, 24);
+        createHiDPICanvas(document.getElementById('sparkPresence'), 80, 24);
+
         const sparkWarmth = new Sparkline(document.getElementById('sparkWarmth'), { color: '#ff6b6b' });
         const sparkClarity = new Sparkline(document.getElementById('sparkClarity'), { color: '#4ecdc4' });
         const sparkStability = new Sparkline(document.getElementById('sparkStability'), { color: '#45b7d1' });
         const sparkPresence = new Sparkline(document.getElementById('sparkPresence'), { color: '#96ceb4' });
 
-        // ---- Notification ----
+        // ── Mood emoji map ──
+        const MOOD_EMOJI = {
+            'content': '\u{1F60A}', 'calm': '\u{1F60C}', 'alert': '\u{1F440}', 'curious': '\u{1F914}',
+            'uncomfortable': '\u{1F61F}', 'stressed': '\u{1F630}', 'unknown': '\u{1F916}'
+        };
+
+        // ── Error state with retry ──
+        function renderError(elementId, message, retryFn) {
+            const el = document.getElementById(elementId);
+            el.innerHTML = `<div class="error-state">
+                ${escapeHtml(message)}
+                ${retryFn ? `<br><button class="retry-btn" onclick="${retryFn}()">Retry</button>` : ''}
+            </div>`;
+        }
+
+        // ── Notification ──
+        const notifBadge = document.getElementById('notificationBadge');
+        notifBadge.addEventListener('click', scrollToQA);
+        notifBadge.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); scrollToQA(); }
+        });
+
         function showNotification(message) {
-            const badge = document.getElementById('notificationBadge');
-            badge.textContent = message;
-            badge.classList.add('show');
-            setTimeout(() => badge.classList.remove('show'), 10000);
+            notifBadge.textContent = message;
+            notifBadge.classList.add('show');
+            setTimeout(() => notifBadge.classList.remove('show'), 10000);
         }
 
         function scrollToQA() {
             document.getElementById('qaCard').scrollIntoView({ behavior: 'smooth' });
-            document.getElementById('notificationBadge').classList.remove('show');
+            notifBadge.classList.remove('show');
         }
 
-        // ---- Connection status ----
+        // ── Connection status ──
         function updateConnection(online, text) {
+            const wrap = document.getElementById('connectionStatus');
             const dot = document.getElementById('connectionDot');
             const label = document.getElementById('connectionText');
+            wrap.classList.remove('connecting');
             dot.className = online ? 'status-dot status-online' : 'status-dot status-offline';
-            label.textContent = online ? `Connected to ${text}` : text;
+            label.textContent = online ? `Connected \u00b7 ${text}` : text;
+        }
+        function setLastUpdated() {
+            const el = document.getElementById('lastUpdated');
+            if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         }
 
-        // ---- State ----
+        // ── State ──
         async function fetchState() {
             try {
                 const response = await fetch(`${API_BASE}/state`);
@@ -966,11 +1143,11 @@
                     return;
                 }
                 updateConnection(true, data.name || 'Lumen');
+                setLastUpdated();
                 renderState(data);
                 renderNeural(data);
                 renderSystem(data);
 
-                // Push to sparklines
                 if (data.warmth != null) sparkWarmth.push(data.warmth);
                 if (data.clarity != null) sparkClarity.push(data.clarity);
                 if (data.stability != null) sparkStability.push(data.stability);
@@ -981,11 +1158,7 @@
         }
 
         function renderState(data) {
-            const moodEmoji = {
-                'content': '😊', 'calm': '😌', 'alert': '👀', 'curious': '🤔',
-                'uncomfortable': '😟', 'stressed': '😰', 'unknown': '🤖'
-            }[data.mood] || '🤖';
-
+            const moodEmoji = MOOD_EMOJI[data.mood] || '\u{1F916}';
             const f = data.feeling || {};
 
             // EISV mini bars
@@ -1016,7 +1189,7 @@
                 const isOff = gov.decision === 'OFFLINE';
                 const dc = isProc ? '#7ecf8b' : isOff ? '#666' : '#e8a87c';
                 const detail = gov.margin ? escapeHtml(gov.margin) : '';
-                const src = gov.source ? ` · ${escapeHtml(gov.source)}` : '';
+                const src = gov.source ? ` \u00b7 ${escapeHtml(gov.source)}` : '';
                 govHtml = `
                     <div class="gov-inline">
                         <div class="gov-dot" style="background: ${dc}; box-shadow: 0 0 6px ${dc}60;"></div>
@@ -1029,28 +1202,27 @@
             stateEl.innerHTML = `
                 <div class="mood-display">
                     <div class="mood-text">${moodEmoji}</div>
-                    <div class="mood-name">${data.name} is ${data.mood}</div>
+                    <div class="mood-name">${escapeHtml(data.name)} is ${escapeHtml(data.mood)}</div>
                 </div>
-                <div class="layer-header">Anima <span>— how Lumen feels</span></div>
+                <div class="layer-header">Anima <span>\u2014 how Lumen feels</span></div>
                 <div class="state-grid">
                     ${renderStateItem('Warmth', data.warmth, '#ff6b6b', f.warmth)}
                     ${renderStateItem('Clarity', data.clarity, '#4ecdc4', f.clarity)}
                     ${renderStateItem('Stability', data.stability, '#45b7d1', f.stability)}
                     ${renderStateItem('Presence', data.presence, '#96ceb4', f.presence)}
                 </div>
-                <div class="layer-header">Environment <span>— raw sensor inputs</span></div>
+                <div class="layer-header">Environment <span>\u2014 raw sensor inputs</span></div>
                 <div style="font-size: 0.8rem; color: var(--text-secondary); padding: 6px 0;">
-                    ${data.ambient_temp != null ? `🌡️ ${data.ambient_temp.toFixed(1)}°C` : ''}
-                    ${data.light != null ? ` · 💡 ${data.light.toFixed(0)} lux` : ''}
-                    ${data.humidity != null ? ` · 💧 ${data.humidity.toFixed(0)}%` : ''}
-                    ${data.pressure ? ` · 🔵 ${data.pressure.toFixed(0)} hPa` : ''}
+                    ${data.ambient_temp != null ? `\u{1F321}\uFE0F ${data.ambient_temp.toFixed(1)}\u00B0C` : ''}
+                    ${data.light != null ? ` \u00b7 \u{1F4A1} ${data.light.toFixed(0)} lux` : ''}
+                    ${data.humidity != null ? ` \u00b7 \u{1F4A7} ${data.humidity.toFixed(0)}%` : ''}
+                    ${data.pressure ? ` \u00b7 \u{1F535} ${data.pressure.toFixed(0)} hPa` : ''}
                 </div>
-                <div class="layer-header">Governance <span>— system health metrics (EISV)</span></div>
+                <div class="layer-header">Governance <span>\u2014 system health metrics (EISV)</span></div>
                 ${eisvHtml}
                 ${govHtml}
             `;
 
-            // Value flash on state items
             stateEl.querySelectorAll('.state-value').forEach(el => {
                 const label = el.closest('.state-item')?.querySelector('.state-label')?.textContent;
                 if (label) {
@@ -1077,15 +1249,15 @@
         function renderNeural(data) {
             const neural = data.neural || {};
             if (Object.keys(neural).length === 0) {
-                document.getElementById('neuralContent').innerHTML = '<div class="no-data">No neural data</div>';
+                renderError('neuralContent', 'No neural data');
                 return;
             }
             const bands = [
-                { key: 'delta', name: 'δ delta', color: '#7a6ec4' },
-                { key: 'theta', name: 'θ theta', color: '#9b8ed4' },
-                { key: 'alpha', name: 'α alpha', color: '#b8a4e8' },
-                { key: 'beta',  name: 'β beta',  color: '#d4b8f0' },
-                { key: 'gamma', name: 'γ gamma', color: '#e8ccf8' },
+                { key: 'delta', name: '\u03B4 delta', color: '#7a6ec4' },
+                { key: 'theta', name: '\u03B8 theta', color: '#9b8ed4' },
+                { key: 'alpha', name: '\u03B1 alpha', color: '#b8a4e8' },
+                { key: 'beta',  name: '\u03B2 beta',  color: '#d4b8f0' },
+                { key: 'gamma', name: '\u03B3 gamma', color: '#e8ccf8' },
             ];
             const dominant = bands.reduce((best, b) =>
                 (neural[b.key] || 0) > (neural[best.key] || 0) ? b : best, bands[0]);
@@ -1117,12 +1289,12 @@
             if (data.awakenings) metrics.push({ label: 'Awakenings', value: data.awakenings, color: 'var(--accent-cyan)' });
             if (data.alive_hours) metrics.push({ label: 'Alive', value: `${data.alive_hours}h`, color: 'var(--accent-green)' });
             if (data.alive_ratio) metrics.push({ label: 'Uptime', value: `${(data.alive_ratio * 100).toFixed(0)}%`, color: 'var(--accent-green)' });
-            if (data.cpu_temp) metrics.push({ label: 'CPU Temp', value: `${data.cpu_temp.toFixed(0)}°C`, color: data.cpu_temp > 70 ? 'var(--accent-orange)' : 'var(--text-primary)' });
+            if (data.cpu_temp) metrics.push({ label: 'CPU Temp', value: `${data.cpu_temp.toFixed(0)}\u00B0C`, color: data.cpu_temp > 70 ? 'var(--accent-orange)' : 'var(--text-primary)' });
             if (data.memory_percent) metrics.push({ label: 'RAM', value: `${data.memory_percent.toFixed(0)}%`, color: data.memory_percent > 80 ? 'var(--accent-orange)' : 'var(--text-primary)' });
             if (data.disk_percent) metrics.push({ label: 'Disk', value: `${data.disk_percent.toFixed(0)}%`, color: data.disk_percent > 80 ? 'var(--accent-orange)' : 'var(--text-primary)' });
 
             if (metrics.length === 0) {
-                document.getElementById('systemContent').innerHTML = '<div class="no-data">No system data</div>';
+                renderError('systemContent', 'No system data');
                 return;
             }
 
@@ -1134,13 +1306,13 @@
             `).join('');
         }
 
-        // ---- Q&A ----
+        // ── Q&A ──
         async function fetchQA() {
             try {
                 const response = await fetch(`${API_BASE}/qa`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('qaContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    renderError('qaContent', data.error, 'fetchQA');
                     return;
                 }
 
@@ -1153,31 +1325,31 @@
                     data.unanswered > 0 ? `(${data.unanswered} unanswered of ${data.total})` : `(${data.total} total)`;
                 renderQA(data.questions);
             } catch (e) {
-                document.getElementById('qaContent').innerHTML = `<div class="no-data">Could not load Q&A</div>`;
+                renderError('qaContent', 'Could not load Q&A', 'fetchQA');
             }
         }
 
         function renderQA(questions) {
             if (!questions || questions.length === 0) {
-                document.getElementById('qaContent').innerHTML = `<div class="no-data">No questions yet</div>`;
+                document.getElementById('qaContent').innerHTML = `<div class="error-state">No questions yet</div>`;
                 return;
             }
 
             const html = questions.map(q => {
                 const age = formatAge(q.timestamp);
-                const idBadge = q.id ? `<span class="msg-id" onclick="copyId('${q.id}', this)" title="Click to copy ID for responds_to">${q.id}</span>` : '';
+                const idBadge = q.id ? `<span class="msg-id" onclick="copyId('${q.id}', this)" title="Click to copy ID">${q.id}</span>` : '';
                 return `
                 <div class="qa-item ${q.answered ? '' : 'unanswered'}">
                     <div class="qa-question">${idBadge} ? ${escapeHtml(q.question)}</div>
                     ${q.answer ? `
                         <div class="qa-answer">${escapeHtml(q.answer.text)}</div>
-                        <div class="qa-meta">Answered by ${escapeHtml(q.answer.author)} · ${formatAge(q.answer.timestamp)}</div>
+                        <div class="qa-meta">Answered by ${escapeHtml(q.answer.author)} \u00b7 ${formatAge(q.answer.timestamp)}</div>
                     ` : `
                         <div class="qa-meta">Asked ${age}</div>
                         <div class="qa-answer-form">
                             <textarea class="qa-answer-input" id="answer-${q.id}" placeholder="Type your answer..."></textarea>
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 8px; gap: 8px;">
-                                <input type="text" id="author-${q.id}" value="Kenny" placeholder="Your name" style="width: 100px; padding: 4px 8px; border: 1px solid #444; border-radius: 4px; background: #2a2a2a; color: #f0f0f0; font-size: 0.85rem;">
+                                <input type="text" id="author-${q.id}" value="Kenny" placeholder="Your name" class="message-author-input">
                                 <span id="status-${q.id}" style="font-size: 0.8rem; flex: 1;"></span>
                                 <button class="btn btn-small btn-primary" onclick="submitAnswer('${q.id}')">Answer</button>
                             </div>
@@ -1189,7 +1361,7 @@
             document.getElementById('qaContent').innerHTML = html;
         }
 
-        // ---- Submit answer ----
+        // ── Submit answer ──
         async function submitAnswer(questionId) {
             const input = document.getElementById(`answer-${questionId}`);
             const authorInput = document.getElementById(`author-${questionId}`);
@@ -1222,15 +1394,15 @@
             }
         }
 
-        // ---- Send message ----
+        // ── Send message (simplified — no responds_to) ──
+        document.getElementById('sendBtn').addEventListener('click', sendMessage);
+
         async function sendMessage() {
             const input = document.getElementById('messageInput');
             const authorInput = document.getElementById('messageAuthor');
-            const respondsToInput = document.getElementById('messageRespondsTo');
             const status = document.getElementById('messageStatus');
             const text = input.value.trim();
             const author = authorInput.value.trim() || 'Anonymous';
-            const respondsTo = respondsToInput.value.trim() || null;
 
             if (!text) return;
 
@@ -1238,23 +1410,19 @@
             status.className = 'status-sending';
 
             try {
-                const payload = { text: text, author: author };
-                if (respondsTo) payload.responds_to = respondsTo;
-
                 const response = await fetch(`${API_BASE}/message`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({ text: text, author: author })
                 });
 
                 if (response.ok) {
-                    status.textContent = respondsTo ? `Answered question ${respondsTo}!` : 'Sent!';
+                    status.textContent = 'Sent!';
                     status.className = 'status-success';
                     input.value = '';
-                    respondsToInput.value = '';
                     setTimeout(() => { status.textContent = ''; }, 3000);
+                    input.focus();
                     fetchMessages();
-                    if (respondsTo) fetchQA();
                 } else {
                     throw new Error('Server error');
                 }
@@ -1264,27 +1432,27 @@
             }
         }
 
-        // ---- Messages (with load more) ----
+        // ── Messages ──
         async function fetchMessages() {
             try {
                 const response = await fetch(`${API_BASE}/messages?limit=${msgLimit}`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('msgContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    renderError('msgContent', data.error, 'fetchMessages');
                     return;
                 }
                 const returned = data.returned || data.messages.length;
                 const total = data.total || returned;
-                document.getElementById('msgCount').textContent = `(${returned} of ${total} messages)`;
+                document.getElementById('msgCount').textContent = `(${returned} of ${total})`;
                 renderMessages(data.messages, total > returned);
             } catch (e) {
-                document.getElementById('msgContent').innerHTML = `<div class="no-data">Could not load messages</div>`;
+                renderError('msgContent', 'Could not load messages', 'fetchMessages');
             }
         }
 
         function renderMessages(messages, hasMore) {
             if (!messages || messages.length === 0) {
-                document.getElementById('msgContent').innerHTML = `<div class="no-data">No messages yet</div>`;
+                document.getElementById('msgContent').innerHTML = `<div class="error-state">No messages yet</div>`;
                 return;
             }
             const sorted = [...messages].sort((a, b) => b.timestamp - a.timestamp);
@@ -1292,10 +1460,10 @@
                 const age = formatAge(m.timestamp);
                 const author = m.author || m.type;
                 const idBadge = m.id ? `<span class="msg-id" onclick="copyId('${m.id}', this)" title="Click to copy">${m.id}</span>` : '';
-                const replyTag = m.responds_to ? `<span style="color: var(--accent-purple); font-size: 0.65rem;">↩ ${m.responds_to}</span>` : '';
+                const replyTag = m.responds_to ? `<span style="color: var(--accent-purple); font-size: 0.65rem;">\u21A9 ${m.responds_to}</span>` : '';
                 return `
                     <div class="msg-item type-${m.type}">
-                        <div class="msg-meta">${idBadge} ${escapeHtml(author)} &middot; ${age} ${replyTag}</div>
+                        <div class="msg-meta">${idBadge} ${escapeHtml(author)} \u00b7 ${age} ${replyTag}</div>
                         <div class="msg-text">${escapeHtml(m.text)}</div>
                     </div>`;
             }).join('');
@@ -1312,18 +1480,18 @@
             fetchMessages();
         }
 
-        // ---- Learning ----
+        // ── Learning ──
         async function fetchLearning() {
             try {
                 const response = await fetch(`${API_BASE}/learning`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('learningContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    renderError('learningContent', data.error, 'fetchLearning');
                     return;
                 }
                 renderLearning(data);
             } catch (e) {
-                document.getElementById('learningContent').innerHTML = `<div class="no-data">Could not load learning stats</div>`;
+                renderError('learningContent', 'Could not load learning stats', 'fetchLearning');
             }
         }
 
@@ -1346,7 +1514,7 @@
                         <div class="learning-stat-label">Samples (24h)</div>
                     </div>
                 </div>
-                <div class="layer-header">24h Averages <span>— stability trend: <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span></span></div>
+                <div class="layer-header">24h Averages <span>\u2014 stability trend: <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span></span></div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; font-size: 0.85rem;">
                     <div style="color: #ff6b6b;">W: ${(data.avg_warmth * 100).toFixed(0)}%</div>
                     <div style="color: #4ecdc4;">C: ${(data.avg_clarity * 100).toFixed(0)}%</div>
@@ -1356,7 +1524,7 @@
             `;
         }
 
-        // ---- Voice ----
+        // ── Voice ──
         async function fetchVoice() {
             try {
                 const response = await fetch(`${API_BASE}/voice`);
@@ -1368,15 +1536,15 @@
                 if (data.active || data.speaking || data.listening) {
                     voiceDiv.style.display = 'flex';
                     if (data.speaking) {
-                        voiceIcon.textContent = '🗣️';
+                        voiceIcon.textContent = '\u{1F5E3}\uFE0F';
                         voiceIcon.classList.add('voice-speaking');
                         voiceState.textContent = data.text ? `"${data.text.slice(0, 50)}..."` : 'Speaking...';
                     } else if (data.listening) {
-                        voiceIcon.textContent = '👂';
+                        voiceIcon.textContent = '\u{1F442}';
                         voiceIcon.classList.remove('voice-speaking');
                         voiceState.textContent = 'Listening...';
                     } else {
-                        voiceIcon.textContent = '🔊';
+                        voiceIcon.textContent = '\u{1F50A}';
                         voiceIcon.classList.remove('voice-speaking');
                         voiceState.textContent = 'Voice active';
                     }
@@ -1388,30 +1556,29 @@
             }
         }
 
-        // ---- Gallery (limited to 12 for dashboard preview) ----
+        // ── Gallery ──
         async function fetchGallery() {
             try {
                 const response = await fetch(`${API_BASE}/gallery?limit=12`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('galleryContent').innerHTML = `<div class="no-data">${data.error}</div>`;
+                    renderError('galleryContent', data.error, 'fetchGallery');
                     return;
                 }
                 document.getElementById('galleryCount').textContent =
                     data.total > 0 ? `(${data.total} drawings)` : '';
                 renderGalleryPreview(data.drawings);
             } catch (e) {
-                document.getElementById('galleryContent').innerHTML = `<div class="no-data">Could not load gallery</div>`;
+                renderError('galleryContent', 'Could not load gallery', 'fetchGallery');
             }
         }
 
         function renderGalleryPreview(drawings) {
             if (!drawings || drawings.length === 0) {
-                document.getElementById('galleryContent').innerHTML = `<div class="no-data">No drawings yet</div>`;
+                document.getElementById('galleryContent').innerHTML = `<div class="error-state">No drawings yet</div>`;
                 return;
             }
 
-            // Initialize lightbox with simple items
             Lightbox.init(drawings, {
                 getUrl: d => `${API_BASE}/gallery/${d.filename}`,
                 getMeta: (d, i) => {
@@ -1424,15 +1591,16 @@
                 const date = new Date(d.timestamp * 1000);
                 const dateStr = date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
                 return `
-                    <div class="gallery-item" onclick="Lightbox.open(${i})">
-                        <img src="${API_BASE}/gallery/${d.filename}" alt="${d.filename}" loading="lazy">
+                    <div class="gallery-item" tabindex="0" role="button" aria-label="View drawing from ${dateStr}"
+                         onclick="Lightbox.open(${i})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();Lightbox.open(${i})}">
+                        <img src="${API_BASE}/gallery/${d.filename}" alt="Lumen drawing ${i + 1}" loading="lazy">
                         <div class="gallery-item-meta">${dateStr}</div>
                     </div>`;
             }).join('');
             document.getElementById('galleryContent').innerHTML = html;
         }
 
-        // ---- Self-Knowledge ----
+        // ── Self-Knowledge ──
         let allInsights = [];
         let insightFilter = 'all';
 
@@ -1441,7 +1609,7 @@
                 const response = await fetch(`${API_BASE}/self-knowledge?limit=50`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('insightContent').innerHTML = `<div class="no-data">${escapeHtml(data.error)}</div>`;
+                    renderError('insightContent', data.error, 'fetchSelfKnowledge');
                     return;
                 }
                 allInsights = data.insights || [];
@@ -1449,7 +1617,7 @@
                 renderInsightTabs();
                 renderInsights();
             } catch (e) {
-                document.getElementById('insightContent').innerHTML = `<div class="no-data">Could not load self-knowledge</div>`;
+                renderError('insightContent', 'Could not load self-knowledge', 'fetchSelfKnowledge');
             }
         }
 
@@ -1471,7 +1639,7 @@
         function renderInsights() {
             const filtered = insightFilter === 'all' ? allInsights : allInsights.filter(i => i.category === insightFilter);
             if (filtered.length === 0) {
-                document.getElementById('insightContent').innerHTML = `<div class="no-data">No insights in this category</div>`;
+                document.getElementById('insightContent').innerHTML = `<div class="error-state">No insights in this category</div>`;
                 return;
             }
             const html = filtered.map(i => {
@@ -1495,18 +1663,18 @@
             document.getElementById('insightContent').innerHTML = html;
         }
 
-        // ---- Growth ----
+        // ── Growth ──
         async function fetchGrowth() {
             try {
                 const response = await fetch(`${API_BASE}/growth`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('growthContent').innerHTML = `<div class="no-data">${escapeHtml(data.error)}</div>`;
+                    renderError('growthContent', data.error, 'fetchGrowth');
                     return;
                 }
                 renderGrowth(data);
             } catch (e) {
-                document.getElementById('growthContent').innerHTML = `<div class="no-data">Could not load growth data</div>`;
+                renderError('growthContent', 'Could not load growth data', 'fetchGrowth');
             }
         }
 
@@ -1519,7 +1687,7 @@
 
             const goals = data.goals;
             if (goals && goals.current && goals.current.length > 0) {
-                html += `<div class="layer-header">Goals <span>— ${goals.active} active, ${goals.achieved} achieved</span></div>`;
+                html += `<div class="layer-header">Goals <span>\u2014 ${goals.active} active, ${goals.achieved} achieved</span></div>`;
                 html += goals.current.map(g => {
                     const pct = Math.round((g.progress || 0) * 100);
                     return `
@@ -1533,7 +1701,7 @@
 
             const memories = data.memories;
             if (memories && memories.recent && memories.recent.length > 0) {
-                html += `<div class="layer-header">Memories <span>— ${memories.count} total</span></div>`;
+                html += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
                 html += memories.recent.map(m => `
                     <div class="memory-item">
                         <div class="memory-date">${m.when || ''}</div>
@@ -1543,13 +1711,13 @@
 
             const prefs = data.preferences;
             if (prefs && prefs.learned && prefs.learned.length > 0) {
-                html += `<div class="layer-header">Preferences <span>— ${prefs.count} learned</span></div>`;
+                html += `<div class="layer-header">Preferences <span>\u2014 ${prefs.count} learned</span></div>`;
                 html += `<div style="padding: 4px 0; display: flex; flex-wrap: wrap; gap: 6px;">`;
                 html += prefs.learned.map(p => {
                     const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
                     return `<div class="pref-tag" style="display: flex; flex-direction: column; gap: 2px;">
                         <span style="font-weight: 500;">${escapeHtml(p.name)}</span>
-                        <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: normal;">${escapeHtml(p.description || '')}${obs ? ' · ' + obs : ''}</span>
+                        <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: normal;">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
                     </div>`;
                 }).join('');
                 html += `</div>`;
@@ -1557,45 +1725,45 @@
 
             const curiosities = data.curiosities;
             if (curiosities && curiosities.questions && curiosities.questions.length > 0) {
-                html += `<div class="layer-header">Curiosities <span>— ${curiosities.count} questions</span></div>`;
+                html += `<div class="layer-header">Curiosities <span>\u2014 ${curiosities.count} questions</span></div>`;
                 html += `<div style="font-size: 0.8rem; color: var(--text-secondary); padding: 4px 0;">`;
-                html += curiosities.questions.map(q => `<div style="padding: 2px 0;">• ${escapeHtml(typeof q === 'string' ? q : q.question || q.text || '')}</div>`).join('');
+                html += curiosities.questions.map(q => `<div style="padding: 2px 0;">\u2022 ${escapeHtml(typeof q === 'string' ? q : q.question || q.text || '')}</div>`).join('');
                 html += `</div>`;
             }
 
             if (!html) {
-                html = '<div class="no-data">No growth data yet</div>';
+                html = '<div class="error-state">No growth data yet</div>';
             }
 
             document.getElementById('growthContent').innerHTML = html;
         }
 
-        // ---- System Health ----
+        // ── System Health ──
         async function fetchHealth() {
             try {
                 const response = await fetch(`${API_BASE}/health/detailed`);
                 const data = await response.json();
                 if (data.error) {
-                    document.getElementById('healthContent').innerHTML = `<div class="no-data">${escapeHtml(data.error)}</div>`;
+                    renderError('healthContent', data.error, 'fetchHealth');
                     return;
                 }
                 renderHealth(data);
             } catch (e) {
-                document.getElementById('healthContent').innerHTML = `<div class="no-data">Could not load health data</div>`;
+                renderError('healthContent', 'Could not load health data', 'fetchHealth');
             }
         }
 
         function renderHealth(data) {
             const subsystems = data.subsystems || data;
             if (typeof subsystems !== 'object') {
-                document.getElementById('healthContent').innerHTML = `<div class="no-data">Unexpected health format</div>`;
+                renderError('healthContent', 'Unexpected health format', 'fetchHealth');
                 return;
             }
 
             const entries = Object.entries(subsystems).filter(([k]) => k !== 'overall' && k !== 'timestamp');
 
             if (entries.length === 0) {
-                document.getElementById('healthContent').innerHTML = `<div class="no-data">No subsystem data</div>`;
+                document.getElementById('healthContent').innerHTML = `<div class="error-state">No subsystem data</div>`;
                 return;
             }
 
@@ -1605,19 +1773,29 @@
                 const isWarn = status === 'degraded' || status === 'warning' || status === 'slow';
                 const isErr = status === 'error' || status === 'failed' || status === 'down' || status === false;
                 const dotClass = isOk ? 'health-ok' : isWarn ? 'health-warn' : isErr ? 'health-err' : 'health-off';
-                const detail = typeof info === 'object' && info.detail ? info.detail : '';
+                const statusLabel = isOk ? 'ok' : isWarn ? 'warn' : isErr ? 'err' : String(status);
                 return `
-                    <div class="health-item">
-                        <div class="health-dot ${dotClass}"></div>
+                    <div class="health-item" title="${escapeHtml(String(status))}">
+                        <div class="health-dot ${dotClass}" aria-hidden="true"></div>
                         <span class="health-name">${escapeHtml(name)}</span>
-                        ${detail ? `<span class="health-detail">${escapeHtml(detail)}</span>` : ''}
+                        <span class="health-status">${escapeHtml(statusLabel)}</span>
                     </div>`;
             }).join('');
 
             document.getElementById('healthContent').innerHTML = html;
         }
 
-        // ---- Initialize ----
+        // ── Keyboard ──
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && Lightbox.currentIndex === -1) {
+                const msgInput = document.getElementById('messageInput');
+                if (msgInput && document.activeElement !== msgInput) {
+                    msgInput.focus();
+                }
+            }
+        });
+
+        // ── Initialize ──
         initNav('dashboard');
         initCollapsibleCards();
 
@@ -1631,7 +1809,7 @@
         setTimeout(fetchGrowth, 600);
         setTimeout(fetchHealth, 700);
 
-        // ---- Auto-refresh ----
+        // ── Auto-refresh ──
         setInterval(fetchState, 10000);
         setInterval(fetchQA, 20000);
         setInterval(fetchMessages, 30000);
