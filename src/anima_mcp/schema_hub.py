@@ -361,7 +361,7 @@ class SchemaHub:
         schema.nodes.append(SchemaNode(
             node_id="meta_gap_duration",
             node_type="meta",
-            label="Gap",
+            label=f"Gap {duration_hours:.1f}h",
             value=normalized,
             raw_value={
                 "duration_seconds": delta.duration_seconds,
@@ -375,7 +375,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id="meta_state_delta",
                 node_type="meta",
-                label="Delta",
+                label=f"Δ State {total_delta:.2f}",
                 value=min(1.0, total_delta),
                 raw_value=delta.anima_delta,
             ))
@@ -478,7 +478,7 @@ class SchemaHub:
         schema.nodes.append(SchemaNode(
             node_id="traj_identity_maturity",
             node_type="trajectory",
-            label="Mature",
+            label=f"Maturity ({obs_count} obs)",
             value=maturity,
             raw_value={"observation_count": obs_count},
         ))
@@ -490,7 +490,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id="traj_attractor_position",
                 node_type="trajectory",
-                label="Rest",
+                label=f"Attractor {center_magnitude:.2f}",
                 value=center_magnitude,
                 raw_value={"center": center},
             ))
@@ -510,7 +510,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id="traj_stability_score",
                 node_type="trajectory",
-                label="Stable",
+                label=f"Traj Stability {stability:.2f}",
                 value=stability,
                 raw_value={"variance": variance},
             ))
@@ -554,7 +554,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id=f"drift_{dim_name}",
                 node_type="drift",
-                label=f"Drift:{dim_name[:4]}",
+                label=f"Drift {dim_name}",
                 value=normalized,
                 raw_value={"offset": offset, "dimension": dim_name},
             ))
@@ -595,13 +595,13 @@ class SchemaHub:
             # Compute normalized value based on category
             if category == "structural":
                 value = 0.5  # always present, constant
-                label = f"T:{dim_a[:3]}/{dim_b[:3]}"
+                label = f"{dim_a} ↔ {dim_b}"
             elif category == "environmental":
                 value = max(0.0, min(1.0, conflict.duration / 10.0))
-                label = f"T:env:{dim_a[:3]}/{dim_b[:3]}"
+                label = f"Env: {dim_a} ↔ {dim_b}"
             elif category == "volitional":
                 value = max(0.0, min(1.0, abs(conflict.grad_a - conflict.grad_b)))
-                label = f"T:vol:{dim_a[:3]}/{dim_b[:3]}"
+                label = f"Vol: {dim_a} ↔ {dim_b}"
             else:
                 continue
 

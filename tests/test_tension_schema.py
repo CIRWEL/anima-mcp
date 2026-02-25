@@ -158,21 +158,21 @@ class TestInjectTensionNodes:
         schema = _make_base_schema()
         result = hub._inject_tension_nodes(schema, [_structural_conflict()])
         tension_nodes = [n for n in result.nodes if n.node_type == "tension"]
-        assert tension_nodes[0].label == "T:war/pre"
+        assert tension_nodes[0].label == "warmth ↔ presence"
 
     def test_label_format_environmental(self):
         hub = SchemaHub()
         schema = _make_base_schema()
         result = hub._inject_tension_nodes(schema, [_environmental_conflict()])
         tension_nodes = [n for n in result.nodes if n.node_type == "tension"]
-        assert "env" in tension_nodes[0].label
+        assert "Env:" in tension_nodes[0].label
 
     def test_label_format_volitional(self):
         hub = SchemaHub()
         schema = _make_base_schema()
         result = hub._inject_tension_nodes(schema, [_volitional_conflict()])
         tension_nodes = [n for n in result.nodes if n.node_type == "tension"]
-        assert "vol" in tension_nodes[0].label
+        assert "Vol:" in tension_nodes[0].label
 
 
 class TestComposeSchemaWithTensions:

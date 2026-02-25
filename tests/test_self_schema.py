@@ -17,6 +17,7 @@ from anima_mcp.self_schema import (
     get_current_schema,
     _get_sensor_anima_weights,
     _belief_label,
+    _parse_evidence_count,
 )
 
 
@@ -44,7 +45,7 @@ class TestSchemaNode:
         node = SchemaNode(
             node_id="pref_warmth",
             node_type="preference",
-            label="PW",
+            label="Pref warmth",
             value=0.6,
             raw_value={"valence": 0.2, "optimal_range": (0.4, 0.7), "confidence": 0.8},
         )
@@ -175,18 +176,17 @@ class TestBeliefLabel:
     """Test _belief_label helper."""
 
     def test_known_belief_labels(self):
-        """Test known belief IDs return correct labels."""
-        assert _belief_label("light_sensitive") == "BLit"
-        assert _belief_label("temp_sensitive") == "BTmp"
-        assert _belief_label("stability_recovery") == "BRec"
-        assert _belief_label("my_leds_affect_lux") == "BLED"
-        assert _belief_label("question_asking_tendency") == "BQst"
+        """Test known belief IDs return readable labels."""
+        assert _belief_label("light_sensitive") == "Light sensitive"
+        assert _belief_label("temp_sensitive") == "Temp sensitive"
+        assert _belief_label("stability_recovery") == "Stability recovery"
+        assert _belief_label("my_leds_affect_lux") == "LEDs affect lux"
+        assert _belief_label("question_asking_tendency") == "Asks questions"
 
     def test_unknown_belief_fallback(self):
         """Test unknown belief IDs use fallback format."""
         label = _belief_label("some_unknown_belief")
-        assert label.startswith("B")
-        assert len(label) == 4  # "B" + first 3 chars
+        assert label == "some unknown belief"
 
 
 class TestExtractSelfSchema:
@@ -287,6 +287,10 @@ class TestExtractSelfSchema:
         pref_nodes = [n for n in schema.nodes if n.node_type == "preference"]
         assert len(pref_nodes) == 4
 
+        # Preference nodes should have edges to anima even when anima is not passed (uses defaults)
+        pref_edges = [e for e in schema.edges if e.source_id.startswith("pref_")]
+        assert len(pref_edges) == 4
+
     def test_extraction_excludes_untested_beliefs(self):
         """Test beliefs without evidence are excluded."""
         mock_self_model = MagicMock()
@@ -350,8 +354,8 @@ class TestExtractSelfSchema:
 
         # Check labels
         labels = [n.label for n in belief_nodes]
-        assert "BLit" in labels
-        assert "BLED" in labels
+        assert "Light sensitive" in labels
+        assert "LEDs affect lux" in labels
 
     def test_belief_edges_connect_to_anima(self):
         """Test belief nodes have edges to their mapped anima dimension."""
@@ -459,6 +463,27 @@ class TestGetCurrentSchema:
         schema = get_current_schema()
         assert isinstance(schema, SelfSchema)
         assert len(schema.nodes) == 12  # Base graph
+
+
+class TestParseEvidenceCount:
+    """Test _parse_evidence_count helper."""
+
+    def test_standard_format(self):
+        """Test standard N+ / M- format."""
+        assert _parse_evidence_count("10+ / 2-") == 12
+        assert _parse_evidence_count("0+ / 0-") == 0
+        assert _parse_evidence_count("5+ / 1-") == 6
+
+    def test_malformed_returns_zero(self):
+        """Test malformed input returns 0."""
+        assert _parse_evidence_count("") == 0
+        assert _parse_evidence_count("N/A") == 0
+        assert _parse_evidence_count(None) == 0
+
+    def test_partial_parse(self):
+        """Test partial parse extracts valid parts."""
+        assert _parse_evidence_count("10+ / x-") == 10
+        assert _parse_evidence_count("5+") == 5
 
 
 class TestSensorAnimaWeights:

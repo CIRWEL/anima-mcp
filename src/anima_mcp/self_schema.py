@@ -4,7 +4,9 @@ Self-Schema Graph (G_t) - Lumen's internal representation of self.
 Nodes:
 - 1 identity (center)
 - 4 anima dimensions (warmth, clarity, stability, presence)
-- 7 sensors (light, temp, humidity, pressure, memory, cpu, disk)
+- 4 physical sensors (light, temp, humidity, pressure)
+- 3 resources (memory, cpu, disk)
+- Optional: preference, belief, tension nodes
 
 Edges derived from NervousSystemCalibration weights.
 Identity connects to all anima dimensions (structural "I am" edges).
@@ -14,7 +16,7 @@ Any rendering R(G_t) should faithfully represent this structure.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Tuple
 from datetime import datetime
 
 
@@ -44,7 +46,7 @@ BELIEF_SENSITIVITY_MODULATIONS: Dict[str, str] = {
 class SchemaNode:
     """A node in Lumen's self-schema graph."""
     node_id: str
-    node_type: str  # "identity", "anima", "sensor"
+    node_type: str  # "identity", "anima", "sensor", "resource", "preference", "belief", "tension"
     label: str
     value: float  # Normalized 0-1 for display
     raw_value: Any = None  # Original value before normalization
@@ -176,8 +178,8 @@ def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
         weights[("sensor_temp", "anima_warmth")] = temp_to_warmth
 
     # --- Clarity ---
-    # Clarity ← light
-    light_to_clarity = cal.clarity_weights.get("light", 0)
+    # Clarity ← world_light (env light, self-glow subtracted). Fallback to "light" for legacy configs.
+    light_to_clarity = cal.clarity_weights.get("world_light", 0) or cal.clarity_weights.get("light", 0)
     if light_to_clarity > 0:
         weights[("sensor_light", "anima_clarity")] = light_to_clarity
 
@@ -213,22 +215,41 @@ def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
     return weights
 
 
+def _parse_evidence_count(evidence: str) -> int:
+    """
+    Parse evidence string "N+ / M-" to total count. Robust to malformed input.
+
+    Returns 0 for unparseable or empty evidence.
+    """
+    if not evidence or not isinstance(evidence, str):
+        return 0
+    total = 0
+    for part in evidence.split("/"):
+        cleaned = part.strip().rstrip("+-")
+        if cleaned.isdigit():
+            try:
+                total += int(cleaned)
+            except ValueError:
+                pass
+    return total
+
+
 def _belief_label(belief_id: str) -> str:
-    """Short label for a belief node in the schema graph."""
+    """Human-readable label for a belief node in the schema graph."""
     labels = {
-        "light_sensitive": "BLit",
-        "temp_sensitive": "BTmp",
-        "stability_recovery": "BRec",
-        "warmth_recovery": "BWrc",
-        "temp_clarity_correlation": "BTC",
-        "light_warmth_correlation": "BLW",
-        "interaction_clarity_boost": "BInt",
-        "evening_warmth_increase": "BEve",
-        "morning_clarity": "BMrn",
-        "question_asking_tendency": "BQst",
-        "my_leds_affect_lux": "BLED",  # proprioceptive: own LEDs affect light sensor
+        "light_sensitive": "Light sensitive",
+        "temp_sensitive": "Temp sensitive",
+        "stability_recovery": "Stability recovery",
+        "warmth_recovery": "Warmth recovery",
+        "temp_clarity_correlation": "Temp → clarity",
+        "light_warmth_correlation": "Light → warmth",
+        "interaction_clarity_boost": "Interaction → clarity",
+        "evening_warmth_increase": "Evening → warmth",
+        "morning_clarity": "Morning clarity",
+        "question_asking_tendency": "Asks questions",
+        "my_leds_affect_lux": "LEDs affect lux",
     }
-    return labels.get(belief_id, f"B{belief_id[:3]}")
+    return labels.get(belief_id, belief_id.replace("_", " "))
 
 
 def extract_self_schema(
@@ -397,7 +418,7 @@ def extract_self_schema(
                 nodes.append(SchemaNode(
                     node_id=f"pref_{dim}",
                     node_type="preference",
-                    label=f"P{dim[0].upper()}",  # PW, PC, PS, PP
+                    label=f"Pref {dim}",
                     value=max(0.0, min(1.0, (pref_data.get("valence", 0) + 1.0) / 2.0)),  # Normalize -1..1 to 0..1
                     raw_value={
                         "valence": pref_data.get("valence", 0),
@@ -422,7 +443,7 @@ def extract_self_schema(
             confidence = bdata.get("confidence", 0)
             evidence = bdata.get("evidence", "0+ / 0-")
             # Only include beliefs that have been tested (have evidence) and are confident
-            total_evidence = sum(int(x.strip().rstrip("+-")) for x in evidence.split("/") if x.strip().rstrip("+-").isdigit())
+            total_evidence = _parse_evidence_count(evidence)
             if total_evidence < 1 or confidence < 0.3:
                 continue  # Untested or not confident enough
 
@@ -444,11 +465,12 @@ def extract_self_schema(
             ))
 
     # === EDGES (identity → anima: "I am constituted by these") ===
+    # Weight encodes current dimension intensity for visualization; structural connection is always present.
     for dim in anima_dims:
         edges.append(SchemaEdge(
             source_id="identity",
             target_id=f"anima_{dim}",
-            weight=anima_values.get(dim, 0.5),  # Weight = current dimension value
+            weight=anima_values.get(dim, 0.5),
         ))
 
     # === EDGES (sensor → anima influences, derived from NervousSystemCalibration) ===
@@ -481,13 +503,14 @@ def extract_self_schema(
             ))
 
     # === EDGES (preference → anima satisfaction) ===
-    if include_preferences and pref_summary and anima:
+    # Use anima_values (from anima if provided, else defaults) so pref nodes are never orphaned.
+    if include_preferences and pref_summary:
         for dim in ["warmth", "clarity", "stability", "presence"]:
             if dim in pref_summary:
                 pref_data = pref_summary[dim]
                 if pref_data.get("confidence", 0) > 0.2:
                     try:
-                        anima_value = getattr(anima, dim, 0.5)
+                        anima_value = anima_values.get(dim, 0.5)
                         # Calculate satisfaction: how well current anima matches preference
                         opt_range = pref_data.get("optimal_range", (0.3, 0.7))
                         if opt_range[0] <= anima_value <= opt_range[1]:
