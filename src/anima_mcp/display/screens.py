@@ -3421,7 +3421,16 @@ class ScreenRenderer:
         readings: Optional[SensorReadings] = None,
         identity: Optional[CreatureIdentity] = None,
     ):
-        """Render Lumen's self-schema graph G_t via SchemaHub (full enrichment)."""
+        """Render Lumen's self-schema graph G_t.
+
+        Uses SchemaHub's last composed schema if available (includes trajectory,
+        drift, tension edges). Falls back to direct extraction if hub has no
+        history yet (e.g. right after restart).
+
+        Does NOT call compose_schema() directly — that has side effects
+        (appends to history, triggers trajectory recomputation) and is designed
+        to run every ~20min from the server main loop, not every 1s from render.
+        """
         from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
         from ..growth import get_growth_system
@@ -3439,22 +3448,17 @@ class ScreenRenderer:
         except Exception:
             pass
 
-        # Use SchemaHub for full enrichment (trajectory, drift, tension edges)
+        # Read the last schema from SchemaHub (no side effects — just reads)
         schema = None
         try:
             from ..server import _get_schema_hub
             hub = _get_schema_hub()
-            schema = hub.compose_schema(
-                identity=identity,
-                anima=anima,
-                readings=readings,
-                growth_system=growth_system,
-                self_model=self_model,
-            )
+            if hub.schema_history:
+                schema = hub.schema_history[-1]
         except Exception:
             pass
 
-        # Fallback to base schema if hub unavailable
+        # Fallback: direct extraction (no trajectory/drift/tension edges)
         if schema is None:
             schema = get_current_schema(
                 identity=identity,
