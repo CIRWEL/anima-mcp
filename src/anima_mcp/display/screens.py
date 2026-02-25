@@ -1094,11 +1094,13 @@ class ScreenRenderer:
 
                 # Use cached fonts (loading from disk is slow)
                 fonts = self._get_fonts()
-                font = fonts['default']
-                font_small = fonts['small']
+                font = fonts['small']
+                font_small = fonts['tiny']
 
-                y = 10
-                line_height = 22
+                # Title
+                draw.text((10, 6), "sensors", fill=CYAN, font=fonts['medium'])
+                y = 24
+                line_height = 18
 
                 # Temperature
                 if readings.ambient_temp_c:
@@ -1801,7 +1803,7 @@ class ScreenRenderer:
             # One row per subsystem
             dot_radius = 4
             subsystems = sorted(status_data.items())
-            row_height = 22 if len(subsystems) <= 9 else 19
+            row_height = min(22, max(16, (228 - y) // max(1, len(subsystems))))
 
             for name, info in subsystems:
                 status = info.get("status", "unknown")
@@ -1949,15 +1951,18 @@ class ScreenRenderer:
                 "beta": "focus",
                 "gamma": "cognition",
             }
+            freq_map = {
+                "delta": "0.5-4 Hz",
+                "theta": "4-8 Hz",
+                "alpha": "8-13 Hz",
+                "beta": "13-30 Hz",
+                "gamma": "30+ Hz",
+            }
             dominant_desc = desc_map.get(dominant_name, "")
             draw.text((10, y_desc), f"{dominant_name}: {dominant_desc}", fill=dominant_color, font=font_small)
-
-            # Mood context line
-            if anima:
-                feeling = anima.feeling()
-                mood = feeling.get("mood", "")
-                if mood:
-                    draw.text((10, y_desc + 16), f"mood: {mood}", fill=DIM, font=font_tiny)
+            freq_range = freq_map.get(dominant_name, "")
+            if freq_range:
+                draw.text((10, y_desc + 14), freq_range, fill=DIM, font=font_tiny)
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
@@ -2509,11 +2514,12 @@ class ScreenRenderer:
 
                     inner_y = y_offset + msg_padding
 
-                    # Author line (if present) with age
+                    # Author line (if present) — timestamp only on selected message
                     if author_text:
                         draw.text((12, inner_y), f"{prefix} {author_text}", fill=prefix_color, font=font_small)
-                        age = msg.age_str()
-                        draw.text((200, inner_y), age, fill=MUTED, font=font_small)
+                        if is_selected:
+                            age = msg.age_str()
+                            draw.text((200, inner_y), age, fill=MUTED, font=font_small)
                         inner_y += 12
 
                     # Message text
@@ -2545,12 +2551,13 @@ class ScreenRenderer:
                             draw.text((140, max_y - 10), scroll_info, fill=MUTED, font=font_small)
                     else:
                         # Single line, truncated directly (no _wrap_text call - faster)
-                        first_line = display_text[:28] + "..." if len(display_text) > 28 else display_text
+                        first_line = display_text[:34] + "..." if len(display_text) > 34 else display_text
                         # For Lumen's observations, show prefix inline
                         if not author_text:
                             draw.text((12, inner_y), f"{prefix} {first_line}", fill=text_color, font=font_small)
-                            age = msg.age_str()
-                            draw.text((200, inner_y), age, fill=MUTED, font=font_small)
+                            if is_selected:
+                                age = msg.age_str()
+                                draw.text((200, inner_y), age, fill=MUTED, font=font_small)
                         else:
                             draw.text((12, inner_y), first_line, fill=text_color, font=font_small)
                         inner_y += line_height
@@ -2580,9 +2587,9 @@ class ScreenRenderer:
                     thumb_pos = bar_top + int((scroll_idx / max(1, len(all_messages) - 1)) * (bar_height - thumb_size))
 
                     # Track
-                    draw.rectangle([236, bar_top, 238, bar_top + bar_height], fill=DARK_BG)
+                    draw.rectangle([234, bar_top, 238, bar_top + bar_height], fill=DARK_BG)
                     # Thumb
-                    draw.rectangle([236, thumb_pos, 238, thumb_pos + thumb_size], fill=MUTED)
+                    draw.rectangle([234, thumb_pos, 238, thumb_pos + thumb_size], fill=MUTED)
 
                 # Bottom status (y=218 to avoid dot overlap)
                 draw.text((10, 218), f"{scroll_idx + 1}/{len(all_messages)}", fill=MUTED, font=font_small)
@@ -2670,31 +2677,28 @@ class ScreenRenderer:
 
                     # Highlight bar behind cursor
                     if is_cursor:
-                        draw.rectangle([4, y - 2, 236, y + 30], fill=(25, 35, 50))
+                        draw.rectangle([4, y - 2, 236, y + 16], fill=(25, 35, 50))
 
                     arrow = "\u25b6 " if is_cursor else "  "
+                    name_color = YELLOW if is_current else SECONDARY
 
+                    # Name + short description on one line
+                    short_desc = desc[:18] + ".." if len(desc) > 18 else desc
+                    label = f"{arrow}{name}"
+                    draw.text((10, y), label, fill=name_color, font=fonts['small'])
+
+                    # Description after name
+                    try:
+                        bbox = fonts['small'].getbbox(label)
+                        desc_x = 10 + bbox[2] + 4
+                    except Exception:
+                        desc_x = 10 + (len(label)) * 7
+                    draw.text((desc_x, y + 1), short_desc, fill=DIM, font=fonts['micro'])
+
+                    # "now" tag at right edge for current era
                     if is_current:
-                        name_color = YELLOW
-                    else:
-                        name_color = SECONDARY
+                        draw.text((210, y + 1), "now", fill=(120, 120, 60), font=fonts['micro'])
 
-                    draw.text((10, y), f"{arrow}{name}", fill=name_color, font=fonts['medium'])
-
-                    # "now" tag for current era
-                    if is_current:
-                        try:
-                            bbox = fonts['medium'].getbbox(f"{arrow}{name}")
-                            tag_x = 10 + bbox[2] + 6
-                        except Exception:
-                            tag_x = 10 + (len(name) + 2) * 8
-                        draw.text((tag_x, y + 2), "\u2190 now", fill=(120, 120, 60), font=fonts['tiny'])
-
-                    y += 16
-
-                    # Description
-                    short_desc = desc[:38] + "..." if len(desc) > 38 else desc
-                    draw.text((24, y), short_desc, fill=DIM, font=fonts['tiny'])
                     y += 18
 
                 # --- Auto-rotate toggle (last cursor item) ---
@@ -2881,10 +2885,8 @@ class ScreenRenderer:
                         # Background
                         draw.rectangle([5, y_offset - 2, 235, y_offset + box_height], fill=(35, 55, 85))
 
-                        # Author
+                        # Author + timestamp (expanded view has room)
                         draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
-
-                        # Timestamp next to author
                         if hasattr(msg, 'timestamp'):
                             from datetime import datetime
                             if isinstance(msg.timestamp, (int, float)):
@@ -2920,6 +2922,13 @@ class ScreenRenderer:
                         draw.rectangle([5, y_offset - 2, 235, y_offset + 32], fill=(30, 50, 80), outline=(80, 140, 200), width=1)
 
                         draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
+                        if hasattr(msg, 'timestamp'):
+                            from datetime import datetime
+                            if isinstance(msg.timestamp, (int, float)):
+                                ts = datetime.fromtimestamp(msg.timestamp).strftime("%H:%M")
+                            else:
+                                ts = str(msg.timestamp)[11:16]
+                            draw.text((180, y_offset), ts, fill=MUTED, font=font_small)
                         y_offset += 14
 
                         # Truncated text preview
@@ -3570,6 +3579,29 @@ class ScreenRenderer:
 
             count_str = f"{len(schema.nodes)} nodes, {len(schema.edges)} edges"
             draw.text((5, 225), count_str, fill=(120, 120, 120), font=font_small)
+
+            # Compact legend — colored dots with labels
+            font_micro = fonts['micro']
+            legend = [
+                ((255, 200, 100), "id"),
+                ((100, 150, 255), "anima"),
+                ((100, 200, 100), "sensor"),
+            ]
+            legend2 = [
+                ((255, 150, 0), "pref"),
+                ((180, 180, 255), "belief"),
+                ((180, 220, 140), "traj"),
+            ]
+            lx = 5
+            for color, label in legend:
+                draw.rectangle([lx, 209, lx + 4, 213], fill=color)
+                draw.text((lx + 6, 208), label, fill=(120, 120, 120), font=font_micro)
+                lx += 6 + len(label) * 6 + 4
+            lx = 5
+            for color, label in legend2:
+                draw.rectangle([lx, 218, lx + 4, 222], fill=color)
+                draw.text((lx + 6, 217), label, fill=(120, 120, 120), font=font_micro)
+                lx += 6 + len(label) * 6 + 4
 
             self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
