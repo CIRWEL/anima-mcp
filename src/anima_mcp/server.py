@@ -3437,8 +3437,11 @@ def run_http_server(host: str, port: int):
                 if hub.schema_history:
                     schema = hub.schema_history[-1].to_dict()
                 else:
-                    # Hub empty (just restarted) — compose via hub for full enrichment
+                    # Hub empty (just restarted) — direct extraction like Pi LCD.
+                    # Do NOT call hub.compose_schema() here: it has side effects
+                    # (appends to history, triggers trajectory recomputation).
                     try:
+                        from .self_schema import get_current_schema
                         from .self_model import get_self_model
                         readings, anima = _get_readings_and_anima()
                         store = _get_store()
@@ -3453,7 +3456,7 @@ def run_http_server(host: str, port: int):
                             self_model = get_self_model()
                         except Exception:
                             pass
-                        live = hub.compose_schema(
+                        live = get_current_schema(
                             identity=identity, anima=anima, readings=readings,
                             growth_system=growth_system, self_model=self_model,
                         )

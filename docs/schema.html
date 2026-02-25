@@ -13,7 +13,7 @@
     <link rel="stylesheet" href="/static/shared.css">
     <style>
         body {
-            background: #0c0c0f;
+            background: #0a0a0e;
             padding: 0;
             display: flex;
             flex-direction: column;
@@ -23,27 +23,518 @@
         .container {
             max-width: 640px;
             width: 100%;
-            padding: 32px 24px;
+            padding: 32px 24px 48px;
         }
 
-        /* Header */
-        .header { margin-bottom: 24px; text-align: center; }
+        /* ── Header ── */
+        .header {
+            margin-bottom: 28px;
+            text-align: center;
+        }
         .header-label {
-            font-size: 9px; color: rgba(255,255,255,0.35); font-family: var(--mono);
-            letter-spacing: 0.15em; text-transform: uppercase; margin-bottom: 6px;
+            font-size: 9px;
+            color: rgba(255,255,255,0.25);
+            font-family: var(--mono);
+            letter-spacing: 0.2em;
+            text-transform: uppercase;
+            margin-bottom: 8px;
         }
         .header-title {
-            font-size: 18px; font-weight: 300; color: rgba(255,255,255,0.9);
+            font-size: 20px;
+            font-weight: 200;
+            color: rgba(255,255,255,0.88);
+            letter-spacing: 0.04em;
+        }
+        .header-title sub {
+            font-size: 12px;
+            color: rgba(255,255,255,0.3);
+        }
+        .header-meta {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .pulse-dot {
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            animation: pulse 2.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; box-shadow: 0 0 4px currentColor; }
+            50% { opacity: 0.4; box-shadow: none; }
+        }
+        .header-meta-text {
+            font-size: 10px;
+            color: rgba(255,255,255,0.3);
+            font-family: var(--mono);
             letter-spacing: 0.02em;
         }
-        .header-status {
-            display: flex; align-items: center; justify-content: center;
-            gap: 8px; margin-top: 8px;
+
+        /* ── Section ── */
+        .section {
+            background: rgba(255,255,255,0.015);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 14px;
+            padding: 20px;
+            margin-bottom: 14px;
+            position: relative;
+            overflow: hidden;
         }
-        .header-status-text {
-            font-size: 10px; color: rgba(255,255,255,0.35); font-family: var(--mono);
+        .section::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+        }
+        .section-label {
+            font-size: 9px;
+            color: rgba(255,255,255,0.22);
+            font-family: var(--mono);
+            letter-spacing: 0.14em;
+            text-transform: uppercase;
+            margin-bottom: 14px;
+        }
+        .section-label span {
+            color: rgba(255,255,255,0.12);
+            margin-left: 6px;
+            letter-spacing: 0.08em;
         }
 
+        /* ── Graph canvas ── */
+        #graphCanvas {
+            width: 100%;
+            display: block;
+            cursor: crosshair;
+        }
+
+        /* ── Legend ── */
+        .legend {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            margin-top: 14px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(255,255,255,0.03);
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 9px;
+            color: rgba(255,255,255,0.3);
+            font-family: var(--mono);
+        }
+        .legend-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            opacity: 0.8;
+        }
+
+        /* ── Node detail ── */
+        .node-detail {
+            display: none;
+            margin-top: 14px;
+            padding: 14px 18px;
+            background: rgba(255,255,255,0.025);
+            border: 1px solid rgba(255,255,255,0.07);
+            border-radius: 10px;
+            font-family: var(--mono);
+        }
+        .node-detail.visible { display: block; }
+        .nd-header {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            margin-bottom: 10px;
+        }
+        .nd-type {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: rgba(255,255,255,0.04);
+        }
+        .nd-label {
+            font-size: 14px;
+            color: rgba(255,255,255,0.88);
+            font-weight: 400;
+        }
+        .nd-val-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .nd-val-num {
+            font-size: 20px;
+            font-weight: 200;
+            color: rgba(255,255,255,0.7);
+            min-width: 60px;
+        }
+        .nd-val-bar {
+            flex: 1;
+            height: 4px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .nd-val-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.6s ease;
+        }
+        .nd-edges {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.04);
+        }
+        .nd-edge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+            font-size: 10px;
+            color: rgba(255,255,255,0.35);
+        }
+        .nd-edge-arrow { color: rgba(255,255,255,0.2); }
+        .nd-edge-target { color: rgba(255,255,255,0.5); }
+        .nd-raw {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255,255,255,0.04);
+            color: rgba(255,255,255,0.25);
+            font-size: 10px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+
+        /* ── Node list ── */
+        .node-group {
+            margin-bottom: 16px;
+        }
+        .node-group:last-child { margin-bottom: 0; }
+        .ng-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid rgba(255,255,255,0.03);
+        }
+        .ng-dot {
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .ng-name {
+            font-size: 10px;
+            font-family: var(--mono);
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+        }
+        .ng-count {
+            font-size: 9px;
+            color: rgba(255,255,255,0.15);
+            font-family: var(--mono);
+            margin-left: auto;
+        }
+        .node-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 5px 10px;
+            margin: 0 -10px;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: background 0.15s ease;
+        }
+        .node-row:hover {
+            background: rgba(255,255,255,0.03);
+        }
+        .node-row.selected {
+            background: rgba(255,255,255,0.05);
+        }
+        .nr-label {
+            font-size: 11px;
+            color: rgba(255,255,255,0.6);
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .nr-bar {
+            width: 72px;
+            height: 3px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 2px;
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        .nr-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.8s ease;
+        }
+        .nr-val {
+            font-size: 10px;
+            font-family: var(--mono);
+            color: rgba(255,255,255,0.3);
+            width: 36px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .nr-edges-count {
+            font-size: 9px;
+            font-family: var(--mono);
+            color: rgba(255,255,255,0.12);
+            width: 18px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        /* ── Trajectory ── */
+        .traj-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 14px;
+        }
+        .traj-card {
+            background: rgba(255,255,255,0.015);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 10px;
+            padding: 14px 16px;
+            position: relative;
+            overflow: hidden;
+        }
+        .traj-card.full { grid-column: 1 / -1; }
+        .traj-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 20%; right: 20%;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, var(--c-trajectory), transparent);
+            opacity: 0.25;
+        }
+        .tc-title {
+            font-size: 9px;
+            font-family: var(--mono);
+            color: rgba(255,255,255,0.22);
+            letter-spacing: 0.12em;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .tc-symbol {
+            color: var(--c-trajectory);
+            margin-right: 5px;
+            font-size: 10px;
+        }
+
+        /* ── Bars (shared) ── */
+        .bar { margin-bottom: 8px; }
+        .bar:last-child { margin-bottom: 0; }
+        .bar-head {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            margin-bottom: 4px;
+        }
+        .bar-label {
+            font-size: 10px;
+            color: rgba(255,255,255,0.45);
+        }
+        .bar-val {
+            font-size: 10px;
+            color: rgba(255,255,255,0.6);
+            font-family: var(--mono);
+        }
+        .bar-track {
+            height: 3px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        .bar-fill {
+            height: 100%;
+            border-radius: 2px;
+            transition: width 0.8s ease;
+        }
+
+        /* ── Mini bar (inline) ── */
+        .mini-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 2px 0;
+        }
+        .mini-label {
+            font-size: 9px;
+            color: rgba(255,255,255,0.3);
+            font-family: var(--mono);
+            width: 58px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+        .mini-track {
+            flex: 1;
+            height: 2px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 1px;
+            overflow: hidden;
+        }
+        .mini-fill {
+            height: 100%;
+            border-radius: 1px;
+        }
+        .mini-val {
+            font-size: 9px;
+            font-family: var(--mono);
+            color: rgba(255,255,255,0.2);
+            width: 30px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        /* ── Belief items ── */
+        .belief-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 3px 0;
+        }
+        .belief-name {
+            font-size: 10px;
+            color: rgba(255,255,255,0.5);
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .belief-track {
+            width: 48px; height: 3px;
+            background: rgba(255,255,255,0.04);
+            border-radius: 2px;
+            flex-shrink: 0;
+            overflow: hidden;
+        }
+        .belief-fill {
+            height: 100%;
+            border-radius: 2px;
+            background: var(--c-belief);
+        }
+        .belief-ev {
+            font-size: 9px;
+            color: rgba(255,255,255,0.15);
+            font-family: var(--mono);
+            width: 18px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+
+        /* ── History ── */
+        #historyCanvas {
+            width: 100%;
+            height: 48px;
+            display: block;
+        }
+        .history-tooltip {
+            display: none;
+            position: fixed;
+            background: rgba(10,10,14,0.95);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 6px;
+            padding: 5px 10px;
+            font-size: 10px;
+            font-family: var(--mono);
+            color: rgba(255,255,255,0.5);
+            pointer-events: none;
+            z-index: 100;
+            white-space: nowrap;
+            backdrop-filter: blur(8px);
+        }
+
+        /* ── Gap & drift ── */
+        .gap-badge {
+            display: inline-block;
+            font-size: 9px;
+            font-family: var(--mono);
+            color: var(--c-drift);
+            border: 1px solid rgba(232,168,124,0.2);
+            border-radius: 10px;
+            padding: 3px 12px;
+            margin-bottom: 10px;
+            letter-spacing: 0.04em;
+        }
+        .drift-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 4px 0;
+        }
+        .drift-dot {
+            width: 5px; height: 5px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+        .drift-label {
+            font-size: 10px;
+            color: rgba(255,255,255,0.5);
+            flex: 1;
+        }
+        .drift-val {
+            font-size: 10px;
+            font-family: var(--mono);
+            color: rgba(255,255,255,0.3);
+        }
+
+        /* ── Footer ── */
+        .footer {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .footer-text {
+            font-size: 9px;
+            color: rgba(255,255,255,0.12);
+            font-family: var(--mono);
+            letter-spacing: 0.1em;
+        }
+
+        /* ── Skeleton ── */
+        .skeleton-graph {
+            height: 320px;
+            border-radius: 8px;
+            background: linear-gradient(90deg,
+                rgba(255,255,255,0.015) 25%,
+                rgba(255,255,255,0.03) 50%,
+                rgba(255,255,255,0.015) 75%);
+            background-size: 200% 100%;
+            animation: shimmer 2s ease-in-out infinite;
+        }
+        @keyframes shimmer {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+
+        .no-data {
+            padding: 80px 20px;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: rgba(255,255,255,0.25);
+            text-align: center;
+            letter-spacing: 0.04em;
+        }
+
+        /* ── Colors ── */
         :root {
             --c-identity: #e8c87c;
             --c-anima: #f0b87a;
@@ -52,241 +543,15 @@
             --c-preference: #7ecfcf;
             --c-belief: #c49be8;
             --c-trajectory: #7ecf8b;
-            --c-meta: #888;
+            --c-meta: #8a8a9a;
             --c-drift: #e8a87c;
             --c-tension: #e87c7c;
         }
 
-        .pulse-dot {
-            width: 6px; height: 6px; border-radius: 50%;
-            animation: pulse-glow 2s ease-in-out infinite;
-        }
-        @keyframes pulse-glow {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-
-        /* Section cards */
-        .section {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 12px;
-            padding: 16px;
-            margin-bottom: 16px;
-            position: relative;
-        }
-        .section-label {
-            font-size: 9px; color: rgba(255,255,255,0.35); font-family: var(--mono);
-            letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 12px;
-        }
-
-        /* Graph canvas */
-        #graphCanvas {
-            width: 100%;
-            border-radius: 8px;
-            cursor: crosshair;
-            display: block;
-        }
-
-        /* Legend */
-        .legend {
-            display: flex; flex-wrap: wrap; gap: 10px;
-            margin-top: 12px; padding-top: 10px;
-            border-top: 1px solid rgba(255,255,255,0.04);
-        }
-        .legend-item {
-            display: flex; align-items: center; gap: 5px;
-            font-size: 10px; color: rgba(255,255,255,0.4);
-        }
-        .legend-dot {
-            width: 8px; height: 8px; border-radius: 50%;
-        }
-
-        /* Node detail panel */
-        .node-detail {
-            display: none;
-            margin-top: 12px;
-            padding: 12px 16px;
-            background: rgba(255,255,255,0.04);
-            border: 1px solid rgba(255,255,255,0.1);
-            border-radius: 8px;
-            font-family: var(--mono);
-        }
-        .node-detail.visible { display: block; }
-        .node-detail-type {
-            font-size: 9px; text-transform: uppercase; letter-spacing: 0.1em;
-            margin-bottom: 4px;
-        }
-        .node-detail-label {
-            font-size: 14px; color: rgba(255,255,255,0.9); margin-bottom: 6px;
-        }
-        .node-detail-value {
-            color: rgba(255,255,255,0.6); font-size: 12px;
-        }
-        .node-detail-bar {
-            margin-top: 6px; height: 4px; background: rgba(255,255,255,0.06);
-            border-radius: 2px; overflow: hidden;
-        }
-        .node-detail-bar-fill { height: 100%; border-radius: 2px; }
-        .node-detail-raw {
-            margin-top: 8px; color: rgba(255,255,255,0.35); font-size: 10px;
-            white-space: pre-wrap; word-break: break-all;
-            max-height: 140px; overflow-y: auto;
-        }
-        .node-detail-edges {
-            margin-top: 8px; font-size: 10px; color: rgba(255,255,255,0.4);
-        }
-        .node-detail-edge {
-            padding: 2px 0;
-        }
-
-        /* Node list */
-        .node-group { margin-bottom: 12px; }
-        .node-group:last-child { margin-bottom: 0; }
-        .node-group-title {
-            font-size: 10px; font-family: var(--mono); letter-spacing: 0.08em;
-            text-transform: uppercase; margin-bottom: 6px;
-            display: flex; align-items: center; gap: 6px;
-        }
-        .node-group-dot {
-            width: 6px; height: 6px; border-radius: 50%;
-        }
-        .node-row {
-            display: flex; align-items: center; gap: 8px;
-            padding: 4px 0; cursor: pointer;
-            border-radius: 4px; padding: 4px 8px; margin: 0 -8px;
-        }
-        .node-row:hover { background: rgba(255,255,255,0.04); }
-        .node-row.selected { background: rgba(255,255,255,0.06); }
-        .node-name {
-            font-size: 11px; color: rgba(255,255,255,0.7);
-            flex: 1; min-width: 0;
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .node-bar-track {
-            width: 80px; height: 3px;
-            background: rgba(255,255,255,0.06); border-radius: 2px;
-            flex-shrink: 0;
-        }
-        .node-bar-fill {
-            height: 100%; border-radius: 2px;
-        }
-        .node-val {
-            font-size: 10px; font-family: var(--mono); color: rgba(255,255,255,0.4);
-            width: 36px; text-align: right; flex-shrink: 0;
-        }
-
-        /* Trajectory panel */
-        .traj-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-        .traj-card {
-            background: rgba(255,255,255,0.02);
-            border: 1px solid rgba(255,255,255,0.06);
-            border-radius: 10px;
-            padding: 12px 14px;
-            position: relative;
-            overflow: hidden;
-        }
-        .traj-card.full-width { grid-column: 1 / -1; }
-        .traj-card-glow {
-            position: absolute; top: 0; left: 0; right: 0; height: 1px;
-            background: linear-gradient(90deg, transparent, var(--c-trajectory), transparent);
-            opacity: 0.4;
-        }
-        .traj-card-title {
-            font-size: 9px; font-family: var(--mono); color: rgba(255,255,255,0.35);
-            letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px;
-        }
-        .traj-card-symbol { color: var(--c-trajectory); margin-right: 4px; }
-
-        /* Metric bars */
-        .metric-bar { width: 100%; margin-bottom: 6px; }
-        .metric-bar:last-child { margin-bottom: 0; }
-        .metric-header {
-            display: flex; justify-content: space-between; align-items: baseline;
-            margin-bottom: 3px;
-        }
-        .metric-label { font-size: 10px; color: rgba(255,255,255,0.5); }
-        .metric-value { font-size: 11px; color: rgba(255,255,255,0.8); font-family: var(--mono); }
-        .metric-track { height: 3px; background: rgba(255,255,255,0.06); border-radius: 2px; }
-        .metric-fill { height: 100%; border-radius: 2px; transition: width 1s ease; }
-
-        /* Belief list */
-        .belief-item {
-            display: flex; align-items: center; gap: 8px; padding: 3px 0;
-        }
-        .belief-name {
-            font-size: 10px; color: rgba(255,255,255,0.6);
-            flex: 1; min-width: 0;
-            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-        }
-        .belief-bar {
-            width: 50px; height: 3px;
-            background: rgba(255,255,255,0.06); border-radius: 2px;
-            flex-shrink: 0;
-        }
-        .belief-fill { height: 100%; border-radius: 2px; background: var(--c-belief); }
-        .belief-evidence {
-            font-size: 9px; color: rgba(255,255,255,0.2); font-family: var(--mono);
-            width: 20px; text-align: right; flex-shrink: 0;
-        }
-
-        /* History strip */
-        .history-strip { position: relative; }
-        #historyCanvas { width: 100%; height: 40px; display: block; }
-        .history-tooltip {
-            display: none; position: fixed;
-            background: rgba(13,13,18,0.95);
-            border: 1px solid rgba(255,255,255,0.12);
-            border-radius: 6px; padding: 6px 10px;
-            font-size: 10px; font-family: var(--mono);
-            color: rgba(255,255,255,0.6);
-            pointer-events: none; z-index: 100; white-space: nowrap;
-        }
-
-        /* Gap & drift */
-        .gap-badge {
-            display: inline-block;
-            font-size: 10px; font-family: var(--mono);
-            color: var(--c-drift);
-            border: 1px solid rgba(232,168,124,0.3);
-            border-radius: 10px; padding: 2px 10px; margin-bottom: 8px;
-        }
-        .drift-node {
-            display: flex; align-items: center; gap: 8px; padding: 4px 0;
-        }
-        .drift-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-        .drift-label { font-size: 10px; color: rgba(255,255,255,0.6); flex: 1; }
-        .drift-value { font-size: 10px; font-family: var(--mono); color: rgba(255,255,255,0.35); }
-
-        /* Footer */
-        .footer { text-align: center; margin-top: 24px; padding-bottom: 32px; }
-        .footer-text { font-size: 9px; color: rgba(255,255,255,0.2); font-family: var(--mono); }
-
-        /* Skeleton */
-        .skeleton-graph {
-            height: 300px; border-radius: 8px;
-            background: linear-gradient(90deg, rgba(255,255,255,0.02) 25%, rgba(255,255,255,0.04) 50%, rgba(255,255,255,0.02) 75%);
-            background-size: 200% 100%;
-            animation: skeleton-shimmer 1.5s ease-in-out infinite;
-        }
-        @keyframes skeleton-shimmer {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-        }
-
-        .no-data {
-            padding: 60px 20px; font-family: var(--mono);
-            font-size: 12px; color: rgba(255,255,255,0.35); text-align: center;
-        }
-
         @media (max-width: 500px) {
-            .container { padding: 20px 16px; }
+            .container { padding: 20px 16px 40px; }
             .traj-grid { grid-template-columns: 1fr; }
+            .section { padding: 16px; }
         }
     </style>
 </head>
@@ -296,9 +561,9 @@
         <div class="header">
             <div class="header-label">Self-Model Graph</div>
             <div class="header-title">Self-Schema G<sub>t</sub></div>
-            <div class="header-status">
-                <div class="pulse-dot" id="statusDot" style="background-color: var(--c-trajectory);"></div>
-                <span class="header-status-text" id="statusText">loading...</span>
+            <div class="header-meta">
+                <div class="pulse-dot" id="statusDot" style="color: var(--c-trajectory);background:var(--c-trajectory)"></div>
+                <span class="header-meta-text" id="statusText">loading...</span>
             </div>
         </div>
 
@@ -315,642 +580,677 @@
 
     <script src="/static/shared.js"></script>
     <script>
-        // ── State ──
-        let data = null;
-        let selectedNode = null;
-        let nodePositions = [];
+    // ── Constants ──
+    const TYPE_COLORS = {
+        identity: '#e8c87c', anima: '#f0b87a', sensor: '#8bb8e8',
+        resource: '#6a9fd8', preference: '#7ecfcf', belief: '#c49be8',
+        trajectory: '#7ecf8b', meta: '#8a8a9a', drift: '#e8a87c', tension: '#e87c7c',
+    };
+    const TYPE_LABELS = {
+        identity: 'Identity', anima: 'Anima', sensor: 'Sensor', resource: 'Resource',
+        preference: 'Preference', belief: 'Belief', trajectory: 'Trajectory',
+        meta: 'Meta', drift: 'Drift', tension: 'Tension',
+    };
+    const TYPE_ORDER = ['identity','anima','sensor','resource','preference','belief','trajectory','meta','drift','tension'];
+    const TYPE_RINGS = {
+        identity: 0, anima: 1, sensor: 2, resource: 2,
+        preference: 3, belief: 3, trajectory: 4, meta: 4, drift: 4, tension: 4,
+    };
 
-        const TYPE_COLORS = {
-            identity:   '#e8c87c',
-            anima:      '#f0b87a',
-            sensor:     '#8bb8e8',
-            resource:   '#6a9fd8',
-            preference: '#7ecfcf',
-            belief:     '#c49be8',
-            trajectory: '#7ecf8b',
-            meta:       '#888888',
-            drift:      '#e8a87c',
-            tension:    '#e87c7c',
-        };
-        const TYPE_LABELS = {
-            identity: 'Identity', anima: 'Anima', sensor: 'Sensor',
-            resource: 'Resource', preference: 'Preference', belief: 'Belief',
-            trajectory: 'Trajectory', meta: 'Meta', drift: 'Drift', tension: 'Tension',
-        };
-        const TYPE_RINGS = {
-            identity: 0, anima: 1, sensor: 2, resource: 2,
-            preference: 3, belief: 3, trajectory: 4, meta: 4, drift: 4, tension: 4,
-        };
+    // ── State ──
+    let data = null;
+    let selectedNode = null;
+    let nodePositions = [];
+    let hoveredNode = null;
 
-        // ── Fetch ──
-        async function fetchSchema() {
-            try {
-                const response = await fetch(`${API_BASE}/schema-data`);
-                data = await response.json();
-                if (data.error) {
-                    document.getElementById('content').innerHTML =
-                        `<div class="no-data">Error: ${escapeHtml(data.error)}</div>`;
-                    return;
-                }
-                render(data);
-            } catch (e) {
+    // ── Fetch ──
+    async function fetchSchema() {
+        try {
+            const r = await fetch(`${API_BASE}/schema-data`);
+            data = await r.json();
+            if (data.error) {
                 document.getElementById('content').innerHTML =
-                    `<div class="no-data">Connection lost. Is Lumen running?</div>`;
+                    `<div class="no-data">error: ${escapeHtml(data.error)}</div>`;
+                return;
             }
+            render(data);
+        } catch (e) {
+            document.getElementById('content').innerHTML =
+                `<div class="no-data">connection lost &mdash; is Lumen running?</div>`;
+        }
+    }
+
+    // ── Render ──
+    function render(d) {
+        const schema = d.schema;
+        const traj = d.trajectory;
+        const history = d.history || [];
+        const gap = d.gap;
+
+        // Status
+        if (schema) {
+            const ts = new Date(schema.timestamp);
+            const t = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+            document.getElementById('statusText').textContent =
+                `${t} \u00b7 ${schema.node_count} nodes \u00b7 ${schema.edge_count} edges`;
+            document.getElementById('statusDot').style.color = 'var(--c-trajectory)';
+            document.getElementById('statusDot').style.background = 'var(--c-trajectory)';
+        } else {
+            document.getElementById('statusText').textContent = 'awaiting first schema\u2026';
+            document.getElementById('statusDot').style.color = 'rgba(255,255,255,0.15)';
+            document.getElementById('statusDot').style.background = 'rgba(255,255,255,0.15)';
         }
 
-        // ── Main render ──
-        function render(d) {
-            const schema = d.schema;
-            const traj = d.trajectory;
-            const history = d.history || [];
-            const gap = d.gap;
+        let html = '';
 
-            // Status line
-            if (schema) {
-                const ts = new Date(schema.timestamp);
-                const timeStr = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                document.getElementById('statusText').textContent =
-                    `${timeStr} \u00b7 ${schema.node_count} nodes \u00b7 ${schema.edge_count} edges`;
-                document.getElementById('statusDot').style.backgroundColor = 'var(--c-trajectory)';
-            } else {
-                document.getElementById('statusText').textContent = 'no schema yet';
-                document.getElementById('statusDot').style.backgroundColor = 'rgba(255,255,255,0.2)';
-            }
+        // ── Graph ──
+        if (schema) {
+            html += `<div class="section">
+                <div class="section-label">Graph<span>${schema.node_count}n ${schema.edge_count}e</span></div>
+                <canvas id="graphCanvas"></canvas>
+                ${legendHtml(schema)}
+                <div class="node-detail" id="nodeDetail"></div>
+            </div>`;
 
-            let html = '';
-
-            // A. Graph
-            if (schema) {
-                html += `<div class="section">
-                    <div class="section-label">Graph</div>
-                    <canvas id="graphCanvas" width="600" height="460"></canvas>
-                    ${renderLegend(schema)}
-                    <div class="node-detail" id="nodeDetail">
-                        <div class="node-detail-type" id="ndType"></div>
-                        <div class="node-detail-label" id="ndLabel"></div>
-                        <div class="node-detail-value" id="ndValue"></div>
-                        <div class="node-detail-bar" id="ndBar"><div class="node-detail-bar-fill" id="ndBarFill"></div></div>
-                        <div class="node-detail-edges" id="ndEdges"></div>
-                        <div class="node-detail-raw" id="ndRaw"></div>
-                    </div>
-                </div>`;
-
-                // B. Node list (readable table grouped by type)
-                html += `<div class="section">
-                    <div class="section-label">Nodes</div>
-                    ${renderNodeList(schema)}
-                </div>`;
-            }
-
-            // C. Trajectory
-            if (traj) {
-                html += renderTrajectory(traj);
-            }
-
-            // D. History strip
-            if (history.length > 1) {
-                html += `<div class="section history-strip">
-                    <div class="section-label">History (${history.length} snapshots)</div>
-                    <canvas id="historyCanvas" width="600" height="40"></canvas>
-                </div>`;
-            }
-
-            // E. Gap & drift
-            const driftNodes = schema ? schema.nodes.filter(n => n.type === 'drift' || n.type === 'tension') : [];
-            if (gap || driftNodes.length > 0) {
-                html += renderGapDrift(gap, driftNodes);
-            }
-
-            document.getElementById('content').innerHTML = html;
-
-            // Draw canvases
-            if (schema) drawGraph(schema);
-            if (history.length > 1) drawHistory(history);
-        }
-
-        // ── Legend ──
-        function renderLegend(schema) {
-            const types = new Set(schema.nodes.map(n => n.type));
-            let html = '<div class="legend">';
-            for (const t of ['identity','anima','sensor','resource','preference','belief','trajectory','meta','drift','tension']) {
-                if (!types.has(t)) continue;
-                html += `<div class="legend-item">
-                    <div class="legend-dot" style="background:${TYPE_COLORS[t]}"></div>
-                    ${TYPE_LABELS[t] || t}
-                </div>`;
-            }
-            html += '</div>';
-            return html;
-        }
-
-        // ── Node list (grouped by type) ──
-        function renderNodeList(schema) {
-            const groups = {};
-            schema.nodes.forEach(n => {
-                (groups[n.type] = groups[n.type] || []).push(n);
-            });
-
-            const order = ['identity','anima','sensor','resource','preference','belief','trajectory','meta','drift','tension'];
-            let html = '';
-            for (const t of order) {
-                const nodes = groups[t];
-                if (!nodes) continue;
-                const color = TYPE_COLORS[t];
-                html += `<div class="node-group">
-                    <div class="node-group-title" style="color:${color}">
-                        <div class="node-group-dot" style="background:${color}"></div>
-                        ${TYPE_LABELS[t] || t} (${nodes.length})
-                    </div>`;
-                nodes.forEach(n => {
-                    const val = typeof n.value === 'number' ? n.value : 0;
-                    const pct = Math.min(Math.abs(val) * 100, 100);
-                    const sel = selectedNode && selectedNode.id === n.id ? ' selected' : '';
-                    html += `<div class="node-row${sel}" data-node-id="${n.id}" onclick="selectNodeById('${n.id}')">
-                        <span class="node-name">${escapeHtml(n.label)}</span>
-                        <div class="node-bar-track">
-                            <div class="node-bar-fill" style="width:${pct}%;background:${color}"></div>
-                        </div>
-                        <span class="node-val">${typeof n.value === 'number' ? n.value.toFixed(2) : n.value}</span>
-                    </div>`;
-                });
-                html += '</div>';
-            }
-            return html;
-        }
-
-        // ── Graph drawing ──
-        function drawGraph(schema) {
-            const canvas = document.getElementById('graphCanvas');
-            if (!canvas) return;
-            const dpr = window.devicePixelRatio || 1;
-            const w = canvas.clientWidth;
-            const h = 460;
-            canvas.width = w * dpr;
-            canvas.height = h * dpr;
-            canvas.style.height = h + 'px';
-            const ctx = canvas.getContext('2d');
-            ctx.scale(dpr, dpr);
-
-            const cx = w / 2;
-            const cy = h / 2;
-            const maxR = Math.min(cx, cy) - 40;
-            const ringRadii = [0, maxR * 0.20, maxR * 0.42, maxR * 0.64, maxR * 0.86];
-
-            // Group nodes by ring
-            const rings = [[], [], [], [], []];
-            schema.nodes.forEach(n => {
-                const ring = TYPE_RINGS[n.type] !== undefined ? TYPE_RINGS[n.type] : 4;
-                rings[ring].push(n);
-            });
-
-            // Position nodes
-            nodePositions = [];
-            const posMap = {};
-            rings.forEach((ringNodes, ri) => {
-                const radius = ringRadii[ri];
-                ringNodes.forEach((n, i) => {
-                    let x, y;
-                    if (ri === 0) {
-                        x = cx; y = cy;
-                    } else {
-                        const angle = (2 * Math.PI * i / ringNodes.length) - Math.PI / 2;
-                        x = cx + radius * Math.cos(angle);
-                        y = cy + radius * Math.sin(angle);
-                    }
-                    const nr = 6 + (n.value || 0) * 10;
-                    posMap[n.id] = { x, y, r: nr };
-                    nodePositions.push({ x, y, r: nr, node: n });
-                });
-            });
-
-            // Draw ring guides
-            ctx.setLineDash([2, 4]);
-            ringRadii.slice(1).forEach(r => {
-                ctx.beginPath();
-                ctx.arc(cx, cy, r, 0, 2 * Math.PI);
-                ctx.strokeStyle = 'rgba(255,255,255,0.04)';
-                ctx.lineWidth = 1;
-                ctx.stroke();
-            });
-            ctx.setLineDash([]);
-
-            // Draw edges
-            schema.edges.forEach(e => {
-                const src = posMap[e.source];
-                const tgt = posMap[e.target];
-                if (!src || !tgt) return;
-                const aw = Math.abs(e.weight);
-                ctx.beginPath();
-                ctx.moveTo(src.x, src.y);
-                ctx.lineTo(tgt.x, tgt.y);
-                const isSelected = selectedNode &&
-                    (e.source === selectedNode.id || e.target === selectedNode.id);
-                if (isSelected) {
-                    ctx.strokeStyle = e.weight >= 0
-                        ? `rgba(126,207,139,${0.4 + aw * 0.5})`
-                        : `rgba(232,124,124,${0.4 + aw * 0.5})`;
-                    ctx.lineWidth = 1 + aw * 2;
-                } else {
-                    ctx.strokeStyle = e.weight >= 0
-                        ? `rgba(126,207,139,${aw * 0.35})`
-                        : `rgba(232,124,124,${aw * 0.35})`;
-                    ctx.lineWidth = 0.5 + aw;
-                }
-                ctx.stroke();
-            });
-
-            // Draw nodes
-            nodePositions.forEach(({ x, y, r, node }) => {
-                const color = TYPE_COLORS[node.type] || '#888';
-                const isSel = selectedNode && selectedNode.id === node.id;
-
-                // Glow
-                if (isSel || r > 8) {
-                    ctx.beginPath();
-                    ctx.arc(x, y, r + 6, 0, 2 * Math.PI);
-                    ctx.fillStyle = color;
-                    ctx.globalAlpha = isSel ? 0.25 : 0.1;
-                    ctx.fill();
-                    ctx.globalAlpha = 1;
-                }
-
-                // Fill
-                ctx.beginPath();
-                ctx.arc(x, y, r, 0, 2 * Math.PI);
-                ctx.fillStyle = color;
-                ctx.globalAlpha = isSel ? 1.0 : 0.85;
-                ctx.fill();
-                ctx.globalAlpha = 1;
-
-                // Selected ring
-                if (isSel) {
-                    ctx.beginPath();
-                    ctx.arc(x, y, r + 2, 0, 2 * Math.PI);
-                    ctx.strokeStyle = '#fff';
-                    ctx.lineWidth = 1.5;
-                    ctx.stroke();
-                }
-            });
-
-            // Draw labels (separate pass so they're on top)
-            ctx.font = '10px "DM Mono", monospace';
-            ctx.textAlign = 'center';
-            nodePositions.forEach(({ x, y, r, node }) => {
-                const label = truncLabel(node.label, 16);
-                const labelY = y + r + 5;
-
-                // Background pill for readability
-                const tm = ctx.measureText(label);
-                const pw = tm.width + 8;
-                const ph = 13;
-                ctx.fillStyle = 'rgba(12,12,15,0.8)';
-                ctx.beginPath();
-                ctx.roundRect(x - pw/2, labelY - 1, pw, ph, 3);
-                ctx.fill();
-
-                // Text
-                const isSel = selectedNode && selectedNode.id === node.id;
-                ctx.fillStyle = isSel ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.6)';
-                ctx.textBaseline = 'top';
-                ctx.fillText(label, x, labelY + 1);
-            });
-
-            // Click handler
-            canvas.onclick = function(evt) {
-                const rect = canvas.getBoundingClientRect();
-                const mx = evt.clientX - rect.left;
-                const my = evt.clientY - rect.top;
-                let hit = null;
-                let minDist = Infinity;
-                nodePositions.forEach(p => {
-                    const dx = mx - p.x;
-                    const dy = my - p.y;
-                    const dist = Math.sqrt(dx*dx + dy*dy);
-                    if (dist < p.r + 10 && dist < minDist) {
-                        minDist = dist;
-                        hit = p.node;
-                    }
-                });
-                if (hit) {
-                    selectedNode = hit;
-                } else {
-                    selectedNode = null;
-                }
-                render(data);
-            };
-        }
-
-        function selectNodeById(id) {
-            if (!data || !data.schema) return;
-            const node = data.schema.nodes.find(n => n.id === id);
-            if (node) {
-                selectedNode = node;
-                render(data);
-                // Scroll detail into view
-                const detail = document.getElementById('nodeDetail');
-                if (detail) detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-            }
-        }
-
-        function truncLabel(s, max) {
-            if (!s) return '';
-            return s.length > max ? s.slice(0, max - 1) + '\u2026' : s;
-        }
-
-        function showNodeDetail() {
-            if (!selectedNode || !data || !data.schema) return;
-            const node = selectedNode;
-            const panel = document.getElementById('nodeDetail');
-            const color = TYPE_COLORS[node.type] || '#888';
-
-            document.getElementById('ndType').textContent = node.type;
-            document.getElementById('ndType').style.color = color;
-            document.getElementById('ndLabel').textContent = node.label;
-
-            const val = typeof node.value === 'number' ? node.value : 0;
-            document.getElementById('ndValue').textContent = typeof node.value === 'number'
-                ? `value: ${node.value.toFixed(4)}` : `value: ${node.value}`;
-            document.getElementById('ndBarFill').style.width = (Math.abs(val) * 100) + '%';
-            document.getElementById('ndBarFill').style.background = color;
-
-            // Edges involving this node
-            const edges = data.schema.edges.filter(e => e.source === node.id || e.target === node.id);
-            if (edges.length > 0) {
-                const edgeHtml = edges.map(e => {
-                    const other = e.source === node.id ? e.target : e.source;
-                    const dir = e.source === node.id ? '\u2192' : '\u2190';
-                    const wSign = e.weight >= 0 ? '+' : '';
-                    const wColor = e.weight >= 0 ? 'rgba(126,207,139,0.7)' : 'rgba(232,124,124,0.7)';
-                    return `<div class="node-detail-edge">${dir} ${other} <span style="color:${wColor}">${wSign}${e.weight.toFixed(3)}</span></div>`;
-                }).join('');
-                document.getElementById('ndEdges').innerHTML = edgeHtml;
-                document.getElementById('ndEdges').style.display = 'block';
-            } else {
-                document.getElementById('ndEdges').style.display = 'none';
-            }
-
-            // Raw value
-            const raw = node.raw_value;
-            if (raw !== null && raw !== undefined && raw !== node.value) {
-                document.getElementById('ndRaw').textContent =
-                    typeof raw === 'object' ? JSON.stringify(raw, null, 2) : String(raw);
-                document.getElementById('ndRaw').style.display = 'block';
-            } else {
-                document.getElementById('ndRaw').style.display = 'none';
-            }
-
-            panel.classList.add('visible');
-        }
-
-        // ── Trajectory panel ──
-        function renderTrajectory(t) {
-            let html = '<div class="traj-grid">';
-
-            // Overview
-            html += trajCard('\u03a3', 'Overview', true, `
-                ${metricBar('identity confidence', t.identity_confidence, 1, 'var(--c-trajectory)')}
-                ${metricBar('stability', t.stability_score, 1, 'var(--c-trajectory)')}
-                ${t.lineage_similarity !== null ? metricBar('lineage similarity', t.lineage_similarity, 1, 'var(--c-identity)') : ''}
-                <div style="margin-top:4px;font-size:10px;color:rgba(255,255,255,0.35);font-family:var(--mono)">
-                    ${t.observation_count} observations${t.has_genesis ? ' \u00b7 genesis anchored' : ''}
-                </div>
-            `);
-
-            // Preferences
-            const prefs = t.preferences_detail || {};
-            let prefsContent = `<div style="font-size:10px;color:rgba(255,255,255,0.6);margin-bottom:4px">${t.preferences_learned || 0} learned</div>`;
-            const pv = prefs.preference_vector || prefs.dimensions || {};
-            Object.keys(pv).forEach(k => {
-                const v = pv[k];
-                prefsContent += miniBar(k, typeof v === 'number' ? v : (v.mean || 0), 'var(--c-preference)');
-            });
-            html += trajCard('\u03a0', 'Preferences', false, prefsContent);
-
-            // Beliefs
-            const beliefs = t.beliefs_detail || {};
-            let beliefsContent = '';
-            const bv = beliefs.values || beliefs.beliefs || {};
-            const bKeys = Object.keys(bv).slice(0, 8);
-            if (bKeys.length > 0) {
-                bKeys.forEach(k => {
-                    const b = bv[k];
-                    const conf = typeof b === 'number' ? b : (b.confidence || 0);
-                    const ev = typeof b === 'object' ? (b.evidence_count || b.n_evidence || 0) : '';
-                    beliefsContent += `<div class="belief-item">
-                        <span class="belief-name">${escapeHtml(k)}</span>
-                        <div class="belief-bar"><div class="belief-fill" style="width:${(conf*100).toFixed(0)}%"></div></div>
-                        ${ev !== '' ? `<span class="belief-evidence">${ev}</span>` : ''}
-                    </div>`;
-                });
-            } else {
-                beliefsContent = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">avg confidence: ${(t.belief_confidence || 0).toFixed(2)}</div>`;
-            }
-            html += trajCard('\u0392', 'Beliefs', false, beliefsContent);
-
-            // Attractor
-            const attr = t.attractor_detail;
-            let attrContent = '';
-            if (attr && attr.center) {
-                const dims = ['warmth', 'clarity', 'stability', 'presence'];
-                const center = attr.center;
-                const variance = attr.variance || [];
-                dims.forEach((d, i) => {
-                    const c = Array.isArray(center) ? center[i] : (center[d] || 0);
-                    const v = Array.isArray(variance) ? variance[i] : (variance[d] || 0);
-                    attrContent += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
-                        <span style="font-size:10px;color:rgba(255,255,255,0.6);width:55px">${d}</span>
-                        <div style="flex:1;height:3px;background:rgba(255,255,255,0.06);border-radius:2px">
-                            <div style="height:100%;width:${(c*100).toFixed(0)}%;background:var(--c-anima);border-radius:2px"></div>
-                        </div>
-                        <span style="font-size:9px;font-family:var(--mono);color:rgba(255,255,255,0.2);width:28px;text-align:right">\u00b1${v.toFixed(2)}</span>
-                    </div>`;
-                });
-            } else {
-                attrContent = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">${t.attractor_defined ? 'defined' : 'not yet computed'}</div>`;
-            }
-            html += trajCard('\u0391', 'Attractor', false, attrContent);
-
-            // Recovery
-            const rec = t.recovery_detail || {};
-            let recContent = '';
-            if (t.recovery_tau !== null && t.recovery_tau !== undefined) {
-                recContent += `<div style="font-size:12px;color:rgba(255,255,255,0.6);font-family:var(--mono);margin-bottom:4px">\u03c4 = ${t.recovery_tau.toFixed(2)}</div>`;
-            }
-            const decayTimes = rec.decay_times || rec.per_dimension || {};
-            Object.keys(decayTimes).forEach(k => {
-                const v = decayTimes[k];
-                recContent += miniBar(k, Math.min((typeof v === 'number' ? v : v.tau || 0) / 100, 1), 'var(--c-trajectory)');
-            });
-            if (!recContent) recContent = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">awaiting perturbation data</div>`;
-            html += trajCard('\u03a1', 'Recovery', false, recContent);
-
-            // Relational
-            const rel = t.relational_detail || {};
-            let relContent = '';
-            if (rel.valence_tendency !== undefined) {
-                relContent += metricBar('valence tendency', Math.abs(rel.valence_tendency), 1,
-                    rel.valence_tendency >= 0 ? 'var(--c-trajectory)' : 'var(--c-drift)');
-            }
-            relContent += `<div style="font-size:10px;color:rgba(255,255,255,0.35);font-family:var(--mono);margin-top:2px">${t.relationships || 0} relationships</div>`;
-            html += trajCard('\u0394', 'Relational', false, relContent);
-
-            html += '</div>';
-            return html;
-        }
-
-        function trajCard(symbol, title, fullWidth, content) {
-            return `<div class="traj-card${fullWidth ? ' full-width' : ''}">
-                <div class="traj-card-glow"></div>
-                <div class="traj-card-title"><span class="traj-card-symbol">${symbol}</span>${title}</div>
-                ${content}
+            // ── Node List ──
+            html += `<div class="section">
+                <div class="section-label">Nodes</div>
+                ${nodeListHtml(schema)}
             </div>`;
         }
 
-        function metricBar(label, value, max, color) {
-            const pct = Math.min((value / max) * 100, 100);
-            return `<div class="metric-bar">
-                <div class="metric-header">
-                    <span class="metric-label">${label}</span>
-                    <span class="metric-value">${typeof value === 'number' ? value.toFixed(3) : value}</span>
-                </div>
-                <div class="metric-track">
-                    <div class="metric-fill" style="width:${pct}%;background:${color}"></div>
-                </div>
+        // ── Trajectory ──
+        if (traj) html += trajHtml(traj);
+
+        // ── History ──
+        if (history.length > 1) {
+            html += `<div class="section">
+                <div class="section-label">History<span>${history.length} snapshots</span></div>
+                <canvas id="historyCanvas"></canvas>
             </div>`;
-        }
-
-        function miniBar(label, value, color) {
-            const pct = Math.min(Math.abs(value) * 100, 100);
-            return `<div style="display:flex;align-items:center;gap:6px;padding:1px 0">
-                <span style="font-size:9px;color:rgba(255,255,255,0.35);width:55px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(label)}</span>
-                <div style="flex:1;height:2px;background:rgba(255,255,255,0.06);border-radius:1px">
-                    <div style="height:100%;width:${pct.toFixed(0)}%;background:${color};border-radius:1px"></div>
-                </div>
-                <span style="font-size:9px;font-family:var(--mono);color:rgba(255,255,255,0.2);width:28px;text-align:right">${value.toFixed(2)}</span>
-            </div>`;
-        }
-
-        // ── History strip ──
-        function drawHistory(history) {
-            const canvas = document.getElementById('historyCanvas');
-            if (!canvas) return;
-            const dpr = window.devicePixelRatio || 1;
-            const w = canvas.clientWidth;
-            const h = 40;
-            canvas.width = w * dpr;
-            canvas.height = h * dpr;
-            canvas.style.height = h + 'px';
-            const ctx = canvas.getContext('2d');
-            ctx.scale(dpr, dpr);
-
-            const points = history.slice(-100);
-            if (points.length === 0) return;
-            const maxNodes = Math.max(...points.map(p => p.node_count), 1);
-            const step = w / Math.max(points.length - 1, 1);
-
-            // Fill area
-            ctx.beginPath();
-            points.forEach((p, i) => {
-                const x = i * step;
-                const y = h - 4 - (p.node_count / maxNodes) * (h - 8);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            });
-            ctx.lineTo((points.length - 1) * step, h);
-            ctx.lineTo(0, h);
-            ctx.closePath();
-            ctx.fillStyle = 'rgba(126,207,139,0.06)';
-            ctx.fill();
-
-            // Line
-            ctx.beginPath();
-            points.forEach((p, i) => {
-                const x = i * step;
-                const y = h - 4 - (p.node_count / maxNodes) * (h - 8);
-                if (i === 0) ctx.moveTo(x, y);
-                else ctx.lineTo(x, y);
-            });
-            ctx.strokeStyle = 'rgba(126,207,139,0.4)';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-
-            // Dots
-            const dotPositions = [];
-            points.forEach((p, i) => {
-                const x = i * step;
-                const y = h - 4 - (p.node_count / maxNodes) * (h - 8);
-                ctx.beginPath();
-                ctx.arc(x, y, 2.5, 0, 2 * Math.PI);
-                ctx.fillStyle = 'rgba(126,207,139,0.7)';
-                ctx.fill();
-                dotPositions.push({ x, y, point: p });
-            });
-
-            // Hover
-            const tooltip = document.getElementById('historyTooltip');
-            canvas.onmousemove = function(evt) {
-                const rect = canvas.getBoundingClientRect();
-                const mx = evt.clientX - rect.left;
-                let closest = null, minDist = 20;
-                dotPositions.forEach(dp => {
-                    const d = Math.abs(mx - dp.x);
-                    if (d < minDist) { minDist = d; closest = dp; }
-                });
-                if (closest) {
-                    const ts = new Date(closest.point.timestamp);
-                    const timeStr = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    tooltip.textContent = `${timeStr} \u00b7 ${closest.point.node_count}n ${closest.point.edge_count}e`;
-                    tooltip.style.display = 'block';
-                    tooltip.style.left = (evt.clientX - tooltip.offsetWidth / 2) + 'px';
-                    tooltip.style.top = (rect.top - 30) + 'px';
-                } else {
-                    tooltip.style.display = 'none';
-                }
-            };
-            canvas.onmouseleave = function() { tooltip.style.display = 'none'; };
         }
 
         // ── Gap & Drift ──
-        function renderGapDrift(gap, driftNodes) {
-            let html = '<div class="section">';
-            html += '<div class="section-label">Gap & Drift</div>';
-            if (gap) {
-                html += `<div class="gap-badge">${gap.was_gap ? 'gap' : 'first schema'} \u00b7 ${gap.duration_hours.toFixed(1)}h</div>`;
-                if (gap.anima_delta && Object.keys(gap.anima_delta).length > 0) {
-                    Object.keys(gap.anima_delta).forEach(k => {
-                        const v = gap.anima_delta[k];
-                        html += miniBar(k, Math.min(Math.abs(v), 1), v >= 0 ? 'var(--c-trajectory)' : 'var(--c-drift)');
-                    });
-                }
-            }
-            if (driftNodes.length > 0) {
-                html += '<div style="margin-top:8px">';
-                driftNodes.forEach(n => {
-                    const color = n.type === 'drift' ? 'var(--c-drift)' : 'var(--c-tension)';
-                    html += `<div class="drift-node">
-                        <div class="drift-dot" style="background:${color}"></div>
-                        <span class="drift-label">${escapeHtml(n.label)}</span>
-                        <span class="drift-value">${typeof n.value === 'number' ? n.value.toFixed(3) : n.value}</span>
+        const driftNodes = schema ? schema.nodes.filter(n => n.type === 'drift' || n.type === 'tension') : [];
+        if (gap || driftNodes.length > 0) html += gapHtml(gap, driftNodes);
+
+        document.getElementById('content').innerHTML = html;
+
+        // Post-render
+        if (schema) {
+            drawGraph(schema);
+            if (selectedNode) showDetail();
+        }
+        if (history.length > 1) drawHistory(history);
+    }
+
+    // ── Legend ──
+    function legendHtml(schema) {
+        const types = [...new Set(schema.nodes.map(n => n.type))];
+        return '<div class="legend">' +
+            TYPE_ORDER.filter(t => types.includes(t)).map(t =>
+                `<div class="legend-item"><div class="legend-dot" style="background:${TYPE_COLORS[t]}"></div>${TYPE_LABELS[t]}</div>`
+            ).join('') + '</div>';
+    }
+
+    // ── Node List ──
+    function nodeListHtml(schema) {
+        // Build edge count per node
+        const ec = {};
+        schema.edges.forEach(e => {
+            ec[e.source] = (ec[e.source] || 0) + 1;
+            ec[e.target] = (ec[e.target] || 0) + 1;
+        });
+
+        const groups = {};
+        schema.nodes.forEach(n => (groups[n.type] = groups[n.type] || []).push(n));
+
+        return TYPE_ORDER.filter(t => groups[t]).map(t => {
+            const nodes = groups[t];
+            const color = TYPE_COLORS[t];
+            return `<div class="node-group">
+                <div class="ng-title">
+                    <div class="ng-dot" style="background:${color}"></div>
+                    <span class="ng-name" style="color:${color}">${TYPE_LABELS[t]}</span>
+                    <span class="ng-count">${nodes.length}</span>
+                </div>
+                ${nodes.map(n => {
+                    const v = typeof n.value === 'number' ? n.value : 0;
+                    const pct = Math.min(Math.abs(v) * 100, 100);
+                    const sel = selectedNode && selectedNode.id === n.id ? ' selected' : '';
+                    const edgeCount = ec[n.id] || 0;
+                    return `<div class="node-row${sel}" onclick="selectNode('${n.id}')">
+                        <span class="nr-label">${escapeHtml(n.label)}</span>
+                        <div class="nr-bar"><div class="nr-fill" style="width:${pct}%;background:${color}"></div></div>
+                        <span class="nr-val">${typeof n.value === 'number' ? n.value.toFixed(2) : n.value}</span>
+                        <span class="nr-edges-count">${edgeCount ? edgeCount + 'e' : ''}</span>
                     </div>`;
-                });
-                html += '</div>';
+                }).join('')}
+            </div>`;
+        }).join('');
+    }
+
+    // ── Graph ──
+    function drawGraph(schema) {
+        const canvas = document.getElementById('graphCanvas');
+        if (!canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        const w = canvas.clientWidth;
+        const h = 480;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.height = h + 'px';
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const cx = w / 2;
+        const cy = h / 2;
+        const maxR = Math.min(cx, cy) - 50;
+
+        // Subtle radial gradient background
+        const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, maxR + 40);
+        bg.addColorStop(0, 'rgba(232,200,124,0.02)');
+        bg.addColorStop(0.5, 'rgba(255,255,255,0.005)');
+        bg.addColorStop(1, 'transparent');
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, w, h);
+
+        const ringRadii = [0, maxR * 0.18, maxR * 0.40, maxR * 0.64, maxR * 0.88];
+
+        // Group by ring
+        const rings = [[], [], [], [], []];
+        schema.nodes.forEach(n => {
+            const ri = TYPE_RINGS[n.type] ?? 4;
+            rings[ri].push(n);
+        });
+
+        // Position nodes
+        nodePositions = [];
+        const posMap = {};
+        rings.forEach((rn, ri) => {
+            const radius = ringRadii[ri];
+            rn.forEach((n, i) => {
+                let x, y;
+                if (ri === 0) {
+                    x = cx; y = cy;
+                } else {
+                    // Offset each ring slightly for visual variety
+                    const offset = ri * 0.3;
+                    const angle = (2 * Math.PI * i / rn.length) - Math.PI / 2 + offset;
+                    x = cx + radius * Math.cos(angle);
+                    y = cy + radius * Math.sin(angle);
+                }
+                const nr = ri === 0 ? 14 : 5 + (n.value || 0) * 9;
+                posMap[n.id] = { x, y, r: nr };
+                nodePositions.push({ x, y, r: nr, node: n });
+            });
+        });
+
+        // Ring guides (faint dashed)
+        ctx.save();
+        ctx.setLineDash([1, 6]);
+        ringRadii.slice(1).forEach(r => {
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, 2 * Math.PI);
+            ctx.strokeStyle = 'rgba(255,255,255,0.025)';
+            ctx.lineWidth = 1;
+            ctx.stroke();
+        });
+        ctx.restore();
+
+        // Edges — quadratic curves
+        const selId = selectedNode ? selectedNode.id : null;
+        schema.edges.forEach(e => {
+            const s = posMap[e.source];
+            const t = posMap[e.target];
+            if (!s || !t) return;
+
+            const aw = Math.abs(e.weight);
+            const isConn = selId && (e.source === selId || e.target === selId);
+            const isDim = selId && !isConn;
+
+            // Curve control point: perpendicular offset from midpoint
+            const mx = (s.x + t.x) / 2;
+            const my = (s.y + t.y) / 2;
+            const dx = t.x - s.x;
+            const dy = t.y - s.y;
+            const len = Math.sqrt(dx*dx + dy*dy) || 1;
+            // Offset perpendicular, proportional to distance, alternating sign
+            const curveAmount = Math.min(len * 0.12, 20);
+            const sign = (e.source + e.target).length % 2 === 0 ? 1 : -1;
+            const cpx = mx + (-dy / len) * curveAmount * sign;
+            const cpy = my + (dx / len) * curveAmount * sign;
+
+            ctx.beginPath();
+            ctx.moveTo(s.x, s.y);
+            ctx.quadraticCurveTo(cpx, cpy, t.x, t.y);
+
+            if (isDim) {
+                ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+                ctx.lineWidth = 0.5;
+            } else if (isConn) {
+                ctx.strokeStyle = e.weight >= 0
+                    ? `rgba(126,207,139,${0.3 + aw * 0.6})`
+                    : `rgba(232,124,124,${0.3 + aw * 0.6})`;
+                ctx.lineWidth = 1 + aw * 2.5;
+            } else {
+                ctx.strokeStyle = e.weight >= 0
+                    ? `rgba(126,207,139,${aw * 0.25})`
+                    : `rgba(232,124,124,${aw * 0.25})`;
+                ctx.lineWidth = 0.5 + aw * 0.8;
             }
-            html += '</div>';
-            return html;
+            ctx.stroke();
+        });
+
+        // Nodes
+        nodePositions.forEach(({ x, y, r, node }) => {
+            const color = TYPE_COLORS[node.type] || '#888';
+            const isSel = selId === node.id;
+            const isHov = hoveredNode === node.id;
+            const isConn = selId && schema.edges.some(e =>
+                (e.source === selId && e.target === node.id) ||
+                (e.target === selId && e.source === node.id));
+            const isDim = selId && !isSel && !isConn;
+
+            // Outer glow
+            if (isSel || isHov) {
+                ctx.beginPath();
+                ctx.arc(x, y, r + 8, 0, 2 * Math.PI);
+                ctx.fillStyle = color;
+                ctx.globalAlpha = 0.12;
+                ctx.fill();
+                ctx.globalAlpha = 1;
+            }
+
+            // Value ring (donut showing fill level)
+            const val = typeof node.value === 'number' ? node.value : 0;
+            const startAngle = -Math.PI / 2;
+            const endAngle = startAngle + (2 * Math.PI * Math.abs(val));
+
+            // Track ring
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, 2 * Math.PI);
+            ctx.fillStyle = isDim ? 'rgba(255,255,255,0.02)' : 'rgba(255,255,255,0.04)';
+            ctx.fill();
+
+            // Value arc fill
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            ctx.arc(x, y, r, startAngle, endAngle);
+            ctx.closePath();
+            ctx.fillStyle = color;
+            ctx.globalAlpha = isDim ? 0.15 : (isSel ? 1 : 0.75);
+            ctx.fill();
+            ctx.globalAlpha = 1;
+
+            // Border
+            ctx.beginPath();
+            ctx.arc(x, y, r, 0, 2 * Math.PI);
+            ctx.strokeStyle = isSel ? '#fff' : (isDim ? 'rgba(255,255,255,0.03)' : color);
+            ctx.globalAlpha = isSel ? 0.9 : (isDim ? 0.3 : 0.4);
+            ctx.lineWidth = isSel ? 1.5 : 0.5;
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        });
+
+        // Labels (separate pass, on top)
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'top';
+        nodePositions.forEach(({ x, y, r, node }) => {
+            const isSel = selId === node.id;
+            const isConn = selId && schema.edges.some(e =>
+                (e.source === selId && e.target === node.id) ||
+                (e.target === selId && e.source === node.id));
+            const isDim = selId && !isSel && !isConn;
+
+            if (isDim) return; // Hide labels for dimmed nodes
+
+            const label = truncLabel(node.label, 18);
+            const ly = y + r + 6;
+            ctx.font = isSel ? 'bold 10px "DM Mono", monospace' : '10px "DM Mono", monospace';
+
+            // Background pill
+            const tm = ctx.measureText(label);
+            const pw = tm.width + 10;
+            const ph = 14;
+            ctx.fillStyle = 'rgba(10,10,14,0.85)';
+            ctx.beginPath();
+            ctx.roundRect(x - pw/2, ly - 1, pw, ph, 4);
+            ctx.fill();
+
+            // Text
+            ctx.fillStyle = isSel ? 'rgba(255,255,255,0.95)' :
+                            isConn ? 'rgba(255,255,255,0.7)' :
+                            'rgba(255,255,255,0.5)';
+            ctx.fillText(label, x, ly + 1);
+        });
+
+        // Interaction
+        canvas.onmousemove = function(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = evt.clientX - rect.left;
+            const my = evt.clientY - rect.top;
+            let hit = null, minD = Infinity;
+            nodePositions.forEach(p => {
+                const d = Math.hypot(mx - p.x, my - p.y);
+                if (d < p.r + 12 && d < minD) { minD = d; hit = p.node.id; }
+            });
+            if (hit !== hoveredNode) {
+                hoveredNode = hit;
+                canvas.style.cursor = hit ? 'pointer' : 'crosshair';
+                drawGraph(schema);
+            }
+        };
+        canvas.onclick = function(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = evt.clientX - rect.left;
+            const my = evt.clientY - rect.top;
+            let hit = null, minD = Infinity;
+            nodePositions.forEach(p => {
+                const d = Math.hypot(mx - p.x, my - p.y);
+                if (d < p.r + 12 && d < minD) { minD = d; hit = p.node; }
+            });
+            selectedNode = hit && selectedNode && selectedNode.id === hit.id ? null : hit;
+            render(data);
+            if (selectedNode) {
+                const det = document.getElementById('nodeDetail');
+                if (det) det.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            }
+        };
+        canvas.onmouseleave = function() {
+            if (hoveredNode) { hoveredNode = null; drawGraph(schema); }
+        };
+    }
+
+    function selectNode(id) {
+        if (!data || !data.schema) return;
+        const node = data.schema.nodes.find(n => n.id === id);
+        selectedNode = selectedNode && selectedNode.id === id ? null : node;
+        render(data);
+        if (selectedNode) {
+            const det = document.getElementById('nodeDetail');
+            if (det) det.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        }
+    }
+
+    function showDetail() {
+        if (!selectedNode || !data || !data.schema) return;
+        const n = selectedNode;
+        const panel = document.getElementById('nodeDetail');
+        const color = TYPE_COLORS[n.type] || '#888';
+        const val = typeof n.value === 'number' ? n.value : 0;
+
+        // Edges
+        const edges = data.schema.edges.filter(e => e.source === n.id || e.target === n.id);
+        let edgesHtml = '';
+        if (edges.length > 0) {
+            edgesHtml = `<div class="nd-edges">${edges.map(e => {
+                const other = e.source === n.id ? e.target : e.source;
+                const dir = e.source === n.id ? '\u2192' : '\u2190';
+                const wc = e.weight >= 0 ? 'rgba(126,207,139,0.7)' : 'rgba(232,124,124,0.7)';
+                const ws = e.weight >= 0 ? '+' : '';
+                return `<div class="nd-edge">
+                    <span class="nd-edge-arrow">${dir}</span>
+                    <span class="nd-edge-target">${other}</span>
+                    <span style="color:${wc};margin-left:auto">${ws}${e.weight.toFixed(3)}</span>
+                </div>`;
+            }).join('')}</div>`;
         }
 
-        // After render, show selected node detail if any
-        const _origRender = render;
-        render = function(d) {
-            _origRender(d);
-            if (selectedNode) showNodeDetail();
-        };
+        // Raw value
+        let rawHtml = '';
+        const raw = n.raw_value;
+        if (raw !== null && raw !== undefined && raw !== n.value) {
+            rawHtml = `<div class="nd-raw">${typeof raw === 'object' ? JSON.stringify(raw, null, 2) : String(raw)}</div>`;
+        }
 
-        // ── Init ──
-        initNav('schema');
-        fetchSchema();
-        setInterval(fetchSchema, 30000);
+        panel.innerHTML = `
+            <div class="nd-header">
+                <span class="nd-type" style="color:${color}">${n.type}</span>
+                <span class="nd-label">${escapeHtml(n.label)}</span>
+            </div>
+            <div class="nd-val-row">
+                <span class="nd-val-num">${typeof n.value === 'number' ? n.value.toFixed(3) : n.value}</span>
+                <div class="nd-val-bar">
+                    <div class="nd-val-fill" style="width:${(Math.abs(val)*100).toFixed(0)}%;background:${color}"></div>
+                </div>
+            </div>
+            ${edgesHtml}${rawHtml}`;
+        panel.classList.add('visible');
+    }
+
+    function truncLabel(s, max) {
+        if (!s) return '';
+        return s.length > max ? s.slice(0, max - 1) + '\u2026' : s;
+    }
+
+    // ── Trajectory ──
+    function trajHtml(t) {
+        let html = '<div class="traj-grid">';
+
+        // Overview
+        html += tc('\u03a3', 'Overview', true, `
+            ${bar('identity confidence', t.identity_confidence, 1, 'var(--c-trajectory)')}
+            ${bar('stability', t.stability_score, 1, 'var(--c-trajectory)')}
+            ${t.lineage_similarity != null ? bar('lineage similarity', t.lineage_similarity, 1, 'var(--c-identity)') : ''}
+            <div style="margin-top:6px;font-size:10px;color:rgba(255,255,255,0.25);font-family:var(--mono)">
+                ${t.observation_count} obs${t.has_genesis ? ' \u00b7 genesis' : ''}
+            </div>`);
+
+        // Preferences
+        const pv = t.preferences_detail?.preference_vector || t.preferences_detail?.dimensions || {};
+        let pc = `<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px">${t.preferences_learned || 0} learned</div>`;
+        Object.keys(pv).forEach(k => {
+            const v = pv[k];
+            pc += mini(k, typeof v === 'number' ? v : (v.mean || 0), 'var(--c-preference)');
+        });
+        html += tc('\u03a0', 'Preferences', false, pc);
+
+        // Beliefs
+        const bv = t.beliefs_detail?.values || t.beliefs_detail?.beliefs || {};
+        let bc = '';
+        const bk = Object.keys(bv).slice(0, 8);
+        if (bk.length > 0) {
+            bk.forEach(k => {
+                const b = bv[k];
+                const conf = typeof b === 'number' ? b : (b.confidence || 0);
+                const ev = typeof b === 'object' ? (b.evidence_count || b.n_evidence || '') : '';
+                bc += `<div class="belief-row">
+                    <span class="belief-name">${escapeHtml(k)}</span>
+                    <div class="belief-track"><div class="belief-fill" style="width:${(conf*100).toFixed(0)}%"></div></div>
+                    ${ev !== '' ? `<span class="belief-ev">${ev}</span>` : ''}
+                </div>`;
+            });
+        } else {
+            bc = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">avg: ${(t.belief_confidence || 0).toFixed(2)}</div>`;
+        }
+        html += tc('\u0392', 'Beliefs', false, bc);
+
+        // Attractor
+        const attr = t.attractor_detail;
+        let ac = '';
+        if (attr?.center) {
+            ['warmth','clarity','stability','presence'].forEach((d, i) => {
+                const c = Array.isArray(attr.center) ? attr.center[i] : (attr.center[d] || 0);
+                const v = (attr.variance || [])[i] ?? (attr.variance?.[d] ?? 0);
+                ac += `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">
+                    <span style="font-size:10px;color:rgba(255,255,255,0.45);width:52px">${d}</span>
+                    <div style="flex:1;height:3px;background:rgba(255,255,255,0.04);border-radius:2px;overflow:hidden">
+                        <div style="height:100%;width:${(c*100).toFixed(0)}%;background:var(--c-anima);border-radius:2px"></div>
+                    </div>
+                    <span style="font-size:9px;font-family:var(--mono);color:rgba(255,255,255,0.18);width:30px;text-align:right">\u00b1${v.toFixed(2)}</span>
+                </div>`;
+            });
+        } else {
+            ac = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">${t.attractor_defined ? 'defined' : 'not yet computed'}</div>`;
+        }
+        html += tc('\u0391', 'Attractor', false, ac);
+
+        // Recovery
+        const rec = t.recovery_detail || {};
+        let rc = '';
+        if (t.recovery_tau != null) {
+            rc += `<div style="font-size:13px;color:rgba(255,255,255,0.5);font-family:var(--mono);margin-bottom:4px;font-weight:200">\u03c4 = ${t.recovery_tau.toFixed(2)}</div>`;
+        }
+        const dt = rec.decay_times || rec.per_dimension || {};
+        Object.keys(dt).forEach(k => {
+            const v = dt[k];
+            rc += mini(k, Math.min((typeof v === 'number' ? v : v.tau || 0) / 100, 1), 'var(--c-trajectory)');
+        });
+        if (!rc) rc = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">awaiting perturbation data</div>`;
+        html += tc('\u03a1', 'Recovery', false, rc);
+
+        // Relational
+        const rel = t.relational_detail || {};
+        let rl = '';
+        if (rel.valence_tendency !== undefined) {
+            rl += bar('valence tendency', Math.abs(rel.valence_tendency), 1,
+                rel.valence_tendency >= 0 ? 'var(--c-trajectory)' : 'var(--c-drift)');
+        }
+        rl += `<div style="font-size:10px;color:rgba(255,255,255,0.25);font-family:var(--mono);margin-top:2px">${t.relationships || 0} relationships</div>`;
+        html += tc('\u0394', 'Relational', false, rl);
+
+        html += '</div>';
+        return html;
+    }
+
+    function tc(sym, title, full, content) {
+        return `<div class="traj-card${full ? ' full' : ''}">
+            <div class="tc-title"><span class="tc-symbol">${sym}</span>${title}</div>
+            ${content}
+        </div>`;
+    }
+
+    function bar(label, value, max, color) {
+        const pct = Math.min((value / max) * 100, 100);
+        return `<div class="bar">
+            <div class="bar-head">
+                <span class="bar-label">${label}</span>
+                <span class="bar-val">${typeof value === 'number' ? value.toFixed(3) : value}</span>
+            </div>
+            <div class="bar-track"><div class="bar-fill" style="width:${pct}%;background:${color}"></div></div>
+        </div>`;
+    }
+
+    function mini(label, value, color) {
+        const pct = Math.min(Math.abs(value) * 100, 100);
+        return `<div class="mini-row">
+            <span class="mini-label">${escapeHtml(label)}</span>
+            <div class="mini-track"><div class="mini-fill" style="width:${pct.toFixed(0)}%;background:${color}"></div></div>
+            <span class="mini-val">${value.toFixed(2)}</span>
+        </div>`;
+    }
+
+    // ── History ──
+    function drawHistory(history) {
+        const canvas = document.getElementById('historyCanvas');
+        if (!canvas) return;
+        const dpr = window.devicePixelRatio || 1;
+        const w = canvas.clientWidth;
+        const h = 48;
+        canvas.width = w * dpr;
+        canvas.height = h * dpr;
+        canvas.style.height = h + 'px';
+        const ctx = canvas.getContext('2d');
+        ctx.scale(dpr, dpr);
+
+        const pts = history.slice(-100);
+        if (!pts.length) return;
+        const maxN = Math.max(...pts.map(p => p.node_count), 1);
+        const step = w / Math.max(pts.length - 1, 1);
+
+        // Area fill
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+            const x = i * step;
+            const y = h - 4 - (p.node_count / maxN) * (h - 12);
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.lineTo((pts.length - 1) * step, h);
+        ctx.lineTo(0, h);
+        ctx.closePath();
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, 'rgba(126,207,139,0.08)');
+        grad.addColorStop(1, 'rgba(126,207,139,0.01)');
+        ctx.fillStyle = grad;
+        ctx.fill();
+
+        // Line
+        ctx.beginPath();
+        pts.forEach((p, i) => {
+            const x = i * step;
+            const y = h - 4 - (p.node_count / maxN) * (h - 12);
+            i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+        });
+        ctx.strokeStyle = 'rgba(126,207,139,0.5)';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+
+        // Dots
+        const dots = [];
+        pts.forEach((p, i) => {
+            const x = i * step;
+            const y = h - 4 - (p.node_count / maxN) * (h - 12);
+            ctx.beginPath();
+            ctx.arc(x, y, 2, 0, 2 * Math.PI);
+            ctx.fillStyle = 'rgba(126,207,139,0.6)';
+            ctx.fill();
+            dots.push({ x, y, p });
+        });
+
+        // Tooltip
+        const tip = document.getElementById('historyTooltip');
+        canvas.onmousemove = function(evt) {
+            const rect = canvas.getBoundingClientRect();
+            const mx = evt.clientX - rect.left;
+            let closest = null, minD = 20;
+            dots.forEach(d => { const dd = Math.abs(mx - d.x); if (dd < minD) { minD = dd; closest = d; } });
+            if (closest) {
+                const ts = new Date(closest.p.timestamp);
+                const t = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                tip.textContent = `${t} \u00b7 ${closest.p.node_count}n ${closest.p.edge_count}e`;
+                tip.style.display = 'block';
+                tip.style.left = (evt.clientX - tip.offsetWidth / 2) + 'px';
+                tip.style.top = (canvas.getBoundingClientRect().top - 32) + 'px';
+            } else {
+                tip.style.display = 'none';
+            }
+        };
+        canvas.onmouseleave = () => tip.style.display = 'none';
+    }
+
+    // ── Gap & Drift ──
+    function gapHtml(gap, driftNodes) {
+        let html = '<div class="section"><div class="section-label">Gap & Drift</div>';
+        if (gap) {
+            html += `<div class="gap-badge">${gap.was_gap ? 'gap' : 'first schema'} \u00b7 ${gap.duration_hours.toFixed(1)}h</div>`;
+            if (gap.anima_delta && Object.keys(gap.anima_delta).length) {
+                Object.keys(gap.anima_delta).forEach(k => {
+                    const v = gap.anima_delta[k];
+                    html += mini(k, Math.min(Math.abs(v), 1), v >= 0 ? 'var(--c-trajectory)' : 'var(--c-drift)');
+                });
+            }
+        }
+        if (driftNodes.length) {
+            html += '<div style="margin-top:10px">';
+            driftNodes.forEach(n => {
+                const c = n.type === 'drift' ? 'var(--c-drift)' : 'var(--c-tension)';
+                html += `<div class="drift-row">
+                    <div class="drift-dot" style="background:${c}"></div>
+                    <span class="drift-label">${escapeHtml(n.label)}</span>
+                    <span class="drift-val">${typeof n.value === 'number' ? n.value.toFixed(3) : n.value}</span>
+                </div>`;
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
+    // ── Init ──
+    initNav('schema');
+    fetchSchema();
+    setInterval(fetchSchema, 30000);
     </script>
 </body>
 </html>
