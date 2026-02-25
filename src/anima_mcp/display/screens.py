@@ -20,14 +20,16 @@ import json
 import math
 import random
 
-from ..atomic_write import atomic_json_write
 from .face import FaceState
 from .design import COLORS, SPACING, Timing, ease_smooth
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity
 from ..learning_visualization import LearningVisualizer
-from ..expression_moods import ExpressionMoodTracker
+from .drawing_engine import (
+    DrawingEngine, CanvasState, DrawingState, DrawingGoal,
+    DrawingIntent, DrawingEISV, _EISV_PARAMS, _get_canvas_path,
+)
 
 
 class ScreenMode(Enum):
@@ -97,643 +99,6 @@ class ScreenState:
     governance_paused: bool = False  # True when action in ("pause", "halt")
 
 
-def _get_canvas_path() -> Path:
-    """Get persistent path for canvas state."""
-    anima_dir = Path.home() / ".anima"
-    anima_dir.mkdir(exist_ok=True)
-    return anima_dir / "canvas.json"
-
-
-@dataclass
-class CanvasState:
-    """Drawing canvas state for notepad mode - persists across restarts."""
-    width: int = 240
-    height: int = 240
-    pixels: Dict[Tuple[int, int], Tuple[int, int, int]] = field(default_factory=dict)
-    # Drawing memory - helps Lumen build on previous work
-    recent_locations: List[Tuple[int, int]] = field(default_factory=list)
-    drawing_phase: str = "exploring"  # exploring, building, reflecting, resting
-    phase_start_time: float = field(default_factory=time.time)
-
-    # Autonomy tracking
-    last_save_time: float = 0.0  # When Lumen last saved a drawing
-    last_clear_time: float = field(default_factory=time.time)  # When canvas was last cleared
-    is_satisfied: bool = False  # Lumen feels done with current drawing
-    satisfaction_time: float = 0.0  # When satisfaction was reached
-    drawings_saved: int = 0  # Count of drawings Lumen has saved
-    drawing_paused_until: float = 0.0  # Pause drawing after manual clear (so user sees empty canvas)
-
-    # Save indicator (brief visual feedback)
-    save_indicator_until: float = 0.0  # Show "saved" indicator until this time
-
-    # Drawing energy persistence (survives restarts so drawings can finish)
-    energy: float = 1.0  # Persisted to disk, restored on load (legacy, now derived)
-    mark_count: int = 0  # Persisted to disk, restored on load
-
-    # Attention/coherence/narrative persistence (survives restarts)
-    curiosity: float = 1.0
-    engagement: float = 0.5
-    fatigue: float = 0.0
-    arc_phase: str = "opening"
-    coherence_history: List[float] = field(default_factory=list)
-    i_momentum: float = 0.0
-
-    # Art era (persisted so drawings continue in the same era after restart)
-    _era_name: str = "gestural"
-    pending_era_switch: Optional[str] = None  # Queue era switch until current drawing completes
-
-    # Render caching - avoid redrawing all pixels every frame
-    _dirty: bool = True  # Set by draw_pixel(), cleared after render
-    _cached_image: object = None  # Cached PIL Image of all pixels
-    _new_pixels: list = field(default_factory=list)  # Pixels added since last render
-
-    def draw_pixel(self, x: int, y: int, color: Tuple[int, int, int]):
-        """Draw a pixel at position."""
-        if 0 <= x < self.width and 0 <= y < self.height:
-            self.pixels[(x, y)] = color
-            self._new_pixels.append((x, y, color))  # Track for incremental render
-            self._dirty = True
-            # Remember recent locations (keep last 20)
-            self.recent_locations.append((x, y))
-            if len(self.recent_locations) > 20:
-                self.recent_locations.pop(0)
-            # Drawing resets satisfaction
-            self.is_satisfied = False
-
-    def clear(self):
-        """Clear the canvas."""
-        self.pixels.clear()
-        self.recent_locations.clear()
-        self.drawing_phase = "opening"  # Start with opening phase
-        self.phase_start_time = time.time()
-        self.last_clear_time = time.time()
-        self.is_satisfied = False
-        self.satisfaction_time = 0.0
-        self.energy = 1.0
-        self.mark_count = 0
-        # Reset attention/coherence/narrative
-        self.curiosity = 1.0
-        self.engagement = 0.5
-        self.fatigue = 0.0
-        self.arc_phase = "opening"
-        self.coherence_history = []
-        self.i_momentum = 0.0
-        self._dirty = True
-        self._cached_image = None
-        self._new_pixels.clear()
-        # Clear pending era switch (will be applied by canvas_clear caller)
-        self.pending_era_switch = None
-        # Pause drawing for 5 seconds after manual clear so user sees empty canvas
-        self.drawing_paused_until = time.time() + 5.0
-
-    def compositional_satisfaction(self) -> float:
-        """Evaluate compositional satisfaction: coverage, balance, coherence.
-
-        Returns 0.0-1.0 score based on:
-        - Coverage: reasonable pixel density (not too sparse, not too dense)
-        - Balance: spatial distribution across canvas quadrants
-        - Visual coherence: derived from recent coherence history if available
-
-        This provides an alternative completion path to attention exhaustion.
-        """
-        if len(self.pixels) < 50:
-            return 0.0  # Too sparse to evaluate
-
-        # Coverage score: ideal density is 5-25% of canvas (2880-14400 pixels)
-        max_pixels = self.width * self.height
-        density = len(self.pixels) / max_pixels
-        if density < 0.05:
-            coverage = density / 0.05  # Ramp up from 0 to 1 as we approach 5%
-        elif density > 0.25:
-            coverage = max(0.0, 1.0 - (density - 0.25) / 0.5)  # Ramp down if too dense
-        else:
-            coverage = 1.0  # Sweet spot: 5-25%
-
-        # Balance score: spatial distribution across quadrants
-        # Divide canvas into 4 quadrants and check for reasonable distribution
-        quadrants = [0, 0, 0, 0]
-        mid_x, mid_y = self.width // 2, self.height // 2
-        for (x, y) in self.pixels.keys():
-            quad = (0 if x < mid_x else 1) + (0 if y < mid_y else 2)
-            quadrants[quad] += 1
-
-        total = len(self.pixels)
-        quadrant_ratios = [q / total for q in quadrants]
-        # Good balance: each quadrant has 10-50% of pixels (not all in one corner)
-        balance_scores = [1.0 if 0.1 <= r <= 0.5 else min(r / 0.1, (1.0 - r) / 0.5) for r in quadrant_ratios]
-        balance = sum(balance_scores) / 4.0
-
-        # Coherence score: use recent coherence history if available
-        coherence = 0.5  # Default neutral
-        if len(self.coherence_history) >= 5:
-            recent = self.coherence_history[-10:]
-            coherence = sum(recent) / len(recent)
-
-        # Weighted combination: coverage 40%, balance 30%, coherence 30%
-        satisfaction = 0.4 * coverage + 0.3 * balance + 0.3 * coherence
-        return min(1.0, max(0.0, satisfaction))
-
-    def mark_satisfied(self):
-        """Mark that Lumen feels satisfied with current drawing."""
-        if not self.is_satisfied:
-            self.is_satisfied = True
-            self.satisfaction_time = time.time()
-            print(f"[Canvas] Lumen feels satisfied with drawing ({len(self.pixels)} pixels)", file=sys.stderr, flush=True)
-
-    def save_to_disk(self):
-        """Persist canvas state to disk."""
-        try:
-            # Convert pixel dict keys to strings for JSON
-            pixel_data = {f"{x},{y}": list(color) for (x, y), color in self.pixels.items()}
-            data = {
-                "pixels": pixel_data,
-                "recent_locations": self.recent_locations,
-                "drawing_phase": self.drawing_phase,
-                "phase_start_time": self.phase_start_time,
-                "last_save_time": self.last_save_time,
-                "last_clear_time": self.last_clear_time,
-                "is_satisfied": self.is_satisfied,
-                "satisfaction_time": self.satisfaction_time,
-                "drawings_saved": self.drawings_saved,
-                "energy": self.energy,
-                "mark_count": self.mark_count,
-                "era": self._era_name,
-                "pending_era_switch": self.pending_era_switch,
-                # Attention/coherence/narrative state
-                "curiosity": self.curiosity,
-                "engagement": self.engagement,
-                "fatigue": self.fatigue,
-                "arc_phase": self.arc_phase,
-                "coherence_history": self.coherence_history[-20:],  # Keep last 20
-                "i_momentum": self.i_momentum,
-            }
-            atomic_json_write(_get_canvas_path(), data)
-        except Exception as e:
-            print(f"[Canvas] Save to disk error: {e}", file=sys.stderr, flush=True)
-
-    def load_from_disk(self):
-        """Load canvas state from disk - defensive against corruption."""
-        path = _get_canvas_path()
-        if not path.exists():
-            return  # No saved state, use defaults
-
-        data = None
-        try:
-            raw_content = path.read_text()
-            if not raw_content.strip():
-                # Empty file - delete and use defaults
-                print("[Canvas] Empty canvas file, starting fresh", file=sys.stderr, flush=True)
-                path.unlink()
-                return
-            data = json.loads(raw_content)
-        except json.JSONDecodeError as e:
-            # Corrupted JSON - delete file and start fresh
-            print(f"[Canvas] Corrupted canvas file (invalid JSON): {e}", file=sys.stderr, flush=True)
-            try:
-                path.unlink()
-                print("[Canvas] Deleted corrupted file, starting fresh", file=sys.stderr, flush=True)
-            except Exception:
-                pass
-            return
-        except Exception as e:
-            print(f"[Canvas] Failed to read canvas file: {e}", file=sys.stderr, flush=True)
-            return
-
-        # Validate data is a dict
-        if not isinstance(data, dict):
-            print(f"[Canvas] Invalid canvas data (not a dict), starting fresh", file=sys.stderr, flush=True)
-            try:
-                path.unlink()
-            except Exception:
-                pass
-            return
-
-        # Load pixels with validation
-        loaded_pixels = 0
-        skipped_pixels = 0
-        try:
-            pixels_data = data.get("pixels", {})
-            if isinstance(pixels_data, dict):
-                for key, color in pixels_data.items():
-                    try:
-                        # Validate key format "x,y"
-                        if not isinstance(key, str) or "," not in key:
-                            skipped_pixels += 1
-                            continue
-                        parts = key.split(",")
-                        if len(parts) != 2:
-                            skipped_pixels += 1
-                            continue
-                        x, y = int(parts[0]), int(parts[1])
-
-                        # Validate coordinates
-                        if not (0 <= x < self.width and 0 <= y < self.height):
-                            skipped_pixels += 1
-                            continue
-
-                        # Validate color format [r, g, b]
-                        if not isinstance(color, (list, tuple)) or len(color) != 3:
-                            skipped_pixels += 1
-                            continue
-                        r, g, b = int(color[0]), int(color[1]), int(color[2])
-                        if not all(0 <= c <= 255 for c in (r, g, b)):
-                            skipped_pixels += 1
-                            continue
-
-                        self.pixels[(x, y)] = (r, g, b)
-                        loaded_pixels += 1
-                    except (ValueError, TypeError, IndexError):
-                        skipped_pixels += 1
-                        continue
-        except Exception as e:
-            print(f"[Canvas] Error loading pixels: {e}", file=sys.stderr, flush=True)
-
-        # Load recent_locations with validation
-        try:
-            locations = data.get("recent_locations", [])
-            if isinstance(locations, list):
-                for loc in locations[-20:]:  # Keep last 20
-                    if isinstance(loc, (list, tuple)) and len(loc) == 2:
-                        try:
-                            x, y = int(loc[0]), int(loc[1])
-                            if 0 <= x < self.width and 0 <= y < self.height:
-                                self.recent_locations.append((x, y))
-                        except (ValueError, TypeError):
-                            pass
-        except Exception:
-            pass  # Non-fatal, use empty list
-
-        # Load scalar fields with type validation
-        try:
-            phase = data.get("drawing_phase", "exploring")
-            if isinstance(phase, str) and phase in ("exploring", "building", "reflecting", "resting"):
-                self.drawing_phase = phase
-        except Exception:
-            pass
-
-        try:
-            phase_time = data.get("phase_start_time", time.time())
-            if isinstance(phase_time, (int, float)):
-                self.phase_start_time = float(phase_time)
-        except Exception:
-            pass
-
-        try:
-            save_time = data.get("last_save_time", 0.0)
-            if isinstance(save_time, (int, float)):
-                self.last_save_time = float(save_time)
-        except Exception:
-            pass
-
-        try:
-            clear_time = data.get("last_clear_time", time.time())
-            if isinstance(clear_time, (int, float)):
-                self.last_clear_time = float(clear_time)
-        except Exception:
-            pass
-
-        try:
-            satisfied = data.get("is_satisfied", False)
-            if isinstance(satisfied, bool):
-                self.is_satisfied = satisfied
-        except Exception:
-            pass
-
-        try:
-            sat_time = data.get("satisfaction_time", 0.0)
-            if isinstance(sat_time, (int, float)):
-                self.satisfaction_time = float(sat_time)
-        except Exception:
-            pass
-
-        try:
-            saved_count = data.get("drawings_saved", 0)
-            if isinstance(saved_count, int) and saved_count >= 0:
-                self.drawings_saved = saved_count
-        except Exception:
-            pass
-
-        # Restore drawing energy (survives restarts)
-        try:
-            energy = data.get("energy")
-            if isinstance(energy, (int, float)) and 0.0 <= energy <= 1.0:
-                self.energy = float(energy)
-        except Exception:
-            pass
-
-        try:
-            marks = data.get("mark_count")
-            if isinstance(marks, int) and marks >= 0:
-                self.mark_count = marks
-        except Exception:
-            pass
-
-        # Restore art era (defaults to "gestural" for backward compatibility)
-        try:
-            era = data.get("era", "gestural")
-            if isinstance(era, str) and era:
-                self._era_name = era
-        except Exception:
-            pass
-
-        # Restore pending era switch
-        try:
-            pending = data.get("pending_era_switch")
-            if pending is None or (isinstance(pending, str) and pending):
-                self.pending_era_switch = pending
-        except Exception:
-            pass
-
-        # Restore attention signals
-        try:
-            curiosity = data.get("curiosity", 1.0)
-            if isinstance(curiosity, (int, float)) and 0.0 <= curiosity <= 1.0:
-                self.curiosity = float(curiosity)
-        except Exception:
-            pass
-
-        try:
-            engagement = data.get("engagement", 0.5)
-            if isinstance(engagement, (int, float)) and 0.0 <= engagement <= 1.0:
-                self.engagement = float(engagement)
-        except Exception:
-            pass
-
-        try:
-            fatigue = data.get("fatigue", 0.0)
-            if isinstance(fatigue, (int, float)) and 0.0 <= fatigue <= 1.0:
-                self.fatigue = float(fatigue)
-        except Exception:
-            pass
-
-        # Restore narrative arc state
-        try:
-            arc = data.get("arc_phase", "opening")
-            if isinstance(arc, str) and arc in ("opening", "developing", "resolving", "closing"):
-                self.arc_phase = arc
-        except Exception:
-            pass
-
-        try:
-            history = data.get("coherence_history", [])
-            if isinstance(history, list):
-                self.coherence_history = [float(c) for c in history[-20:] if isinstance(c, (int, float))]
-        except Exception:
-            pass
-
-        try:
-            i_mom = data.get("i_momentum", 0.0)
-            if isinstance(i_mom, (int, float)):
-                self.i_momentum = float(i_mom)
-        except Exception:
-            pass
-
-        # Invalidate render cache after loading
-        self._dirty = True
-        self._cached_image = None
-        self._new_pixels.clear()
-
-        if skipped_pixels > 0:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels (skipped {skipped_pixels} invalid), arc={self.arc_phase}, curio={self.curiosity:.2f}, era={self._era_name}", file=sys.stderr, flush=True)
-        else:
-            print(f"[Canvas] Loaded from disk: {loaded_pixels} pixels, arc={self.arc_phase}, curio={self.curiosity:.2f}, era={self._era_name}", file=sys.stderr, flush=True)
-
-
-# EISV parameters for drawing (scaled from governance_core/parameters.py for ~920 mark timescale)
-_EISV_PARAMS = {
-    "alpha": 0.01,       # I→E coupling
-    "beta_E": 0.005,     # S damping on E
-    "gamma_E": 0.002,    # drift feedback to E
-    "beta_I": 0.015,     # coherence boost to I
-    "k": 0.005,          # S→I coupling (negative)
-    "gamma_I": 0.012,    # I self-regulation (linear)
-    "mu": 0.04,          # S natural decay
-    "lambda1": 0.02,     # drift → S coupling
-    "lambda2": 0.008,    # coherence → S reduction
-    "kappa": 0.015,      # (I-E) → V coupling (FLIPPED from governance)
-    "delta": 0.02,       # V decay (slow = long memory)
-    "C1": 1.0,           # coherence sigmoid steepness
-    "Cmax": 1.0,         # max coherence
-    "dt": 0.1,           # Euler step size
-}
-
-
-@dataclass
-class DrawingState:
-    """Drawing state with EISV core + attention/coherence/narrative signals.
-
-    EISV math preserved (V flipped to κ(I-E) so coherence rises as Lumen commits).
-    Completion emerges from attention exhaustion + coherence settling, not arbitrary energy.
-    """
-    # EISV core (preserved)
-    E: float = 0.7    # Drawing energy (now derived from attention)
-    I: float = 0.2    # Intentionality (proprioceptive: locks, orbits, gesture runs)
-    S: float = 0.5    # Behavioral entropy (gesture variety)
-    V: float = 0.0    # Accumulated I-E imbalance
-    gesture_history: List[str] = field(default_factory=list)
-
-    # Attention signals (NEW)
-    curiosity: float = 1.0          # Exploratory capacity - depletes exploring, regenerates with patterns
-    engagement: float = 0.5         # Absorption in current pattern
-    fatigue: float = 0.0            # Accumulated decision fatigue (never decreases during drawing)
-
-    # Coherence tracking (NEW)
-    coherence_history: List[float] = field(default_factory=list)
-    coherence_velocity: float = 0.0  # EMA of dC/dt
-
-    # Narrative arc (NEW)
-    arc_phase: str = "opening"       # opening, developing, resolving, closing
-    phase_mark_count: int = 0        # Marks in current phase
-    i_momentum: float = 0.0          # Smoothed I trend (EMA)
-
-    def reset(self):
-        """Reset state for new drawing."""
-        self.E = 0.7
-        self.I = 0.2
-        self.S = 0.5
-        self.V = 0.0
-        self.gesture_history = []
-        # Attention
-        self.curiosity = 1.0
-        self.engagement = 0.5
-        self.fatigue = 0.0
-        # Coherence tracking
-        self.coherence_history = []
-        self.coherence_velocity = 0.0
-        # Narrative arc
-        self.arc_phase = "opening"
-        self.phase_mark_count = 0
-        self.i_momentum = 0.0
-
-    def coherence(self) -> float:
-        """C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))"""
-        p = _EISV_PARAMS
-        return p["Cmax"] * 0.5 * (1.0 + math.tanh(p["C1"] * self.V))
-
-    def coherence_settled(self) -> bool:
-        """True when coherence stabilizes at high value (pattern found itself)."""
-        if len(self.coherence_history) < 20:
-            return False
-        recent = self.coherence_history[-10:]
-        mean_C = sum(recent) / len(recent)
-        variance = sum((c - mean_C)**2 for c in recent) / len(recent)
-        return mean_C > 0.7 and variance < 0.01
-
-    def attention_exhausted(self) -> bool:
-        """True when curiosity depleted AND either disengaged or fatigued."""
-        return self.curiosity < 0.15 and (
-            self.engagement < 0.3 or self.fatigue > 0.8
-        )
-
-    def narrative_complete(self, canvas=None) -> bool:
-        """True when drawing has naturally completed its arc.
-
-        Multiple completion paths (OR logic):
-        1. Already in closing phase (manual/explicit completion)
-        2. Coherence settled AND attention exhausted (pattern found + no energy)
-        3. High compositional satisfaction AND curiosity depleted (good composition + explored)
-        4. Extreme fatigue (emergency exit if stuck)
-        5. Stalled too long — energy near-zero with pixels on canvas (prevents stuck drawings)
-
-        This gives Lumen multiple ways to complete drawings naturally.
-        """
-        # Path 1: Already closing
-        if self.arc_phase == "closing":
-            return True
-
-        # Path 2: Pattern found AND attention exhausted (original strict path)
-        if self.coherence_settled() and self.attention_exhausted():
-            return True
-
-        # Path 3: Good composition AND curiosity depleted (new compositional path)
-        if canvas is not None:
-            satisfaction = canvas.compositional_satisfaction()
-            if satisfaction > 0.7 and self.curiosity < 0.2:
-                return True
-
-        # Path 4: Emergency exit - too fatigued to continue
-        if self.fatigue > 0.85:
-            return True
-
-        # Path 5: Stalled — energy is near-zero (no marks being placed) and
-        # phase hasn't progressed for >120 seconds. This catches the case where
-        # attention signals stall because no marks are placed to evolve them.
-        if canvas is not None and self.derived_energy < 0.05:
-            import time
-            phase_duration = time.time() - canvas.phase_start_time
-            if phase_duration > 120 and len(canvas.pixels) >= 50:
-                return True
-
-        return False
-
-    @property
-    def derived_energy(self) -> float:
-        """Attention-derived energy for draw_chance modulation."""
-        base = 0.6 * self.curiosity + 0.4 * self.engagement
-        return base * (1.0 - 0.5 * self.fatigue)
-
-
-# Alias for backward compatibility
-DrawingEISV = DrawingState
-
-
-@dataclass
-class DrawingGoal:
-    """A compositional intention for the current drawing.
-
-    Generated at canvas_clear time from Lumen's current state.
-    Provides gentle biases to color temperature and initial focus,
-    giving each drawing a subtle intentional character.
-    """
-    warmth_bias: float = 0.0        # -0.15 to +0.15, biases warmth for generate_color
-    coverage_target: str = "balanced"  # "sparse", "balanced", "dense"
-    initial_quadrant: Optional[int] = None  # 0-3, starting focus quadrant
-    description: str = ""
-
-    @staticmethod
-    def from_state(warmth: float, clarity: float,
-                   hour: Optional[int] = None) -> "DrawingGoal":
-        """Generate a drawing goal from current anima state."""
-        goal = DrawingGoal()
-
-        # Color warmth follows anima warmth (subtle: max +/-0.15)
-        goal.warmth_bias = (warmth - 0.5) * 0.3
-
-        # Coverage follows clarity
-        if clarity > 0.7:
-            goal.coverage_target = "sparse"
-        elif clarity < 0.3:
-            goal.coverage_target = "dense"
-        else:
-            goal.coverage_target = "balanced"
-
-        # Initial focus quadrant by time of day
-        if hour is not None:
-            if 6 <= hour < 12:
-                goal.initial_quadrant = 0  # Top-left: morning freshness
-            elif 12 <= hour < 18:
-                goal.initial_quadrant = 1  # Top-right: afternoon energy
-            # Night: None (center default)
-
-        parts = []
-        if goal.warmth_bias > 0.1:
-            parts.append("warm tones")
-        elif goal.warmth_bias < -0.1:
-            parts.append("cool tones")
-        parts.append(goal.coverage_target)
-        goal.description = ", ".join(parts) if parts else "open exploration"
-
-        return goal
-
-
-@dataclass
-class DrawingIntent:
-    """Lumen's drawing intent — focus, state, and mark count.
-
-    Energy is now derived from attention signals (curiosity, engagement, fatigue)
-    rather than arbitrary depletion. Completion emerges from narrative_complete().
-
-    Era-specific state (gestures, direction locks, orbits) lives in era_state,
-    which is created by the active ArtEra module.
-    """
-    focus_x: float = 120.0
-    focus_y: float = 120.0
-    direction: float = 0.0
-    mark_count: int = 0
-
-    # Drawing state with EISV + attention + coherence + narrative (universal across all eras)
-    state: DrawingState = field(default_factory=DrawingState)
-
-    # Era-specific state (opaque to the engine)
-    era_state: object = None  # EraState subclass, created by active era
-
-    @property
-    def energy(self) -> float:
-        """Attention-derived energy for draw_chance modulation."""
-        return self.state.derived_energy
-
-    @energy.setter
-    def energy(self, value: float):
-        """Legacy setter - adjusts curiosity to approximate the requested energy."""
-        # For backward compatibility during transition
-        self.state.curiosity = max(0.0, min(1.0, value))
-
-    # Backward compatibility alias
-    @property
-    def eisv(self) -> DrawingState:
-        """Alias for backward compatibility."""
-        return self.state
-
-    def reset(self):
-        """Reset intent for a new canvas. Era state is recreated by the active era."""
-        self.focus_x = 120.0
-        self.focus_y = 120.0
-        self.direction = random.uniform(0, 2 * math.pi)
-        self.mark_count = 0
-        self.state.reset()
-        self.era_state = None
-
-
 class ScreenRenderer:
     """Renders different screens to display."""
 
@@ -751,32 +116,13 @@ class ScreenRenderer:
         """Initialize with display renderer."""
         self._display = display_renderer
         self._state = ScreenState()
-        self._canvas = CanvasState()
-        self._intent = DrawingIntent()
-        self._drawing_goal: Optional[DrawingGoal] = None
-        self._last_anima = None  # Store last anima for goal generation at canvas_clear
-        # Load any persisted canvas from disk (includes attention/narrative state)
-        self._canvas.load_from_disk()
-        # Restore drawing state from persisted canvas
-        self._intent.mark_count = self._canvas.mark_count
-        # Restore attention signals
-        self._intent.state.curiosity = self._canvas.curiosity
-        self._intent.state.engagement = self._canvas.engagement
-        self._intent.state.fatigue = self._canvas.fatigue
-        # Restore narrative arc
-        self._intent.state.arc_phase = self._canvas.arc_phase
-        self._intent.state.coherence_history = self._canvas.coherence_history.copy()
-        self._intent.state.i_momentum = self._canvas.i_momentum
-        # Load active art era
-        from .eras import get_era
-        self._active_era = get_era(self._canvas._era_name)
-        self._intent.era_state = self._active_era.create_state()
-        self._db_path = db_path or "anima.db"  # Default database path
+        self._db_path = db_path or "anima.db"
         self._identity_store = identity_store
-        # Initialize expression mood tracker
-        self._mood_tracker = ExpressionMoodTracker(identity_store=identity_store)
+
+        # Drawing engine owns canvas, intent, era, mood tracker
+        self.drawing_engine = DrawingEngine(db_path=self._db_path, identity_store=identity_store)
+
         # Initialize user action time
-        import time
         self._state.last_user_action_time = time.time()
         # Cache for learning screen (DB queries are slow - 20+ seconds)
         self._learning_visualizer: Optional[LearningVisualizer] = None
@@ -797,6 +143,79 @@ class ScreenRenderer:
         self._screen_cache_order: List[str] = []  # LRU order
         # UNITARES agent_id (for display on identity screen)
         self._unitares_agent_id: Optional[str] = None
+        # Neural waveform history (scrolling traces)
+        from collections import deque
+        self._neural_history: deque = deque(maxlen=60)
+        # Sensor sparkline history
+        self._sensor_history: deque = deque(maxlen=40)
+
+    # --- Backward-compat properties for drawing engine internals ---
+    @property
+    def _canvas(self):
+        return self.drawing_engine.canvas
+
+    @property
+    def _intent(self):
+        return self.drawing_engine.intent
+
+    @property
+    def _active_era(self):
+        return self.drawing_engine.active_era
+
+    @_active_era.setter
+    def _active_era(self, value):
+        self.drawing_engine.active_era = value
+
+    @property
+    def _drawing_goal(self):
+        return self.drawing_engine.drawing_goal
+
+    @_drawing_goal.setter
+    def _drawing_goal(self, value):
+        self.drawing_engine.drawing_goal = value
+
+    @property
+    def _last_anima(self):
+        return self.drawing_engine.last_anima
+
+    @_last_anima.setter
+    def _last_anima(self, value):
+        self.drawing_engine.last_anima = value
+
+    @property
+    def _mood_tracker(self):
+        return self.drawing_engine._mood_tracker
+
+    # --- Pass-through methods for server.py callers ---
+    def canvas_save(self, **kw):
+        return self.drawing_engine.canvas_save(**kw)
+
+    def canvas_clear(self, **kw):
+        return self.drawing_engine.canvas_clear(**kw)
+
+    def get_drawing_eisv(self):
+        return self.drawing_engine.get_drawing_eisv()
+
+    def get_current_era(self):
+        return self.drawing_engine.get_current_era()
+
+    def set_era(self, era_name, force_immediate=False):
+        return self.drawing_engine.set_era(era_name, force_immediate)
+
+    def era_cursor_up(self):
+        return self.drawing_engine.era_cursor_up(self._state)
+
+    def era_cursor_down(self):
+        return self.drawing_engine.era_cursor_down(self._state)
+
+    def era_select_current(self):
+        return self.drawing_engine.era_select_current(self._state)
+
+    def canvas_check_autonomy(self, anima=None):
+        return self.drawing_engine.canvas_check_autonomy(anima)
+
+    def _lumen_draw(self, anima, draw=None):
+        return self.drawing_engine.draw(anima, draw)
 
     def _get_messages_cache_hash(self, messages: list, scroll_idx: int, expanded_id: Optional[str]) -> str:
         """Compute hash of message screen state for cache invalidation."""
@@ -1074,32 +493,54 @@ class ScreenRenderer:
         else:
             self.set_mode(ScreenMode.NOTEPAD)
 
-    def _draw_screen_indicator(self, draw, current_mode: ScreenMode):
-        """Draw small dots at bottom showing current screen position."""
-        # Screen order (including notepad, questions, visitors, art_eras in regular cycle)
-        screens = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS,
-                   ScreenMode.DIAGNOSTICS, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
+    # Screen groups for indicator display
+    _SCREEN_GROUPS = {
+        ScreenMode.FACE: ("home", [ScreenMode.FACE]),
+        ScreenMode.IDENTITY: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
+        ScreenMode.SENSORS: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
+        ScreenMode.DIAGNOSTICS: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
+        ScreenMode.HEALTH: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
+        ScreenMode.NEURAL: ("mind", [ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.MESSAGES: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
+        ScreenMode.QUESTIONS: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
+        ScreenMode.VISITORS: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
+        ScreenMode.NOTEPAD: ("art", [ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]),
+        ScreenMode.ART_ERAS: ("art", [ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]),
+    }
 
+    def _draw_screen_indicator(self, draw, current_mode: ScreenMode):
+        """Draw group name + position indicator at bottom-right (e.g., 'mind 2/3')."""
+        group_info = self._SCREEN_GROUPS.get(current_mode)
+        if not group_info:
+            return
+
+        group_name, group_screens = group_info
         try:
-            current_idx = screens.index(current_mode)
+            pos = group_screens.index(current_mode) + 1
         except ValueError:
             return
 
-        # Position at bottom right corner (avoids status text on left)
-        dot_radius = 2
-        dot_spacing = 8
-        total_width = len(screens) * dot_spacing
-        start_x = 240 - total_width - 4  # Right-aligned with 4px margin
-        y = 236  # Very bottom
+        total = len(group_screens)
+        if total == 1:
+            label = group_name
+        else:
+            label = f"{group_name} {pos}/{total}"
 
-        GRAY = (60, 60, 60)
-        WHITE = (180, 180, 180)
+        fonts = self._get_fonts()
+        font = fonts.get('tiny', fonts.get('micro'))
+        DIM = (100, 100, 100)
 
-        for i, _ in enumerate(screens):
-            x = start_x + i * dot_spacing + dot_radius
-            color = WHITE if i == current_idx else GRAY
-            draw.ellipse([x - dot_radius, y - dot_radius, x + dot_radius, y + dot_radius],
-                        fill=color)
+        # Right-aligned at bottom
+        try:
+            bbox = font.getbbox(label)
+            text_w = bbox[2] - bbox[0]
+        except Exception:
+            text_w = len(label) * 6
+        x = 240 - text_w - 6
+        y = 232
+        draw.text((x, y), label, fill=DIM, font=font)
 
     def _draw_status_bar(self, draw):
         """Draw status indicators at top-right (WiFi, governance connection)."""
@@ -1347,7 +788,7 @@ class ScreenRenderer:
 
             # Store latest state for use by canvas_save growth notifications
             self._last_anima = anima
-            self._last_readings = readings
+            self.drawing_engine._last_readings = readings
 
             # Store UNITARES agent_id for identity screen display
             if governance and governance.get("unitares_agent_id"):
@@ -1387,7 +828,7 @@ class ScreenRenderer:
             mode = self._state.mode
             try:
                 if mode == ScreenMode.FACE:
-                    self._render_face(face_state, identity)
+                    self._render_face(face_state, identity, anima)
                 elif mode == ScreenMode.SENSORS:
                     self._render_sensors(readings)
                 elif mode == ScreenMode.IDENTITY:
@@ -1493,11 +934,11 @@ class ScreenRenderer:
         if render_time > 0.5:  # Log if >500ms
             print(f"[Screen] Slow render: {mode.value} took {render_time*1000:.0f}ms", file=sys.stderr, flush=True)
     
-    def _render_face(self, face_state: Optional[FaceState], identity: Optional[CreatureIdentity]):
+    def _render_face(self, face_state: Optional[FaceState], identity: Optional[CreatureIdentity], anima: Optional[Anima] = None):
         """Render face screen (default)."""
         if face_state:
             name = identity.name if identity else None
-            self._display.render_face(face_state, name=name)
+            self._display.render_face(face_state, name=name, anima=anima)
         else:
             # Defensive: show minimal face if face_state is None
             # This prevents blank screen during state transitions
@@ -1671,7 +1112,19 @@ class ScreenRenderer:
                     charge_str = "⚡" if charging else ""
                     draw.text((10, y), f"battery: {level}%{charge_str}", fill=bat_color, font=font_small)
 
-                # Nav dots
+                # Record sensor history for sparklines
+                self._sensor_history.append((
+                    readings.ambient_temp_c or 0,
+                    readings.humidity_pct or 0,
+                    readings.cpu_temp_c or 0,
+                ))
+
+                # Draw sparklines next to key values (if enough history)
+                if len(self._sensor_history) >= 5:
+                    self._draw_sensor_sparklines(draw, readings)
+
+                # Status bar + screen indicator
+                self._draw_status_bar(draw)
                 self._draw_screen_indicator(draw, ScreenMode.SENSORS)
 
                 # Update display + cache
@@ -1714,6 +1167,43 @@ class ScreenRenderer:
         else:
             self._display.render_text("SENSORS\n\nno data", (10, 10), color=COLORS.TEXT_DIM)
     
+    def _draw_sensor_sparklines(self, draw, readings):
+        """Draw tiny sparklines to the right of sensor values."""
+        history = list(self._sensor_history)
+        n = len(history)
+        if n < 5:
+            return
+
+        ORANGE = COLORS.SOFT_ORANGE
+        GREEN = COLORS.SOFT_GREEN
+
+        # Sparkline config: (data_index, y_center, color)
+        sparklines = [
+            (0, 21, ORANGE if (readings.ambient_temp_c or 0) > 25 else GREEN),  # temp
+            (1, 43, GREEN),   # humidity
+            (2, 95, GREEN),   # cpu temp
+        ]
+
+        spark_x = 175
+        spark_w = 40
+        spark_h = 12
+
+        for data_idx, y_center, color in sparklines:
+            values = [h[data_idx] for h in history]
+            v_min = min(values)
+            v_max = max(values)
+            v_range = v_max - v_min if v_max > v_min else 1.0
+
+            y_top = y_center - spark_h // 2
+            points = []
+            for i, v in enumerate(values):
+                x = spark_x + int(i * spark_w / (n - 1))
+                y = y_top + spark_h - int(((v - v_min) / v_range) * spark_h)
+                points.append((x, y))
+
+            if len(points) >= 2:
+                draw.line(points, fill=color, width=1)
+
     def _render_identity(self, identity: Optional[CreatureIdentity]):
         """Render identity screen with colors and nav dots."""
         if not identity:
@@ -1799,7 +1289,35 @@ class ScreenRenderer:
                     unitares_short = self._unitares_agent_id[:8]
                     draw.text((130, y), f"gov: {unitares_short}", fill=GREEN, font=font_small)
 
-                # Nav dots
+                # Alive ratio ring (right side)
+                try:
+                    from .design import wellness_to_color
+                    alive_ratio = identity.alive_ratio()
+                    ring_cx, ring_cy, ring_r = 195, 80, 30
+                    # Background ring (dim)
+                    draw.arc([ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r],
+                             0, 360, fill=(40, 40, 40), width=8)
+                    # Filled arc (0 degrees = 3 o'clock, draw clockwise from top)
+                    if alive_ratio > 0.01:
+                        ring_color = wellness_to_color(alive_ratio)
+                        end_angle = int(alive_ratio * 360)
+                        draw.arc([ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r],
+                                 -90, -90 + end_angle, fill=ring_color, width=8)
+                    # Percentage text centered in ring
+                    pct_text = f"{alive_pct:.0f}%"
+                    try:
+                        bbox = fonts['small'].getbbox(pct_text)
+                        tw = bbox[2] - bbox[0]
+                        th = bbox[3] - bbox[1]
+                    except Exception:
+                        tw, th = len(pct_text) * 6, 10
+                    draw.text((ring_cx - tw // 2, ring_cy - th // 2),
+                              pct_text, fill=COLORS.TEXT_PRIMARY, font=fonts['small'])
+                except Exception:
+                    pass  # Non-fatal
+
+                # Status bar + screen indicator
+                self._draw_status_bar(draw)
                 self._draw_screen_indicator(draw, ScreenMode.IDENTITY)
 
                 # Update display
@@ -2051,7 +1569,8 @@ class ScreenRenderer:
                 except Exception:
                     pass
 
-            # Screen indicator dots
+            # Status bar + screen indicator
+            self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.DIAGNOSTICS)
 
             # Update display + cache
@@ -2202,6 +1721,9 @@ class ScreenRenderer:
 
                 y += row_height
 
+            self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, ScreenMode.HEALTH)
+
             self._display.render_image(image)
             self._store_screen_cache("health", health_key, image)
 
@@ -2210,22 +1732,12 @@ class ScreenRenderer:
             self._display.render_text(f"HEALTH\n\n{overall}\n\nError:\n{str(e)[:40]}", (10, 10))
 
     def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
-        """Render neural activity screen - EEG frequency band visualization."""
+        """Render neural activity screen - scrolling waveform traces."""
         if not readings:
             self._display.render_text("NEURAL\n\nNo data", (10, 10))
             return
 
-        # Cache: neural bands + anima state rounded to display precision
-        raw = readings.to_dict()
-        neural_key = (
-            f"{raw.get('eeg_delta_power', 0):.2f}|{raw.get('eeg_theta_power', 0):.2f}|"
-            f"{raw.get('eeg_alpha_power', 0):.2f}|{raw.get('eeg_beta_power', 0):.2f}|"
-            f"{raw.get('eeg_gamma_power', 0):.2f}"
-        )
-        if anima:
-            neural_key += f"|{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|{anima.presence:.2f}"
-        if self._check_screen_cache("neural", neural_key):
-            return
+        # No screen cache for neural — waveforms scroll every frame
 
         try:
             if not hasattr(self._display, '_create_canvas'):
@@ -2236,80 +1748,78 @@ class ScreenRenderer:
 
             fonts = self._get_fonts()
             font_small = fonts['small']
-            font_medium = fonts['medium']
             font_title = fonts['title']
             font_tiny = fonts['tiny']
             font_micro = fonts['micro']
 
-            WHITE = COLORS.TEXT_PRIMARY
             DIM = COLORS.TEXT_DIM
-            SUBTLE = COLORS.BG_SUBTLE
-            SECONDARY = COLORS.TEXT_SECONDARY
 
             # Band data from readings
             raw = readings.to_dict()
-            bands = [
-                ("delta",  raw.get("eeg_delta_power") or 0, (100, 100, 240),  "0.5-4 Hz"),
-                ("theta",  raw.get("eeg_theta_power") or 0, (140, 92, 246),   "4-8 Hz"),
-                ("alpha",  raw.get("eeg_alpha_power") or 0, (6, 182, 212),    "8-13 Hz"),
-                ("beta",   raw.get("eeg_beta_power") or 0,  (34, 197, 94),    "13-30 Hz"),
-                ("gamma",  raw.get("eeg_gamma_power") or 0, (245, 158, 11),   "30+ Hz"),
+            band_values = (
+                raw.get("eeg_delta_power") or 0,
+                raw.get("eeg_theta_power") or 0,
+                raw.get("eeg_alpha_power") or 0,
+                raw.get("eeg_beta_power") or 0,
+                raw.get("eeg_gamma_power") or 0,
+            )
+            self._neural_history.append(band_values)
+
+            band_info = [
+                ("delta", (100, 100, 240)),
+                ("theta", (140, 92, 246)),
+                ("alpha", (6, 182, 212)),
+                ("beta",  (34, 197, 94)),
+                ("gamma", (245, 158, 11)),
             ]
 
             # Title
             draw.text((10, 6), "Neural Activity", fill=COLORS.SOFT_CYAN, font=font_title)
 
             # Dominant band indicator
-            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
-            dominant_name = bands[dominant_idx][0]
-            dominant_color = bands[dominant_idx][2]
+            dominant_idx = max(range(5), key=lambda i: band_values[i])
+            dominant_name = band_info[dominant_idx][0]
+            dominant_color = band_info[dominant_idx][1]
             draw.text((10, 26), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
 
-            # ---- Vertical bar chart ----
-            bar_area_top = 58
-            bar_area_bottom = 184
-            bar_area_height = bar_area_bottom - bar_area_top
-            bar_width = 28
-            bar_gap = 12
-            total_bars_width = len(bands) * bar_width + (len(bands) - 1) * bar_gap
-            bar_start_x = (240 - total_bars_width) // 2
+            # ---- Waveform traces ----
+            trace_x_start = 30
+            trace_x_end = 225
+            trace_width = trace_x_end - trace_x_start
+            trace_height = 20
+            trace_gap = 4
+            trace_y_start = 50
+            history = list(self._neural_history)
+            n_points = len(history)
 
-            # Background area
-            draw.rectangle([bar_start_x - 6, bar_area_top - 4, bar_start_x + total_bars_width + 6, bar_area_bottom + 4],
-                          fill=SUBTLE, outline=(30, 30, 40))
+            for band_idx, (name, color) in enumerate(band_info):
+                y_top = trace_y_start + band_idx * (trace_height + trace_gap)
+                y_bottom = y_top + trace_height
 
-            for i, (name, value, color, freq) in enumerate(bands):
-                x = bar_start_x + i * (bar_width + bar_gap)
+                # Band label on left
+                greek = {0: "\u03b4", 1: "\u03b8", 2: "\u03b1", 3: "\u03b2", 4: "\u03b3"}
+                draw.text((6, y_top + 4), greek[band_idx], fill=color, font=font_small)
 
-                # Bar background (track)
-                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
-                              fill=(15, 15, 22))
+                # Current value on right
+                val = band_values[band_idx]
+                draw.text((trace_x_end + 4, y_top + 4), f"{val*100:.0f}", fill=DIM, font=font_micro)
 
-                # Filled bar (bottom-up)
-                fill_height = int(value * bar_area_height)
-                if fill_height > 0:
-                    bar_top = bar_area_bottom - fill_height
-                    # Gradient effect: brighter at top
-                    from .design import dim_color, lighten_color
-                    draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom],
-                                  fill=color)
-                    # Bright cap at top of bar
-                    if fill_height > 3:
-                        bright = lighten_color(color, 60)
-                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2],
-                                      fill=bright)
+                # Background track
+                draw.rectangle([trace_x_start, y_top, trace_x_end, y_bottom],
+                              fill=(12, 12, 18))
 
-                # Value text above bar
-                pct_text = f"{value * 100:.0f}%"
-                draw.text((x + 2, bar_area_top - 14), pct_text, fill=color, font=font_micro)
-
-                # Greek letter label below bar
-                greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
-                letter = greek.get(name, name[0])
-                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 6), letter, fill=SECONDARY, font=font_medium)
+                # Draw waveform if we have enough data
+                if n_points >= 2:
+                    points = []
+                    for i, sample in enumerate(history):
+                        x = trace_x_start + int(i * trace_width / (n_points - 1))
+                        v = max(0.0, min(1.0, sample[band_idx]))
+                        y = y_bottom - int(v * trace_height)
+                        points.append((x, y))
+                    draw.line(points, fill=color, width=1)
 
             # ---- Band descriptions at bottom ----
-            y_desc = 202
+            y_desc = trace_y_start + 5 * (trace_height + trace_gap) + 4
             desc_map = {
                 "delta": "deep rest",
                 "theta": "meditation",
@@ -2317,8 +1827,6 @@ class ScreenRenderer:
                 "beta": "focus",
                 "gamma": "cognition",
             }
-
-            # Show dominant band description more prominently
             dominant_desc = desc_map.get(dominant_name, "")
             draw.text((10, y_desc), f"{dominant_name}: {dominant_desc}", fill=dominant_color, font=font_small)
 
@@ -2329,11 +1837,10 @@ class ScreenRenderer:
                 if mood:
                     draw.text((10, y_desc + 16), f"mood: {mood}", fill=DIM, font=font_tiny)
 
-            # Screen indicator dots
+            # Status bar + screen indicator
+            self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.NEURAL)
 
-            # Push to display + cache
-            self._store_screen_cache("neural", neural_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
@@ -2615,7 +2122,8 @@ class ScreenRenderer:
                 color = PURPLE if mood not in ("stressed", "overheated") else ORANGE
                 draw.text((bar_x, y_offset + i * 12), line, fill=color, font=font_small)
 
-            # Screen indicator dots
+            # Status bar + screen indicator
+            self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.LEARNING)
 
             # Update display
@@ -2957,7 +2465,8 @@ class ScreenRenderer:
                 hint = "▼ expand" if not self._state.message_expanded_id else "▼ collapse"
                 draw.text((100, 218), hint, fill=MUTED, font=font_small)
 
-            # Screen indicator dots
+            # Status bar + screen indicator
+            self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
 
             # Cache the rendered image for fast subsequent renders
@@ -3101,7 +2610,8 @@ class ScreenRenderer:
 
                 draw.text((10, y), f"phase: {phase}", fill=DIM, font=fonts['small'])
 
-                # Navigation dots
+                # Status bar + screen indicator
+                self._draw_status_bar(draw)
                 self._draw_screen_indicator(draw, ScreenMode.ART_ERAS)
 
                 if hasattr(self._display, '_image'):
@@ -3311,7 +2821,8 @@ class ScreenRenderer:
                 hint = "▼ expand" if not expanded_id else "▼ collapse"
                 draw.text((100, 220), hint, fill=MUTED, font=font_small)
 
-            # Screen indicator
+            # Status bar + screen indicator
+            self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, mode)
 
             # Always update display - ensure image is set and shown
@@ -3636,7 +3147,8 @@ class ScreenRenderer:
                     hint = "press:expand  ▲▼:select"
                 draw.text((80, 218), hint, fill=MUTED, font=font_small)
 
-            # Screen indicator dots
+            # Status bar + screen indicator
+            self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.QUESTIONS)
 
             # Always update display - ensure image is set and shown
@@ -3885,6 +3397,82 @@ class ScreenRenderer:
         except Exception:
             pass
 
+    def _render_self_graph(
+        self,
+        anima: Optional[Anima] = None,
+        readings: Optional[SensorReadings] = None,
+        identity: Optional[CreatureIdentity] = None,
+    ):
+        """Render Lumen's self-schema graph G_t."""
+        from ..self_schema import get_current_schema
+        from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
+        from ..growth import get_growth_system
+        from ..self_model import get_self_model
+
+        growth_system = None
+        try:
+            growth_system = get_growth_system()
+        except Exception:
+            pass
+
+        self_model = None
+        try:
+            self_model = get_self_model()
+        except Exception:
+            pass
+
+        schema = get_current_schema(
+            identity=identity,
+            anima=anima,
+            readings=readings,
+            growth_system=growth_system,
+            include_preferences=True,
+            self_model=self_model,
+        )
+
+        pixels = render_schema_to_pixels(schema)
+
+        if hasattr(self._display, '_create_canvas'):
+            try:
+                image, draw = self._display._create_canvas(SCHEMA_COLORS["background"])
+
+                for (x, y), color in pixels.items():
+                    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                        image.putpixel((x, y), color)
+
+                fonts = self._get_fonts()
+                font_small = fonts['small']
+                draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
+
+                core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+                learned_count = len(schema.nodes) - core_count
+                if learned_count > 0:
+                    count_str = f"{core_count} core + {learned_count} learned, {len(schema.edges)} edges"
+                else:
+                    count_str = f"{core_count} nodes, {len(schema.edges)} edges"
+                draw.text((5, 225), count_str, fill=(120, 120, 120), font=font_small)
+
+                self._draw_status_bar(draw)
+                self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
+
+                if hasattr(self._display, '_image'):
+                    self._display._image = image
+                if hasattr(self._display, '_show'):
+                    self._display._show()
+                return
+            except Exception as e:
+                print(f"[Self Graph] Canvas error: {e}", file=sys.stderr, flush=True)
+                import traceback
+                traceback.print_exc(file=sys.stderr)
+
+        core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+        learned_count = len(schema.nodes) - core_count
+        if learned_count > 0:
+            text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
+        else:
+            text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
+        self._display.render_text(text, (10, 10))
+
     def _render_notepad(self, anima: Optional[Anima] = None):
         """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave.
 
@@ -4055,970 +3643,4 @@ class ScreenRenderer:
                             self._display._show()
                 except Exception:
                     pass  # If even this fails, at least we logged everything
-    
-    def _lumen_draw(self, anima: Anima, draw=None):
-        """Lumen draws through the active era's mark-making vocabulary.
-
-        Completion emerges from attention/coherence/narrative, not arbitrary energy depletion.
-        draw: PIL ImageDraw for rendering new pixels (optional when drawing in background).
-        """
-        warmth = anima.warmth
-        clarity = anima.clarity
-        stability = anima.stability
-        presence = anima.presence
-
-        # Store last anima for goal generation at canvas_clear time
-        self._last_anima = anima
-
-        # Light regime: dark / dim / bright
-        # Uses corrected lux (self-glow subtracted) — raw lux is dominated by
-        # LED self-illumination (168-728 lux depending on brightness), so raw
-        # would never reach "dark" and would flip regimes from LED changes alone.
-        light_lux = anima.readings.light_lux if anima.readings else None
-        if light_lux is not None:
-            from ..config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
-            led_b = anima.readings.led_brightness if anima.readings.led_brightness is not None else 0.0
-            estimated_glow = led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
-            env_lux = max(0.0, light_lux - estimated_glow)
-            if env_lux < 20:
-                light_regime = "dark"
-            elif env_lux < 200:
-                light_regime = "dim"
-            else:
-                light_regime = "bright"
-        else:
-            light_regime = "dim"  # default assumption
-
-        # Update narrative arc phase (replaces energy-threshold phase logic)
-        self._update_narrative_arc()
-
-        # Ensure era state exists
-        if self._intent.era_state is None:
-            self._intent.era_state = self._active_era.create_state()
-        era_state = self._intent.era_state
-
-        # Draw frequency: balanced flow — not constipated, not diarrhea
-        base_chance = 0.07  # 7% base — ~1 mark every 10-25s when populated
-        expression_intensity = (presence + clarity) / 2.0
-        draw_chance = base_chance * (0.5 + expression_intensity)  # 3.5-7% range
-
-        # Attention-derived energy affects chance — tired Lumen draws less
-        draw_chance *= self._intent.energy
-
-        # Empty canvas: strong boost. Early canvas (1-150 px): gradual ramp down — no harsh cliff
-        pixel_count = len(self._canvas.pixels)
-        if pixel_count == 0:
-            empty_boost = 0.3 + (expression_intensity * 0.7)
-            draw_chance = max(draw_chance, empty_boost)
-        elif pixel_count < 150:
-            ramp = 0.12 + 0.18 * (1.0 - pixel_count / 150.0)
-            draw_chance = max(draw_chance, ramp)
-
-        if random.random() > draw_chance:
-            return
-
-        # Canvas size limit
-        if len(self._canvas.pixels) > 15000:
-            return
-
-        # --- Delegate to active era ---
-        # Apply drawing goal warmth bias (subtle color temperature shift)
-        draw_warmth = warmth
-        if self._drawing_goal and self._drawing_goal.warmth_bias != 0.0:
-            draw_warmth = max(0.0, min(1.0, warmth + self._drawing_goal.warmth_bias))
-
-        color, hue_category = self._active_era.generate_color(
-            era_state, draw_warmth, clarity, stability, presence, light_regime=light_regime)
-
-        C = self._intent.state.coherence()
-        if era_state.gesture_remaining <= 0:
-            self._active_era.choose_gesture(era_state, clarity, stability, presence, C)
-
-        # Detect gesture switch for fatigue tracking
-        old_gesture = era_state.gesture
-        self._active_era.place_mark(
-            era_state, self._canvas,
-            self._intent.focus_x, self._intent.focus_y,
-            self._intent.direction, self._intent.energy, color)
-        era_state.gesture_remaining -= 1
-        self._intent.mark_count += 1
-
-        new_fx, new_fy, new_dir = self._active_era.drift_focus(
-            era_state, self._intent.focus_x, self._intent.focus_y,
-            self._intent.direction, stability, presence, C, clarity)
-        self._intent.focus_x = new_fx
-        self._intent.focus_y = new_fy
-        self._intent.direction = new_dir
-
-        # --- EISV thermodynamic step ---
-        dE_coupling, C = self._eisv_step()
-
-        # Track gesture for behavioral entropy
-        state = self._intent.state
-        state.gesture_history.append(era_state.gesture)
-        if len(state.gesture_history) > 20:
-            state.gesture_history.pop(0)
-
-        # Detect gesture switch
-        gesture_switch = len(state.gesture_history) >= 2 and state.gesture_history[-1] != state.gesture_history[-2]
-
-        # Get I and S signals from EISV for attention update
-        I_signal = era_state.intentionality() if era_state else 0.1
-        gesture_count = len(era_state.gestures()) if era_state else 5
-        max_entropy = math.log2(max(gesture_count, 2))
-        if len(state.gesture_history) >= 5:
-            counts: Dict[str, int] = {}
-            for g in state.gesture_history:
-                counts[g] = counts.get(g, 0) + 1
-            total = len(state.gesture_history)
-            S_signal = 0.0
-            for count in counts.values():
-                prob = count / total
-                if prob > 0:
-                    S_signal -= prob * math.log2(prob)
-            S_signal = min(1.0, S_signal / max_entropy)
-        else:
-            S_signal = 0.5
-
-        # --- Update attention and coherence tracking (replaces arbitrary energy depletion) ---
-        self._update_attention(I_signal, S_signal, C, gesture_switch)
-        self._update_coherence_tracking(C, I_signal)
-
-        # Sync state to canvas for persistence across restarts
-        self._canvas.mark_count = self._intent.mark_count
-        self._canvas.curiosity = state.curiosity
-        self._canvas.engagement = state.engagement
-        self._canvas.fatigue = state.fatigue
-        self._canvas.arc_phase = state.arc_phase
-        self._canvas.coherence_history = state.coherence_history.copy()
-        self._canvas.i_momentum = state.i_momentum
-
-        # --- Record for mood tracker ---
-        try:
-            self._mood_tracker.record_drawing(era_state.gesture, hue_category)
-        except Exception:
-            pass
-
-        # --- Record DrawingEISV for history (every 10 marks to throttle I/O) ---
-        if self._identity_store and self._intent.mark_count % 10 == 0:
-            try:
-                # Compute switching rate from gesture history
-                gh = state.gesture_history
-                if len(gh) >= 2:
-                    switches = sum(1 for j in range(1, len(gh)) if gh[j] != gh[j-1])
-                    sr = switches / (len(gh) - 1)
-                else:
-                    sr = 0.0
-                self._identity_store.record_drawing_state(
-                    E=state.E, I=state.I, S=state.S, V=state.V,
-                    C=C,
-                    marks=self._intent.mark_count,
-                    phase=state.arc_phase,
-                    era=self._active_era.name if self._active_era else None,
-                    energy=state.derived_energy,
-                    curiosity=state.curiosity,
-                    engagement=state.engagement,
-                    fatigue=state.fatigue,
-                    arc_phase=state.arc_phase,
-                    gesture_entropy=S_signal,
-                    switching_rate=sr,
-                    intentionality=I_signal,
-                )
-            except Exception:
-                pass  # Never crash drawing for history
-
-    def _eisv_step(self) -> Tuple[float, float]:
-        """Step EISV thermodynamics — same equations as governance, proprioceptive signals.
-
-        Returns (dE_coupling, C) where dE_coupling modulates energy depletion
-        and C is the coherence signal for drift/gesture modulation.
-        """
-        eisv = self._intent.eisv
-        p = _EISV_PARAMS
-
-        # --- I signal: from era state's proprioceptive intentionality ---
-        era_state = self._intent.era_state
-        I_signal = era_state.intentionality() if era_state else 0.1
-
-        # --- S signal: behavioral entropy (Shannon over last 20 gestures) ---
-        # Normalize by log2(N) where N = gesture vocabulary size for this era
-        gesture_count = len(era_state.gestures()) if era_state else 5
-        max_entropy = math.log2(max(gesture_count, 2))
-        if len(eisv.gesture_history) >= 5:
-            counts: Dict[str, int] = {}
-            for g in eisv.gesture_history:
-                counts[g] = counts.get(g, 0) + 1
-            total = len(eisv.gesture_history)
-            S_signal = 0.0
-            for count in counts.values():
-                prob = count / total
-                if prob > 0:
-                    S_signal -= prob * math.log2(prob)
-            S_signal = min(1.0, S_signal / max_entropy)
-        else:
-            S_signal = 0.5
-
-        # --- Drift: gesture switching rate (proprioceptive, no mood tracker) ---
-        history = eisv.gesture_history
-        if len(history) >= 2:
-            switches = sum(1 for i in range(1, len(history)) if history[i] != history[i-1])
-            gesture_drift = switches / (len(history) - 1)  # 0 = steady, 1 = every mark switches
-        else:
-            gesture_drift = 0.0
-        drift_sq = gesture_drift * gesture_drift
-
-        # --- Coherence C(V) ---
-        C = eisv.coherence()
-
-        # --- Differential equations (Euler integration) ---
-        dE = p["alpha"] * (I_signal - eisv.E) - p["beta_E"] * eisv.E * S_signal + p["gamma_E"] * drift_sq
-        dI = p["beta_I"] * C - p["k"] * S_signal - p["gamma_I"] * eisv.I
-        dS = -p["mu"] * eisv.S + p["lambda1"] * drift_sq - p["lambda2"] * C
-        dV = p["kappa"] * (I_signal - eisv.E) - p["delta"] * eisv.V  # I-E, not E-I
-
-        dt = p["dt"]
-        eisv.E = max(0.0, min(1.0, eisv.E + dE * dt))
-        eisv.I = max(0.0, min(1.0, eisv.I + dI * dt))
-        eisv.S = max(0.001, min(2.0, eisv.S + dS * dt))
-        eisv.V = max(-2.0, min(2.0, eisv.V + dV * dt))
-
-        return dE * dt, C
-
-    def _update_attention(self, I_signal: float, S_signal: float, C: float, gesture_switch: bool):
-        """Update attention signals based on drawing activity.
-
-        Curiosity: depletes while exploring (low C), regenerates when finding patterns (high C).
-        In resolving phase: stop regenerating so the arc can complete (avoids stuck-at-high-C).
-        Engagement: rises with intentionality, falls with entropy.
-        Fatigue: accumulates, never decreases during drawing.
-        """
-        state = self._intent.state
-
-        # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
-        # In resolving phase, don't regenerate — otherwise curiosity never exhausts and drawing stays stuck
-        if state.arc_phase == "resolving":
-            curiosity_drain = 0.002  # Gentle drain so arc can complete
-        elif C < 0.4:
-            curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
-        else:
-            curiosity_drain = -0.001 * C  # Pattern found regenerates
-        state.curiosity = max(0.0, min(1.0, state.curiosity - curiosity_drain))
-
-        # Engagement: rises with intentionality, falls with entropy
-        target = I_signal * (1.0 - 0.5 * S_signal)
-        state.engagement += 0.05 * (target - state.engagement)
-        state.engagement = max(0.0, min(1.0, state.engagement))
-
-        # Fatigue: accumulates, never decreases during drawing (gentler per-mark)
-        if gesture_switch:
-            state.fatigue += 0.005
-        state.fatigue = min(1.0, state.fatigue + 0.0004)
-
-    def _update_coherence_tracking(self, C: float, I_signal: float):
-        """Track coherence over time for settling detection and narrative arc.
-
-        Coherence history: rolling window of C values for variance calculation.
-        Coherence velocity: EMA of dC/dt for detecting stabilization.
-        I momentum: smoothed I trend for phase transitions.
-        """
-        state = self._intent.state
-
-        # Track coherence history (keep last 30 for window calculations)
-        state.coherence_history.append(C)
-        if len(state.coherence_history) > 30:
-            state.coherence_history.pop(0)
-
-        # Coherence velocity: EMA of change
-        if len(state.coherence_history) >= 2:
-            dC = state.coherence_history[-1] - state.coherence_history[-2]
-            alpha = 0.2  # EMA smoothing factor
-            state.coherence_velocity = alpha * dC + (1.0 - alpha) * state.coherence_velocity
-
-        # I momentum: smoothed trend of intentionality
-        alpha_i = 0.1
-        state.i_momentum = alpha_i * I_signal + (1.0 - alpha_i) * state.i_momentum
-
-        # Increment phase mark count
-        state.phase_mark_count += 1
-
-    def _update_narrative_arc(self):
-        """Update narrative arc phase based on state, not energy thresholds.
-
-        opening → developing: I momentum builds, initial exploration done
-        developing → resolving: coherence stabilizes at high value
-        developing → opening: regression if coherence drops, I momentum low
-        resolving → closing: narrative complete (coherence settled + attention exhausted)
-        resolving → developing: destabilized if coherence drops
-        """
-        state = self._intent.state
-        C = state.coherence()
-        current_phase = state.arc_phase
-        marks = state.phase_mark_count
-
-        def transition_to(new_phase: str):
-            """Helper to transition phase with logging."""
-            if state.arc_phase != new_phase:
-                old_phase = state.arc_phase
-                state.arc_phase = new_phase
-                state.phase_mark_count = 0
-                # Also update canvas drawing_phase for neural modulation
-                self._canvas.drawing_phase = new_phase
-                self._canvas.phase_start_time = time.time()
-                try:
-                    from ..computational_neural import get_computational_neural_sensor
-                    sensor = get_computational_neural_sensor()
-                    # Map narrative phases to drawing phases for neural modulation
-                    neural_phase = {
-                        "opening": "exploring",
-                        "developing": "building",
-                        "resolving": "reflecting",
-                        "closing": "resting",
-                    }.get(new_phase, "exploring")
-                    sensor.drawing_phase = neural_phase
-                    n = sensor.get_neural_state()
-                    print(f"[Canvas] Arc: {old_phase} → {new_phase} (C={C:.2f}, I_mom={state.i_momentum:.2f}, curio={state.curiosity:.2f}, engage={state.engagement:.2f})", file=sys.stderr, flush=True)
-                except Exception:
-                    print(f"[Canvas] Arc: {old_phase} → {new_phase}", file=sys.stderr, flush=True)
-
-        # Fresh canvas = opening
-        if len(self._canvas.pixels) < 10:
-            transition_to("opening")
-            return
-
-        if current_phase == "opening":
-            # Transition to developing once intentionality builds
-            if state.i_momentum > 0.4 and marks > 10:
-                transition_to("developing")
-
-        elif current_phase == "developing":
-            # Transition to resolving when coherence stabilizes high
-            if C > 0.6 and abs(state.coherence_velocity) < 0.02:
-                transition_to("resolving")
-            # Regression: coherence drops, I momentum low
-            elif C < 0.3 and state.i_momentum < 0.3 and marks > 20:
-                transition_to("opening")
-
-        elif current_phase == "resolving":
-            # Natural completion
-            if state.narrative_complete(self._canvas):
-                transition_to("closing")
-            # Destabilized: coherence dropped
-            elif C < 0.5:
-                transition_to("developing")
-
-        elif current_phase == "closing":
-            # Mark canvas as satisfied (first time entering closing)
-            if not self._canvas.is_satisfied:
-                self._canvas.mark_satisfied()
-
-    def _update_drawing_phase(self, anima: Anima):
-        """Update Lumen's drawing phase based on energy level.
-
-        Phases driven by energy (organic depletion), not pixel count thresholds:
-        - exploring (energy > 0.7): free wandering, frequent focus jumps
-        - building (0.3-0.7): settling into patterns
-        - reflecting (0.1-0.3): slowing down
-        - resting (< 0.1): nearly done
-        """
-        now = time.time()
-        phase_duration = now - self._canvas.phase_start_time
-        energy = self._intent.energy
-        pixel_count = len(self._canvas.pixels)
-        current_phase = self._canvas.drawing_phase
-
-        def transition_to(new_phase: str):
-            """Helper to transition phase with logging."""
-            if self._canvas.drawing_phase != new_phase:
-                old_phase = self._canvas.drawing_phase
-                self._canvas.drawing_phase = new_phase
-                self._canvas.phase_start_time = now
-                try:
-                    from ..computational_neural import get_computational_neural_sensor
-                    sensor = get_computational_neural_sensor()
-                    sensor.drawing_phase = new_phase
-                    n = sensor.get_neural_state()
-                    print(f"[Canvas] Phase: {old_phase} → {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s) neural: d={n.delta:.2f} t={n.theta:.2f} a={n.alpha:.2f} b={n.beta:.2f} g={n.gamma:.2f}", file=sys.stderr, flush=True)
-                except Exception:
-                    print(f"[Canvas] Phase: {old_phase} → {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s)", file=sys.stderr, flush=True)
-
-        # Fresh canvas = exploring regardless of energy
-        if pixel_count < 10:
-            transition_to("exploring")
-            return
-
-        # Energy-driven phase progression
-        if energy > 0.7:
-            transition_to("exploring")
-        elif energy > 0.3:
-            transition_to("building")
-        elif energy > 0.1:
-            transition_to("reflecting")
-        else:
-            transition_to("resting")
-    
-    def get_current_era(self) -> dict:
-        """Return current era info and all available eras."""
-        from .eras import list_all_era_info, auto_rotate
-        return {
-            "current_era": self._active_era.name,
-            "current_description": self._active_era.description,
-            "auto_rotate": auto_rotate,
-            "all_eras": list_all_era_info(),
-        }
-
-    def get_drawing_eisv(self) -> Optional[Dict]:
-        """Return current drawing state for governance reporting.
-
-        Returns None when not actively drawing. Includes EISV core signals
-        plus attention/coherence/narrative state for comprehensive monitoring.
-        """
-        if not self._intent or not hasattr(self._intent, 'state'):
-            return None
-        state = self._intent.state
-        C = state.coherence()
-        result = {
-            # EISV core
-            "E": round(state.E, 4),
-            "I": round(state.I, 4),
-            "S": round(state.S, 4),
-            "V": round(state.V, 4),
-            "C": round(C, 4),
-            "marks": self._intent.mark_count,
-            "phase": self._canvas.drawing_phase if self._canvas else "unknown",
-            "era": self._active_era.name if self._active_era else "unknown",
-            # Attention signals
-            "curiosity": round(state.curiosity, 4),
-            "engagement": round(state.engagement, 4),
-            "fatigue": round(state.fatigue, 4),
-            "energy": round(state.derived_energy, 4),  # Attention-derived
-            # Narrative arc
-            "arc_phase": state.arc_phase,
-            "i_momentum": round(state.i_momentum, 4),
-            "coherence_settled": state.coherence_settled(),
-            "attention_exhausted": state.attention_exhausted(),
-            "narrative_complete": state.narrative_complete(self._canvas),
-            "compositional_satisfaction": round(self._canvas.compositional_satisfaction(), 3),
-        }
-        if self._drawing_goal:
-            result["drawing_goal"] = self._drawing_goal.description
-        return result
-
-    def set_era(self, era_name: str, force_immediate: bool = False) -> dict:
-        """Switch to a different art era (queues if drawing in progress).
-
-        Args:
-            era_name: Name of the era to switch to
-            force_immediate: If True, switch immediately even if drawing in progress
-
-        Returns:
-            dict with success, era, queued status
-        """
-        from .eras import get_era
-        era = get_era(era_name)
-        if era is None or era.name != era_name:
-            # get_era falls back to gestural — check if we got what we asked for
-            return {"success": False, "error": f"Unknown era: {era_name}"}
-
-        # Check if a drawing is in progress (50+ pixels, not just noise)
-        drawing_in_progress = len(self._canvas.pixels) >= 50
-
-        if drawing_in_progress and not force_immediate:
-            # Queue the era switch for after current drawing completes
-            self._canvas.pending_era_switch = era_name
-            self._canvas.save_to_disk()
-            print(f"[Canvas] Era switch queued: {era_name} (will apply after drawing completes)", file=sys.stderr, flush=True)
-            return {
-                "success": True,
-                "era": era_name,
-                "queued": True,
-                "description": era.description,
-            }
-
-        # Apply immediately (either no drawing in progress or forced)
-        self._active_era = era
-        self._canvas._era_name = era_name
-        self._intent.era_state = era.create_state()
-        self._canvas.pending_era_switch = None  # Clear any pending
-        self._canvas.save_to_disk()
-        print(f"[Canvas] Era switched to: {era_name}", file=sys.stderr, flush=True)
-        return {
-            "success": True,
-            "era": era_name,
-            "queued": False,
-            "description": era.description,
-        }
-
-    def era_cursor_up(self):
-        """Move era cursor up on art eras screen."""
-        from .eras import list_all_era_info
-        total = len(list_all_era_info()) + 1  # +1 for auto-rotate toggle
-        if total > 0:
-            self._state.era_cursor = (self._state.era_cursor - 1) % total
-
-    def era_cursor_down(self):
-        """Move era cursor down on art eras screen."""
-        from .eras import list_all_era_info
-        total = len(list_all_era_info()) + 1  # +1 for auto-rotate toggle
-        if total > 0:
-            self._state.era_cursor = (self._state.era_cursor + 1) % total
-
-    def era_select_current(self) -> dict:
-        """Select the era at cursor, or toggle auto-rotate if on the toggle row."""
-        from .eras import list_all_era_info
-        import anima_mcp.display.eras as eras_module
-        all_eras = list_all_era_info()
-
-        if self._state.era_cursor == len(all_eras):
-            # Toggle auto-rotate
-            eras_module.auto_rotate = not eras_module.auto_rotate
-            state = "on" if eras_module.auto_rotate else "off"
-            print(f"[ArtEras] Auto-rotate: {state}", file=sys.stderr, flush=True)
-            return {"success": True, "auto_rotate": eras_module.auto_rotate}
-
-        if 0 <= self._state.era_cursor < len(all_eras):
-            era_name = all_eras[self._state.era_cursor]["name"]
-            return self.set_era(era_name)
-        return {"success": False, "error": "Invalid cursor position"}
-
-    def canvas_clear(self, persist: bool = True, already_saved: bool = False):
-        """Clear the canvas - saves first if there's a real drawing (50+ pixels).
-
-        Minimal threshold avoids saving noise/stray marks.
-
-        Args:
-            persist: Write cleared state to disk.
-            already_saved: Skip internal save (caller already saved).
-        """
-        # Prevent clearing if we're already paused (prevents loops)
-        now = time.time()
-        if now < self._canvas.drawing_paused_until:
-            return  # Already paused, don't clear again
-
-        # Save before clearing if there's actual drawing (50+ pixels, not just noise)
-        # Skip if caller already saved (prevents double growth observation)
-        if not already_saved and len(self._canvas.pixels) >= 50:
-            saved_path = self.canvas_save(announce=False)
-            if saved_path:
-                print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
-
-        # Apply pending era switch if queued, otherwise auto-rotate
-        from .eras import choose_next_era, get_era
-        if self._canvas.pending_era_switch:
-            new_era_name = self._canvas.pending_era_switch
-            print(f"[Canvas] Applying queued era switch: {new_era_name}", file=sys.stderr, flush=True)
-        else:
-            new_era_name = choose_next_era(self._active_era.name, self._canvas.drawings_saved)
-            print(f"[Canvas] Auto-rotating to new era: {new_era_name}", file=sys.stderr, flush=True)
-
-        self._canvas.clear()
-        self._intent.reset()
-        self._active_era = get_era(new_era_name)
-        self._canvas._era_name = new_era_name
-        self._intent.era_state = self._active_era.create_state()
-        if persist:
-            self._canvas.save_to_disk()
-        print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
-
-        # Generate drawing goal for next canvas
-        try:
-            if self._last_anima:
-                self._drawing_goal = DrawingGoal.from_state(
-                    warmth=self._last_anima.warmth,
-                    clarity=self._last_anima.clarity,
-                    hour=datetime.now().hour,
-                )
-                # Set initial focus based on goal
-                if self._drawing_goal.initial_quadrant is not None:
-                    q = self._drawing_goal.initial_quadrant
-                    self._intent.focus_x = float((q % 2) * 120 + 60)
-                    self._intent.focus_y = float((q // 2) * 120 + 60)
-                print(f"[Canvas] Drawing goal: {self._drawing_goal.description}",
-                      file=sys.stderr, flush=True)
-            else:
-                self._drawing_goal = None
-        except Exception:
-            self._drawing_goal = None
-
-    def canvas_save(self, announce: bool = False, manual: bool = False) -> Optional[str]:
-        """
-        Save the canvas to a PNG file in ~/.anima/drawings/.
-
-        Args:
-            announce: If True, post to message board about the save.
-            manual: If True, this is a user-triggered snapshot (no clear, no reset).
-
-        Returns:
-            Path to saved file, or None if save failed or canvas empty.
-        """
-        # Don't save empty canvas
-        if not self._canvas.pixels:
-            print("[Notepad] Canvas empty, nothing to save", file=sys.stderr, flush=True)
-            return None
-
-        try:
-            from PIL import Image
-
-            # Create drawings directory
-            drawings_dir = Path.home() / ".anima" / "drawings"
-            drawings_dir.mkdir(parents=True, exist_ok=True)
-
-            # Create image from canvas
-            img = Image.new("RGB", (self._canvas.width, self._canvas.height), (0, 0, 0))
-
-            # Draw all pixels
-            for (x, y), color in self._canvas.pixels.items():
-                if 0 <= x < self._canvas.width and 0 <= y < self._canvas.height:
-                    img.putpixel((x, y), color)
-
-            # Generate filename with timestamp
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            suffix = "_manual" if manual else ""
-            filename = f"lumen_drawing_{timestamp}{suffix}.png"
-            filepath = drawings_dir / filename
-
-            # Save the image
-            img.save(filepath)
-
-            # Update tracking
-            self._canvas.last_save_time = time.time()
-            self._canvas.drawings_saved += 1
-            self._canvas.save_to_disk()
-
-            # Trigger save indicator (shows "saved" on screen for 2 seconds)
-            self._canvas.save_indicator_until = time.time() + 2.0
-
-            print(f"[Notepad] Saved drawing to {filepath} ({len(self._canvas.pixels)} pixels)", file=sys.stderr, flush=True)
-
-            # EISV calibration logging — track state + structure for validation
-            eisv = self._intent.eisv
-            C = eisv.coherence()
-            pixel_count = len(self._canvas.pixels)
-            # Spatial variance (how spread out marks are)
-            if pixel_count > 10:
-                xs = [x for x, _ in self._canvas.pixels.keys()]
-                ys = [y for _, y in self._canvas.pixels.keys()]
-                mean_x = sum(xs) / len(xs)
-                mean_y = sum(ys) / len(ys)
-                spatial_var = math.sqrt(
-                    sum((x - mean_x) ** 2 for x in xs) / len(xs)
-                    + sum((y - mean_y) ** 2 for y in ys) / len(ys)
-                )
-            else:
-                spatial_var = 0.0
-            # Gesture variety
-            gh = eisv.gesture_history
-            gesture_variety = len(set(gh)) / max(1, len(gh))
-            print(
-                f"[EISV] E={eisv.E:.3f} I={eisv.I:.3f} S={eisv.S:.3f} V={eisv.V:.3f} C={C:.3f} | "
-                f"{self._intent.mark_count} marks, spatial_var={spatial_var:.1f}, "
-                f"gesture_variety={gesture_variety:.2f}",
-                file=sys.stderr, flush=True
-            )
-
-            # Announce on message board if requested
-            if announce:
-                try:
-                    from ..messages import add_observation
-                    add_observation("finished a drawing")
-                except Exception as e:
-                    print(f"[Notepad] Could not announce save: {e}", file=sys.stderr, flush=True)
-
-            # Notify growth system — learn from drawing activity
-            try:
-                anima = getattr(self, '_last_anima', None)
-                readings = getattr(self, '_last_readings', None)
-                if anima and readings:
-                    from ..growth import get_growth_system
-                    anima_state = {
-                        "warmth": anima.warmth,
-                        "clarity": anima.clarity,
-                        "stability": anima.stability,
-                        "presence": anima.presence,
-                    }
-                    # Correct for LED self-glow: growth preferences should
-                    # reflect actual environment, not Lumen's own LEDs
-                    from ..config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
-                    _raw_lux = readings.light_lux or 0.0
-                    _led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
-                    _world_light = max(0.0, _raw_lux - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
-                    environment = {
-                        "light_lux": _world_light,
-                        "temp_c": readings.ambient_temp_c or 22,
-                        "humidity": readings.humidity_pct or 50,
-                    }
-                    phase = self._canvas.drawing_phase or "resting"
-                    growth = get_growth_system()
-                    insight = growth.observe_drawing(
-                        pixel_count=len(self._canvas.pixels),
-                        phase=phase,
-                        anima_state=anima_state,
-                        environment=environment,
-                    )
-                    if insight:
-                        print(f"[Growth] Drawing insight: {insight}", file=sys.stderr, flush=True)
-
-                    # Drawing → Anima feedback: record completion with satisfaction
-                    try:
-                        satisfaction = self._canvas.compositional_satisfaction()
-                        coherence = (
-                            self._canvas.coherence_history[-1]
-                            if self._canvas.coherence_history else 0.5
-                        )
-                        growth.record_drawing_completion(
-                            pixel_count=len(self._canvas.pixels),
-                            mark_count=self._canvas.mark_count,
-                            coherence=coherence,
-                            satisfaction=satisfaction,
-                        )
-                    except Exception as e:
-                        print(f"[Growth] Drawing feedback failed: {e}",
-                              file=sys.stderr, flush=True)
-            except Exception as e:
-                print(f"[Notepad] Growth notify failed: {e}", file=sys.stderr, flush=True)
-
-            # Report drawing outcome to UNITARES for EISV validation
-            try:
-                from ..server import _unitares_bridge
-                if _unitares_bridge:
-                    import asyncio
-                    _sat = self._canvas.compositional_satisfaction()
-                    _coh = (
-                        self._canvas.coherence_history[-1]
-                        if self._canvas.coherence_history else 0.5
-                    )
-                    asyncio.get_event_loop().call_soon_threadsafe(
-                        asyncio.ensure_future,
-                        _unitares_bridge.report_outcome(
-                            outcome_type="drawing_completed",
-                            outcome_score=_sat,
-                            detail={
-                                "mark_count": self._canvas.mark_count,
-                                "pixel_count": len(self._canvas.pixels),
-                                "arc_phase": self._canvas.arc_phase or "unknown",
-                                "era": self._active_era.name if self._active_era else "unknown",
-                                "coherence": _coh,
-                                "spatial_var": spatial_var,
-                                "gesture_variety": gesture_variety,
-                            }
-                        )
-                    )
-            except Exception:
-                pass  # Non-fatal
-
-            return str(filepath)
-
-        except ImportError:
-            print("[Notepad] PIL not available, cannot save canvas", file=sys.stderr, flush=True)
-            return None
-        except Exception as e:
-            print(f"[Notepad] Failed to save canvas: {e}", file=sys.stderr, flush=True)
-            return None
-
-    def _render_self_graph(
-        self,
-        anima: Optional[Anima] = None,
-        readings: Optional[SensorReadings] = None,
-        identity: Optional[CreatureIdentity] = None,
-    ):
-        """
-        Render Lumen's self-schema graph G_t.
-
-        PoC for StructScore visual integrity evaluation.
-        Base: 12 nodes (1 identity + 4 anima + 4 sensors + 3 resources).
-        Enhanced: +N preference nodes + N belief nodes.
-        """
-        from ..self_schema import get_current_schema
-        from ..self_schema_renderer import render_schema_to_pixels, COLORS, WIDTH, HEIGHT
-        from ..growth import get_growth_system
-        from ..self_model import get_self_model
-
-        # Get growth_system for learned preferences (uses DB, 456K+ observations)
-        growth_system = None
-        try:
-            growth_system = get_growth_system()
-        except Exception:
-            pass  # Non-fatal
-
-        # Get self_model for learned beliefs
-        self_model = None
-        try:
-            self_model = get_self_model()
-        except Exception:
-            pass  # Non-fatal
-
-        # Extract current G_t (with preferences and beliefs)
-        schema = get_current_schema(
-            identity=identity,
-            anima=anima,
-            readings=readings,
-            growth_system=growth_system,
-            include_preferences=True,
-            self_model=self_model,
-        )
-
-        # Render to pixels
-        pixels = render_schema_to_pixels(schema)
-
-        # Try canvas-based rendering
-        if hasattr(self._display, '_create_canvas'):
-            try:
-                # Create canvas with schema background color
-                image, draw = self._display._create_canvas(COLORS["background"])
-
-                # Draw all pixels from schema render
-                for (x, y), color in pixels.items():
-                    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                        image.putpixel((x, y), color)
-
-                # Add title at top
-                fonts = self._get_fonts()
-                font_small = fonts['small']
-                CYAN = (0, 255, 255)
-                draw.text((5, 2), "self-schema G_t", fill=CYAN, font=font_small)
-
-                # Add node count at bottom left — breakdown so count matches what's visible
-                GRAY = (120, 120, 120)
-                core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-                learned_count = len(schema.nodes) - core_count
-                if learned_count > 0:
-                    count_str = f"{core_count} core + {learned_count} learned, {len(schema.edges)} edges"
-                else:
-                    count_str = f"{core_count} nodes, {len(schema.edges)} edges"
-                draw.text((5, 225), count_str, fill=GRAY, font=font_small)
-
-                # Nav dots
-                self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
-
-                # Update display
-                if hasattr(self._display, '_image'):
-                    self._display._image = image
-                if hasattr(self._display, '_show'):
-                    self._display._show()
-                return
-            except Exception as e:
-                print(f"[Self Graph] Canvas error: {e}", file=sys.stderr, flush=True)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-
-        # Fallback to text rendering
-        core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-        learned_count = len(schema.nodes) - core_count
-        if learned_count > 0:
-            text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
-        else:
-            text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
-        self._display.render_text(text, (10, 10))
-
-    def _check_lumen_said_finished(self) -> bool:
-        """
-        Check if Lumen recently said it's finished with the drawing.
-
-        Looks for keywords like "finished", "done", "complete" in recent observations.
-        Only triggers once per drawing (resets after save).
-        """
-        try:
-            from ..messages import get_board, MESSAGE_TYPE_OBSERVATION
-            board = get_board()
-            board._load()
-
-            # Check last 5 observations from the past 5 minutes
-            now = time.time()
-            five_min_ago = now - 300
-
-            recent_obs = [
-                m for m in board._messages
-                if m.msg_type == MESSAGE_TYPE_OBSERVATION
-                and m.timestamp > five_min_ago
-                and m.author == "lumen"
-            ][-5:]
-
-            # Keywords that indicate Lumen is done with drawing
-            finish_keywords = [
-                "finished", "done", "complete", "satisfied",
-                "happy with", "ready to save", "time to save",
-                "that's enough", "all done"
-            ]
-
-            for obs in recent_obs:
-                text_lower = obs.text.lower()
-                # Check for drawing-related finish statements
-                if any(kw in text_lower for kw in finish_keywords):
-                    # Make sure it's about drawing/canvas/art
-                    drawing_context = ["draw", "canvas", "art", "creat", "work", "piece", "picture"]
-                    if any(ctx in text_lower for ctx in drawing_context) or "drawing" in text_lower:
-                        return True
-                    # Also accept standalone "finished" or "done" if we have pixels
-                    if len(self._canvas.pixels) > 500:
-                        return True
-
-            return False
-        except Exception:
-            return False
-
-    def canvas_check_autonomy(self, anima: Optional[Anima] = None) -> Optional[str]:
-        """
-        Check if Lumen wants to autonomously save or clear the canvas.
-
-        Narrative-based: saves when the drawing naturally completes its arc.
-        - Coherence settling (pattern found itself) + attention exhausted
-        - Lumen saying "finished" still respected as priority
-        - 60s safety floor between saves (prevents edge-case spam)
-        - No arbitrary mark limit - fatigue accumulates naturally
-        """
-        if anima is None:
-            return None
-
-        # Update narrative arc phase
-        self._update_narrative_arc()
-
-        now = time.time()
-        pixel_count = len(self._canvas.pixels)
-        state = self._intent.state
-        time_since_save = now - self._canvas.last_save_time if self._canvas.last_save_time > 0 else float('inf')
-
-        # Safety floor: at least 60s between saves
-        if time_since_save < 60.0:
-            return None
-
-        # Don't act during pause period
-        if now < self._canvas.drawing_paused_until:
-            return None
-
-        # Don't act when governance says pause/halt/reject
-        if getattr(self._state, 'governance_paused', False):
-            return None
-
-        # === PRIORITY 1: Lumen said "finished" ===
-        if (pixel_count > 50 and self._check_lumen_said_finished()):
-            C = state.coherence()
-            print(f"[Canvas] Lumen said finished - saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f})", file=sys.stderr, flush=True)
-            saved_path = self.canvas_save(announce=False)
-            if saved_path:
-                self.canvas_clear(persist=True, already_saved=True)
-                self._intent.reset()
-                self._canvas.save_to_disk()
-                return "saved_and_cleared"
-
-        # === PRIORITY 2: Narrative complete (multiple paths: coherence+attention, composition+curiosity, or fatigue) ===
-        if state.narrative_complete(self._canvas) and pixel_count >= 50:
-            C = state.coherence()
-            satisfaction = self._canvas.compositional_satisfaction()
-            print(f"[Canvas] Narrative complete — saving ({pixel_count}px, {self._intent.mark_count} marks, C={C:.2f}, sat={satisfaction:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f}, fatigue={state.fatigue:.2f})", file=sys.stderr, flush=True)
-            saved_path = self.canvas_save(announce=True)
-            if saved_path:
-                self.canvas_clear(persist=True, already_saved=True)
-                self._intent.reset()
-                self._canvas.save_to_disk()
-                return "saved_and_cleared"
-
-        # No arbitrary mark limit - fatigue accumulates (0.0005/mark + 0.005/switch)
-        # so attention exhausts naturally. Canvas pixel limit (15000) is the only hard cap.
-
-        # Periodically persist canvas state (every 60s of drawing)
-        time_since_clear = now - self._canvas.last_clear_time
-        if pixel_count > 0 and time_since_clear > 60.0:
-            # Only save if we have new pixels since last persist
-            self._canvas.save_to_disk()
-
-        return None
     

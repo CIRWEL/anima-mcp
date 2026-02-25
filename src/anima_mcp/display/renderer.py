@@ -313,7 +313,7 @@ class PilRenderer(DisplayRenderer):
         draw = ImageDraw.Draw(image)
         return image, draw
 
-    def render_face(self, state: FaceState, name: Optional[str] = None) -> None:
+    def render_face(self, state: FaceState, name: Optional[str] = None, anima=None) -> None:
         """Render face to display with micro-expressions and transitions. Safe, never crashes."""
         if not self._display:
             # Attempt recovery via _push_to_display (which has reinit logic)
@@ -407,6 +407,10 @@ class PilRenderer(DisplayRenderer):
                     fill=WHITE,
                     font=font
                 )
+            # Draw anima dimension bars on left edge (if anima provided)
+            if anima is not None:
+                self._draw_anima_bars(draw, anima)
+
             t4 = time.time()
 
             self._image = image
@@ -424,7 +428,15 @@ class PilRenderer(DisplayRenderer):
 
     def _draw_gradient_face(self, draw: ImageDraw.ImageDraw, cx: int, cy: int,
                              radius: int, tint: Tuple[int, int, int]):
-        """Draw face with radial gradient - glowing from within."""
+        """Draw face with radial gradient - glowing from within.
+
+        Includes subtle breathing animation (+/- 2px) tied to wall clock.
+        """
+        # Breathing: subtle radius modulation (0.4 Hz = 2.5s cycle)
+        import time
+        breath = 2 * math.sin(time.time() * 0.4 * 2 * math.pi)
+        radius = radius + int(breath)
+
         # Center color: brighter version of tint
         center_color = tuple(min(255, c // 6 + 20) for c in tint)
 
@@ -444,6 +456,30 @@ class PilRenderer(DisplayRenderer):
         rim_color = tuple(min(255, c // 4 + 30) for c in tint)
         draw.arc([cx - radius + 2, cy - radius + 2, cx + radius - 2, cy + radius - 2],
                  200, 340, fill=rim_color, width=1)
+
+    def _draw_anima_bars(self, draw: ImageDraw.ImageDraw, anima):
+        """Draw 4 thin vertical bars on left edge showing anima dimensions.
+
+        Each bar is 60px tall, filled bottom-up based on dimension value.
+        warmth=orange, clarity=cyan, stability=green, presence=purple.
+        """
+        from .design import COLORS as C
+        bar_colors = [C.SOFT_ORANGE, C.SOFT_CYAN, C.SOFT_GREEN, C.SOFT_PURPLE]
+        values = [anima.warmth, anima.clarity, anima.stability, anima.presence]
+        bar_width = 3
+        bar_height = 60
+        y_top = 40
+        y_bottom = y_top + bar_height
+
+        for i, (val, color) in enumerate(zip(values, bar_colors)):
+            x_left = 4 + i * 5
+            x_right = x_left + bar_width
+            # Dim background
+            draw.rectangle([x_left, y_top, x_right, y_bottom], fill=(30, 30, 30))
+            # Filled portion (bottom-up)
+            fill_height = int(bar_height * max(0.0, min(1.0, val)))
+            if fill_height > 0:
+                draw.rectangle([x_left, y_bottom - fill_height, x_right, y_bottom], fill=color)
 
     def _draw_eyes(self, draw: ImageDraw.ImageDraw, state: FaceState, cx: int, cy: int):
         """Draw eyes based on state - fluid, expressive, and alive."""
