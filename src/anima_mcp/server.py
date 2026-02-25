@@ -3425,6 +3425,71 @@ def run_http_server(host: str, port: int):
                     status_code=404
                 )
 
+        async def rest_schema_data(request):
+            """Return full self-schema graph, trajectory, and history."""
+            if not _check_rest_auth(request):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
+            try:
+                hub = _get_schema_hub()
+
+                # Latest schema
+                schema = None
+                if hub.schema_history:
+                    schema = hub.schema_history[-1].to_dict()
+
+                # Trajectory with component detail
+                trajectory = None
+                if hub.last_trajectory:
+                    traj = hub.last_trajectory
+                    trajectory = traj.summary()
+                    trajectory["preferences_detail"] = traj.preferences
+                    trajectory["beliefs_detail"] = traj.beliefs
+                    trajectory["attractor_detail"] = traj.attractor
+                    trajectory["recovery_detail"] = traj.recovery
+                    trajectory["relational_detail"] = traj.relational
+
+                # Condensed history
+                history = [{
+                    "timestamp": s.timestamp.isoformat(),
+                    "node_count": len(s.nodes),
+                    "edge_count": len(s.edges),
+                } for s in hub.schema_history]
+
+                # Gap info
+                gap = None
+                if hub.last_gap_delta:
+                    g = hub.last_gap_delta
+                    gap = {
+                        "duration_hours": round(g.duration_seconds / 3600, 2),
+                        "was_gap": g.was_gap,
+                        "was_restore": g.was_restore,
+                        "anima_delta": g.anima_delta,
+                        "beliefs_decayed": g.beliefs_decayed,
+                    }
+
+                return JSONResponse({
+                    "schema": schema,
+                    "trajectory": trajectory,
+                    "history": history,
+                    "gap": gap,
+                })
+            except Exception as e:
+                return JSONResponse({"error": str(e)}, status_code=500)
+
+        async def rest_schema_page(request):
+            """Serve the Self-Schema visualization page."""
+            server_dir = Path(__file__).parent
+            project_root = server_dir.parent.parent
+            page_path = project_root / "docs" / "schema.html"
+            if page_path.exists():
+                return FileResponse(page_path, media_type="text/html")
+            else:
+                return HTMLResponse(
+                    "<html><body><h1>Schema Page Not Found</h1>"
+                    f"<p>Expected at: {page_path}</p></body></html>",
+                    status_code=404
+                )
+
         # === Build Starlette app with all routes ===
         # Wrap /mcp with OAuth if configured.
         # Auth middleware is chained directly around /mcp (not globally)
@@ -3484,6 +3549,8 @@ def run_http_server(host: str, port: int):
             Route("/self-knowledge", rest_self_knowledge, methods=["GET"]),
             Route("/growth", rest_growth, methods=["GET"]),
             Route("/architecture", rest_architecture_page, methods=["GET"]),
+            Route("/schema-data", rest_schema_data, methods=["GET"]),
+            Route("/schema", rest_schema_page, methods=["GET"]),
         ]
         _inner_app = Starlette(routes=all_routes)
 

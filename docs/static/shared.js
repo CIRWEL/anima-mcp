@@ -183,6 +183,7 @@ function initNav(activePage) {
     const pages = [
         { id: 'dashboard', label: 'Dashboard', href: '/dashboard' },
         { id: 'architecture', label: 'Architecture', href: '/architecture' },
+        { id: 'schema', label: 'Schema', href: '/schema' },
         { id: 'gallery', label: 'Gallery', href: '/gallery-page' },
     ];
 
