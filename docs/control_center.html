@@ -155,10 +155,17 @@
             padding: 4px 10px;
             font-size: 0.75rem;
             cursor: pointer;
+            transition: all 0.2s;
         }
         .quick-help-btn:hover {
             border-color: var(--accent-cyan);
             color: var(--accent-cyan);
+        }
+        .quick-help-btn.active {
+            border-color: var(--accent-cyan);
+            color: var(--accent-cyan);
+            background: rgba(0,255,255,0.1);
+            box-shadow: 0 0 0 1px rgba(0,255,255,0.2) inset;
         }
 
         /* ── Layout grids ── */
@@ -173,14 +180,27 @@
         .card {
             border: 1px solid rgba(255, 255, 255, 0.06);
             box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02);
-            transition: border-color 0.2s, box-shadow 0.2s;
+            background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.015));
+            backdrop-filter: blur(1.5px);
+            transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
         }
         .card:hover {
             border-color: rgba(255, 255, 255, 0.09);
+            transform: translateY(-1px);
         }
         .card-priority-high {
             border-color: rgba(0, 255, 255, 0.18);
-            box-shadow: 0 2px 14px rgba(0, 255, 255, 0.06);
+            box-shadow: 0 4px 20px rgba(0, 255, 255, 0.08);
+            position: relative;
+        }
+        .card-priority-high::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: linear-gradient(180deg, var(--accent-cyan), rgba(0,255,255,0.15));
         }
         .card-priority-low {
             opacity: 0.95;
@@ -205,6 +225,9 @@
         body.is-offline .retry-btn {
             opacity: 0.45;
             pointer-events: none;
+        }
+        body.monitor-mode .card-priority-low {
+            display: none !important;
         }
 
         /* ── State Display ── */
@@ -950,6 +973,7 @@
                 <span class="help-kbd">?</span> shortcuts
             </div>
             <div class="quick-help-actions">
+                <button type="button" id="monitorModeBtn" class="quick-help-btn" onclick="toggleMonitorMode()">Monitor mode: off</button>
                 <button type="button" class="quick-help-btn" onclick="reconnectAll()">Refresh all</button>
             </div>
         </div>
@@ -1204,6 +1228,7 @@
         let msgTypeFilter = 'all';
         let lastMessages = [];
         let lastMessagesHasMore = false;
+        let monitorMode = false;
         const animaPrev = { warmth: null, clarity: null, stability: null, presence: null };
 
         // ── HiDPI-aware sparkline canvas setup ──
@@ -1304,6 +1329,22 @@
             fetchSelfKnowledge();
             fetchGrowth();
             fetchHealth();
+        }
+
+        function applyMonitorMode() {
+            document.body.classList.toggle('monitor-mode', monitorMode);
+            const btn = document.getElementById('monitorModeBtn');
+            if (!btn) return;
+            btn.textContent = `Monitor mode: ${monitorMode ? 'on' : 'off'}`;
+            btn.classList.toggle('active', monitorMode);
+        }
+
+        function toggleMonitorMode() {
+            monitorMode = !monitorMode;
+            try {
+                localStorage.setItem('lumen-monitor-mode', monitorMode ? '1' : '0');
+            } catch (e) {}
+            applyMonitorMode();
         }
 
         function getAnimaTrend(metric, value) {
@@ -2059,6 +2100,12 @@
         // ── Initialize ──
         initNav('dashboard');
         initCollapsibleCards();
+        try {
+            monitorMode = localStorage.getItem('lumen-monitor-mode') === '1';
+        } catch (e) {
+            monitorMode = false;
+        }
+        applyMonitorMode();
 
         fetchState();
         fetchQA();
