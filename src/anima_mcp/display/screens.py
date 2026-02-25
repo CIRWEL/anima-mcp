@@ -1316,27 +1316,32 @@ class ScreenRenderer:
                 except Exception:
                     pass  # Non-fatal
 
-                # Anima dimension bars — horizontal at bottom
+                # Anima dimensions — horizontal bars below text
                 if anima is not None:
-                    bar_colors = [ORANGE, CYAN, GREEN, PURPLE]
-                    labels = ["w", "c", "s", "p"]
-                    values = [anima.warmth, anima.clarity, anima.stability, anima.presence]
-                    bar_y = 190
-                    bar_height = 4
-                    max_width = 45
-                    x_start = 10
-                    for i, (val, color, lbl) in enumerate(zip(values, bar_colors, labels)):
-                        by = bar_y + i * (bar_height + 4)
-                        # Label
-                        draw.text((x_start, by - 2), lbl, fill=color, font=font_small)
-                        bx = x_start + 12
-                        # Dim background
-                        dim = tuple(c // 6 for c in color)
-                        draw.rectangle([bx, by, bx + max_width, by + bar_height], fill=dim)
+                    bar_info = [
+                        ("warmth", anima.warmth, ORANGE),
+                        ("clarity", anima.clarity, CYAN),
+                        ("stability", anima.stability, GREEN),
+                        ("presence", anima.presence, PURPLE),
+                    ]
+                    bar_y = 178
+                    bar_h = 6
+                    max_w = 120
+                    for i, (label, val, color) in enumerate(bar_info):
+                        by = bar_y + i * (bar_h + 5)
+                        # Label + value on left
+                        dim = tuple(c // 3 for c in color)
+                        draw.text((10, by - 1), label[:4], fill=dim, font=font_small)
+                        # Bar background
+                        bx = 48
+                        bg = tuple(c // 8 for c in color)
+                        draw.rectangle([bx, by, bx + max_w, by + bar_h], fill=bg)
                         # Filled portion
-                        fill_w = int(max_width * max(0.0, min(1.0, val)))
+                        fill_w = int(max_w * max(0.0, min(1.0, val)))
                         if fill_w > 0:
-                            draw.rectangle([bx, by, bx + fill_w, by + bar_height], fill=color)
+                            draw.rectangle([bx, by, bx + fill_w, by + bar_h], fill=color)
+                        # Value on right
+                        draw.text((bx + max_w + 4, by - 1), f".{int(val*100):02d}", fill=dim, font=font_small)
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)
@@ -3427,26 +3432,47 @@ class ScreenRenderer:
     ):
         """Render Lumen's self-schema graph G_t.
 
-        Reads the last schema from SchemaHub (composed by server main loop every
-        ~20 min, includes trajectory/drift/tension edges). Shows a waiting state
-        if no schema has been composed yet — does not fabricate a hollow schema.
-        """
-        from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
+        Uses get_current_schema() directly — this produces the base schema
+        (identity, anima, sensor, resource, preference, belief nodes) whose
+        node types the 240x240 renderer knows how to lay out on rings.
 
-        # Read the last schema from SchemaHub (no side effects — just reads)
-        schema = None
+        The SchemaHub's enriched schema (trajectory, drift, tension nodes)
+        is for the web dashboard and trajectory computation, not the LCD.
+        """
+        from ..self_schema import get_current_schema
+        from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
+        from ..growth import get_growth_system
+        from ..self_model import get_self_model
+
+        growth_system = None
         try:
-            from ..server import _get_schema_hub
-            hub = _get_schema_hub()
-            if hub.schema_history:
-                schema = hub.schema_history[-1]
+            growth_system = get_growth_system()
         except Exception:
             pass
 
+        self_model = None
+        try:
+            self_model = get_self_model()
+        except Exception:
+            pass
+
+        schema = get_current_schema(
+            identity=identity,
+            anima=anima,
+            readings=readings,
+            growth_system=growth_system,
+            include_preferences=True,
+            self_model=self_model,
+        )
+
         if not hasattr(self._display, '_create_canvas'):
-            node_count = len(schema.nodes) if schema else 0
-            edge_count = len(schema.edges) if schema else 0
-            self._display.render_text(f"SELF GRAPH\n\n{node_count} nodes\n{edge_count} edges", (10, 10))
+            core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+            learned_count = len(schema.nodes) - core_count
+            if learned_count > 0:
+                text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
+            else:
+                text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
+            self._display.render_text(text, (10, 10))
             return
 
         try:
@@ -3454,27 +3480,21 @@ class ScreenRenderer:
             fonts = self._get_fonts()
             font_small = fonts['small']
 
-            if schema is None:
-                # No schema yet — seeded on wake, should appear within seconds
-                draw.text((50, 100), "composing schema...", fill=(100, 100, 100), font=font_small)
+            pixels = render_schema_to_pixels(schema)
+            for (x, y), color in pixels.items():
+                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    image.putpixel((x, y), color)
+
+            # Title (top) and stats (bottom) overlay on the graph
+            draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
+
+            core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
+            learned_count = len(schema.nodes) - core_count
+            if learned_count > 0:
+                count_str = f"{core_count}+{learned_count} nodes, {len(schema.edges)} edges"
             else:
-                # Render graph pixels, reserving top 14px and bottom 14px for text
-                pixels = render_schema_to_pixels(schema)
-                for (x, y), color in pixels.items():
-                    if 0 <= x < WIDTH and 14 <= y < HEIGHT - 14:
-                        image.putpixel((x, y), color)
-
-                # Title above the graph
-                draw.text((5, 1), "self-schema G_t", fill=(0, 255, 255), font=font_small)
-
-                # Stats below the graph
-                core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-                learned_count = len(schema.nodes) - core_count
-                if learned_count > 0:
-                    count_str = f"{core_count}+{learned_count} nodes, {len(schema.edges)} edges"
-                else:
-                    count_str = f"{core_count} nodes, {len(schema.edges)} edges"
-                draw.text((5, 226), count_str, fill=(120, 120, 120), font=font_small)
+                count_str = f"{core_count} nodes, {len(schema.edges)} edges"
+            draw.text((5, 225), count_str, fill=(120, 120, 120), font=font_small)
 
             self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
