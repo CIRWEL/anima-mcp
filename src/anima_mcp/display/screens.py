@@ -828,11 +828,11 @@ class ScreenRenderer:
             mode = self._state.mode
             try:
                 if mode == ScreenMode.FACE:
-                    self._render_face(face_state, identity, anima)
+                    self._render_face(face_state, identity)
                 elif mode == ScreenMode.SENSORS:
                     self._render_sensors(readings)
                 elif mode == ScreenMode.IDENTITY:
-                    self._render_identity(identity, anima)
+                    self._render_identity(identity)
                 elif mode == ScreenMode.DIAGNOSTICS:
                     self._render_diagnostics(anima, readings, governance)
                 elif mode == ScreenMode.NEURAL:
@@ -934,11 +934,11 @@ class ScreenRenderer:
         if render_time > 0.5:  # Log if >500ms
             print(f"[Screen] Slow render: {mode.value} took {render_time*1000:.0f}ms", file=sys.stderr, flush=True)
     
-    def _render_face(self, face_state: Optional[FaceState], identity: Optional[CreatureIdentity], anima: Optional[Anima] = None):
+    def _render_face(self, face_state: Optional[FaceState], identity: Optional[CreatureIdentity]):
         """Render face screen (default)."""
         if face_state:
             name = identity.name if identity else None
-            self._display.render_face(face_state, name=name, anima=anima)
+            self._display.render_face(face_state, name=name)
         else:
             # Defensive: show minimal face if face_state is None
             # This prevents blank screen during state transitions
@@ -1204,8 +1204,8 @@ class ScreenRenderer:
             if len(points) >= 2:
                 draw.line(points, fill=color, width=1)
 
-    def _render_identity(self, identity: Optional[CreatureIdentity], anima: Optional[Anima] = None):
-        """Render identity screen with colors, anima bars, and nav dots."""
+    def _render_identity(self, identity: Optional[CreatureIdentity]):
+        """Render identity screen with colors and nav dots."""
         if not identity:
             self._display.render_text("who am i?\n(unknown)", (10, 10), color=COLORS.TEXT_DIM)
             return
@@ -1315,33 +1315,6 @@ class ScreenRenderer:
                               pct_text, fill=COLORS.TEXT_PRIMARY, font=fonts['small'])
                 except Exception:
                     pass  # Non-fatal
-
-                # Anima dimensions — horizontal bars below text
-                if anima is not None:
-                    bar_info = [
-                        ("warmth", anima.warmth, ORANGE),
-                        ("clarity", anima.clarity, CYAN),
-                        ("stability", anima.stability, GREEN),
-                        ("presence", anima.presence, PURPLE),
-                    ]
-                    bar_y = 178
-                    bar_h = 6
-                    max_w = 120
-                    for i, (label, val, color) in enumerate(bar_info):
-                        by = bar_y + i * (bar_h + 5)
-                        # Label + value on left
-                        dim = tuple(c // 3 for c in color)
-                        draw.text((10, by - 1), label[:4], fill=dim, font=font_small)
-                        # Bar background
-                        bx = 48
-                        bg = tuple(c // 8 for c in color)
-                        draw.rectangle([bx, by, bx + max_w, by + bar_h], fill=bg)
-                        # Filled portion
-                        fill_w = int(max_w * max(0.0, min(1.0, val)))
-                        if fill_w > 0:
-                            draw.rectangle([bx, by, bx + fill_w, by + bar_h], fill=color)
-                        # Value on right
-                        draw.text((bx + max_w + 4, by - 1), f".{int(val*100):02d}", fill=dim, font=font_small)
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)
