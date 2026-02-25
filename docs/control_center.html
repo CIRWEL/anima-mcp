@@ -233,11 +233,9 @@
         /* ── State Display ── */
         .state-grid {
             display: grid;
-            grid-template-columns: repeat(4, 1fr);
+            grid-template-columns: repeat(2, 1fr);
             gap: 12px;
-        }
-        @media (max-width: 900px) {
-            .state-grid { grid-template-columns: repeat(2, 1fr); }
+            max-width: 600px;
         }
 
         .state-item {
@@ -279,7 +277,7 @@
             padding: 15px;
             background: linear-gradient(135deg, rgba(0,255,255,0.1), rgba(187,134,252,0.1));
             border-radius: 8px;
-            grid-column: 1 / -1;
+            grid-column: span 2;
         }
 
         .mood-text { font-size: 1.8rem; font-weight: 300; }
