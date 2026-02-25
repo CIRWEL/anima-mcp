@@ -1137,11 +1137,14 @@
             </div>
         </div>
 
-        <!-- ═══ Row 4: Learning + Self-Knowledge (2-col) ═══ -->
+        <!-- ═══ Row 4: Learning + Discovered Insights (2-col) ═══ -->
         <div class="grid">
             <div class="card card-priority-low">
                 <div class="card-header-collapsible" data-card-id="learning">
-                    <h3 class="card-title" style="margin-bottom: 0;">Learning</h3>
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Learning
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchLearning(); fetchGrowth();" title="Refresh" aria-label="Refresh learning">&#x21bb;</button>
+                    </h3>
                     <span class="collapse-icon">&#9660;</span>
                 </div>
                 <div class="card-body-collapsible">
@@ -1154,6 +1157,7 @@
                             </div>
                         </div>
                     </div>
+                    <div id="learningExtras"></div>
                 </div>
             </div>
 
@@ -1178,7 +1182,7 @@
             </div>
         </div>
 
-        <!-- ═══ Row 5: Growth + Gallery (2-col) ═══ -->
+        <!-- ═══ Row 5: Lumen's Journey + Drawings (2-col) ═══ -->
         <div class="grid">
             <div class="card card-priority-low">
                 <div class="card-header-collapsible" data-card-id="growth">
@@ -1968,16 +1972,17 @@
         }
 
         function renderGrowth(data) {
-            let html = '';
+            // ── Journey card: autobiography, goals, curiosities ──
+            let journeyHtml = '';
 
             if (data.autobiography) {
-                html += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
+                journeyHtml += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
             }
 
             const goals = data.goals;
             if (goals && goals.current && goals.current.length > 0) {
-                html += `<div class="layer-header">Goals <span>\u2014 ${goals.active} active, ${goals.achieved} achieved</span></div>`;
-                html += goals.current.map(g => {
+                journeyHtml += `<div class="layer-header">Goals <span>\u2014 ${goals.active} active, ${goals.achieved} achieved</span></div>`;
+                journeyHtml += goals.current.map(g => {
                     const pct = Math.round((g.progress || 0) * 100);
                     return `
                         <div class="goal-item">
@@ -1988,10 +1993,27 @@
                 }).join('');
             }
 
+            const curiosities = data.curiosities;
+            if (curiosities && curiosities.questions && curiosities.questions.length > 0) {
+                journeyHtml += `<div class="layer-header">Curiosities <span>\u2014 ${curiosities.count} questions</span></div>`;
+                journeyHtml += `<div style="font-size: 0.8rem; color: var(--text-secondary); padding: 4px 0;">`;
+                journeyHtml += curiosities.questions.map(q => `<div style="padding: 2px 0;">\u2022 ${escapeHtml(typeof q === 'string' ? q : q.question || q.text || '')}</div>`).join('');
+                journeyHtml += `</div>`;
+            }
+
+            if (!journeyHtml) {
+                journeyHtml = '<div class="error-state">No growth data yet</div>';
+            }
+
+            document.getElementById('growthContent').innerHTML = journeyHtml;
+
+            // ── Learning card extras: memories + preferences ──
+            let extrasHtml = '';
+
             const memories = data.memories;
             if (memories && memories.recent && memories.recent.length > 0) {
-                html += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
-                html += memories.recent.map(m => `
+                extrasHtml += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
+                extrasHtml += memories.recent.map(m => `
                     <div class="memory-item">
                         <div class="memory-date">${m.when || ''}</div>
                         <div class="memory-desc">${escapeHtml(m.description)}</div>
@@ -2000,31 +2022,19 @@
 
             const prefs = data.preferences;
             if (prefs && prefs.learned && prefs.learned.length > 0) {
-                html += `<div class="layer-header">Preferences <span>\u2014 ${prefs.count} learned</span></div>`;
-                html += `<div style="padding: 4px 0; display: flex; flex-wrap: wrap; gap: 6px;">`;
-                html += prefs.learned.map(p => {
+                extrasHtml += `<div class="layer-header">Preferences <span>\u2014 ${prefs.count} learned</span></div>`;
+                extrasHtml += `<div style="padding: 4px 0; display: flex; flex-wrap: wrap; gap: 6px;">`;
+                extrasHtml += prefs.learned.map(p => {
                     const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
                     return `<div class="pref-tag" style="display: flex; flex-direction: column; gap: 2px;">
                         <span style="font-weight: 500;">${escapeHtml(p.name)}</span>
                         <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: normal;">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
                     </div>`;
                 }).join('');
-                html += `</div>`;
+                extrasHtml += `</div>`;
             }
 
-            const curiosities = data.curiosities;
-            if (curiosities && curiosities.questions && curiosities.questions.length > 0) {
-                html += `<div class="layer-header">Curiosities <span>\u2014 ${curiosities.count} questions</span></div>`;
-                html += `<div style="font-size: 0.8rem; color: var(--text-secondary); padding: 4px 0;">`;
-                html += curiosities.questions.map(q => `<div style="padding: 2px 0;">\u2022 ${escapeHtml(typeof q === 'string' ? q : q.question || q.text || '')}</div>`).join('');
-                html += `</div>`;
-            }
-
-            if (!html) {
-                html = '<div class="error-state">No growth data yet</div>';
-            }
-
-            document.getElementById('growthContent').innerHTML = html;
+            document.getElementById('learningExtras').innerHTML = extrasHtml;
         }
 
         // ── System Health ──
