@@ -235,7 +235,6 @@
             display: grid;
             grid-template-columns: repeat(2, 1fr);
             gap: 12px;
-            max-width: 600px;
         }
 
         .state-item {
@@ -1185,70 +1184,73 @@
             </div>
         </div>
 
-        <!-- ═══ Live State (full width) ═══ -->
-        <div class="card card-priority-high" style="margin-top: 24px;">
-            <div class="card-header-collapsible" data-card-id="live-state">
-                <h3 class="card-title" style="margin-bottom: 0;">
-                    Live State
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh" aria-label="Refresh state">&#x21bb;</button>
-                </h3>
-                <span class="collapse-icon">&#9660;</span>
+        <!-- ═══ Row 1: Live State + Q&A (2-col) ═══ -->
+        <div class="grid">
+            <!-- Live State -->
+            <div class="card card-priority-high">
+                <div class="card-header-collapsible" data-card-id="live-state">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Live State
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh" aria-label="Refresh state">&#x21bb;</button>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <!-- Voice Status -->
+                    <div id="voiceStatus" class="voice-status" style="display: none; margin-top: 15px;">
+                        <span class="voice-icon"></span>
+                        <div class="voice-text">
+                            <div id="voiceState">Idle</div>
+                        </div>
+                    </div>
+                    <!-- Sparklines -->
+                    <div id="sparklineRow" class="sparkline-row" style="margin-top: 10px;">
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">W</span>
+                            <div class="sparkline"><canvas id="sparkWarmth"></canvas></div>
+                        </div>
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">C</span>
+                            <div class="sparkline"><canvas id="sparkClarity"></canvas></div>
+                        </div>
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">S</span>
+                            <div class="sparkline"><canvas id="sparkStability"></canvas></div>
+                        </div>
+                        <div class="sparkline-container">
+                            <span class="sparkline-label">P</span>
+                            <div class="sparkline"><canvas id="sparkPresence"></canvas></div>
+                        </div>
+                    </div>
+                    <div id="stateContent">
+                        <div class="skeleton" style="padding: 20px;">
+                            <div class="skeleton skeleton-block" style="height: 60px; margin-bottom: 12px;"></div>
+                            <div class="skeleton skeleton-line" style="width: 80%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 60%;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%;"></div>
+                            <div class="skeleton skeleton-bar" style="width: 100%;"></div>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div class="card-body-collapsible">
-                <!-- Voice Status -->
-                <div id="voiceStatus" class="voice-status" style="display: none; margin-top: 15px;">
-                    <span class="voice-icon"></span>
-                    <div class="voice-text">
-                        <div id="voiceState">Idle</div>
-                    </div>
-                </div>
-                <!-- Sparklines -->
-                <div id="sparklineRow" class="sparkline-row" style="margin-top: 10px;">
-                    <div class="sparkline-container">
-                        <span class="sparkline-label">W</span>
-                        <div class="sparkline"><canvas id="sparkWarmth"></canvas></div>
-                    </div>
-                    <div class="sparkline-container">
-                        <span class="sparkline-label">C</span>
-                        <div class="sparkline"><canvas id="sparkClarity"></canvas></div>
-                    </div>
-                    <div class="sparkline-container">
-                        <span class="sparkline-label">S</span>
-                        <div class="sparkline"><canvas id="sparkStability"></canvas></div>
-                    </div>
-                    <div class="sparkline-container">
-                        <span class="sparkline-label">P</span>
-                        <div class="sparkline"><canvas id="sparkPresence"></canvas></div>
-                    </div>
-                </div>
-                <div id="stateContent">
-                    <div class="skeleton" style="padding: 20px;">
-                        <div class="skeleton skeleton-block" style="height: 60px; margin-bottom: 12px;"></div>
-                        <div class="skeleton skeleton-line" style="width: 80%;"></div>
-                        <div class="skeleton skeleton-line" style="width: 60%;"></div>
-                        <div class="skeleton skeleton-bar" style="width: 100%;"></div>
-                        <div class="skeleton skeleton-bar" style="width: 100%;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <!-- ═══ Q&A (full width) ═══ -->
-        <div class="card card-priority-high" id="qaCard" style="margin-top: 24px;">
-            <div class="card-header-collapsible" data-card-id="qa">
-                <h3 class="card-title" style="margin-bottom: 0;">
-                    Questions &amp; Answers
-                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh" aria-label="Refresh Q&amp;A">&#x21bb;</button>
-                    <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-                </h3>
-                <span class="collapse-icon">&#9660;</span>
-            </div>
-            <div class="card-body-collapsible">
-                <div id="qaContent" class="qa-list" style="margin-top: 15px;">
-                    <div class="skeleton" style="padding: 12px;">
-                        <div class="skeleton skeleton-line" style="width: 90%;"></div>
-                        <div class="skeleton skeleton-line" style="width: 70%;"></div>
-                        <div class="skeleton skeleton-line" style="width: 50%;"></div>
+            <!-- Q&A -->
+            <div class="card card-priority-high" id="qaCard">
+                <div class="card-header-collapsible" data-card-id="qa">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Questions &amp; Answers
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh" aria-label="Refresh Q&amp;A">&#x21bb;</button>
+                        <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="qaContent" class="qa-list" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 12px;">
+                            <div class="skeleton skeleton-line" style="width: 90%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 70%;"></div>
+                            <div class="skeleton skeleton-line" style="width: 50%;"></div>
+                        </div>
                     </div>
                 </div>
             </div>
