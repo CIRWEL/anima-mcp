@@ -3417,17 +3417,8 @@ class ScreenRenderer:
         from ..growth import get_growth_system
         from ..self_model import get_self_model
 
-        growth_system = None
-        try:
-            growth_system = get_growth_system()
-        except Exception:
-            pass
-
-        self_model = None
-        try:
-            self_model = get_self_model()
-        except Exception:
-            pass
+        growth_system = get_growth_system()
+        self_model = get_self_model()
 
         schema = get_current_schema(
             identity=identity,
@@ -3455,10 +3446,11 @@ class ScreenRenderer:
 
             pixels = render_schema_to_pixels(schema)
             for (x, y), color in pixels.items():
-                if 0 <= x < WIDTH and 0 <= y < HEIGHT:
-                    image.putpixel((x, y), color)
+                nx = int((x - 120) * 0.80 + 120)
+                ny = int((y - 120) * 0.80 + 114)
+                if 0 <= nx < WIDTH and 0 <= ny < HEIGHT:
+                    image.putpixel((nx, ny), color)
 
-            # Title (top) and stats (bottom) overlay on the graph
             draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
 
             core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
