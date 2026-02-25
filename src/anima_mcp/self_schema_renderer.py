@@ -39,16 +39,17 @@ HEIGHT = 240
 CENTER = (WIDTH // 2, HEIGHT // 2)
 
 # Ring radii — 9 rings evenly spaced from center to edge
+# Sized so outermost ring (104px) fits within title (y=16) and stats (y=224) on 240x240 LCD
 # Inner to outer: meta → anima → trajectory → sensor → resource → drift → preference → tension → belief
-RING_META_RADIUS = 24     # Identity texture (Exist%, Wakes, Age)
-RING_1_RADIUS = 40        # Anima dimensions (warmth, clarity, stability, presence)
-RING_TRAJ_RADIUS = 56     # Trajectory (maturity, rest point, stability score)
-RING_2_RADIUS = 72        # Physical sensors (light, temp, humidity, pressure)
-RING_2B_RADIUS = 84       # System resources (memory, cpu, disk)
-RING_DRIFT_RADIUS = 92    # Calibration drift per dimension
-RING_3_RADIUS = 100       # Learned preferences
-RING_TENSION_RADIUS = 108 # Value tensions between dimensions
-RING_4_RADIUS = 115       # Learned beliefs
+RING_META_RADIUS = 22     # Identity texture (Exist%, Wakes, Age)
+RING_1_RADIUS = 36        # Anima dimensions (warmth, clarity, stability, presence)
+RING_TRAJ_RADIUS = 50     # Trajectory (maturity, rest point, stability score)
+RING_2_RADIUS = 65        # Physical sensors (light, temp, humidity, pressure)
+RING_2B_RADIUS = 76       # System resources (memory, cpu, disk)
+RING_DRIFT_RADIUS = 83    # Calibration drift per dimension
+RING_3_RADIUS = 90        # Learned preferences
+RING_TENSION_RADIUS = 97  # Value tensions between dimensions
+RING_4_RADIUS = 104       # Learned beliefs
 
 # Node sizes (radius) — smaller for outer/enriched nodes to reduce overlap
 IDENTITY_RADIUS = 12
