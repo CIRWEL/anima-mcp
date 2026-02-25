@@ -454,10 +454,16 @@ class SelfModel:
         """Record interaction for testing interaction-clarity belief."""
         clarity_change = clarity_after - clarity_before
 
+        # Minimum strength ensures each observation moves the needle.
+        # Clarity changes during a single interaction are typically tiny (0.001-0.02),
+        # so without a floor the confidence barely moves from 0.5.
+        strength = max(0.15, abs(clarity_change) * 2)
+
         self._beliefs["interaction_clarity_boost"].update_from_evidence(
             supports=clarity_change > 0,
-            strength=abs(clarity_change) * 2,
+            strength=strength,
         )
+        self._maybe_save()
 
     def observe_time_pattern(self, hour: int, warmth: float, clarity: float):
         """Test time-based beliefs."""

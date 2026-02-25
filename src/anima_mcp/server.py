@@ -648,6 +648,15 @@ async def _update_display_loop():
                                 if _leds and _leds.is_available():
                                     _leds.quick_flash((70, 110, 140), 70)
                         else:
+                            if _joy_btn_press_start is not None:
+                                hold_time = time.time() - _joy_btn_press_start
+                                if hold_time < 0.8 and not _joy_btn_help_shown:
+                                    # Short joystick button press: cycle to next screen in group
+                                    renderer.trigger_input_feedback("button")
+                                    renderer.next_in_group()
+                                    mode_change_event.set()
+                                    current_mode = renderer.get_mode()
+                                    print(f"[Input] btn -> {current_mode.value} (group cycle)", file=sys.stderr, flush=True)
                             _joy_btn_press_start = None
                             _joy_btn_help_shown = False
 

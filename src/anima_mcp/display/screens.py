@@ -597,14 +597,15 @@ class ScreenRenderer:
         font = fonts.get('tiny', fonts.get('micro'))
         DIM = (100, 100, 100)
 
-        # Right-aligned at bottom
+        # Right-aligned at bottom (y=228 with micro font fits within 240px display)
+        font = fonts.get('micro', fonts.get('tiny'))
         try:
             bbox = font.getbbox(label)
             text_w = bbox[2] - bbox[0]
         except Exception:
             text_w = len(label) * 6
         x = 240 - text_w - 6
-        y = 232
+        y = 228
         draw.text((x, y), label, fill=DIM, font=font)
 
     def _draw_status_bar(self, draw):
@@ -806,12 +807,13 @@ class ScreenRenderer:
             return
         fonts = self._get_fonts()
         hint = self._get_action_hint(mode)
-        box_x, box_y, box_w, box_h = 18, 78, 204, 86
+        box_x, box_y, box_w, box_h = 18, 72, 204, 98
         draw.rectangle([box_x, box_y, box_x + box_w, box_y + box_h], fill=(14, 18, 24), outline=(70, 110, 150), width=2)
         draw.text((box_x + 10, box_y + 8), "controls", fill=(130, 220, 255), font=fonts['medium'])
         draw.text((box_x + 10, box_y + 30), hint, fill=(215, 215, 215), font=fonts['small'])
-        draw.text((box_x + 10, box_y + 48), "hold stick btn: this help", fill=(150, 165, 180), font=fonts['tiny'])
-        draw.text((box_x + 10, box_y + 62), "hold side btn 3s: shutdown", fill=(150, 165, 180), font=fonts['tiny'])
+        draw.text((box_x + 10, box_y + 48), "L/R switch groups", fill=(150, 165, 180), font=fonts['tiny'])
+        draw.text((box_x + 10, box_y + 60), "click stick: cycle pages", fill=(150, 165, 180), font=fonts['tiny'])
+        draw.text((box_x + 10, box_y + 72), "hold side btn 3s: shutdown", fill=(150, 165, 180), font=fonts['tiny'])
 
     def _draw_brightness_overlay(self, draw, image):
         """Draw LED brightness overlay (centered box with name + bar)."""
@@ -1007,9 +1009,6 @@ class ScreenRenderer:
                         image = self._apply_transition(image)
 
                     draw = ImageDraw.Draw(image)
-
-                    # Persistent control hint for current screen.
-                    self._draw_action_hint(draw, mode)
 
                     # Draw input feedback (joystick/button visual acknowledgment)
                     if time.time() < self._state.input_feedback_until:
