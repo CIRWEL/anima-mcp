@@ -89,6 +89,8 @@ _display: DisplayRenderer | None = None
 _screen_renderer: ScreenRenderer | None = None
 _joystick_enabled: bool = False
 _sep_btn_press_start: float | None = None  # Track separate button press start time for long-press shutdown
+_joy_btn_press_start: float | None = None  # Track joystick button hold for controls overlay
+_joy_btn_help_shown: bool = False
 _last_governance_decision: Dict[str, Any] | None = None
 _last_input_error_log: float = 0.0
 _leds: LEDDisplay | None = None
@@ -631,11 +633,24 @@ async def _update_display_loop():
                         import time
                         
                         # Check button presses (edge detection)
-                        joy_btn_pressed = input_state.joystick_button and (not prev_state or not prev_state.joystick_button)
-                        sep_btn_pressed = input_state.separate_button and (not prev_state or not prev_state.separate_button)
+                        global _joy_btn_press_start, _joy_btn_help_shown
                         
                         # LEFT/RIGHT = screen switching (D22/D24 both reclaimed after display init)
                         current_dir = input_state.joystick_direction
+                        if input_state.joystick_button:
+                            if _joy_btn_press_start is None:
+                                _joy_btn_press_start = time.time()
+                                _joy_btn_help_shown = False
+                            elif not _joy_btn_help_shown and (time.time() - _joy_btn_press_start) >= 1.0:
+                                renderer.trigger_controls_overlay()
+                                mode_change_event.set()
+                                _joy_btn_help_shown = True
+                                if _leds and _leds.is_available():
+                                    _leds.quick_flash((70, 110, 140), 70)
+                        else:
+                            _joy_btn_press_start = None
+                            _joy_btn_help_shown = False
+
                         if prev_state:
                             prev_dir = prev_state.joystick_direction
                             # Q&A expanded needs LEFT/RIGHT for focus switching
@@ -648,21 +663,24 @@ async def _update_display_loop():
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
-                                    renderer.previous_mode()
+                                    renderer.previous_group()
                                     new_mode = renderer.get_mode()
                                     renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()
-                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (left)", file=sys.stderr, flush=True)
+                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (group-left)", file=sys.stderr, flush=True)
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
                                     renderer.trigger_input_feedback("right")
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
-                                    renderer.next_mode()
+                                    renderer.next_group()
                                     new_mode = renderer.get_mode()
                                     renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()
-                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
+                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (group-right)", file=sys.stderr, flush=True)
+
+                        # Refresh mode after possible group navigation
+                        current_mode = renderer.get_mode()
                         
                         # Joystick UP/DOWN on FACE screen = brightness control
                         if current_mode == ScreenMode.FACE:
@@ -735,6 +753,22 @@ async def _update_display_loop():
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
                                     renderer.trigger_input_feedback("right")
                                     renderer.qa_focus_next()
+
+                        # Group-local up/down for screens that don't consume up/down directly
+                        if current_mode in (
+                            ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH,
+                            ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.NOTEPAD
+                        ):
+                            if prev_state:
+                                prev_dir = prev_state.joystick_direction
+                                if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+                                    renderer.trigger_input_feedback("up")
+                                    renderer.previous_in_group()
+                                    mode_change_event.set()
+                                elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+                                    renderer.trigger_input_feedback("down")
+                                    renderer.next_in_group()
+                                    mode_change_event.set()
                         
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
@@ -781,15 +815,19 @@ async def _update_display_loop():
                                     renderer.trigger_input_feedback("press")
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((80, 100, 60), 80)  # Soft green flash
+                                    handled_short_press = False
                                     if current_mode == ScreenMode.MESSAGES:
                                         renderer.message_toggle_expand()
                                         print(f"[Messages] Toggled message expansion", file=sys.stderr, flush=True)
+                                        handled_short_press = True
                                     elif current_mode == ScreenMode.VISITORS:
                                         renderer.message_toggle_expand()
                                         print(f"[Visitors] Toggled message expansion", file=sys.stderr, flush=True)
+                                        handled_short_press = True
                                     elif current_mode == ScreenMode.QUESTIONS:
                                         renderer.qa_toggle_expand()
                                         print(f"[Questions] Toggled Q&A expansion", file=sys.stderr, flush=True)
+                                        handled_short_press = True
                                     elif current_mode == ScreenMode.NOTEPAD:
                                         era_name = getattr(renderer, '_active_era', None)
                                         era_name = getattr(era_name, 'name', '') if era_name else ''
@@ -801,12 +839,24 @@ async def _update_display_loop():
                                                 print(f"[Notepad] Manual save: {saved}", file=sys.stderr, flush=True)
                                             else:
                                                 print(f"[Notepad] Manual save: canvas empty", file=sys.stderr, flush=True)
+                                        handled_short_press = True
                                     elif current_mode == ScreenMode.ART_ERAS:
                                         result = renderer.era_select_current()
                                         renderer._state.last_user_action_time = time.time()
                                         mode_change_event.set()
                                         print(f"[ArtEras] Button press: {result}", file=sys.stderr, flush=True)
-                                    # No catch-all: button only acts on screens with specific use
+                                        handled_short_press = True
+                                    # Universal fallback so short press is never a dead action.
+                                    if not handled_short_press:
+                                        if current_mode != ScreenMode.FACE:
+                                            old_mode = current_mode
+                                            renderer.set_mode(ScreenMode.FACE)
+                                            mode_change_event.set()
+                                            print(f"[Input] Side button fallback: {old_mode.value} -> face", file=sys.stderr, flush=True)
+                                        else:
+                                            renderer.trigger_controls_overlay()
+                                            mode_change_event.set()
+                                            print("[Input] Side button fallback: controls overlay", file=sys.stderr, flush=True)
             except Exception as e:
                 # Log errors but don't spam - only log occasionally
                 import time

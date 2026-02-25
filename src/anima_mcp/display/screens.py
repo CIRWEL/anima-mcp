@@ -94,6 +94,7 @@ class ScreenState:
     brightness_changed_at: float = 0.0  # When brightness last changed
     brightness_overlay_name: str = ""  # Preset name to display
     brightness_overlay_level: float = 1.0  # Display brightness level for bar
+    controls_overlay_until: float = 0.0  # Show controls overlay until this timestamp
 
     # Governance verdict enforcement: pause drawing when governance says pause/halt
     governance_paused: bool = False  # True when action in ("pause", "halt")
@@ -491,6 +492,72 @@ class ScreenRenderer:
         else:
             self.set_mode(ScreenMode.NOTEPAD)
 
+    def next_group(self):
+        """Switch to next top-level screen group."""
+        group_info = self._SCREEN_GROUPS.get(self._state.mode)
+        if not group_info:
+            self.set_mode(ScreenMode.FACE)
+            return
+        group_name = group_info[0]
+        group_order = ["home", "info", "mind", "social", "art"]
+        group_default = {
+            "home": ScreenMode.FACE,
+            "info": ScreenMode.IDENTITY,
+            "mind": ScreenMode.NEURAL,
+            "social": ScreenMode.MESSAGES,
+            "art": ScreenMode.NOTEPAD,
+        }
+        if group_name not in group_order:
+            self.set_mode(ScreenMode.FACE)
+            return
+        idx = group_order.index(group_name)
+        next_group = group_order[(idx + 1) % len(group_order)]
+        self.set_mode(group_default[next_group])
+
+    def previous_group(self):
+        """Switch to previous top-level screen group."""
+        group_info = self._SCREEN_GROUPS.get(self._state.mode)
+        if not group_info:
+            self.set_mode(ScreenMode.FACE)
+            return
+        group_name = group_info[0]
+        group_order = ["home", "info", "mind", "social", "art"]
+        group_default = {
+            "home": ScreenMode.FACE,
+            "info": ScreenMode.IDENTITY,
+            "mind": ScreenMode.NEURAL,
+            "social": ScreenMode.MESSAGES,
+            "art": ScreenMode.NOTEPAD,
+        }
+        if group_name not in group_order:
+            self.set_mode(ScreenMode.FACE)
+            return
+        idx = group_order.index(group_name)
+        prev_group = group_order[(idx - 1) % len(group_order)]
+        self.set_mode(group_default[prev_group])
+
+    def next_in_group(self):
+        """Switch to next screen within current group."""
+        group_info = self._SCREEN_GROUPS.get(self._state.mode)
+        if not group_info:
+            return
+        _, group_screens = group_info
+        if len(group_screens) <= 1:
+            return
+        idx = group_screens.index(self._state.mode)
+        self.set_mode(group_screens[(idx + 1) % len(group_screens)])
+
+    def previous_in_group(self):
+        """Switch to previous screen within current group."""
+        group_info = self._SCREEN_GROUPS.get(self._state.mode)
+        if not group_info:
+            return
+        _, group_screens = group_info
+        if len(group_screens) <= 1:
+            return
+        idx = group_screens.index(self._state.mode)
+        self.set_mode(group_screens[(idx - 1) % len(group_screens)])
+
     # Screen groups for indicator display
     _SCREEN_GROUPS = {
         ScreenMode.FACE: ("home", [ScreenMode.FACE]),
@@ -703,6 +770,49 @@ class ScreenRenderer:
         self._state.brightness_overlay_name = preset_name
         self._state.brightness_overlay_level = display_level
 
+    def trigger_controls_overlay(self, duration_s: float = 1.8):
+        """Show compact controls help overlay."""
+        self._state.controls_overlay_until = time.time() + max(0.5, duration_s)
+
+    def _get_action_hint(self, mode: ScreenMode) -> str:
+        """Get one-line control hint shown at bottom-left."""
+        if mode == ScreenMode.FACE:
+            return "L/R groups  U/D LEDs"
+        if mode in (ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH):
+            return "L/R groups  U/D pages"
+        if mode in (ScreenMode.MESSAGES, ScreenMode.VISITORS):
+            return "U/D scroll  btn expand"
+        if mode == ScreenMode.QUESTIONS:
+            if self._state.qa_full_view:
+                return "U/D text  btn back"
+            if self._state.qa_expanded:
+                return "U/D text  L/R focus"
+            return "U/D select  btn expand"
+        if mode == ScreenMode.ART_ERAS:
+            return "U/D choose  btn select"
+        if mode == ScreenMode.NOTEPAD:
+            return "btn save  hold btn power"
+        return "L/R groups"
+
+    def _draw_action_hint(self, draw, mode: ScreenMode):
+        """Draw persistent action hint at bottom-left."""
+        fonts = self._get_fonts()
+        hint = self._get_action_hint(mode)
+        draw.text((8, 232), hint, fill=(105, 105, 105), font=fonts.get('tiny', fonts.get('micro')))
+
+    def _draw_controls_overlay(self, draw, mode: ScreenMode):
+        """Draw a small controls card for the current screen."""
+        if time.time() >= self._state.controls_overlay_until:
+            return
+        fonts = self._get_fonts()
+        hint = self._get_action_hint(mode)
+        box_x, box_y, box_w, box_h = 18, 78, 204, 86
+        draw.rectangle([box_x, box_y, box_x + box_w, box_y + box_h], fill=(14, 18, 24), outline=(70, 110, 150), width=2)
+        draw.text((box_x + 10, box_y + 8), "controls", fill=(130, 220, 255), font=fonts['medium'])
+        draw.text((box_x + 10, box_y + 30), hint, fill=(215, 215, 215), font=fonts['small'])
+        draw.text((box_x + 10, box_y + 48), "hold stick btn: this help", fill=(150, 165, 180), font=fonts['tiny'])
+        draw.text((box_x + 10, box_y + 62), "hold side btn 3s: shutdown", fill=(150, 165, 180), font=fonts['tiny'])
+
     def _draw_brightness_overlay(self, draw, image):
         """Draw LED brightness overlay (centered box with name + bar)."""
         elapsed = time.time() - self._state.brightness_changed_at
@@ -898,6 +1008,9 @@ class ScreenRenderer:
 
                     draw = ImageDraw.Draw(image)
 
+                    # Persistent control hint for current screen.
+                    self._draw_action_hint(draw, mode)
+
                     # Draw input feedback (joystick/button visual acknowledgment)
                     if time.time() < self._state.input_feedback_until:
                         self._draw_input_feedback(draw, image)
@@ -905,6 +1018,9 @@ class ScreenRenderer:
                     # Draw brightness overlay (when user changes brightness)
                     if time.time() - self._state.brightness_changed_at < 1.5:
                         self._draw_brightness_overlay(draw, image)
+
+                    # Draw controls overlay (hold joystick button)
+                    self._draw_controls_overlay(draw, mode)
 
                     # Apply loading indicator overlay
                     if self._state.is_loading:
@@ -2213,7 +2329,7 @@ class ScreenRenderer:
             if self._messages_cache_image is not None and self._messages_cache_hash == cache_hash:
                 # Cache hit - use cached image directly (saves ~500ms)
                 if hasattr(self._display, '_image'):
-                    self._display._image = self._messages_cache_image
+                    self._display._image = self._messages_cache_image.copy()
                 if hasattr(self._display, '_show'):
                     self._display._show()
                 return
@@ -2479,7 +2595,7 @@ class ScreenRenderer:
             self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
 
             # Cache the rendered image for fast subsequent renders
-            self._messages_cache_image = image
+            self._messages_cache_image = image.copy()
             self._messages_cache_hash = cache_hash
 
             # Update display
