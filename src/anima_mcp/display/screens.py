@@ -3455,9 +3455,8 @@ class ScreenRenderer:
             font_small = fonts['small']
 
             if schema is None:
-                # No schema yet — honest waiting state
+                # No schema yet — seeded on wake, should appear within seconds
                 draw.text((50, 100), "composing schema...", fill=(100, 100, 100), font=font_small)
-                draw.text((60, 120), "~20 min after start", fill=(60, 60, 60), font=font_small)
             else:
                 # Render graph pixels, reserving top 14px and bottom 14px for text
                 pixels = render_schema_to_pixels(schema)

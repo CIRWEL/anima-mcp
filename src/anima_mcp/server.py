@@ -2173,7 +2173,7 @@ async def _update_display_loop():
             # === SLOW CLOCK: Self-Schema G_t extraction (every 5 minutes) ===
             # PoC for StructScore visual integrity evaluation
             # Extracts Lumen's self-representation graph and optionally saves for offline analysis
-            if loop_count % SCHEMA_EXTRACTION_INTERVAL == 0 and readings and anima and identity:
+            if (loop_count == 1 or loop_count % SCHEMA_EXTRACTION_INTERVAL == 0) and readings and anima and identity:
                 async def extract_and_validate_schema():
                     """Extract G_t via SchemaHub, save, and optionally run real VQA validation."""
                     try:
@@ -2516,6 +2516,27 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                     print(f"[SchemaHub] Woke after {gap_delta.duration_seconds:.0f}s gap", file=sys.stderr, flush=True)
                 else:
                     print(f"[SchemaHub] Initialized (no previous schema found)", file=sys.stderr, flush=True)
+
+                # Seed hub with initial schema so Pi LCD and /schema-data have
+                # data immediately, not after the first 20-min main loop tick.
+                try:
+                    from .self_model import get_self_model as _gsm_init
+                    _sm_init = None
+                    try:
+                        _sm_init = _gsm_init()
+                    except Exception:
+                        pass
+                    readings_init, anima_init = _get_readings_and_anima()
+                    init_schema = hub.compose_schema(
+                        identity=identity,
+                        anima=anima_init,
+                        readings=readings_init,
+                        growth_system=_growth,
+                        self_model=_sm_init,
+                    )
+                    print(f"[SchemaHub] Seeded initial schema: {len(init_schema.nodes)}n {len(init_schema.edges)}e", file=sys.stderr, flush=True)
+                except Exception as seed_e:
+                    print(f"[SchemaHub] Initial seed failed (non-fatal): {seed_e}", file=sys.stderr, flush=True)
             except Exception as she:
                 print(f"[SchemaHub] Init failed (non-fatal): {she}", file=sys.stderr, flush=True)
 
@@ -3432,37 +3453,8 @@ def run_http_server(host: str, port: int):
             try:
                 hub = _get_schema_hub()
 
-                # Latest schema — prefer hub history, fall back to live composition
-                schema = None
-                if hub.schema_history:
-                    schema = hub.schema_history[-1].to_dict()
-                else:
-                    # Hub empty (just restarted) — direct extraction like Pi LCD.
-                    # Do NOT call hub.compose_schema() here: it has side effects
-                    # (appends to history, triggers trajectory recomputation).
-                    try:
-                        from .self_schema import get_current_schema
-                        from .self_model import get_self_model
-                        readings, anima = _get_readings_and_anima()
-                        store = _get_store()
-                        identity = store.get_identity() if store else None
-                        growth_system = None
-                        try:
-                            growth_system = get_growth_system()
-                        except Exception:
-                            pass
-                        self_model = None
-                        try:
-                            self_model = get_self_model()
-                        except Exception:
-                            pass
-                        live = get_current_schema(
-                            identity=identity, anima=anima, readings=readings,
-                            growth_system=growth_system, self_model=self_model,
-                        )
-                        schema = live.to_dict()
-                    except Exception:
-                        pass
+                # Single source of truth: hub.schema_history (seeded on wake)
+                schema = hub.schema_history[-1].to_dict() if hub.schema_history else None
 
                 # Trajectory with component detail
                 trajectory = None
