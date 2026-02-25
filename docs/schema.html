@@ -923,10 +923,11 @@
                     : `rgba(232,124,124,${0.3 + aw * 0.6})`;
                 ctx.lineWidth = 1 + aw * 2.5;
             } else {
+                const alpha = 0.08 + aw * 0.45;
                 ctx.strokeStyle = e.weight >= 0
-                    ? `rgba(126,207,139,${aw * 0.25})`
-                    : `rgba(232,124,124,${aw * 0.25})`;
-                ctx.lineWidth = 0.5 + aw * 0.8;
+                    ? `rgba(126,207,139,${alpha})`
+                    : `rgba(232,124,124,${alpha})`;
+                ctx.lineWidth = 0.7 + aw * 1.5;
             }
             ctx.stroke();
         });
