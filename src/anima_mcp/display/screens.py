@@ -1316,23 +1316,27 @@ class ScreenRenderer:
                 except Exception:
                     pass  # Non-fatal
 
-                # Anima dimension bars on left edge
+                # Anima dimension bars — horizontal at bottom
                 if anima is not None:
                     bar_colors = [ORANGE, CYAN, GREEN, PURPLE]
+                    labels = ["w", "c", "s", "p"]
                     values = [anima.warmth, anima.clarity, anima.stability, anima.presence]
-                    bar_width = 3
-                    bar_height = 60
-                    y_top = 40
-                    for i, (val, color) in enumerate(zip(values, bar_colors)):
-                        x_left = 4 + i * 5
-                        x_right = x_left + bar_width
+                    bar_y = 190
+                    bar_height = 4
+                    max_width = 45
+                    x_start = 10
+                    for i, (val, color, lbl) in enumerate(zip(values, bar_colors, labels)):
+                        by = bar_y + i * (bar_height + 4)
+                        # Label
+                        draw.text((x_start, by - 2), lbl, fill=color, font=font_small)
+                        bx = x_start + 12
                         # Dim background
                         dim = tuple(c // 6 for c in color)
-                        draw.rectangle([x_left, y_top, x_right, y_top + bar_height], fill=dim)
-                        # Filled portion (bottom-up)
-                        fill_h = int(bar_height * max(0.0, min(1.0, val)))
-                        if fill_h > 0:
-                            draw.rectangle([x_left, y_top + bar_height - fill_h, x_right, y_top + bar_height], fill=color)
+                        draw.rectangle([bx, by, bx + max_width, by + bar_height], fill=dim)
+                        # Filled portion
+                        fill_w = int(max_width * max(0.0, min(1.0, val)))
+                        if fill_w > 0:
+                            draw.rectangle([bx, by, bx + fill_w, by + bar_height], fill=color)
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)
@@ -3423,30 +3427,11 @@ class ScreenRenderer:
     ):
         """Render Lumen's self-schema graph G_t.
 
-        Uses SchemaHub's last composed schema if available (includes trajectory,
-        drift, tension edges). Falls back to direct extraction if hub has no
-        history yet (e.g. right after restart).
-
-        Does NOT call compose_schema() directly — that has side effects
-        (appends to history, triggers trajectory recomputation) and is designed
-        to run every ~20min from the server main loop, not every 1s from render.
+        Reads the last schema from SchemaHub (composed by server main loop every
+        ~20 min, includes trajectory/drift/tension edges). Shows a waiting state
+        if no schema has been composed yet — does not fabricate a hollow schema.
         """
-        from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
-        from ..growth import get_growth_system
-        from ..self_model import get_self_model
-
-        growth_system = None
-        try:
-            growth_system = get_growth_system()
-        except Exception:
-            pass
-
-        self_model = None
-        try:
-            self_model = get_self_model()
-        except Exception:
-            pass
 
         # Read the last schema from SchemaHub (no side effects — just reads)
         schema = None
@@ -3458,59 +3443,51 @@ class ScreenRenderer:
         except Exception:
             pass
 
-        # Fallback: direct extraction (no trajectory/drift/tension edges)
-        if schema is None:
-            schema = get_current_schema(
-                identity=identity,
-                anima=anima,
-                readings=readings,
-                growth_system=growth_system,
-                include_preferences=True,
-                self_model=self_model,
-            )
+        if not hasattr(self._display, '_create_canvas'):
+            node_count = len(schema.nodes) if schema else 0
+            edge_count = len(schema.edges) if schema else 0
+            self._display.render_text(f"SELF GRAPH\n\n{node_count} nodes\n{edge_count} edges", (10, 10))
+            return
 
-        pixels = render_schema_to_pixels(schema)
+        try:
+            image, draw = self._display._create_canvas(SCHEMA_COLORS["background"])
+            fonts = self._get_fonts()
+            font_small = fonts['small']
 
-        if hasattr(self._display, '_create_canvas'):
-            try:
-                image, draw = self._display._create_canvas(SCHEMA_COLORS["background"])
-
+            if schema is None:
+                # No schema yet — honest waiting state
+                draw.text((50, 100), "composing schema...", fill=(100, 100, 100), font=font_small)
+                draw.text((60, 120), "~20 min after start", fill=(60, 60, 60), font=font_small)
+            else:
+                # Render graph pixels, reserving top 14px and bottom 14px for text
+                pixels = render_schema_to_pixels(schema)
                 for (x, y), color in pixels.items():
-                    if 0 <= x < WIDTH and 0 <= y < HEIGHT:
+                    if 0 <= x < WIDTH and 14 <= y < HEIGHT - 14:
                         image.putpixel((x, y), color)
 
-                fonts = self._get_fonts()
-                font_small = fonts['small']
-                draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
+                # Title above the graph
+                draw.text((5, 1), "self-schema G_t", fill=(0, 255, 255), font=font_small)
 
+                # Stats below the graph
                 core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
                 learned_count = len(schema.nodes) - core_count
                 if learned_count > 0:
-                    count_str = f"{core_count} core + {learned_count} learned, {len(schema.edges)} edges"
+                    count_str = f"{core_count}+{learned_count} nodes, {len(schema.edges)} edges"
                 else:
                     count_str = f"{core_count} nodes, {len(schema.edges)} edges"
-                draw.text((5, 225), count_str, fill=(120, 120, 120), font=font_small)
+                draw.text((5, 226), count_str, fill=(120, 120, 120), font=font_small)
 
-                self._draw_status_bar(draw)
-                self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
+            self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
 
-                if hasattr(self._display, '_image'):
-                    self._display._image = image
-                if hasattr(self._display, '_show'):
-                    self._display._show()
-                return
-            except Exception as e:
-                print(f"[Self Graph] Canvas error: {e}", file=sys.stderr, flush=True)
-                import traceback
-                traceback.print_exc(file=sys.stderr)
-
-        core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-        learned_count = len(schema.nodes) - core_count
-        if learned_count > 0:
-            text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
-        else:
-            text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
-        self._display.render_text(text, (10, 10))
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+        except Exception as e:
+            print(f"[Self Graph] Canvas error: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
 
     def _render_notepad(self, anima: Optional[Anima] = None):
         """Render notepad - Lumen's autonomous drawing space. Lumen's work persists even when you leave.
