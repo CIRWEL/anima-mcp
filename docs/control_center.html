@@ -233,8 +233,11 @@
         /* ── State Display ── */
         .state-grid {
             display: grid;
-            grid-template-columns: repeat(2, 1fr);
+            grid-template-columns: repeat(4, 1fr);
             gap: 12px;
+        }
+        @media (max-width: 900px) {
+            .state-grid { grid-template-columns: repeat(2, 1fr); }
         }
 
         .state-item {
@@ -276,7 +279,7 @@
             padding: 15px;
             background: linear-gradient(135deg, rgba(0,255,255,0.1), rgba(187,134,252,0.1));
             border-radius: 8px;
-            grid-column: span 2;
+            grid-column: 1 / -1;
         }
 
         .mood-text { font-size: 1.8rem; font-weight: 300; }
@@ -723,13 +726,13 @@
             content: "";
             flex: 1;
             height: 1px;
-            background: linear-gradient(90deg, transparent, rgba(187,134,252,0.25), transparent);
+            background: linear-gradient(90deg, transparent, rgba(187,134,252,0.4), transparent);
         }
         .section-divider-label {
             font-size: 0.65rem;
             text-transform: uppercase;
             letter-spacing: 2px;
-            color: rgba(187,134,252,0.45);
+            color: rgba(187,134,252,0.6);
             font-weight: 500;
             white-space: nowrap;
         }
@@ -1184,73 +1187,70 @@
             </div>
         </div>
 
-        <!-- ═══ Row 1: Live State + Q&A ═══ -->
-        <div class="grid">
-            <!-- Live State -->
-            <div class="card card-priority-high">
-                <div class="card-header-collapsible" data-card-id="live-state">
-                    <h3 class="card-title" style="margin-bottom: 0;">
-                        Live State
-                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh" aria-label="Refresh state">&#x21bb;</button>
-                    </h3>
-                    <span class="collapse-icon">&#9660;</span>
+        <!-- ═══ Live State (full width) ═══ -->
+        <div class="card card-priority-high" style="margin-top: 24px;">
+            <div class="card-header-collapsible" data-card-id="live-state">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Live State
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh" aria-label="Refresh state">&#x21bb;</button>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <!-- Voice Status -->
+                <div id="voiceStatus" class="voice-status" style="display: none; margin-top: 15px;">
+                    <span class="voice-icon"></span>
+                    <div class="voice-text">
+                        <div id="voiceState">Idle</div>
+                    </div>
                 </div>
-                <div class="card-body-collapsible">
-                    <!-- Voice Status -->
-                    <div id="voiceStatus" class="voice-status" style="display: none; margin-top: 15px;">
-                        <span class="voice-icon"></span>
-                        <div class="voice-text">
-                            <div id="voiceState">Idle</div>
-                        </div>
+                <!-- Sparklines -->
+                <div id="sparklineRow" class="sparkline-row" style="margin-top: 10px;">
+                    <div class="sparkline-container">
+                        <span class="sparkline-label">W</span>
+                        <div class="sparkline"><canvas id="sparkWarmth"></canvas></div>
                     </div>
-                    <!-- Sparklines -->
-                    <div id="sparklineRow" class="sparkline-row" style="margin-top: 10px;">
-                        <div class="sparkline-container">
-                            <span class="sparkline-label">W</span>
-                            <div class="sparkline"><canvas id="sparkWarmth"></canvas></div>
-                        </div>
-                        <div class="sparkline-container">
-                            <span class="sparkline-label">C</span>
-                            <div class="sparkline"><canvas id="sparkClarity"></canvas></div>
-                        </div>
-                        <div class="sparkline-container">
-                            <span class="sparkline-label">S</span>
-                            <div class="sparkline"><canvas id="sparkStability"></canvas></div>
-                        </div>
-                        <div class="sparkline-container">
-                            <span class="sparkline-label">P</span>
-                            <div class="sparkline"><canvas id="sparkPresence"></canvas></div>
-                        </div>
+                    <div class="sparkline-container">
+                        <span class="sparkline-label">C</span>
+                        <div class="sparkline"><canvas id="sparkClarity"></canvas></div>
                     </div>
-                    <div id="stateContent">
-                        <div class="skeleton" style="padding: 20px;">
-                            <div class="skeleton skeleton-block" style="height: 60px; margin-bottom: 12px;"></div>
-                            <div class="skeleton skeleton-line" style="width: 80%;"></div>
-                            <div class="skeleton skeleton-line" style="width: 60%;"></div>
-                            <div class="skeleton skeleton-bar" style="width: 100%;"></div>
-                            <div class="skeleton skeleton-bar" style="width: 100%;"></div>
-                        </div>
+                    <div class="sparkline-container">
+                        <span class="sparkline-label">S</span>
+                        <div class="sparkline"><canvas id="sparkStability"></canvas></div>
+                    </div>
+                    <div class="sparkline-container">
+                        <span class="sparkline-label">P</span>
+                        <div class="sparkline"><canvas id="sparkPresence"></canvas></div>
+                    </div>
+                </div>
+                <div id="stateContent">
+                    <div class="skeleton" style="padding: 20px;">
+                        <div class="skeleton skeleton-block" style="height: 60px; margin-bottom: 12px;"></div>
+                        <div class="skeleton skeleton-line" style="width: 80%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 60%;"></div>
+                        <div class="skeleton skeleton-bar" style="width: 100%;"></div>
+                        <div class="skeleton skeleton-bar" style="width: 100%;"></div>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Q&A -->
-            <div class="card card-priority-high" id="qaCard">
-                <div class="card-header-collapsible" data-card-id="qa">
-                    <h3 class="card-title" style="margin-bottom: 0;">
-                        Questions &amp; Answers
-                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh" aria-label="Refresh Q&amp;A">&#x21bb;</button>
-                        <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
-                    </h3>
-                    <span class="collapse-icon">&#9660;</span>
-                </div>
-                <div class="card-body-collapsible">
-                    <div id="qaContent" class="qa-list" style="margin-top: 15px;">
-                        <div class="skeleton" style="padding: 12px;">
-                            <div class="skeleton skeleton-line" style="width: 90%;"></div>
-                            <div class="skeleton skeleton-line" style="width: 70%;"></div>
-                            <div class="skeleton skeleton-line" style="width: 50%;"></div>
-                        </div>
+        <!-- ═══ Q&A (full width) ═══ -->
+        <div class="card card-priority-high" id="qaCard" style="margin-top: 24px;">
+            <div class="card-header-collapsible" data-card-id="qa">
+                <h3 class="card-title" style="margin-bottom: 0;">
+                    Questions &amp; Answers
+                    <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh" aria-label="Refresh Q&amp;A">&#x21bb;</button>
+                    <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
+                </h3>
+                <span class="collapse-icon">&#9660;</span>
+            </div>
+            <div class="card-body-collapsible">
+                <div id="qaContent" class="qa-list" style="margin-top: 15px;">
+                    <div class="skeleton" style="padding: 12px;">
+                        <div class="skeleton skeleton-line" style="width: 90%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 70%;"></div>
+                        <div class="skeleton skeleton-line" style="width: 50%;"></div>
                     </div>
                 </div>
             </div>
