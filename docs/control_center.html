@@ -694,140 +694,324 @@
         }
 
         /* ── Self-Knowledge ── */
+        /* ── Inner World Layout ── */
+        .inner-world {
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            margin-top: 24px;
+        }
+        .journey-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+        @media (max-width: 900px) {
+            .journey-columns { grid-template-columns: 1fr; }
+        }
+
+        /* ── Section Divider ── */
+        .section-divider {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin: 32px 0 4px;
+            padding: 0 4px;
+        }
+        .section-divider::before,
+        .section-divider::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(187,134,252,0.25), transparent);
+        }
+        .section-divider-label {
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: rgba(187,134,252,0.45);
+            font-weight: 500;
+            white-space: nowrap;
+        }
+
+        /* ── Insights ── */
         .insight-grid {
             display: grid;
+            grid-template-columns: repeat(2, 1fr);
             gap: 8px;
-            max-height: 400px;
+            max-height: 420px;
             overflow-y: auto;
+            padding-right: 4px;
         }
+        @media (max-width: 900px) {
+            .insight-grid { grid-template-columns: 1fr; }
+        }
+        .insight-grid::-webkit-scrollbar { width: 3px; }
+        .insight-grid::-webkit-scrollbar-track { background: transparent; }
+        .insight-grid::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 2px; }
         .insight-item {
-            background: #0d0d12;
-            border-radius: 6px;
-            padding: 10px 12px;
-            border: 1px solid #222;
+            background: rgba(13,13,18,0.8);
+            border-radius: 8px;
+            padding: 12px 14px;
+            border: 1px solid rgba(255,255,255,0.05);
+            border-left: 3px solid var(--insight-color, #555);
             font-size: 0.85rem;
+            transition: border-color 0.2s, background 0.2s;
         }
-        .insight-desc { color: var(--text-secondary); }
+        .insight-item:hover {
+            background: rgba(255,255,255,0.025);
+            border-color: rgba(255,255,255,0.08);
+            border-left-color: var(--insight-color, #555);
+        }
+        .insight-cat-badge {
+            display: inline-block;
+            font-size: 0.6rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 2px 8px;
+            border-radius: 4px;
+            background: color-mix(in srgb, var(--insight-color, #888) 12%, transparent);
+            color: var(--insight-color, #888);
+            font-weight: 500;
+            margin-bottom: 6px;
+        }
+        .insight-desc { color: var(--text-secondary); line-height: 1.45; }
         .insight-meta {
             display: flex;
             justify-content: space-between;
             align-items: center;
-            margin-top: 6px;
+            margin-top: 8px;
             font-size: 0.7rem;
             color: #555;
         }
+        .insight-samples { font-family: 'JetBrains Mono', var(--mono); }
         .insight-confidence {
-            height: 3px;
+            height: 4px;
             background: rgba(255,255,255,0.06);
             border-radius: 2px;
-            width: 60px;
+            width: 80px;
+            overflow: hidden;
         }
         .insight-confidence-fill {
             height: 100%;
             border-radius: 2px;
-            background: var(--accent-purple);
+            background: var(--insight-color, var(--accent-purple));
+            transition: width 0.5s ease;
         }
         .category-tabs {
             display: flex;
             gap: 6px;
-            margin-bottom: 10px;
+            margin-bottom: 12px;
             flex-wrap: wrap;
         }
         .category-tab {
             font-size: 0.7rem;
-            padding: 3px 10px;
-            border-radius: 12px;
-            border: 1px solid #333;
+            padding: 4px 12px;
+            border-radius: 14px;
+            border: 1px solid rgba(255,255,255,0.1);
             background: transparent;
             color: var(--text-secondary);
             cursor: pointer;
             transition: all 0.2s;
+            font-weight: 500;
         }
         .category-tab.active {
             border-color: var(--accent-purple);
             color: var(--accent-purple);
-            background: rgba(187,134,252,0.08);
+            background: rgba(187,134,252,0.1);
+            box-shadow: 0 0 8px rgba(187,134,252,0.1);
         }
-        .category-tab:hover { border-color: #555; }
+        .category-tab:hover:not(.active) { border-color: rgba(255,255,255,0.2); color: var(--text-primary); }
 
-        /* ── Growth ── */
+        /* ── Growth / Journey ── */
         .autobiography {
-            background: #0d0d12;
-            border-radius: 8px;
-            padding: 14px 16px;
+            background: linear-gradient(135deg, rgba(187,134,252,0.06), rgba(0,255,255,0.03));
+            border-radius: 10px;
+            padding: 20px 22px 20px 28px;
             border-left: 3px solid var(--accent-purple);
             color: var(--text-secondary);
             font-size: 0.9rem;
-            line-height: 1.5;
+            line-height: 1.6;
             font-style: italic;
-            margin-bottom: 12px;
+            margin-bottom: 16px;
+            position: relative;
         }
+        .autobiography::before {
+            content: "\201C";
+            position: absolute;
+            top: 8px;
+            left: 12px;
+            font-size: 2rem;
+            color: rgba(187,134,252,0.2);
+            font-style: normal;
+            line-height: 1;
+        }
+        .goals-section { margin-bottom: 12px; }
         .goal-item {
             display: flex;
             align-items: center;
-            gap: 10px;
-            padding: 6px 0;
+            gap: 12px;
+            padding: 8px 0;
             font-size: 0.85rem;
         }
         .goal-bar {
-            width: 60px;
-            height: 4px;
+            width: 80px;
+            height: 6px;
             background: rgba(255,255,255,0.06);
-            border-radius: 2px;
+            border-radius: 3px;
             flex-shrink: 0;
+            overflow: hidden;
         }
         .goal-bar-fill {
             height: 100%;
-            border-radius: 2px;
-            background: var(--accent-green);
+            border-radius: 3px;
+            background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan));
+            transition: width 0.6s ease;
         }
-        .goal-desc { color: var(--text-secondary); flex: 1; }
-        .goal-pct { font-size: 0.7rem; color: #555; width: 32px; text-align: right; }
-        .memory-item {
-            display: flex;
-            gap: 10px;
-            padding: 6px 0;
-            border-bottom: 1px solid rgba(255,255,255,0.03);
+        .goal-desc { color: var(--text-secondary); flex: 1; line-height: 1.4; }
+        .goal-pct {
+            font-size: 0.75rem;
+            color: var(--accent-green);
+            font-family: 'JetBrains Mono', var(--mono);
+            font-weight: 500;
+            width: 36px;
+            text-align: right;
+        }
+        .curiosity-list { display: grid; gap: 6px; padding-top: 4px; }
+        .curiosity-item {
             font-size: 0.8rem;
+            color: var(--text-secondary);
+            padding: 8px 12px;
+            background: rgba(0,255,255,0.03);
+            border: 1px solid rgba(0,255,255,0.08);
+            border-radius: 8px;
+            line-height: 1.4;
+        }
+        .curiosity-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: rgba(0,255,255,0.1);
+            color: var(--accent-cyan);
+            font-size: 0.6rem;
+            font-weight: 700;
+            margin-right: 8px;
+            vertical-align: middle;
+        }
+        .memory-timeline {
+            position: relative;
+            padding-left: 18px;
+            margin-top: 4px;
+        }
+        .memory-timeline::before {
+            content: "";
+            position: absolute;
+            left: 4px;
+            top: 8px;
+            bottom: 8px;
+            width: 1px;
+            background: linear-gradient(180deg, rgba(187,134,252,0.3), rgba(187,134,252,0.05));
+        }
+        .memory-item {
+            position: relative;
+            padding: 6px 0 6px 6px;
+            font-size: 0.8rem;
+        }
+        .memory-item::before {
+            content: "";
+            position: absolute;
+            left: -16px;
+            top: 13px;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: var(--accent-purple);
+            box-shadow: 0 0 6px rgba(187,134,252,0.3);
         }
         .memory-date {
             color: #555;
-            font-family: var(--mono);
-            font-size: 0.7rem;
-            flex-shrink: 0;
-            width: 70px;
+            font-family: 'JetBrains Mono', var(--mono);
+            font-size: 0.65rem;
+            margin-bottom: 2px;
         }
-        .memory-desc { color: var(--text-secondary); }
+        .memory-desc { color: var(--text-secondary); line-height: 1.4; }
+        .pref-chips { display: flex; flex-wrap: wrap; gap: 8px; padding-top: 6px; }
         .pref-tag {
             font-size: 0.75rem;
-            padding: 6px 10px;
-            border-radius: 8px;
-            background: rgba(0,255,255,0.06);
-            border: 1px solid rgba(0,255,255,0.15);
+            padding: 8px 12px;
+            border-radius: 10px;
+            background: rgba(0,255,255,0.04);
+            border: 1px solid rgba(0,255,255,0.1);
             color: var(--accent-cyan);
+            display: flex;
+            flex-direction: column;
+            gap: 3px;
+            transition: border-color 0.2s, background 0.2s;
         }
+        .pref-tag:hover {
+            border-color: rgba(0,255,255,0.2);
+            background: rgba(0,255,255,0.07);
+        }
+        .pref-tag-name { font-weight: 500; }
+        .pref-tag-detail { font-size: 0.65rem; color: var(--text-secondary); font-weight: normal; }
+        .pref-toggle {
+            display: block;
+            margin-top: 8px;
+            padding: 4px 0;
+            background: none;
+            border: none;
+            color: var(--accent-cyan);
+            font-size: 0.7rem;
+            cursor: pointer;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .pref-toggle:hover { opacity: 1; }
 
         /* ── Learning Stats ── */
         .learning-stats {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
             gap: 10px;
-            margin-bottom: 15px;
+            margin-bottom: 16px;
         }
-
         .learning-stat {
             text-align: center;
-            padding: 10px;
-            background: #0d0d12;
-            border-radius: 8px;
-            border: 1px solid #333;
+            padding: 12px 8px;
+            background: rgba(13,13,18,0.8);
+            border-radius: 10px;
+            border: 1px solid rgba(255,255,255,0.06);
+            transition: border-color 0.2s;
         }
-
-        .learning-stat-value { font-size: 1.5rem; font-weight: 600; color: var(--accent-purple); }
-        .learning-stat-label { font-size: 0.7rem; color: var(--text-secondary); text-transform: uppercase; }
-        .trend-up { color: var(--accent-green); }
-        .trend-down { color: var(--accent-orange); }
-        .trend-neutral { color: var(--text-secondary); }
+        .learning-stat:hover { border-color: rgba(187,134,252,0.2); }
+        .learning-stat-value {
+            font-size: 1.5rem;
+            font-weight: 600;
+            color: var(--accent-purple);
+            font-family: 'JetBrains Mono', var(--mono);
+        }
+        .learning-stat-label {
+            font-size: 0.65rem;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-top: 2px;
+        }
+        .stability-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.8rem;
+            font-family: 'JetBrains Mono', var(--mono);
+            padding: 3px 10px;
+            border-radius: 6px;
+        }
+        .trend-up { color: var(--accent-green); background: rgba(3,218,198,0.08); }
+        .trend-down { color: var(--accent-orange); background: rgba(207,102,121,0.08); }
+        .trend-neutral { color: var(--text-secondary); background: rgba(255,255,255,0.04); }
 
         /* ── System Health ── */
         .health-grid {
@@ -867,38 +1051,36 @@
         /* ── Gallery ── */
         .gallery-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
             gap: 12px;
         }
-
         .gallery-item {
-            background: #0d0d12;
-            border-radius: 8px;
+            background: rgba(13,13,18,0.8);
+            border-radius: 10px;
             padding: 8px;
-            border: 1px solid #222;
+            border: 1px solid rgba(255,255,255,0.06);
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.25s ease;
         }
-
         .gallery-item:hover, .gallery-item:focus-visible {
-            border-color: var(--accent-cyan);
-            transform: scale(1.02);
+            border-color: rgba(0,255,255,0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0,255,255,0.08);
             outline: none;
         }
-
         .gallery-item img {
             width: 100%;
-            height: 100px;
+            height: 110px;
             object-fit: contain;
-            border-radius: 4px;
+            border-radius: 6px;
             background: #000;
         }
-
         .gallery-item-meta {
-            font-size: 0.7rem;
+            font-size: 0.65rem;
             color: var(--text-secondary);
             margin-top: 6px;
             text-align: center;
+            font-family: 'JetBrains Mono', var(--mono);
         }
 
         /* ── Voice Status ── */
@@ -1137,8 +1319,32 @@
             </div>
         </div>
 
-        <!-- ═══ Row 4: Learning + Discovered Insights (2-col) ═══ -->
-        <div class="grid">
+        <!-- ── Inner World ── -->
+        <div class="section-divider">
+            <span class="section-divider-label">Inner World</span>
+        </div>
+
+        <div class="inner-world">
+            <!-- Journey: full width, internal 2-col -->
+            <div class="card card-priority-low">
+                <div class="card-header-collapsible" data-card-id="growth">
+                    <h3 class="card-title" style="margin-bottom: 0;">
+                        Lumen's Journey
+                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchGrowth()" title="Refresh" aria-label="Refresh growth">&#x21bb;</button>
+                    </h3>
+                    <span class="collapse-icon">&#9660;</span>
+                </div>
+                <div class="card-body-collapsible">
+                    <div id="growthContent" style="margin-top: 15px;">
+                        <div class="skeleton" style="padding: 12px;">
+                            <div class="skeleton skeleton-block" style="height: 50px; margin-bottom: 12px;"></div>
+                            <div class="skeleton skeleton-line" style="width: 80%;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Learning: full width compact strip -->
             <div class="card card-priority-low">
                 <div class="card-header-collapsible" data-card-id="learning">
                     <h3 class="card-title" style="margin-bottom: 0;">
@@ -1150,7 +1356,9 @@
                 <div class="card-body-collapsible">
                     <div id="learningContent" style="margin-top: 15px;">
                         <div class="skeleton" style="padding: 12px;">
-                            <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;">
+                            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px;">
+                                <div class="skeleton skeleton-block" style="height: 60px;"></div>
+                                <div class="skeleton skeleton-block" style="height: 60px;"></div>
                                 <div class="skeleton skeleton-block" style="height: 60px;"></div>
                                 <div class="skeleton skeleton-block" style="height: 60px;"></div>
                                 <div class="skeleton skeleton-block" style="height: 60px;"></div>
@@ -1161,6 +1369,7 @@
                 </div>
             </div>
 
+            <!-- Insights: full width, multi-column items -->
             <div class="card card-priority-low">
                 <div class="card-header-collapsible" data-card-id="self-knowledge">
                     <h3 class="card-title" style="margin-bottom: 0;">
@@ -1180,29 +1389,8 @@
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- ═══ Row 5: Lumen's Journey + Drawings (2-col) ═══ -->
-        <div class="grid">
-            <div class="card card-priority-low">
-                <div class="card-header-collapsible" data-card-id="growth">
-                    <h3 class="card-title" style="margin-bottom: 0;">
-                        Lumen's Journey
-                        <button class="refresh-btn" onclick="event.stopPropagation(); fetchGrowth()" title="Refresh" aria-label="Refresh growth">&#x21bb;</button>
-                    </h3>
-                    <span class="collapse-icon">&#9660;</span>
-                </div>
-                <div class="card-body-collapsible">
-                    <div id="growthContent" style="margin-top: 15px;">
-                        <div class="skeleton" style="padding: 12px;">
-                            <div class="skeleton skeleton-block" style="height: 50px; margin-bottom: 12px;"></div>
-                            <div class="skeleton skeleton-line" style="width: 80%;"></div>
-                            <div class="skeleton skeleton-line" style="width: 60%;"></div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
+            <!-- Drawings: full width gallery -->
             <div class="card card-priority-low">
                 <div class="card-header-collapsible" data-card-id="gallery">
                     <h3 class="card-title" style="margin-bottom: 0;">
@@ -1813,7 +2001,7 @@
                 <div class="learning-stats">
                     ${statTiles}
                 </div>
-                <div class="layer-header">24h Stability <span class="${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span></div>
+                <div class="layer-header">24h Stability <span class="stability-badge ${trendClass}">${trendIcon} ${(data.stability_trend * 100).toFixed(1)}%</span></div>
             `;
         }
 
@@ -1929,6 +2117,14 @@
             renderInsights();
         }
 
+        const INSIGHT_COLORS = {
+            ENVIRONMENT: '#03dac6',
+            TEMPORAL: '#4fc3f7',
+            BEHAVIORAL: '#bb86fc',
+            WELLNESS: '#ffcc00',
+            SOCIAL: '#00ffff',
+        };
+
         function renderInsights() {
             const filtered = insightFilter === 'all' ? allInsights : allInsights.filter(i => i.category === insightFilter);
             if (filtered.length === 0) {
@@ -1939,11 +2135,14 @@
                 const conf = i.confidence || 0;
                 const confPct = Math.round(conf * 100);
                 const samples = i.sample_count || i.observations || 0;
+                const cat = i.category || 'unknown';
+                const catColor = INSIGHT_COLORS[cat] || '#666';
                 return `
-                    <div class="insight-item">
+                    <div class="insight-item" style="--insight-color: ${catColor}">
+                        <div class="insight-cat-badge">${escapeHtml(cat)}</div>
                         <div class="insight-desc">${escapeHtml(i.description || i.insight || '')}</div>
                         <div class="insight-meta">
-                            <span>${samples} samples</span>
+                            <span class="insight-samples">${samples} samples</span>
                             <div style="display: flex; align-items: center; gap: 6px;">
                                 <span>${confPct}%</span>
                                 <div class="insight-confidence">
@@ -1972,17 +2171,21 @@
         }
 
         function renderGrowth(data) {
-            // ── Journey card: autobiography, goals, curiosities ──
-            let journeyHtml = '';
+            // ── Journey card: 2-column internal layout ──
+            // Left: autobiography + goals + curiosities
+            // Right: memories
+            let leftHtml = '';
+            let rightHtml = '';
 
             if (data.autobiography) {
-                journeyHtml += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
+                leftHtml += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
             }
 
             const goals = data.goals;
             if (goals && goals.current && goals.current.length > 0) {
-                journeyHtml += `<div class="layer-header">Goals <span>\u2014 ${goals.active} active, ${goals.achieved} achieved</span></div>`;
-                journeyHtml += goals.current.map(g => {
+                leftHtml += `<div class="layer-header">Goals <span>\u2014 ${goals.active} active, ${goals.achieved} achieved</span></div>`;
+                leftHtml += `<div class="goals-section">`;
+                leftHtml += goals.current.map(g => {
                     const pct = Math.round((g.progress || 0) * 100);
                     return `
                         <div class="goal-item">
@@ -1991,50 +2194,87 @@
                             <div class="goal-pct">${pct}%</div>
                         </div>`;
                 }).join('');
+                leftHtml += `</div>`;
             }
 
             const curiosities = data.curiosities;
             if (curiosities && curiosities.questions && curiosities.questions.length > 0) {
-                journeyHtml += `<div class="layer-header">Curiosities <span>\u2014 ${curiosities.count} questions</span></div>`;
-                journeyHtml += `<div style="font-size: 0.8rem; color: var(--text-secondary); padding: 4px 0;">`;
-                journeyHtml += curiosities.questions.map(q => `<div style="padding: 2px 0;">\u2022 ${escapeHtml(typeof q === 'string' ? q : q.question || q.text || '')}</div>`).join('');
-                journeyHtml += `</div>`;
+                leftHtml += `<div class="layer-header">Curiosities <span>\u2014 ${curiosities.count} questions</span></div>`;
+                leftHtml += `<div class="curiosity-list">`;
+                leftHtml += curiosities.questions.map(q => {
+                    const text = escapeHtml(typeof q === 'string' ? q : q.question || q.text || '');
+                    return `<div class="curiosity-item"><span class="curiosity-icon">?</span>${text}</div>`;
+                }).join('');
+                leftHtml += `</div>`;
             }
 
-            if (!journeyHtml) {
+            const memories = data.memories;
+            if (memories && memories.recent && memories.recent.length > 0) {
+                rightHtml += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
+                rightHtml += `<div class="memory-timeline">`;
+                rightHtml += memories.recent.map(m => `
+                    <div class="memory-item">
+                        <div class="memory-date">${m.when || ''}</div>
+                        <div class="memory-desc">${escapeHtml(m.description)}</div>
+                    </div>`).join('');
+                rightHtml += `</div>`;
+            }
+
+            let journeyHtml = '';
+            if (leftHtml && rightHtml) {
+                journeyHtml = `<div class="journey-columns"><div>${leftHtml}</div><div>${rightHtml}</div></div>`;
+            } else if (leftHtml || rightHtml) {
+                journeyHtml = leftHtml || rightHtml;
+            } else {
                 journeyHtml = '<div class="error-state">No growth data yet</div>';
             }
 
             document.getElementById('growthContent').innerHTML = journeyHtml;
 
-            // ── Learning card extras: memories + preferences ──
+            // ── Learning card extras: preferences only ──
             let extrasHtml = '';
-
-            const memories = data.memories;
-            if (memories && memories.recent && memories.recent.length > 0) {
-                extrasHtml += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
-                extrasHtml += memories.recent.map(m => `
-                    <div class="memory-item">
-                        <div class="memory-date">${m.when || ''}</div>
-                        <div class="memory-desc">${escapeHtml(m.description)}</div>
-                    </div>`).join('');
-            }
 
             const prefs = data.preferences;
             if (prefs && prefs.learned && prefs.learned.length > 0) {
+                const PREF_LIMIT = 6;
+                const shown = prefs.learned.slice(0, PREF_LIMIT);
+                const hidden = prefs.learned.slice(PREF_LIMIT);
+
                 extrasHtml += `<div class="layer-header">Preferences <span>\u2014 ${prefs.count} learned</span></div>`;
-                extrasHtml += `<div style="padding: 4px 0; display: flex; flex-wrap: wrap; gap: 6px;">`;
-                extrasHtml += prefs.learned.map(p => {
+                extrasHtml += `<div class="pref-chips">`;
+                extrasHtml += shown.map(p => {
                     const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
-                    return `<div class="pref-tag" style="display: flex; flex-direction: column; gap: 2px;">
-                        <span style="font-weight: 500;">${escapeHtml(p.name)}</span>
-                        <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: normal;">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
+                    return `<div class="pref-tag">
+                        <span class="pref-tag-name">${escapeHtml(p.name)}</span>
+                        <span class="pref-tag-detail">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
                     </div>`;
                 }).join('');
                 extrasHtml += `</div>`;
+
+                if (hidden.length > 0) {
+                    extrasHtml += `<div class="pref-chips" id="prefChipsMore" style="display: none; margin-top: 8px;">`;
+                    extrasHtml += hidden.map(p => {
+                        const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
+                        return `<div class="pref-tag">
+                            <span class="pref-tag-name">${escapeHtml(p.name)}</span>
+                            <span class="pref-tag-detail">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
+                        </div>`;
+                    }).join('');
+                    extrasHtml += `</div>`;
+                    extrasHtml += `<button class="pref-toggle" onclick="togglePrefs(this)">Show ${hidden.length} more</button>`;
+                }
             }
 
             document.getElementById('learningExtras').innerHTML = extrasHtml;
+        }
+
+        function togglePrefs(btn) {
+            const more = document.getElementById('prefChipsMore');
+            if (!more) return;
+            const showing = more.style.display !== 'none';
+            more.style.display = showing ? 'none' : 'flex';
+            const count = more.querySelectorAll('.pref-tag').length;
+            btn.textContent = showing ? `Show ${count} more` : 'Show fewer';
         }
 
         // ── System Health ──
