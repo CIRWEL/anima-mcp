@@ -1969,7 +1969,7 @@ async def _update_display_loop():
                     environment = {
                         "light_lux": world_light,
                         "temp_c": readings.ambient_temp_c,
-                        "humidity": readings.humidity_pct,
+                        "humidity_pct": readings.humidity_pct,
                     }
 
                     # Observe for preference learning
@@ -2516,6 +2516,23 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                     print(f"[SchemaHub] Woke after {gap_delta.duration_seconds:.0f}s gap", file=sys.stderr, flush=True)
                 else:
                     print(f"[SchemaHub] Initialized (no previous schema found)", file=sys.stderr, flush=True)
+
+                # Seed hub's trajectory from existing trajectory system so
+                # trajectory nodes appear immediately, not after ~7 hours.
+                try:
+                    from .trajectory import compute_trajectory_signature
+                    from .anima_history import get_anima_history
+                    from .self_model import get_self_model as _get_sm
+                    _hub_traj = compute_trajectory_signature(
+                        growth_system=_growth,
+                        self_model=_get_sm(),
+                        anima_history=get_anima_history(),
+                    )
+                    if _hub_traj and _hub_traj.observation_count > 0:
+                        hub.last_trajectory = _hub_traj
+                        print(f"[SchemaHub] Seeded trajectory: {_hub_traj.observation_count} obs", file=sys.stderr, flush=True)
+                except Exception as te:
+                    print(f"[SchemaHub] Trajectory seed failed (non-fatal): {te}", file=sys.stderr, flush=True)
 
                 # Seed hub with initial schema so Pi LCD and /schema-data have
                 # data immediately, not after the first 20-min main loop tick.

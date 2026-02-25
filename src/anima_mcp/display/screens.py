@@ -3428,12 +3428,7 @@ class ScreenRenderer:
             )
 
         if not hasattr(self._display, '_create_canvas'):
-            core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-            learned_count = len(schema.nodes) - core_count
-            if learned_count > 0:
-                text = f"SELF GRAPH\n\n{core_count} core + {learned_count} learned\n{len(schema.edges)} edges"
-            else:
-                text = f"SELF GRAPH\n\n{core_count} nodes\n{len(schema.edges)} edges"
+            text = f"SELF GRAPH\n\n{len(schema.nodes)} nodes\n{len(schema.edges)} edges"
             self._display.render_text(text, (10, 10))
             return
 
@@ -3449,12 +3444,7 @@ class ScreenRenderer:
 
             draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
 
-            core_count = sum(1 for n in schema.nodes if n.node_type in ("identity", "anima", "sensor", "resource"))
-            learned_count = len(schema.nodes) - core_count
-            if learned_count > 0:
-                count_str = f"{core_count}+{learned_count} nodes, {len(schema.edges)} edges"
-            else:
-                count_str = f"{core_count} nodes, {len(schema.edges)} edges"
+            count_str = f"{len(schema.nodes)} nodes, {len(schema.edges)} edges"
             draw.text((5, 225), count_str, fill=(120, 120, 120), font=font_small)
 
             self._draw_status_bar(draw)

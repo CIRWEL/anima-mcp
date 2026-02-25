@@ -803,10 +803,12 @@
                     const pct = Math.min(Math.abs(v) * 100, 100);
                     const sel = selectedNode && selectedNode.id === n.id ? ' selected' : '';
                     const edgeCount = ec[n.id] || 0;
+                    // For meta nodes, the label is self-describing (e.g. "Age 45d") — don't repeat the value
+                    const showVal = n.type !== 'meta';
                     return `<div class="node-row${sel}" onclick="selectNode('${n.id}')">
                         <span class="nr-label">${escapeHtml(n.label)}</span>
                         <div class="nr-bar"><div class="nr-fill" style="width:${pct}%;background:${color}"></div></div>
-                        <span class="nr-val">${typeof n.value === 'number' ? n.value.toFixed(2) : n.value}</span>
+                        <span class="nr-val">${showVal && typeof n.value === 'number' ? n.value.toFixed(2) : ''}</span>
                         <span class="nr-edges-count">${edgeCount ? edgeCount + 'e' : ''}</span>
                     </div>`;
                 }).join('')}
