@@ -3403,7 +3403,7 @@ class ScreenRenderer:
         readings: Optional[SensorReadings] = None,
         identity: Optional[CreatureIdentity] = None,
     ):
-        """Render Lumen's self-schema graph G_t."""
+        """Render Lumen's self-schema graph G_t via SchemaHub (full enrichment)."""
         from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
         from ..growth import get_growth_system
@@ -3421,14 +3421,31 @@ class ScreenRenderer:
         except Exception:
             pass
 
-        schema = get_current_schema(
-            identity=identity,
-            anima=anima,
-            readings=readings,
-            growth_system=growth_system,
-            include_preferences=True,
-            self_model=self_model,
-        )
+        # Use SchemaHub for full enrichment (trajectory, drift, tension edges)
+        schema = None
+        try:
+            from ..server import _get_schema_hub
+            hub = _get_schema_hub()
+            schema = hub.compose_schema(
+                identity=identity,
+                anima=anima,
+                readings=readings,
+                growth_system=growth_system,
+                self_model=self_model,
+            )
+        except Exception:
+            pass
+
+        # Fallback to base schema if hub unavailable
+        if schema is None:
+            schema = get_current_schema(
+                identity=identity,
+                anima=anima,
+                readings=readings,
+                growth_system=growth_system,
+                include_preferences=True,
+                self_model=self_model,
+            )
 
         pixels = render_schema_to_pixels(schema)
 
