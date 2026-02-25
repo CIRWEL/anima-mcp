@@ -3432,10 +3432,35 @@ def run_http_server(host: str, port: int):
             try:
                 hub = _get_schema_hub()
 
-                # Latest schema
+                # Latest schema — prefer hub history, fall back to live composition
                 schema = None
                 if hub.schema_history:
                     schema = hub.schema_history[-1].to_dict()
+                else:
+                    # Hub empty (just restarted) — compose live like the Pi LCD does
+                    try:
+                        from .self_schema import get_current_schema
+                        from .self_model import get_self_model
+                        readings, anima = _get_readings_and_anima()
+                        store = _get_store()
+                        identity = store.get_identity() if store else None
+                        growth_system = None
+                        try:
+                            growth_system = get_growth_system()
+                        except Exception:
+                            pass
+                        self_model = None
+                        try:
+                            self_model = get_self_model()
+                        except Exception:
+                            pass
+                        live = get_current_schema(
+                            identity=identity, anima=anima, readings=readings,
+                            growth_system=growth_system, self_model=self_model,
+                        )
+                        schema = live.to_dict()
+                    except Exception:
+                        pass
 
                 # Trajectory with component detail
                 trajectory = None
