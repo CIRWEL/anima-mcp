@@ -171,8 +171,10 @@ class Sparkline {
         ctx.lineTo(w, h);
         ctx.lineTo(0, h);
         ctx.closePath();
-        ctx.fillStyle = color.replace(')', ', 0.06)').replace('rgb', 'rgba');
+        ctx.globalAlpha = 0.06;
+        ctx.fillStyle = color;
         ctx.fill();
+        ctx.globalAlpha = 1;
     }
 }
 
