@@ -151,7 +151,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id="meta_existence_ratio",
                 node_type="meta",
-                label="Exist%",
+                label=f"Alive {alive_ratio:.0%}",
                 value=alive_ratio,  # Already 0-1
                 raw_value=alive_ratio,
             ))
@@ -163,7 +163,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id="meta_awakening_count",
                 node_type="meta",
-                label="Wakes",
+                label=f"{awakenings} Wakes",
                 value=normalized,
                 raw_value=awakenings,
             ))
@@ -176,7 +176,7 @@ class SchemaHub:
             schema.nodes.append(SchemaNode(
                 node_id="meta_age_days",
                 node_type="meta",
-                label="Age",
+                label=f"Age {age_days:.0f}d",
                 value=normalized,
                 raw_value=age_days,
             ))
