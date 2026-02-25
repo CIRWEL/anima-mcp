@@ -672,21 +672,21 @@ async def _update_display_loop():
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
-                                    renderer.previous_group()
+                                    renderer.previous_mode()
                                     new_mode = renderer.get_mode()
                                     renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()
-                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (group-left)", file=sys.stderr, flush=True)
+                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (left)", file=sys.stderr, flush=True)
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
                                     renderer.trigger_input_feedback("right")
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
-                                    renderer.next_group()
+                                    renderer.next_mode()
                                     new_mode = renderer.get_mode()
                                     renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()
-                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (group-right)", file=sys.stderr, flush=True)
+                                    print(f"[Input] {old_mode.value} -> {new_mode.value} (right)", file=sys.stderr, flush=True)
 
                         # Refresh mode after possible group navigation
                         current_mode = renderer.get_mode()
