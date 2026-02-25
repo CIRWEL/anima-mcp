@@ -1198,6 +1198,7 @@ class DrawingEngine:
         total = len(list_all_era_info()) + 1  # +1 for auto-rotate toggle
         if total > 0:
             screen_state.era_cursor = (screen_state.era_cursor - 1) % total
+            screen_state.era_marquee_offset = 0
 
     def era_cursor_down(self, screen_state):
         """Move era cursor down on art eras screen."""
@@ -1205,6 +1206,7 @@ class DrawingEngine:
         total = len(list_all_era_info()) + 1  # +1 for auto-rotate toggle
         if total > 0:
             screen_state.era_cursor = (screen_state.era_cursor + 1) % total
+            screen_state.era_marquee_offset = 0
 
     def era_select_current(self, screen_state) -> dict:
         """Select the era at cursor, or toggle auto-rotate if on the toggle row."""

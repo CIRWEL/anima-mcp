@@ -89,6 +89,8 @@ class ScreenState:
 
     # Art eras screen interaction state
     era_cursor: int = 0  # Which era is highlighted (index into list_all_era_info)
+    era_marquee_offset: int = 0  # Pixel offset for marquee scrolling description
+    era_marquee_time: float = 0.0  # Last marquee tick time
 
     # Brightness overlay state
     brightness_changed_at: float = 0.0  # When brightness last changed
@@ -1240,7 +1242,7 @@ class ScreenRenderer:
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)
-                self._draw_screen_indicator(draw, ScreenMode.SENSORS)
+                # Screen indicator removed — linear L/R cycling makes group labels confusing
 
                 # Update display + cache
                 self._store_screen_cache("sensors", cache_key, image)
@@ -1433,7 +1435,7 @@ class ScreenRenderer:
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)
-                self._draw_screen_indicator(draw, ScreenMode.IDENTITY)
+                pass  # screen indicator removed
 
                 # Update display
                 if hasattr(self._display, '_image'):
@@ -1686,7 +1688,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.DIAGNOSTICS)
+            pass  # screen indicator removed
 
             # Update display + cache
             self._store_screen_cache("diagnostics", diag_key, image)
@@ -1837,7 +1839,7 @@ class ScreenRenderer:
                 y += row_height
 
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.HEALTH)
+            pass  # screen indicator removed
 
             self._display.render_image(image)
             self._store_screen_cache("health", health_key, image)
@@ -1966,7 +1968,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.NEURAL)
+            pass  # screen indicator removed
 
             # Cache + push to display
             self._store_screen_cache("neural", neural_key, image)
@@ -2253,7 +2255,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.LEARNING)
+            pass  # screen indicator removed
 
             # Update display
             if hasattr(self._display, '_image'):
@@ -2514,10 +2516,10 @@ class ScreenRenderer:
 
                     inner_y = y_offset + msg_padding
 
-                    # Author line (if present) — timestamp only on selected message
+                    # Author line (timestamp only in expanded view)
                     if author_text:
                         draw.text((12, inner_y), f"{prefix} {author_text}", fill=prefix_color, font=font_small)
-                        if is_selected:
+                        if is_expanded:
                             age = msg.age_str()
                             draw.text((200, inner_y), age, fill=MUTED, font=font_small)
                         inner_y += 12
@@ -2555,9 +2557,6 @@ class ScreenRenderer:
                         # For Lumen's observations, show prefix inline
                         if not author_text:
                             draw.text((12, inner_y), f"{prefix} {first_line}", fill=text_color, font=font_small)
-                            if is_selected:
-                                age = msg.age_str()
-                                draw.text((200, inner_y), age, fill=MUTED, font=font_small)
                         else:
                             draw.text((12, inner_y), first_line, fill=text_color, font=font_small)
                         inner_y += line_height
@@ -2598,7 +2597,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.MESSAGES)
+            pass  # screen indicator removed
 
             # Cache the rendered image for fast subsequent renders
             self._messages_cache_image = image.copy()
@@ -2675,31 +2674,47 @@ class ScreenRenderer:
                     is_current = (name == current_name)
                     is_cursor = (i == cursor)
 
-                    # Highlight bar behind cursor
+                    # Cursor era: name line + marquee description line
                     if is_cursor:
-                        draw.rectangle([4, y - 2, 236, y + 16], fill=(25, 35, 50))
+                        draw.rectangle([4, y - 2, 236, y + 28], fill=(25, 35, 50))
+                        arrow = "\u25b6 "
+                        name_color = YELLOW if is_current else SECONDARY
+                        label = f"{arrow}{name}"
+                        draw.text((10, y), label, fill=name_color, font=fonts['small'])
+                        if is_current:
+                            draw.text((210, y + 1), "now", fill=(120, 120, 60), font=fonts['micro'])
+                        y += 14
 
-                    arrow = "\u25b6 " if is_cursor else "  "
-                    name_color = YELLOW if is_current else SECONDARY
-
-                    # Name + short description on one line
-                    short_desc = desc[:18] + ".." if len(desc) > 18 else desc
-                    label = f"{arrow}{name}"
-                    draw.text((10, y), label, fill=name_color, font=fonts['small'])
-
-                    # Description after name
-                    try:
-                        bbox = fonts['small'].getbbox(label)
-                        desc_x = 10 + bbox[2] + 4
-                    except Exception:
-                        desc_x = 10 + (len(label)) * 7
-                    draw.text((desc_x, y + 1), short_desc, fill=DIM, font=fonts['micro'])
-
-                    # "now" tag at right edge for current era
-                    if is_current:
-                        draw.text((210, y + 1), "now", fill=(120, 120, 60), font=fonts['micro'])
-
-                    y += 18
+                        # Marquee description: scroll if text wider than available area
+                        desc_area_w = 210  # pixels available for description
+                        try:
+                            desc_full_w = fonts['micro'].getbbox(desc)[2]
+                        except Exception:
+                            desc_full_w = len(desc) * 6
+                        if desc_full_w > desc_area_w:
+                            # Advance marquee offset (~every 150ms)
+                            now = time.time()
+                            if now - self._state.era_marquee_time > 0.15:
+                                self._state.era_marquee_offset += 1
+                                self._state.era_marquee_time = now
+                            # Wrap around with padding gap
+                            gap = "     "
+                            scroll_text = desc + gap + desc
+                            offset = self._state.era_marquee_offset % (len(desc) + len(gap))
+                            visible = scroll_text[offset:offset + 40]
+                            draw.text((20, y), visible, fill=DIM, font=fonts['micro'])
+                        else:
+                            draw.text((20, y), desc, fill=DIM, font=fonts['micro'])
+                        y += 16
+                    else:
+                        # Non-cursor era: compact single line
+                        arrow = "  "
+                        name_color = YELLOW if is_current else SECONDARY
+                        label = f"{arrow}{name}"
+                        draw.text((10, y), label, fill=name_color, font=fonts['small'])
+                        if is_current:
+                            draw.text((210, y + 1), "now", fill=(120, 120, 60), font=fonts['micro'])
+                        y += 16
 
                 # --- Auto-rotate toggle (last cursor item) ---
                 toggle_idx = len(all_eras)
@@ -2740,7 +2755,7 @@ class ScreenRenderer:
 
                 # Status bar + screen indicator
                 self._draw_status_bar(draw)
-                self._draw_screen_indicator(draw, ScreenMode.ART_ERAS)
+                pass  # screen indicator removed
 
                 if hasattr(self._display, '_image'):
                     self._display._image = image
@@ -2922,17 +2937,10 @@ class ScreenRenderer:
                         draw.rectangle([5, y_offset - 2, 235, y_offset + 32], fill=(30, 50, 80), outline=(80, 140, 200), width=1)
 
                         draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
-                        if hasattr(msg, 'timestamp'):
-                            from datetime import datetime
-                            if isinstance(msg.timestamp, (int, float)):
-                                ts = datetime.fromtimestamp(msg.timestamp).strftime("%H:%M")
-                            else:
-                                ts = str(msg.timestamp)[11:16]
-                            draw.text((180, y_offset), ts, fill=MUTED, font=font_small)
                         y_offset += 14
 
                         # Truncated text preview
-                        text = msg.text[:45] + "..." if len(msg.text) > 45 else msg.text
+                        text = msg.text[:50] + "..." if len(msg.text) > 50 else msg.text
                         draw.text((10, y_offset), text, fill=(220, 220, 230), font=font_small)
                         y_offset += 22
                     else:
@@ -2956,7 +2964,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, mode)
+            pass  # screen indicator removed
 
             # Always update display - ensure image is set and shown
             self._store_screen_cache(title, cache_key, image)
@@ -3153,7 +3161,8 @@ class ScreenRenderer:
                         draw.text((8, y_offset + 2), "▶", fill=CYAN, font=font_small)  # Arrow indicator
                     
                     draw.text((12, y_offset + 4), "? lumen asks:", fill=CYAN, font=font_small)
-                    draw.text((180, y_offset + 4), q.age_str(), fill=MUTED, font=font_small)
+                    if is_expanded:
+                        draw.text((180, y_offset + 4), q.age_str(), fill=MUTED, font=font_small)
 
                     # Show question lines (with scroll when focused)
                     q_start = text_scroll if focus == "question" else 0
@@ -3191,7 +3200,8 @@ class ScreenRenderer:
 
                         author = getattr(answer, 'author', 'agent')
                         draw.text((12, y_offset + 4), f"↳ {author} responds:", fill=AMBER, font=font_small)
-                        draw.text((180, y_offset + 4), answer.age_str(), fill=MUTED, font=font_small)
+                        if is_expanded:
+                            draw.text((180, y_offset + 4), answer.age_str(), fill=MUTED, font=font_small)
 
                         # Show answer lines (with scroll when focused)
                         a_start = text_scroll if focus == "answer" else 0
@@ -3282,7 +3292,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.QUESTIONS)
+            pass  # screen indicator removed
 
             # Always update display - ensure image is set and shown
             self._store_screen_cache("qa", qa_cache_key, image)
@@ -3604,7 +3614,7 @@ class ScreenRenderer:
                 lx += 6 + len(label) * 6 + 4
 
             self._draw_status_bar(draw)
-            self._draw_screen_indicator(draw, ScreenMode.SELF_GRAPH)
+            pass  # screen indicator removed
 
             if hasattr(self._display, '_image'):
                 self._display._image = image
