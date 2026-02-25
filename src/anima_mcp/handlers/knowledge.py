@@ -332,3 +332,66 @@ async def handle_get_eisv_trajectory_state(arguments: dict) -> list[TextContent]
         return [TextContent(type="text", text=json.dumps(state, indent=2, default=str))]
     except Exception as e:
         return [TextContent(type="text", text=json.dumps({"error": str(e)}))]
+
+
+async def handle_query(arguments: dict) -> list[TextContent]:
+    """
+    Query Lumen's knowledge - semantic search over insights and self-knowledge.
+
+    Used by pi(action='query') from governance. Combines:
+    - Q&A-derived insights (keyword match on text)
+    - Self-reflection insights (when type is cognitive/insights)
+    - Growth summary (when type is growth)
+    """
+    text = arguments.get("text", "").strip()
+    query_type = arguments.get("type", "cognitive")
+    limit = int(arguments.get("limit", 10))
+
+    if not text:
+        return [TextContent(type="text", text=json.dumps({
+            "error": "text parameter required",
+            "usage": "query(text='What have I learned about myself?', type='cognitive', limit=10)"
+        }))]
+
+    try:
+        from ..knowledge import get_relevant_insights
+        from ..server import _get_store
+
+        result = {"query": text, "type": query_type}
+
+        # Always get relevant Q&A insights (keyword match)
+        relevant = get_relevant_insights(text, limit=limit)
+        result["qa_insights"] = [
+            {"text": i.text, "category": i.category, "source_question": i.source_question[:60] + "..." if len(i.source_question) > 60 else i.source_question}
+            for i in relevant
+        ]
+
+        # Add self-knowledge when cognitive/insights
+        if query_type in ("cognitive", "insights", "self"):
+            try:
+                from ..self_reflection import get_reflection_system
+                store = _get_store()
+                if store:
+                    reflection = get_reflection_system(db_path=str(store.db_path))
+                    result["self_knowledge"] = reflection.get_self_knowledge_summary()
+                    result["reflection_insights"] = [i.to_dict() for i in reflection.get_insights()[:limit]]
+            except Exception:
+                result["self_knowledge"] = None
+                result["reflection_insights"] = []
+
+        # Add growth summary when type is growth
+        if query_type == "growth":
+            from ..server import _growth
+            if _growth:
+                result["growth"] = _growth.get_autobiography_summary()
+            else:
+                result["growth"] = None
+
+        return [TextContent(type="text", text=json.dumps(result, indent=2))]
+
+    except Exception as e:
+        return [TextContent(type="text", text=json.dumps({
+            "error": str(e),
+            "query": text,
+            "type": query_type
+        }))]

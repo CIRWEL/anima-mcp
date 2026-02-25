@@ -117,12 +117,14 @@ class TestKnowledgeSmoke:
             handle_get_qa_insights,
             handle_get_trajectory,
             handle_get_eisv_trajectory_state,
+            handle_query,
         )
         assert callable(handle_get_self_knowledge)
         assert callable(handle_get_growth)
         assert callable(handle_get_qa_insights)
         assert callable(handle_get_trajectory)
         assert callable(handle_get_eisv_trajectory_state)
+        assert callable(handle_query)
 
     def test_get_self_knowledge_returns_error_when_store_none(self):
         """get_self_knowledge returns error when store is None."""
@@ -150,6 +152,24 @@ class TestKnowledgeSmoke:
             result = run_async(handle_get_eisv_trajectory_state({}))
             data = parse_handler_result(result)
             assert "error" in data
+
+    def test_query_requires_text(self):
+        """query returns error when text is empty."""
+        from anima_mcp.handlers.knowledge import handle_query
+
+        result = run_async(handle_query({}))
+        data = parse_handler_result(result)
+        assert "error" in data
+        assert "text" in data.get("error", "").lower() or "text" in str(data)
+
+    def test_query_returns_qa_insights_with_text(self):
+        """query returns qa_insights when text is provided."""
+        from anima_mcp.handlers.knowledge import handle_query
+
+        result = run_async(handle_query({"text": "what have I learned"}))
+        data = parse_handler_result(result)
+        assert "qa_insights" in data
+        assert "query" in data
 
 
 # ===========================================================================
@@ -470,6 +490,7 @@ class TestHandlersPackage:
             handle_get_qa_insights,
             handle_get_trajectory,
             handle_get_eisv_trajectory_state,
+            handle_query,
             # Display operations
             handle_capture_screen,
             handle_show_face,

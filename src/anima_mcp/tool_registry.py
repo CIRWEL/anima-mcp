@@ -25,7 +25,7 @@ from .handlers import (
     handle_get_health, handle_get_calibration,
     # Knowledge
     handle_get_self_knowledge, handle_get_growth, handle_get_qa_insights,
-    handle_get_trajectory, handle_get_eisv_trajectory_state,
+    handle_get_trajectory, handle_get_eisv_trajectory_state, handle_query,
     # Display operations
     handle_capture_screen, handle_show_face, handle_diagnostics,
     handle_manage_display,
@@ -277,6 +277,23 @@ TOOLS_STANDARD = [
         },
     ),
     Tool(
+        name="query",
+        description="Query Lumen's knowledge - semantic search over Q&A insights, self-knowledge, and growth. Use for pi(action='query').",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Query text (required)"},
+                "type": {
+                    "type": "string",
+                    "enum": ["cognitive", "insights", "growth", "self"],
+                    "description": "Query type: cognitive/insights adds self-knowledge, growth adds autobiography (default: cognitive)",
+                },
+                "limit": {"type": "integer", "description": "Max insights to return (default: 10)", "default": 10},
+            },
+            "required": ["text"],
+        },
+    ),
+    Tool(
         name="git_pull",
         description="Pull latest code from git repository and optionally restart. For remote deployments without SSH.",
         inputSchema={
@@ -456,6 +473,7 @@ HANDLERS = {
     "get_self_knowledge": handle_get_self_knowledge,
     "get_growth": handle_get_growth,
     "get_qa_insights": handle_get_qa_insights,
+    "query": handle_query,
     "get_trajectory": handle_get_trajectory,
     "get_eisv_trajectory_state": handle_get_eisv_trajectory_state,
     "git_pull": handle_git_pull,

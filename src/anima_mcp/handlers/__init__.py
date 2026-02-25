@@ -27,6 +27,7 @@ from .knowledge import (
     handle_get_qa_insights,
     handle_get_trajectory,
     handle_get_eisv_trajectory_state,
+    handle_query,
 )
 
 from .display_ops import (
@@ -72,6 +73,7 @@ __all__ = [
     "handle_get_qa_insights",
     "handle_get_trajectory",
     "handle_get_eisv_trajectory_state",
+    "handle_query",
     # Display operations
     "handle_capture_screen",
     "handle_show_face",
