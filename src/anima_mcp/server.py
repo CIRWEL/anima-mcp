@@ -2798,9 +2798,20 @@ def run_http_server(host: str, port: int):
         _ANIMA_HTTP_API_TOKEN = os.environ.get("ANIMA_HTTP_API_TOKEN")
 
         def _check_rest_auth(request) -> bool:
-            """Optional bearer token auth for REST endpoints."""
+            """Optional bearer token auth for REST endpoints.
+
+            Allows:
+            - No token configured → all requests pass
+            - Valid Bearer token → pass
+            - Same-origin browser requests (dashboard pages) → pass
+            """
             if not _ANIMA_HTTP_API_TOKEN:
                 return True  # Auth disabled if no token configured
+            # Allow same-origin browser requests (dashboard JS fetch calls)
+            sec_fetch_site = request.headers.get("sec-fetch-site", "")
+            if sec_fetch_site == "same-origin":
+                return True
+            # Allow requests with valid bearer token
             auth = request.headers.get("authorization") or request.headers.get("Authorization")
             if not auth or not isinstance(auth, str):
                 return False
