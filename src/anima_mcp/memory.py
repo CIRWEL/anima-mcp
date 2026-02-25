@@ -215,6 +215,8 @@ class AssociativeMemory:
 
         try:
             conn = sqlite3.connect(self.db_path, timeout=10.0)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=5000")
             cursor = conn.cursor()
 
             # Get recent state history with sensors AND timestamp for temporal patterns

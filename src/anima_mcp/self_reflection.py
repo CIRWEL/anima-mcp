@@ -770,6 +770,63 @@ class SelfReflectionSystem:
 
         return new_insights
 
+    # ==================== Q&A Knowledge Sync ====================
+
+    def sync_from_qa_knowledge(self, min_confidence: float = 0.6) -> int:
+        """
+        Import high-confidence Q&A insights into self-reflection.
+
+        Bridges knowledge.json (Q&A-derived) into SQLite insights so
+        "Things I've learned about myself" includes both pattern-derived
+        and Q&A-derived learnings.
+
+        Returns number of insights synced.
+        """
+        try:
+            from .knowledge import get_knowledge
+            kb = get_knowledge()
+            qa_insights = kb.get_all_insights()
+        except Exception as e:
+            print(f"[SelfReflection] Q&A sync skip: {e}", file=sys.stderr, flush=True)
+            return 0
+
+        synced = 0
+        now = datetime.now()
+        cat_map = {
+            "sensations": InsightCategory.ENVIRONMENT,
+            "world": InsightCategory.ENVIRONMENT,
+            "self": InsightCategory.WELLNESS,
+            "existence": InsightCategory.WELLNESS,
+            "relationships": InsightCategory.SOCIAL,
+            "behavioral": InsightCategory.BEHAVIORAL,
+            "general": InsightCategory.WELLNESS,
+        }
+
+        for qa in qa_insights:
+            if qa.confidence < min_confidence:
+                continue
+            synced_id = f"qa_{qa.insight_id}"
+            if synced_id in self._insights:
+                continue
+            category = cat_map.get(qa.category, InsightCategory.WELLNESS)
+            sr_insight = Insight(
+                id=synced_id,
+                category=category,
+                description=qa.text[:500],
+                confidence=min(1.0, qa.confidence),
+                sample_count=max(1, qa.references),
+                discovered_at=now,
+                last_validated=now,
+                validation_count=1,
+                contradiction_count=0,
+            )
+            self._save_insight(sr_insight)
+            synced += 1
+
+        if synced:
+            print(f"[SelfReflection] Synced {synced} Q&A insights", file=sys.stderr, flush=True)
+        return synced
+
     # ==================== Core Reflection ====================
 
     def reflect(self) -> Optional[str]:
@@ -780,6 +837,7 @@ class SelfReflectionSystem:
         None otherwise.
         """
         self._last_analysis_time = datetime.now()
+        self.sync_from_qa_knowledge()
         new_insights = []
 
         # Analyze recent state-history patterns (temporal, sensor, causal)

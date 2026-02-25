@@ -120,9 +120,9 @@ Lumen now draws on the notepad canvas even when other screens (face, messages, e
 | 7 | HIGH | Unbounded `_screen_cache` — PIL images never evicted, memory creep | screens.py | **FIXED** (max 12, LRU eviction) |
 | 8 | HIGH | Shared memory partial read | stable_creature.py | Mitigated: file backend uses atomic temp+replace |
 | 9 | MEDIUM | SQLite conn opened for identity check, never closed | stable_creature.py:207 | **FIXED** (try/finally conn.close()) |
-| 10 | MEDIUM | memory.py: no WAL mode on pattern load | memory.py:217 | Open |
-| 11 | MEDIUM | growth.py: `read_uncommitted=1` | growth.py:225 | Open |
-| 12 | MEDIUM | Unbounded visitor relationships dict | growth.py:207 | Open |
+| 10 | MEDIUM | memory.py: no WAL mode on pattern load | memory.py:217 | **FIXED** (WAL + busy_timeout in load_patterns) |
+| 11 | MEDIUM | growth.py: `read_uncommitted=1` | growth.py:225 | Open (low risk with WAL) |
+| 12 | MEDIUM | Unbounded visitor relationships dict | growth.py:207 | **FIXED** (LIMIT 500 by last_seen) |
 | 13 | MEDIUM | Correlation epsilon `1e-10` too small | self_model.py:378 | **FIXED** (1e-8) |
 | 14 | MEDIUM | Stale sensor data in prediction when reads fail | stable_creature.py:351 | Mitigated: `continue` skips loop |
 | 15 | MEDIUM | LearningVisualizer never destroyed — holds DB connection | learning_visualization.py | **FIXED** (context manager for conn) |

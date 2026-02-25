@@ -494,7 +494,12 @@ class GrowthSystem:
             )
 
         # Load visitor records (legacy: "relationships")
-        for row in conn.execute("SELECT * FROM relationships"):
+        # Limit to 500 most recent by last_seen to avoid unbounded growth (RESILIENCE #12)
+        RELATIONSHIPS_LOAD_LIMIT = 500
+        for row in conn.execute(
+            "SELECT * FROM relationships ORDER BY last_seen DESC LIMIT ?",
+            (RELATIONSHIPS_LOAD_LIMIT,),
+        ):
             # Handle legacy bond_strength values
             legacy_bond = row["bond_strength"]
             try:
@@ -1277,16 +1282,28 @@ class GrowthSystem:
                                 messages.append(msg)
                         break
 
-            # Belief-testing goals — belief confidence moved decisively
+            # Belief-testing goals — track evidence accumulation + decisive completion
             elif "test whether" in goal.description.lower() and self_model:
                 for bid, belief in self_model.beliefs.items():
                     if belief.description.lower() in goal.description.lower():
                         if belief.confidence > 0.7 or belief.confidence < 0.2:
+                            # Decisive — complete!
                             msg = self.update_goal_progress(
                                 goal.goal_id, 1.0,
                                 milestone=f"belief is now {belief.get_belief_strength()}")
-                            if msg:
-                                messages.append(msg)
+                        else:
+                            # Show intermediate progress based on evidence + confidence movement
+                            total_evidence = belief.supporting_count + belief.contradicting_count
+                            # Evidence component: each observation counts, saturates around 20
+                            evidence_progress = min(0.4, total_evidence / 50.0)
+                            # Confidence component: how far from 0.5 toward either threshold
+                            confidence_movement = abs(belief.confidence - 0.5) / 0.2
+                            confidence_progress = min(0.55, confidence_movement * 0.55)
+                            progress = min(0.95, evidence_progress + confidence_progress)
+                            if progress > goal.progress:
+                                msg = self.update_goal_progress(goal.goal_id, progress)
+                        if msg:
+                            messages.append(msg)
                         break
 
         return messages[0] if messages else None

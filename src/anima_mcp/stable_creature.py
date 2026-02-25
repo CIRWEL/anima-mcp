@@ -316,6 +316,7 @@ def run_creature():
     first_check_in = True  # Track first governance check to sync identity
     last_dialectic_time = 0  # Rate limit dialectic synthesis
     last_governance_time = 0  # Rate limit governance check-ins (every 10s, not every 2s)
+    _last_memory_context = None  # Retrieved memories for dialectic synthesis (past informs present)
     GOVERNANCE_INTERVAL = 10.0  # Seconds between governance check-ins
     last_action = None  # Track last action for outcome recording
     last_state_for_action = None  # State before action for learning
@@ -408,7 +409,7 @@ def run_creature():
                     if mem_result:
                         relevant_memories = mem_result
                         if memory_retriever:
-                            memory_context = memory_retriever.format_for_context(relevant_memories)
+                            _last_memory_context = memory_retriever.format_for_context(relevant_memories)
                         print(f"[Memory] Retrieved: {len(relevant_memories)} relevant memories", file=sys.stderr, flush=True)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
@@ -436,6 +437,9 @@ def run_creature():
                         # Build thesis from the surprise
                         _cog_thesis = f"I expected {', '.join(pred_error.surprise_sources or ['stability'])} but experienced significant deviation"
                         _cog_context = f"Current state: warmth={anima.warmth:.2f}, clarity={anima.clarity:.2f}, surprise={pred_error.surprise:.0%}"
+                        if _last_memory_context:
+                            _cog_context += f"\n\nRelevant past experience:\n{_last_memory_context}"
+                            _last_memory_context = None  # Use once, avoid stale context
                         _cog_sources = list(pred_error.surprise_sources or [])
 
                         def _do_cognitive():

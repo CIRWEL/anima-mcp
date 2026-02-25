@@ -316,6 +316,8 @@ class LEDDisplay:
         )
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
+        if light_level is not None:
+            self._last_light_level = light_level  # Populate diagnostics field
         self._cached_manual_brightness = self._manual_brightness_factor
 
         self._last_state_values, pattern_trigger = _patterns.detect_state_change(

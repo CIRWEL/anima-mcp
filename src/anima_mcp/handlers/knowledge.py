@@ -347,6 +347,14 @@ async def handle_query(arguments: dict) -> list[TextContent]:
     query_type = arguments.get("type", "cognitive")
     limit = int(arguments.get("limit", 10))
 
+    VALID_QUERY_TYPES = ("cognitive", "insights", "self", "growth")
+    if query_type not in VALID_QUERY_TYPES:
+        return [TextContent(type="text", text=json.dumps({
+            "error": f"Unknown query type: '{query_type}'",
+            "valid_types": list(VALID_QUERY_TYPES),
+            "usage": "query(text='...', type='cognitive')"
+        }))]
+
     if not text:
         return [TextContent(type="text", text=json.dumps({
             "error": "text parameter required",
