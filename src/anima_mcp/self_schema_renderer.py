@@ -38,28 +38,32 @@ WIDTH = 240
 HEIGHT = 240
 CENTER = (WIDTH // 2, HEIGHT // 2)
 
-# Ring radii — 9 rings evenly spaced from center to edge
-# Sized so outermost ring (104px) fits within title (y=16) and stats (y=224) on 240x240 LCD
-# Inner to outer: meta → anima → trajectory → sensor → resource → drift → preference → tension → belief
-RING_META_RADIUS = 22     # Identity texture (Exist%, Wakes, Age)
-RING_1_RADIUS = 36        # Anima dimensions (warmth, clarity, stability, presence)
-RING_TRAJ_RADIUS = 50     # Trajectory (maturity, rest point, stability score)
-RING_2_RADIUS = 65        # Physical sensors (light, temp, humidity, pressure)
-RING_2B_RADIUS = 76       # System resources (memory, cpu, disk)
-RING_DRIFT_RADIUS = 83    # Calibration drift per dimension
-RING_3_RADIUS = 90        # Learned preferences
-RING_TENSION_RADIUS = 97  # Value tensions between dimensions
-RING_4_RADIUS = 104       # Learned beliefs
+# Ring radii — 5 rings matching web dashboard grouping
+# Fits within title (y=16) and stats (y=224) on 240x240 LCD
+# Ring 0: identity (center)
+# Ring 1: anima
+# Ring 2: sensor + resource
+# Ring 3: preference + belief
+# Ring 4: meta + trajectory + drift + tension
+RING_1_RADIUS = 30        # Anima dimensions
+RING_2_RADIUS = 55        # Physical sensors
+RING_2B_RADIUS = 55       # System resources (same ring as sensors)
+RING_3_RADIUS = 80        # Learned preferences
+RING_4_RADIUS = 80        # Learned beliefs (same ring as preferences)
+RING_META_RADIUS = 104    # Identity texture (outer ring)
+RING_TRAJ_RADIUS = 104    # Trajectory (outer ring)
+RING_DRIFT_RADIUS = 104   # Calibration drift (outer ring)
+RING_TENSION_RADIUS = 104 # Value tensions (outer ring)
 
-# Node sizes (radius) — smaller for outer/enriched nodes to reduce overlap
+# Node sizes (radius)
 IDENTITY_RADIUS = 12
 ANIMA_RADIUS = 9
-SENSOR_RADIUS = 7
+SENSOR_RADIUS = 6
 RESOURCE_RADIUS = 6
 PREFERENCE_RADIUS = 5
 BELIEF_RADIUS = 5
-META_RADIUS = 5
-TRAJECTORY_RADIUS = 6
+META_RADIUS = 4
+TRAJECTORY_RADIUS = 4
 DRIFT_RADIUS = 4
 TENSION_RADIUS = 4
 
@@ -421,7 +425,7 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
                 )
 
             # Thickness based on weight magnitude (2-4 pixels) - more visible
-            thickness = max(2, min(4, int(weight_magnitude * 4) + 2))
+            thickness = max(1, min(2, int(weight_magnitude * 2) + 1))
 
             _draw_line(pixels, x0, y0, x1, y1, color, thickness=thickness)
 
