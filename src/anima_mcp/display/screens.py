@@ -143,10 +143,8 @@ class ScreenRenderer:
         self._screen_cache_order: List[str] = []  # LRU order
         # UNITARES agent_id (for display on identity screen)
         self._unitares_agent_id: Optional[str] = None
-        # Neural waveform history (scrolling traces)
-        from collections import deque
-        self._neural_history: deque = deque(maxlen=60)
         # Sensor sparkline history
+        from collections import deque
         self._sensor_history: deque = deque(maxlen=40)
 
     # --- Backward-compat properties for drawing engine internals ---
@@ -1732,12 +1730,22 @@ class ScreenRenderer:
             self._display.render_text(f"HEALTH\n\n{overall}\n\nError:\n{str(e)[:40]}", (10, 10))
 
     def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
-        """Render neural activity screen - scrolling waveform traces."""
+        """Render neural activity screen - EEG frequency band visualization."""
         if not readings:
             self._display.render_text("NEURAL\n\nNo data", (10, 10))
             return
 
-        # No screen cache for neural — waveforms scroll every frame
+        # Cache: neural bands + anima state rounded to display precision
+        raw = readings.to_dict()
+        neural_key = (
+            f"{raw.get('eeg_delta_power', 0):.2f}|{raw.get('eeg_theta_power', 0):.2f}|"
+            f"{raw.get('eeg_alpha_power', 0):.2f}|{raw.get('eeg_beta_power', 0):.2f}|"
+            f"{raw.get('eeg_gamma_power', 0):.2f}"
+        )
+        if anima:
+            neural_key += f"|{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|{anima.presence:.2f}"
+        if self._check_screen_cache("neural", neural_key):
+            return
 
         try:
             if not hasattr(self._display, '_create_canvas'):
@@ -1748,78 +1756,77 @@ class ScreenRenderer:
 
             fonts = self._get_fonts()
             font_small = fonts['small']
+            font_medium = fonts['medium']
             font_title = fonts['title']
             font_tiny = fonts['tiny']
             font_micro = fonts['micro']
 
             DIM = COLORS.TEXT_DIM
+            SECONDARY = COLORS.TEXT_SECONDARY
 
             # Band data from readings
             raw = readings.to_dict()
-            band_values = (
-                raw.get("eeg_delta_power") or 0,
-                raw.get("eeg_theta_power") or 0,
-                raw.get("eeg_alpha_power") or 0,
-                raw.get("eeg_beta_power") or 0,
-                raw.get("eeg_gamma_power") or 0,
-            )
-            self._neural_history.append(band_values)
-
-            band_info = [
-                ("delta", (100, 100, 240)),
-                ("theta", (140, 92, 246)),
-                ("alpha", (6, 182, 212)),
-                ("beta",  (34, 197, 94)),
-                ("gamma", (245, 158, 11)),
+            bands = [
+                ("delta",  raw.get("eeg_delta_power") or 0, (100, 100, 240),  "0.5-4 Hz"),
+                ("theta",  raw.get("eeg_theta_power") or 0, (140, 92, 246),   "4-8 Hz"),
+                ("alpha",  raw.get("eeg_alpha_power") or 0, (6, 182, 212),    "8-13 Hz"),
+                ("beta",   raw.get("eeg_beta_power") or 0,  (34, 197, 94),    "13-30 Hz"),
+                ("gamma",  raw.get("eeg_gamma_power") or 0, (245, 158, 11),   "30+ Hz"),
             ]
 
             # Title
             draw.text((10, 6), "Neural Activity", fill=COLORS.SOFT_CYAN, font=font_title)
 
             # Dominant band indicator
-            dominant_idx = max(range(5), key=lambda i: band_values[i])
-            dominant_name = band_info[dominant_idx][0]
-            dominant_color = band_info[dominant_idx][1]
+            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
+            dominant_name = bands[dominant_idx][0]
+            dominant_color = bands[dominant_idx][2]
             draw.text((10, 26), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
 
-            # ---- Waveform traces ----
-            trace_x_start = 30
-            trace_x_end = 225
-            trace_width = trace_x_end - trace_x_start
-            trace_height = 20
-            trace_gap = 4
-            trace_y_start = 50
-            history = list(self._neural_history)
-            n_points = len(history)
+            # ---- Vertical bar chart ----
+            bar_area_top = 58
+            bar_area_bottom = 184
+            bar_area_height = bar_area_bottom - bar_area_top
+            bar_width = 28
+            bar_gap = 12
+            total_bars_width = len(bands) * bar_width + (len(bands) - 1) * bar_gap
+            bar_start_x = (240 - total_bars_width) // 2
 
-            for band_idx, (name, color) in enumerate(band_info):
-                y_top = trace_y_start + band_idx * (trace_height + trace_gap)
-                y_bottom = y_top + trace_height
+            # Background area
+            draw.rectangle([bar_start_x - 6, bar_area_top - 4, bar_start_x + total_bars_width + 6, bar_area_bottom + 4],
+                          fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
 
-                # Band label on left
-                greek = {0: "\u03b4", 1: "\u03b8", 2: "\u03b1", 3: "\u03b2", 4: "\u03b3"}
-                draw.text((6, y_top + 4), greek[band_idx], fill=color, font=font_small)
+            for i, (name, value, color, freq) in enumerate(bands):
+                x = bar_start_x + i * (bar_width + bar_gap)
 
-                # Current value on right
-                val = band_values[band_idx]
-                draw.text((trace_x_end + 4, y_top + 4), f"{val*100:.0f}", fill=DIM, font=font_micro)
+                # Bar background (track)
+                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
+                              fill=(15, 15, 22))
 
-                # Background track
-                draw.rectangle([trace_x_start, y_top, trace_x_end, y_bottom],
-                              fill=(12, 12, 18))
+                # Filled bar (bottom-up)
+                fill_height = int(value * bar_area_height)
+                if fill_height > 0:
+                    bar_top = bar_area_bottom - fill_height
+                    from .design import lighten_color
+                    draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom],
+                                  fill=color)
+                    # Bright cap at top of bar
+                    if fill_height > 3:
+                        bright = lighten_color(color, 60)
+                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2],
+                                      fill=bright)
 
-                # Draw waveform if we have enough data
-                if n_points >= 2:
-                    points = []
-                    for i, sample in enumerate(history):
-                        x = trace_x_start + int(i * trace_width / (n_points - 1))
-                        v = max(0.0, min(1.0, sample[band_idx]))
-                        y = y_bottom - int(v * trace_height)
-                        points.append((x, y))
-                    draw.line(points, fill=color, width=1)
+                # Value text above bar
+                pct_text = f"{value * 100:.0f}%"
+                draw.text((x + 2, bar_area_top - 14), pct_text, fill=color, font=font_micro)
+
+                # Greek letter label below bar
+                greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
+                letter = greek.get(name, name[0])
+                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 6), letter, fill=SECONDARY, font=font_medium)
 
             # ---- Band descriptions at bottom ----
-            y_desc = trace_y_start + 5 * (trace_height + trace_gap) + 4
+            y_desc = 202
             desc_map = {
                 "delta": "deep rest",
                 "theta": "meditation",
@@ -1841,6 +1848,8 @@ class ScreenRenderer:
             self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, ScreenMode.NEURAL)
 
+            # Cache + push to display
+            self._store_screen_cache("neural", neural_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
