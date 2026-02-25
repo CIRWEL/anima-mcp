@@ -3411,14 +3411,14 @@ class ScreenRenderer:
         """
         from ..self_schema import get_current_schema
         from ..self_schema_renderer import render_schema_to_pixels, COLORS as SCHEMA_COLORS, WIDTH, HEIGHT
-        from ..server import _get_schema_hub
 
-        # Same schema the dashboard serves at /schema-data
-        hub = _get_schema_hub()
-        if hub.schema_history:
+        # Use enriched schema from hub if available (same as web dashboard)
+        # schema_hub is set by server.py after ScreenRenderer creation
+        hub = getattr(self, 'schema_hub', None)
+        if hub and hub.schema_history:
             schema = hub.schema_history[-1]
         else:
-            # Fallback before first compose_schema() runs
+            # Fallback: base schema (before hub is connected or has history)
             from ..growth import get_growth_system
             from ..self_model import get_self_model
             schema = get_current_schema(

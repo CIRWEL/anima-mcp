@@ -121,6 +121,7 @@ _last_state_before: Dict[str, float] | None = None
 _last_primitive_utterance: Utterance | None = None
 # Self-model state - cross-iteration tracking
 _sm_prev_stability: float | None = None
+_sm_prev_warmth: float | None = None
 _sm_pending_prediction: dict | None = None  # {context, prediction, warmth_before, clarity_before}
 _sm_clarity_before_interaction: float | None = None
 # LED proprioception - carry LED state across iterations for prediction
@@ -971,6 +972,19 @@ async def _update_display_loop():
                                     # Record curiosity for internal learning loop:
                                     # later, check if prediction improved in these domains
                                     metacog.record_curiosity(prediction_error.surprise_sources, prediction_error)
+                                # Update question_asking_tendency belief
+                                try:
+                                    from .self_model import get_self_model
+                                    get_self_model().observe_question_asked(prediction_error.surprise)
+                                except Exception:
+                                    pass
+                            else:
+                                # Surprised but no question generated — contradicting evidence
+                                try:
+                                    from .self_model import get_self_model
+                                    get_self_model().observe_surprise_no_question(prediction_error.surprise)
+                                except Exception:
+                                    pass
 
                             if reflection.observation:
                                 print(f"[Metacog] Reflection: {reflection.observation}", file=sys.stderr, flush=True)
@@ -1181,10 +1195,15 @@ async def _update_display_loop():
                         ctx = _sm_pending_prediction["context"]
                         if ctx == "light_change":
                             actual["surprise_likelihood"] = prediction_error.surprise if prediction_error else 0.0
-                            actual["warmth_change"] = anima.warmth - _sm_pending_prediction["warmth_before"]
+                            # Normalize warmth delta to [0,1] magnitude for comparison
+                            # with belief value (correlation strength 0-1).
+                            # delta=0 → 0.5 (no effect), delta=±0.25 → 1.0 (strong effect)
+                            raw_delta = anima.warmth - _sm_pending_prediction["warmth_before"]
+                            actual["warmth_change"] = min(1.0, max(0.0, abs(raw_delta) * 2 + 0.5))
                         elif ctx == "temp_change":
                             actual["surprise_likelihood"] = prediction_error.surprise if prediction_error else 0.0
-                            actual["clarity_change"] = anima.clarity - _sm_pending_prediction["clarity_before"]
+                            raw_delta = anima.clarity - _sm_pending_prediction["clarity_before"]
+                            actual["clarity_change"] = min(1.0, max(0.0, abs(raw_delta) * 2 + 0.5))
                         elif ctx == "stability_drop":
                             # Fast recovery = stability improved back within one cycle
                             recovery = anima.stability - _sm_pending_prediction.get("stability_before", 0.5)
@@ -1237,6 +1256,17 @@ async def _update_display_loop():
                                         "clarity_before": anima.clarity,
                                     }
                     _sm_prev_stability = anima.stability
+
+                    # 2b. Observe warmth changes (track across iterations)
+                    global _sm_prev_warmth
+                    if _sm_prev_warmth is not None:
+                        warmth_delta = abs(anima.warmth - _sm_prev_warmth)
+                        if warmth_delta > 0.05:
+                            sm.observe_warmth_change(
+                                _sm_prev_warmth, anima.warmth,
+                                duration_seconds=base_delay * 5
+                            )
+                    _sm_prev_warmth = anima.warmth
 
                     # 3. Observe time-of-day patterns (every ~5 min)
                     if loop_count % SELF_DIALOGUE_LOG_THROTTLE == 0:
@@ -1442,6 +1472,11 @@ async def _update_display_loop():
                     # Pass db_path if store is available
                     db_path = str(_store.db_path) if _store else "anima.db"
                     _screen_renderer = ScreenRenderer(_display, db_path=db_path, identity_store=_store)
+                    # Wire schema hub so LCD shows same enriched schema as dashboard
+                    try:
+                        _screen_renderer.schema_hub = _get_schema_hub()
+                    except Exception:
+                        pass
                     print("[Display] Screen renderer initialized", file=sys.stderr, flush=True)
                     # Pre-warm learning cache in background (avoids 9+ second delay on first visit)
                     _screen_renderer.warm_learning_cache()
