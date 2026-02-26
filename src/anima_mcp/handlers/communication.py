@@ -342,7 +342,12 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 "message_id": msg.message_id,
                 "source": "agent",
                 "agent_name": agent_name,
-                "message": f"Note received from {agent_name}"
+                "message": f"Note received from {agent_name}",
+                # DEBUG: remove after identity verification
+                "_debug_identity": {
+                    "client_session_id": client_session_id,
+                    "bridge_available": _unitares_bridge is not None,
+                }
             }
             if responds_to:
                 result["answered_question"] = validated_question_id or responds_to
