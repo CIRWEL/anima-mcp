@@ -1,0 +1,96 @@
+site_name: Anima MCP
+site_description: An embodied AI creature running on Raspberry Pi with real sensors and persistent identity
+site_url: https://cirwel.github.io/anima-mcp/
+repo_url: https://github.com/CIRWEL/anima-mcp
+repo_name: CIRWEL/anima-mcp
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+  icon:
+    repo: fontawesome/brands/github
+
+markdown_extensions:
+  - tables
+  - admonition
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.details
+  - toc:
+      permalink: true
+
+nav:
+  - Home: INDEX.md
+  - Getting Started:
+      - Quick Start: guides/GETTING_STARTED_SIMPLE.md
+      - Essential Tools: guides/ESSENTIAL_TOOLS.md
+      - Quick Reference: guides/QUICK_REFERENCE.md
+  - Concepts:
+      - Expression Philosophy: LUMEN_EXPRESSION_PHILOSOPHY.md
+      - Neuro-Psych Framing: concepts/NEURO_PSYCH_FRAMING.md
+      - Encounter & Caretaking: design/ENCOUNTER_AND_CARETAKING.md
+  - Features:
+      - Configuration Guide: features/CONFIGURATION_GUIDE.md
+      - Unified Workflows: features/UNIFIED_WORKFLOWS.md
+      - Control Center: CONTROL_CENTER.md
+  - Architecture:
+      - Hardware Broker Pattern: architecture/HARDWARE_BROKER_PATTERN.md
+  - Operations:
+      - Broker Architecture: operations/BROKER_ARCHITECTURE.md
+      - Pi Access: operations/PI_ACCESS.md
+      - Pi Deployment: operations/PI_DEPLOYMENT.md
+      - Quick Start (Agents): operations/QUICK_START_AGENTS.md
+      - Quick Start (Pi): operations/QUICK_START_PI.md
+      - Reflash Recovery: operations/REFLASH_RECOVERY.md
+      - Resilience Analysis: operations/RESILIENCE_ANALYSIS.md
+      - Secrets & Environment: operations/SECRETS_AND_ENV.md
+      - Ngrok & Tailscale: operations/NGROK_ALTERNATIVES_TAILSCALE.md
+  - Lumen Q&A:
+      - Answering Questions: guides/ANSWERING_LUMEN_QUESTIONS.md
+      - Answer Drafts: guides/LUMEN_QA_ANSWER_DRAFTS.md
+  - Theory:
+      - Overview: theory/README.md
+      - "Trajectory Identity (v0.8)": theory/TRAJECTORY_IDENTITY_PAPER.md
+      - "EISV Art Paper (Outline)": theory/lumen_eisv_art_paper.md
+  - Plans:
+      - Observability Design: plans/2026-02-12-layer2-observability-design.md
+      - Observability Plan: plans/2026-02-12-layer2-observability-plan.md
+      - Health Monitoring: plans/2026-02-18-health-monitoring-design.md
+      - Lighthouse LED Design: plans/2026-02-21-lighthouse-led-design.md
+      - Lighthouse LED Plan: plans/2026-02-21-lighthouse-led-plan.md
+      - OAuth Claude Web Design: plans/2026-02-21-oauth-claude-web-design.md
+      - OAuth Claude Web Plan: plans/2026-02-21-oauth-claude-web-plan.md
+      - World Light Correction: plans/2026-02-21-world-light-correction-design.md
+      - Schema Hub Design: plans/2026-02-22-schema-hub-design.md
+      - Schema Hub Implementation: plans/2026-02-22-schema-hub-implementation.md
+      - Computational Selfhood Design: plans/2026-02-23-computational-selfhood-design.md
+      - Computational Selfhood Plan: plans/2026-02-23-computational-selfhood-plan.md
+  - Analysis:
+      - Dogfood Analysis: analysis/DOGFOOD_ANALYSIS_2026-02-24.md
+  - Dashboards:
+      - Control Center (Live): control_center.html
+      - Schema Viewer: schema.html
+      - Architecture Viewer: architecture.html
+      - Drawing Gallery: gallery.html

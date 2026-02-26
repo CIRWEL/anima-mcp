@@ -53,3 +53,6 @@ config/anima.env
 *.env
 !*.env.example
 .worktrees/
+
+# MkDocs build output
+site/
