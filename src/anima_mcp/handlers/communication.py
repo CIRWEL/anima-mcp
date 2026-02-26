@@ -20,9 +20,13 @@ def _get_caller_session_id() -> str | None:
         ctx = request_ctx.get()
         if ctx.request is not None:
             headers = ctx.request.headers
-            return headers.get("mcp-session-id") or headers.get("x-session-id")
-    except (LookupError, AttributeError, ImportError):
-        pass
+            sid = headers.get("mcp-session-id") or headers.get("x-session-id")
+            # DEBUG: log what we see (remove after verification)
+            _hdr_keys = [k for k in headers.keys() if "session" in k.lower() or "mcp" in k.lower()]
+            print(f"[Identity] _get_caller_session_id: sid={sid!r}, relevant_headers={_hdr_keys}", file=sys.stderr, flush=True)
+            return sid
+    except (LookupError, AttributeError, ImportError) as exc:
+        print(f"[Identity] _get_caller_session_id exception: {exc}", file=sys.stderr, flush=True)
     return None
 
 
@@ -212,13 +216,15 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
     # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
+    print(f"[Identity] post_message: client_session_id={client_session_id!r}, bridge={_unitares_bridge is not None}", file=sys.stderr, flush=True)
     if _unitares_bridge and client_session_id:
         try:
             resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
+            print(f"[Identity] post_message: resolved={resolved!r}", file=sys.stderr, flush=True)
             if resolved:
                 agent_name = resolved
-        except Exception:
-            pass  # Fallback to provided agent_name
+        except Exception as exc:
+            print(f"[Identity] post_message resolve failed: {exc}", file=sys.stderr, flush=True)
 
     if not message:
         return [TextContent(type="text", text=json.dumps({
