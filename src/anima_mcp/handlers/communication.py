@@ -9,6 +9,18 @@ import sys
 from mcp.types import TextContent
 
 
+def _debug_request_headers() -> dict | None:
+    """DEBUG: Return all MCP request headers. Remove after verification."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        ctx = request_ctx.get()
+        if ctx.request is not None:
+            return dict(ctx.request.headers)
+    except (LookupError, AttributeError, ImportError):
+        pass
+    return None
+
+
 def _get_caller_session_id() -> str | None:
     """Extract caller's session ID from MCP request context headers.
 
@@ -21,13 +33,36 @@ def _get_caller_session_id() -> str | None:
         if ctx.request is not None:
             headers = ctx.request.headers
             sid = headers.get("mcp-session-id") or headers.get("x-session-id")
-            # DEBUG: log what we see (remove after verification)
-            _hdr_keys = [k for k in headers.keys() if "session" in k.lower() or "mcp" in k.lower()]
-            print(f"[Identity] _get_caller_session_id: sid={sid!r}, relevant_headers={_hdr_keys}", file=sys.stderr, flush=True)
+            # DEBUG: dump all headers to see what's available (remove after verification)
+            all_hdrs = dict(headers)
+            print(f"[Identity] request headers: {all_hdrs}", file=sys.stderr, flush=True)
             return sid
     except (LookupError, AttributeError, ImportError) as exc:
         print(f"[Identity] _get_caller_session_id exception: {exc}", file=sys.stderr, flush=True)
     return None
+
+
+def _get_unitares_bridge():
+    """Get the UNITARES bridge, creating lazily if needed.
+
+    Falls back to creating a fresh bridge from UNITARES_URL env var
+    if the singleton hasn't been initialized by the governance loop yet.
+    """
+    import os
+    from ..server import _unitares_bridge
+    if _unitares_bridge is not None:
+        return _unitares_bridge
+
+    # Singleton not created yet — try to create one lazily
+    unitares_url = os.environ.get("UNITARES_URL")
+    if not unitares_url:
+        return None
+
+    try:
+        from ..server import _get_unitares_bridge as _factory
+        return _factory(unitares_url)
+    except Exception:
+        return None
 
 
 async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
@@ -38,7 +73,6 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     - lumen_qa() -> list unanswered questions
     - lumen_qa(question_id="x", answer="...") -> answer question x
     """
-    from ..server import _unitares_bridge
     from ..messages import get_board, MESSAGE_TYPE_QUESTION, add_agent_message
 
     question_id = arguments.get("question_id")
@@ -48,9 +82,10 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
     # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
-    if _unitares_bridge and client_session_id:
+    bridge = _get_unitares_bridge()
+    if bridge and client_session_id:
         try:
-            resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
+            resolved = await bridge.resolve_caller_identity(session_id=client_session_id)
             if resolved:
                 agent_name = resolved
         except Exception:
@@ -202,7 +237,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     Consolidates: leave_message + leave_agent_note
     """
     from ..server import (
-        _unitares_bridge, _growth, _activity,
+        _growth, _activity,
         _get_readings_and_anima, _store,
     )
     from ..messages import (
@@ -216,10 +251,11 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
     # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
-    print(f"[Identity] post_message: client_session_id={client_session_id!r}, bridge={_unitares_bridge is not None}", file=sys.stderr, flush=True)
-    if _unitares_bridge and client_session_id:
+    bridge = _get_unitares_bridge()
+    print(f"[Identity] post_message: client_session_id={client_session_id!r}, bridge={bridge is not None}", file=sys.stderr, flush=True)
+    if bridge and client_session_id:
         try:
-            resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
+            resolved = await bridge.resolve_caller_identity(session_id=client_session_id)
             print(f"[Identity] post_message: resolved={resolved!r}", file=sys.stderr, flush=True)
             if resolved:
                 agent_name = resolved
@@ -346,7 +382,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 # DEBUG: remove after identity verification
                 "_debug_identity": {
                     "client_session_id": client_session_id,
-                    "bridge_available": _unitares_bridge is not None,
+                    "bridge_available": bridge is not None,
+                    "request_headers": _debug_request_headers(),
                 }
             }
             if responds_to:
