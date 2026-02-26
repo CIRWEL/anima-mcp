@@ -469,10 +469,6 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         count += pressure_weight
 
     # Neural instability: Low theta+delta = scattered mind = instability
-    temp_delta = None
-    if r.ambient_temp_c is not None:
-        temp_delta = r.ambient_temp_c - (cal.ambient_temp_min + cal.ambient_temp_max) / 2
-
     if r.eeg_theta_power is not None and r.eeg_delta_power is not None:
         # Use real EEG data - low theta+delta = instability
         neural_groundedness = (r.eeg_theta_power + r.eeg_delta_power) / 2

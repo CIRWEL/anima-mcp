@@ -1794,7 +1794,6 @@ async def _update_display_loop():
                     try:
                         advocate = get_advocate()
                         display_available = _display.is_available() if _display else False
-                        from .eisv_mapper import anima_to_eisv
                         eisv = anima_to_eisv(anima, readings)
                         steps = advocate.analyze_current_state(
                             anima=anima, readings=readings, eisv=eisv,
@@ -2217,9 +2216,12 @@ async def _update_display_loop():
                     async def check_in_governance():
                         # Use singleton bridge (connection pooling, no session leaks)
                         bridge = _get_unitares_bridge(unitares_url, identity)
-                        # Pass identity for metadata sync and include in check-in
+                        # Pass calibration weights (from config) through to EISV mapping
+                        cal = get_calibration()
                         decision = await bridge.check_in(
                             anima, readings,
+                            neural_weight=cal.neural_weight,
+                            physical_weight=cal.physical_weight,
                             identity=identity,
                             is_first_check_in=is_first_check_in,
                             drawing_eisv=drawing_eisv
@@ -3081,7 +3083,6 @@ def run_http_server(host: str, port: int):
                 neural = _extract_neural_bands(readings)
 
                 # EISV
-                from .eisv_mapper import anima_to_eisv
                 eisv = anima_to_eisv(anima, readings)
 
                 # Governance
@@ -3502,7 +3503,6 @@ def run_http_server(host: str, port: int):
                 }
 
                 # EISV
-                from .eisv_mapper import anima_to_eisv
                 eisv = anima_to_eisv(anima, readings)
                 eisv_data = eisv.to_dict()
 

@@ -29,7 +29,6 @@ from enum import Enum
 from .anima import Anima, _warmth_feeling, _clarity_feeling, _stability_feeling, _presence_feeling, _overall_mood
 from .sensors.base import SensorReadings
 from .eisv_mapper import EISVMetrics, anima_to_eisv
-from .memory import Anticipation
 
 
 class Priority(Enum):

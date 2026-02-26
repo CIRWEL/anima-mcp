@@ -274,6 +274,7 @@ class UnifiedWorkflowOrchestrator:
         
         async def execute_step(step: WorkflowStep):
             """Execute a single step."""
+            nonlocal status
             if step.name in executed:
                 return results.get(step.name)
             
