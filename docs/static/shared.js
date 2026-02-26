@@ -132,6 +132,11 @@ class Sparkline {
         this.maxPoints = maxPoints;
         this.lineWidth = lineWidth;
         this.data = [];
+        // Store CSS (logical) dimensions for HiDPI-correct drawing.
+        // The canvas context is pre-scaled by devicePixelRatio, so we draw
+        // in CSS pixels, not pixel buffer dimensions.
+        this.w = parseInt(canvas.style.width) || canvas.width;
+        this.h = parseInt(canvas.style.height) || canvas.height;
     }
 
     push(value) {
@@ -143,9 +148,7 @@ class Sparkline {
     }
 
     draw() {
-        const { canvas, ctx, data, color, lineWidth } = this;
-        const w = canvas.width;
-        const h = canvas.height;
+        const { ctx, data, color, lineWidth, w, h } = this;
         ctx.clearRect(0, 0, w, h);
 
         if (data.length < 2) return;
