@@ -2171,11 +2171,8 @@
         }
 
         function renderGrowth(data) {
-            // ── Journey card: 2-column internal layout ──
-            // Left: autobiography + goals + curiosities
-            // Right: memories
+            // ── Journey card: autobiography + goals + curiosities ──
             let leftHtml = '';
-            let rightHtml = '';
 
             if (data.autobiography) {
                 leftHtml += `<div class="autobiography">${escapeHtml(data.autobiography)}</div>`;
@@ -2208,31 +2205,23 @@
                 leftHtml += `</div>`;
             }
 
+            let journeyHtml = leftHtml || '<div class="error-state">No growth data yet</div>';
+            document.getElementById('growthContent').innerHTML = journeyHtml;
+
+            // ── Learning card extras: memories + preferences ──
+            let extrasHtml = '';
+
             const memories = data.memories;
             if (memories && memories.recent && memories.recent.length > 0) {
-                rightHtml += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
-                rightHtml += `<div class="memory-timeline">`;
-                rightHtml += memories.recent.map(m => `
+                extrasHtml += `<div class="layer-header">Memories <span>\u2014 ${memories.count} total</span></div>`;
+                extrasHtml += `<div class="memory-timeline">`;
+                extrasHtml += memories.recent.map(m => `
                     <div class="memory-item">
                         <div class="memory-date">${m.when || ''}</div>
                         <div class="memory-desc">${escapeHtml(m.description)}</div>
                     </div>`).join('');
-                rightHtml += `</div>`;
+                extrasHtml += `</div>`;
             }
-
-            let journeyHtml = '';
-            if (leftHtml && rightHtml) {
-                journeyHtml = `<div class="journey-columns"><div>${leftHtml}</div><div>${rightHtml}</div></div>`;
-            } else if (leftHtml || rightHtml) {
-                journeyHtml = leftHtml || rightHtml;
-            } else {
-                journeyHtml = '<div class="error-state">No growth data yet</div>';
-            }
-
-            document.getElementById('growthContent').innerHTML = journeyHtml;
-
-            // ── Learning card extras: preferences only ──
-            let extrasHtml = '';
 
             const prefs = data.preferences;
             if (prefs && prefs.learned && prefs.learned.length > 0) {
