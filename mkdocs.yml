@@ -89,3 +89,8 @@ nav:
       - Computational Selfhood Plan: plans/2026-02-23-computational-selfhood-plan.md
   - Analysis:
       - Dogfood Analysis: analysis/DOGFOOD_ANALYSIS_2026-02-24.md
+  - Dashboards:
+      - Control Center (Live): control_center.html
+      - Schema Viewer: schema.html
+      - Architecture Viewer: architecture.html
+      - Drawing Gallery: gallery.html
