@@ -2,6 +2,16 @@
 
 **Web dashboard for monitoring and interacting with Lumen.**
 
+> **Note:** The dashboards below require the local message server and Pi connectivity.
+> They are local-only tools — open them from your cloned repo, not from the docs site.
+
+**Local dashboard files:**
+
+- `docs/control_center.html` — Live state, Q&A, messaging, gallery
+- `docs/schema.html` — Schema visualization
+- `docs/architecture.html` — Architecture visualization
+- `docs/gallery.html` — Drawing gallery
+
 ## Quick Start
 
 1. **Start the message server** (on Mac):
