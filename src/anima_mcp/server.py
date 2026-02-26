@@ -2940,36 +2940,14 @@ def run_http_server(host: str, port: int):
         # Bearer token auth for REST endpoints
         _ANIMA_HTTP_API_TOKEN = os.environ.get("ANIMA_HTTP_API_TOKEN")
 
-        # Trusted networks: localhost, Tailscale CGNAT, private RFC1918 ranges
-        import ipaddress as _ipaddress
-        _TRUSTED_NETWORKS = [
-            _ipaddress.ip_network("127.0.0.0/8"),
-            _ipaddress.ip_network("::1/128"),
-            _ipaddress.ip_network("100.64.0.0/10"),   # Tailscale CGNAT
-            _ipaddress.ip_network("192.168.0.0/16"),
-            _ipaddress.ip_network("10.0.0.0/8"),
-            _ipaddress.ip_network("172.16.0.0/12"),
-        ]
-
-        def _is_trusted_network(request) -> bool:
-            """Check if request originates from a trusted network."""
-            forwarded = request.headers.get("x-forwarded-for")
-            if forwarded:
-                client_ip = forwarded.split(",")[0].strip()
-            else:
-                client_ip = request.client.host if request.client else None
-            if not client_ip:
-                return False
-            try:
-                addr = _ipaddress.ip_address(client_ip)
-                return any(addr in net for net in _TRUSTED_NETWORKS)
-            except ValueError:
-                return False
-
         def _check_rest_auth(request) -> bool:
-            """Bearer token auth for REST endpoints. Trusted networks bypass auth."""
-            if _is_trusted_network(request):
-                return True
+            """Optional bearer token auth for REST endpoints.
+
+            Allows:
+            - No token configured → all requests pass
+            - Valid Bearer token → pass
+            - Same-origin browser requests (dashboard pages) → pass
+            """
             if not _ANIMA_HTTP_API_TOKEN:
                 return True  # Auth disabled if no token configured
             # Allow same-origin browser requests (dashboard JS fetch calls)
@@ -2987,7 +2965,9 @@ def run_http_server(host: str, port: int):
 
         # Health check endpoint for monitoring
         async def health_check(request):
-            """Health check — always public (monitoring, load balancers)."""
+            """Simple health check - returns 200 if server is running."""
+            if not _check_rest_auth(request):
+                return JSONResponse({"error": "Unauthorized"}, status_code=401)
             status = "ok" if SERVER_READY else "starting"
             return PlainTextResponse(f"{status}\n")
 
