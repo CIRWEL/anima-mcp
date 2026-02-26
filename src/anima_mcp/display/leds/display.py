@@ -295,6 +295,12 @@ class LEDDisplay:
         activity_brightness: float = 1.0,
     ) -> LEDState:
         update_start = time.time()
+        # Always track light level for diagnostics, even on early-return paths.
+        # Previously this was only set after the debounce check, so if the first
+        # call had light_level=None (sensor not ready) it would stay None forever
+        # because subsequent calls would early-return before reaching the setter.
+        if light_level is not None:
+            self._last_light_level = light_level
         state_changed = True
         if self._cached_anima_state is not None:
             lw, lc, ls, lp = self._cached_anima_state
@@ -316,8 +322,6 @@ class LEDDisplay:
         )
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
-        if light_level is not None:
-            self._last_light_level = light_level  # Populate diagnostics field
         self._cached_manual_brightness = self._manual_brightness_factor
 
         self._last_state_values, pattern_trigger = _patterns.detect_state_change(

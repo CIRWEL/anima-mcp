@@ -462,6 +462,42 @@ class SelfReflectionSystem:
 
         return patterns
 
+    @staticmethod
+    def _extract_outcome_metric(outcome: str) -> Optional[str]:
+        """Extract the core metric from an outcome string (e.g. 'higher warmth' → 'warmth')."""
+        for metric in ("warmth", "clarity", "stability", "presence"):
+            if metric in outcome.lower():
+                return metric
+        return None
+
+    def _find_contradicting_insights(
+        self, category: InsightCategory, outcome: str, condition: str
+    ) -> List[Insight]:
+        """Find existing insights that contradict a new one.
+
+        Two insights contradict when they claim the same metric behaves a certain way
+        under mutually exclusive conditions in the same category (e.g. "warmth best at
+        night" vs "warmth best in afternoon").
+        """
+        metric = self._extract_outcome_metric(outcome)
+        if not metric:
+            return []
+
+        contradictions = []
+        for existing in self._insights.values():
+            if existing.category != category:
+                continue
+            existing_metric = self._extract_outcome_metric(existing.description)
+            if existing_metric != metric:
+                continue
+            # Same category + same metric but different condition → contradiction
+            # The insight ID encodes the condition, so different IDs = different conditions
+            existing_condition = existing.id.rsplit("_higher_", 1)[0] if "_higher_" in existing.id else existing.id.rsplit("_lower_", 1)[0] if "_lower_" in existing.id else ""
+            new_condition = condition.replace(" ", "_").lower()
+            if existing_condition and new_condition and existing_condition != new_condition:
+                contradictions.append(existing)
+        return contradictions
+
     def generate_insights(self, patterns: List[StatePattern]) -> List[Insight]:
         """Convert detected patterns into insights."""
         new_insights = []
@@ -501,6 +537,25 @@ class SelfReflectionSystem:
             correlation_boost = min(0.3, abs(pattern.correlation))
             confidence = min(1.0, base_confidence + correlation_boost)
 
+            # Check for contradictions with existing insights before storing.
+            # E.g. "warmth best at night" contradicts "warmth best in afternoon"
+            contradictions = self._find_contradicting_insights(category, pattern.outcome, pattern.condition)
+            initial_contradiction_count = 0
+            if contradictions:
+                initial_contradiction_count = len(contradictions)
+                # Penalize the new insight's confidence
+                confidence = max(0.1, confidence * 0.5)
+                # Also penalize existing contradicted insights
+                for existing in contradictions:
+                    existing.contradiction_count += 1
+                    existing.confidence = max(0.1, existing.confidence * 0.7)
+                    self._save_insight(existing)
+                    print(
+                        f"[SelfReflection] Contradiction detected: '{description}' vs '{existing.description}' "
+                        f"(existing confidence reduced to {existing.confidence:.2f})",
+                        file=sys.stderr, flush=True,
+                    )
+
             insight = Insight(
                 id=insight_id,
                 category=category,
@@ -510,7 +565,7 @@ class SelfReflectionSystem:
                 discovered_at=now,
                 last_validated=now,
                 validation_count=1,
-                contradiction_count=0,
+                contradiction_count=initial_contradiction_count,
             )
 
             self._save_insight(insight)
