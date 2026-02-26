@@ -9,6 +9,23 @@ import sys
 from mcp.types import TextContent
 
 
+def _get_caller_session_id() -> str | None:
+    """Extract caller's session ID from MCP request context headers.
+
+    Checks mcp-session-id (standard MCP header) then x-session-id (custom).
+    Returns None in stdio mode or if no session header is present.
+    """
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+        ctx = request_ctx.get()
+        if ctx.request is not None:
+            headers = ctx.request.headers
+            return headers.get("mcp-session-id") or headers.get("x-session-id")
+    except (LookupError, AttributeError, ImportError):
+        pass
+    return None
+
+
 async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     """
     Unified Q&A tool: list Lumen's questions OR answer one.
@@ -24,10 +41,9 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     answer = arguments.get("answer")
     limit = arguments.get("limit", 5)
     agent_name = arguments.get("agent_name", "agent")
-    client_session_id = arguments.get("client_session_id")
+    client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
-    # Resolve verified identity from UNITARES when caller provides their session_id
-    # Only attempts resolution if client_session_id is explicitly provided
+    # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
     if _unitares_bridge and client_session_id:
         try:
             resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
@@ -193,10 +209,9 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     source = arguments.get("source", "agent")
     agent_name = arguments.get("agent_name", "agent")
     responds_to = arguments.get("responds_to")
-    client_session_id = arguments.get("client_session_id")
+    client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
-    # Resolve verified identity from UNITARES when caller provides their session_id
-    # Only attempts resolution if client_session_id is explicitly provided
+    # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
     if _unitares_bridge and client_session_id:
         try:
             resolved = await _unitares_bridge.resolve_caller_identity(session_id=client_session_id)
