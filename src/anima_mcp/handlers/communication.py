@@ -9,18 +9,6 @@ import sys
 from mcp.types import TextContent
 
 
-def _debug_request_headers() -> dict | None:
-    """DEBUG: Return all MCP request headers. Remove after verification."""
-    try:
-        from mcp.server.lowlevel.server import request_ctx
-        ctx = request_ctx.get()
-        if ctx.request is not None:
-            return dict(ctx.request.headers)
-    except (LookupError, AttributeError, ImportError):
-        pass
-    return None
-
-
 def _get_caller_session_id() -> str | None:
     """Extract caller's session ID from MCP request context headers.
 
@@ -32,13 +20,9 @@ def _get_caller_session_id() -> str | None:
         ctx = request_ctx.get()
         if ctx.request is not None:
             headers = ctx.request.headers
-            sid = headers.get("mcp-session-id") or headers.get("x-session-id")
-            # DEBUG: dump all headers to see what's available (remove after verification)
-            all_hdrs = dict(headers)
-            print(f"[Identity] request headers: {all_hdrs}", file=sys.stderr, flush=True)
-            return sid
-    except (LookupError, AttributeError, ImportError) as exc:
-        print(f"[Identity] _get_caller_session_id exception: {exc}", file=sys.stderr, flush=True)
+            return headers.get("mcp-session-id") or headers.get("x-session-id")
+    except (LookupError, AttributeError, ImportError):
+        pass
     return None
 
 
@@ -252,15 +236,13 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
 
     # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
     bridge = _get_unitares_bridge()
-    print(f"[Identity] post_message: client_session_id={client_session_id!r}, bridge={bridge is not None}", file=sys.stderr, flush=True)
     if bridge and client_session_id:
         try:
             resolved = await bridge.resolve_caller_identity(session_id=client_session_id)
-            print(f"[Identity] post_message: resolved={resolved!r}", file=sys.stderr, flush=True)
             if resolved:
                 agent_name = resolved
-        except Exception as exc:
-            print(f"[Identity] post_message resolve failed: {exc}", file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Fallback to provided agent_name
 
     if not message:
         return [TextContent(type="text", text=json.dumps({
@@ -379,12 +361,6 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 "source": "agent",
                 "agent_name": agent_name,
                 "message": f"Note received from {agent_name}",
-                # DEBUG: remove after identity verification
-                "_debug_identity": {
-                    "client_session_id": client_session_id,
-                    "bridge_available": bridge is not None,
-                    "request_headers": _debug_request_headers(),
-                }
             }
             if responds_to:
                 result["answered_question"] = validated_question_id or responds_to
