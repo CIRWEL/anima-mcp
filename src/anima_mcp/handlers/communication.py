@@ -9,21 +9,93 @@ import sys
 from mcp.types import TextContent
 
 
-def _get_caller_session_id() -> str | None:
-    """Extract caller's session ID from MCP request context headers.
+def _get_request_headers() -> dict | None:
+    """Get HTTP headers from the current MCP request context.
 
-    Checks mcp-session-id (standard MCP header) then x-session-id (custom).
-    Returns None in stdio mode or if no session header is present.
+    Returns header dict, or None in stdio mode / no request context.
     """
     try:
         from mcp.server.lowlevel.server import request_ctx
         ctx = request_ctx.get()
         if ctx.request is not None:
-            headers = ctx.request.headers
-            return headers.get("mcp-session-id") or headers.get("x-session-id")
+            return ctx.request.headers
     except (LookupError, AttributeError, ImportError):
         pass
     return None
+
+
+def _get_caller_session_id() -> str | None:
+    """Extract caller's session ID from MCP request context headers."""
+    headers = _get_request_headers()
+    if headers:
+        return headers.get("mcp-session-id") or headers.get("x-session-id")
+    return None
+
+
+def _parse_caller_name_from_ua(user_agent: str) -> str | None:
+    """Parse a human-readable caller name from User-Agent string.
+
+    Examples:
+        "claude-code/2.1.56 (claude-vscode)" -> "Claude Code (VSCode)"
+        "claude-code/2.1.56"                 -> "Claude Code"
+        "cursor/0.50.1"                      -> "Cursor"
+        "some-mcp-client/1.0"                -> "some-mcp-client"
+    """
+    import re
+
+    if not user_agent:
+        return None
+
+    ua = user_agent.strip().lower()
+
+    # Claude Code variants
+    m = re.match(r"claude-code/[\d.]+\s*\(claude-(vscode|desktop)\)", ua)
+    if m:
+        variant = m.group(1).replace("vscode", "VSCode").replace("desktop", "Desktop")
+        return f"Claude Code ({variant})"
+
+    if ua.startswith("claude-code/"):
+        return "Claude Code"
+
+    # Cursor
+    if ua.startswith("cursor/"):
+        return "Cursor"
+
+    # Windsurf
+    if ua.startswith("windsurf/"):
+        return "Windsurf"
+
+    # Generic: use the product name before the version slash
+    m = re.match(r"([a-zA-Z][\w-]*)/", ua)
+    if m:
+        return m.group(1)
+
+    return None
+
+
+def _resolve_caller_name(arguments: dict) -> str:
+    """Resolve the best available caller name.
+
+    Priority:
+    1. Explicit agent_name in arguments (if not default "agent")
+    2. UNITARES identity resolution via client_session_id
+    3. User-Agent header parsing
+    4. Default "agent"
+    """
+    agent_name = arguments.get("agent_name", "agent")
+
+    # If caller explicitly identified themselves, trust it
+    if agent_name and agent_name != "agent":
+        return agent_name
+
+    # Try user-agent parsing as fallback
+    headers = _get_request_headers()
+    if headers:
+        ua_name = _parse_caller_name_from_ua(headers.get("user-agent", ""))
+        if ua_name:
+            return ua_name
+
+    return "agent"
 
 
 def _get_unitares_bridge():
@@ -62,10 +134,10 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     question_id = arguments.get("question_id")
     answer = arguments.get("answer")
     limit = arguments.get("limit", 5)
-    agent_name = arguments.get("agent_name", "agent")
     client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
-    # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
+    # Identity resolution: UNITARES session > explicit agent_name > user-agent > "agent"
+    agent_name = _resolve_caller_name(arguments)
     bridge = _get_unitares_bridge()
     if bridge and client_session_id:
         try:
@@ -73,7 +145,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             if resolved:
                 agent_name = resolved
         except Exception:
-            pass  # Fallback to provided agent_name
+            pass
 
     # Convert limit to int if string
     if isinstance(limit, str):
@@ -230,11 +302,11 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
 
     message = arguments.get("message", "").strip()
     source = arguments.get("source", "agent")
-    agent_name = arguments.get("agent_name", "agent")
     responds_to = arguments.get("responds_to")
     client_session_id = arguments.get("client_session_id") or _get_caller_session_id()
 
-    # Resolve verified identity from UNITARES — explicit session_id or auto-extracted
+    # Identity resolution: UNITARES session > explicit agent_name > user-agent > "agent"
+    agent_name = _resolve_caller_name(arguments)
     bridge = _get_unitares_bridge()
     if bridge and client_session_id:
         try:
@@ -242,7 +314,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             if resolved:
                 agent_name = resolved
         except Exception:
-            pass  # Fallback to provided agent_name
+            pass
 
     if not message:
         return [TextContent(type="text", text=json.dumps({
