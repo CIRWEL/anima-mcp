@@ -9,7 +9,7 @@
 
 ✅ **Lumen is stable** - Running via systemd on Pi  
 ✅ **Anima-MCP available via MCP** - Tools accessible  
-✅ **Docs reorganized** - `docs/INDEX.md` is entry point  
+✅ **Docs reorganized** - `docs/developer-index.md` is entry point  
 ✅ **SSH configured** - See below for correct settings
 
 ---
@@ -17,7 +17,7 @@
 ## Important Notes
 
 ### 1. Read Docs First
-- **Start here:** `docs/INDEX.md`
+- **Start here:** `docs/developer-index.md`
 - **Coordination:** `docs/operations/AGENT_COORDINATION.md`
 
 ### 2. SSH Access

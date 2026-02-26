@@ -8,7 +8,7 @@
 
 **Before writing ANY code, check the docs.** Most problems have already been solved.
 
-1. **`docs/INDEX.md`** - Start here, find everything
+1. **`docs/developer-index.md`** - Start here, find everything
 2. **This file's "Code Gotchas" section** - Learn from past agent pain
 3. **`docs/operations/RESTART_GUIDE.md`** - When things freeze
 
@@ -20,7 +20,7 @@
 
 ### 1. Read These First
 - ✅ `CLAUDE.md` - **Agent instructions and architecture**
-- ✅ `docs/INDEX.md` - Find all docs
+- ✅ `docs/developer-index.md` - Find all docs
 - ✅ `README.md` - Project overview
 
 ### 2. Check Current Work
