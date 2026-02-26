@@ -1,16 +1,16 @@
 [project]
 name = "anima-mcp"
-version = "0.1.0"
-description = "A persistent Pi creature with grounded self-sense (anima)"
+version = "1.0.0"
+description = "An embodied AI creature running on Raspberry Pi with real sensors and persistent identity"
 readme = "README.md"
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "Your Name", email = "your.email@example.com"}
+    {name = "CIRWEL"}
 ]
-keywords = ["mcp", "raspberry-pi", "embodied-ai", "creature", "sensors"]
+keywords = ["mcp", "raspberry-pi", "embodied-ai", "creature", "sensors", "anima", "lumen"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.11",

@@ -5,7 +5,7 @@
 Two systemd services run on the Pi:
 
 ```
-anima-creature.service      anima.service
+anima-broker.service        anima.service
 (hardware broker)           (MCP server)
      |                           |
      | writes to                 | reads from
@@ -14,7 +14,7 @@ anima-creature.service      anima.service
 
 | Service | Command | Role |
 |---------|---------|------|
-| `anima-creature.service` | `anima-creature` | Hardware broker - owns I2C, runs learning |
+| `anima-broker.service` | `stable_creature.py` | Hardware broker - owns I2C, runs learning |
 | `anima.service` | `anima --http` | MCP server - serves tools, reads shared memory |
 
 **Both must run for full functionality.** The broker writes sensor data and learning state to shared memory; the server reads it.
@@ -28,7 +28,7 @@ anima-creature.service      anima.service
 
 ### MCP Server Structure
 
-`server.py` is the orchestrator (~3,440 lines). Handlers and tool definitions are extracted:
+`server.py` is the orchestrator (~3,950 lines). Handlers and tool definitions are extracted:
 
 | Module | Purpose |
 |--------|---------|
@@ -307,17 +307,17 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 
 ```bash
 # Check status
-sudo systemctl status anima anima-creature
+sudo systemctl status anima-broker anima
 
 # Restart both
-sudo systemctl restart anima-creature anima
+sudo systemctl restart anima-broker anima
 
 # View logs
-sudo journalctl -u anima-creature -f
+sudo journalctl -u anima-broker -f
 sudo journalctl -u anima -f
 ```
 
-Service files: `/etc/systemd/system/anima.service`, `/etc/systemd/system/anima-creature.service`
+Service files: `/etc/systemd/system/anima.service`, `/etc/systemd/system/anima-broker.service`
 
 ## Git Commit Conventions
 
@@ -339,7 +339,7 @@ mcp__anima__git_pull(restart=true)
 
 Or manually:
 ```bash
-ssh unitares-anima@100.83.45.66 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-creature anima'
+ssh unitares-anima@100.79.215.83 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
 ```
 
 **After restart, wait 30-60 seconds.** The Pi is slow to boot the service. You will see "SSE server unavailable" errors from the STDIO proxy during this window — this is normal. Do not panic, do not retry rapidly, just wait and try again.

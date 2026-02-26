@@ -54,7 +54,7 @@
 │ control_center  │ HTTP │  message_server  │ SSH  │   Pi/Lumen  │
 │     .html       │ ───► │      .py         │ ───► │             │
 └─────────────────┘      └──────────────────┘      └─────────────┘
-     Browser              localhost:8768           100.89.201.36
+     Browser              localhost:8768           100.79.215.83
 ```
 
 - **control_center.html**: Static HTML/JS dashboard
@@ -95,7 +95,7 @@ The message server connects to Pi via SSH. Default settings in `message_server.p
 
 ```python
 PI_USER = "unitares-anima"
-PI_HOST = "100.89.201.36"  # Tailscale IP
+PI_HOST = "100.79.215.83"  # Tailscale IP
 PI_KEY = "~/.ssh/id_ed25519_pi"
 ```
 
@@ -116,4 +116,4 @@ PI_KEY = "~/.ssh/id_ed25519_pi"
 
 ---
 
-*Last updated: February 4, 2026*
+*Last updated: February 26, 2026*

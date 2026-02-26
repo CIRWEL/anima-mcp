@@ -1,7 +1,7 @@
 # Raspberry Pi Deployment Guide
 
 **Created:** January 12, 2026  
-**Last Updated:** February 21, 2026
+**Last Updated:** February 26, 2026
 **Status:** Active
 
 ---
@@ -21,8 +21,8 @@ This guide covers deploying Anima MCP server to a Raspberry Pi with:
 ### Hardware
 - Raspberry Pi 4 (recommended) or Pi 3B+
 - BrainCraft HAT (optional - for display/LEDs)
-- DHT11 sensor (optional - for temperature/humidity)
-- Ambient light sensor (optional)
+- BME280 sensor (temp/humidity/pressure)
+- VEML7700 light sensor
 
 ### Software
 - Raspberry Pi OS (Debian-based)
@@ -82,7 +82,7 @@ source .venv/bin/activate
 pip install -e .
 
 # Install Pi-specific dependencies
-pip install -e ".[pi,sse,unitares]"
+pip install -e ".[pi]"
 ```
 
 ### 2.3 Verify Installation
@@ -96,17 +96,18 @@ pip install -e ".[pi,sse,unitares]"
 
 ## Step 3: Configure Systemd Service
 
-### 3.1 Copy Service File
+### 3.1 Copy Service Files
 
 ```bash
 # On Pi (as root or with sudo)
-sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/lumen.service
+sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/anima.service
+sudo cp ~/anima-mcp/systemd/anima-broker.service /etc/systemd/system/anima-broker.service
 ```
 
-### 3.2 Edit Service File (if needed)
+### 3.2 Edit Service Files (if needed)
 
 ```bash
-sudo nano /etc/systemd/system/lumen.service
+sudo nano /etc/systemd/system/anima.service
 ```
 
 **Key settings to verify:**
@@ -122,28 +123,28 @@ sudo nano /etc/systemd/system/lumen.service
 sudo systemctl daemon-reload
 ```
 
-### 3.4 Enable Service (auto-start on boot)
+### 3.4 Enable Services (auto-start on boot)
 
 ```bash
-sudo systemctl enable lumen
+sudo systemctl enable anima-broker anima
 ```
 
-### 3.5 Start Service
+### 3.5 Start Services
 
 ```bash
-sudo systemctl start lumen
+sudo systemctl start anima-broker anima
 ```
 
 ### 3.6 Check Status
 
 ```bash
-sudo systemctl status lumen
+sudo systemctl status anima-broker anima
 ```
 
 **Expected output:**
 ```
-● lumen.service - Anima MCP Server - Persistent Pi Creature
-   Loaded: loaded (/etc/systemd/system/lumen.service; enabled)
+● anima.service - Anima MCP Server - Lumen's Mind (MCP Interface)
+   Loaded: loaded (/etc/systemd/system/anima.service; enabled)
    Active: active (running) since ...
 ```
 
@@ -154,20 +155,20 @@ sudo systemctl status lumen
 ### 4.1 Check Service Status
 
 ```bash
-sudo systemctl status lumen
+sudo systemctl status anima
 ```
 
 ### 4.2 Check Logs
 
 ```bash
 # Recent logs
-sudo journalctl -u lumen -n 50
+sudo journalctl -u anima -n 50
 
 # Follow logs (live)
-sudo journalctl -u lumen -f
+sudo journalctl -u anima -f
 
 # Since boot
-sudo journalctl -u lumen --since boot
+sudo journalctl -u anima --since boot
 ```
 
 **Look for:**
@@ -287,8 +288,8 @@ Create `/etc/systemd/system/anima-ngrok.service`:
 ```ini
 [Unit]
 Description=Anima Ngrok Tunnel
-After=network.target lumen.service
-Requires=lumen.service
+After=network.target anima.service
+Requires=anima.service
 
 [Service]
 Type=simple
@@ -369,10 +370,10 @@ OAuth only protects `/mcp/` via ngrok. Dashboard and API endpoints remain open.
 
 ```bash
 # Check status
-sudo systemctl status lumen
+sudo systemctl status anima
 
 # Check logs
-sudo journalctl -u lumen -n 100
+sudo journalctl -u anima -n 100
 
 # Common issues:
 # - Port 8766 already in use
@@ -385,10 +386,10 @@ sudo journalctl -u lumen -n 100
 
 ```bash
 # Check logs for errors
-sudo journalctl -u lumen -f
+sudo journalctl -u anima -f
 
 # Check resource limits
-systemctl show lumen | grep -i limit
+systemctl show anima | grep -i limit
 
 # Check disk space
 df -h
@@ -401,7 +402,7 @@ df -h
 ~/monitor_health.sh --once
 
 # Check service status
-sudo systemctl status lumen
+sudo systemctl status anima
 
 # Check network connectivity
 curl http://localhost:8766/health
@@ -443,22 +444,22 @@ chmod 644 ~/anima-mcp/anima.db
 
 ```bash
 # Recent logs
-sudo journalctl -u lumen -n 50
+sudo journalctl -u anima -n 50
 
 # Follow logs
-sudo journalctl -u lumen -f
+sudo journalctl -u anima -f
 
 # Logs since boot
-sudo journalctl -u lumen --since boot
+sudo journalctl -u anima --since boot
 
 # Logs from specific time
-sudo journalctl -u lumen --since "2026-01-12 10:00:00"
+sudo journalctl -u anima --since "2026-01-12 10:00:00"
 ```
 
 ### Restart Service
 
 ```bash
-sudo systemctl restart lumen
+sudo systemctl restart anima-broker anima
 ```
 
 ### Update Code
@@ -480,8 +481,8 @@ sudo systemctl restart lumen
 cd ~/anima-mcp
 git pull
 source .venv/bin/activate
-pip install -e ".[pi,sse,unitares]"
-sudo systemctl restart lumen
+pip install -e ".[pi]"
+sudo systemctl restart anima-broker anima
 ```
 
 ### Backup Database
@@ -528,12 +529,12 @@ sudo ufw enable
 ### Service Management
 
 ```bash
-sudo systemctl start lumen      # Start
-sudo systemctl stop lumen       # Stop
-sudo systemctl restart lumen    # Restart
-sudo systemctl status lumen     # Status
-sudo systemctl enable lumen     # Enable auto-start
-sudo systemctl disable lumen    # Disable auto-start
+sudo systemctl start anima-broker anima    # Start both
+sudo systemctl stop anima anima-broker     # Stop both
+sudo systemctl restart anima-broker anima  # Restart both
+sudo systemctl status anima-broker anima   # Status
+sudo systemctl enable anima-broker anima   # Enable auto-start
+sudo systemctl disable anima-broker anima  # Disable auto-start
 ```
 
 ### Health Monitoring
@@ -546,8 +547,8 @@ sudo systemctl disable lumen    # Disable auto-start
 ### Logs
 
 ```bash
-sudo journalctl -u lumen -f     # Follow logs
-sudo journalctl -u lumen -n 50  # Last 50 lines
+sudo journalctl -u anima -f     # Follow logs
+sudo journalctl -u anima -n 50  # Last 50 lines
 ```
 
 ### Testing
@@ -568,4 +569,4 @@ curl http://pi.local:8766/state
 
 ---
 
-**Last Updated:** January 12, 2026
+**Last Updated:** February 26, 2026

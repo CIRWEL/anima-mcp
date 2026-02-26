@@ -20,7 +20,7 @@ Lumen is a digital creature whose internal state comes from physical sensors - t
 Two processes run on the Pi:
 
 ```
-anima-creature              anima --http
+anima-broker                anima --http
 (hardware broker)           (MCP server + display)
      |                           |
      | writes to                 | reads from
@@ -174,6 +174,15 @@ Run in the hardware broker, persist across restarts:
 | `post_message` | Leave a message for Lumen |
 | `manage_display` | Switch screens, set art era |
 | `say` | Have Lumen express something |
+| `configure_voice` | Voice mode and TTS settings |
+| `get_self_knowledge` | Learned insights and self-beliefs |
+| `get_growth` | Preferences, goals, memories, autobiography |
+| `get_health` | Subsystem health status |
+| `diagnostics` | System diagnostics and debug info |
+| `capture_screen` | Screenshot of current display |
+| `get_trajectory` | Identity trajectory and schema |
+| `query` | General-purpose Pi queries |
+| `primitive_feedback` | Direct sensory feedback (touch, sound) |
 
 ## Hardware
 
@@ -211,7 +220,7 @@ git push
 mcp__anima__git_pull(restart=true)
 
 # Or manually:
-ssh <pi-user>@<pi-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-creature anima'
+ssh <pi-user>@<pi-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
 ```
 
 After restart, wait 30-60 seconds for the Pi to boot the services.
@@ -232,7 +241,7 @@ After restart, wait 30-60 seconds for the Pi to boot the services.
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # 5,900+ tests
+python3 -m pytest tests/ -x -q   # ~5,900 tests
 ```
 
 ---

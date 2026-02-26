@@ -19,7 +19,7 @@ Lumen is now split into two systemd services that run independently:
 2. **`anima.service`** - Lumen's **Mind** (MCP Server)
    - Reads sensor data from Redis/shared memory
    - Provides MCP interface for external tools
-   - Runs `anima --sse`
+   - Runs `anima --http`
    - Depends on broker service
 
 **Key Benefit:** You can restart the MCP server (mind) without interrupting the hardware broker (body). No more cascading reboots or I2C hangs.
@@ -57,7 +57,7 @@ Lumen is now split into two systemd services that run independently:
 ┌─────────────────────────────────────────────────────────┐
 │          anima.service (Lumen's Mind)                   │
 │  ┌──────────────────────────────────────────────────┐   │
-│  │  anima --sse (MCP Server)                       │   │
+│  │  anima --http (MCP Server)                      │   │
 │  │  - Reads from Redis/shared memory               │   │
 │  │  - Provides MCP tools (get_state, show_face)   │   │
 │  │  - Handles external connections                 │   │

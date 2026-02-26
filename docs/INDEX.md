@@ -27,7 +27,7 @@
 
 ## Before You Code
 
-1. **Read** `operations/AGENT_COORDINATION.md` - Multi-agent protocol
+1. **Read** `CLAUDE.md` - Agent instructions and architecture
 2. **Check** `operations/PI_ACCESS.md` - SSH access details
 3. **Understand** the anima model (warmth, clarity, stability, presence) and computational neural bands
 4. **Check Knowledge Graph** - Component relationships (if available)
@@ -42,7 +42,7 @@
 **Key source files for understanding the system:**
 | File | What it does |
 |------|--------------|
-| `src/anima_mcp/server.py` | Main loop, lifecycle, REST API (~3,400 lines) |
+| `src/anima_mcp/server.py` | Main loop, lifecycle, REST API (~3,950 lines) |
 | `src/anima_mcp/tool_registry.py` | Tool definitions, HANDLERS dict, FastMCP setup |
 | `src/anima_mcp/handlers/` | 6 handler modules (system, state, knowledge, display, comms, workflows) |
 | `src/anima_mcp/health.py` | Subsystem health monitoring (9 subsystems, per-subsystem stale thresholds) |

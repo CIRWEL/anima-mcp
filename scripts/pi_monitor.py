@@ -20,7 +20,7 @@ from pathlib import Path
 from datetime import datetime
 
 # Configuration
-PI_TAILSCALE_IP = "100.111.166.37"
+PI_TAILSCALE_IP = "100.79.215.83"
 PI_PORT = 8766
 CHECK_INTERVAL = 60  # seconds
 FAILURE_THRESHOLD = 2  # consecutive failures before alerting

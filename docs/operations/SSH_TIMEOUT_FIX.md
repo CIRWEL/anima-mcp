@@ -108,7 +108,7 @@ Host lumen pi-anima
 If Pi has Tailscale, use the 100.x.x.x IP:
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.83.45.66
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83
 # (or whatever tailscale status shows)
 ```
 

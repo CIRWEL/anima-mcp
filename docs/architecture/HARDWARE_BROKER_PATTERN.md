@@ -8,7 +8,7 @@
 
 ## Problem Statement
 
-**Current limitation:** Cannot run `anima --sse` and `stable_creature.py` simultaneously because both directly access I2C sensors, causing bus conflicts.
+**Current limitation:** Cannot run `anima --http` and `stable_creature.py` simultaneously because both directly access I2C sensors, causing bus conflicts.
 
 **Current solution:** Startup check prevents conflicts, but requires choosing one or the other.
 
@@ -278,19 +278,19 @@ Both processes run as systemd services on the Pi:
 | Service | Command | File |
 |---------|---------|------|
 | `anima.service` | `anima --http` | `/etc/systemd/system/anima.service` |
-| `anima-creature.service` | `anima-creature` | `/etc/systemd/system/anima-creature.service` |
+| `anima-broker.service` | `stable_creature.py` | `/etc/systemd/system/anima-broker.service` |
 
-Service file location in repo: `config/anima-creature.service`
+Service file location in repo: `systemd/anima-broker.service`
 
 ```bash
 # Check status
-sudo systemctl status anima anima-creature
+sudo systemctl status anima-broker anima
 
 # Restart both
-sudo systemctl restart anima-creature anima
+sudo systemctl restart anima-broker anima
 
 # View logs
-sudo journalctl -u anima-creature -f
+sudo journalctl -u anima-broker -f
 ```
 
 ### Learning Systems in Broker

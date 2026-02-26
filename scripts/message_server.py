@@ -28,7 +28,7 @@ PI_HOST = os.environ.get("LUMEN_HOST", "lumen-local")  # SSH config alias (local
 # HTTP URL for Pi's anima-mcp server (preferred over SSH)
 # Default to Tailscale IP for reliable access from Mac
 # DEFINITIVE: anima-mcp runs on port 8766 - see docs/operations/DEFINITIVE_PORTS.md
-LUMEN_HTTP_URL = os.environ.get("LUMEN_HTTP_URL", "http://100.89.201.36:8766")
+LUMEN_HTTP_URL = os.environ.get("LUMEN_HTTP_URL", "http://100.79.215.83:8766")
 LUMEN_HTTP_AUTH = os.environ.get("LUMEN_HTTP_AUTH", "")  # "user:pass" for basic auth
 
 

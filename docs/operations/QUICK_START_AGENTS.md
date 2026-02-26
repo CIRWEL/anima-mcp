@@ -19,20 +19,17 @@
 ## Before You Start
 
 ### 1. Read These First
-- ✅ `docs/INDEX.md` - **START HERE** - Find all docs
+- ✅ `CLAUDE.md` - **Agent instructions and architecture**
+- ✅ `docs/INDEX.md` - Find all docs
 - ✅ `README.md` - Project overview
-- ✅ `docs/AGENT_COORDINATION.md` - How to coordinate
 
 ### 2. Check Current Work
-- ✅ `.agent-coordination` - What's being worked on
 - ✅ Recent git commits / file timestamps
 - ✅ Knowledge graph (if available)
 
 ### 3. Understand the System
-- ✅ `docs/CONFIGURATION_GUIDE.md` - Config system
-- ✅ `docs/ERROR_RECOVERY.md` - Error handling
-- ✅ `docs/ADAPTIVE_LEARNING.md` - Learning system
-- ⚠️ **`docs/operations/REBOOT_LOOP_PREVENTION.md`** - **CRITICAL: Port 8766 trap!**
+- ✅ `docs/features/CONFIGURATION_GUIDE.md` - Config system
+- ✅ `docs/operations/BROKER_ARCHITECTURE.md` - Body/mind separation
 
 ---
 
@@ -42,33 +39,27 @@
 
 1. **Check docs** - Does it exist? Should it?
 2. **Check code** - Similar features? Patterns?
-3. **Check running script** - Use `anima --sse` for normal work, `stable_creature.py` only for debugging
+3. **Check running services** - Two systemd services: `anima` (MCP server) and `anima-broker` (hardware)
 4. **Implement** - Follow existing patterns
 5. **Update docs** - Document new feature
-6. **Test** - Verify it works
-7. **Update `.agent-coordination`** - Note what you did
+6. **Test** - `python3 -m pytest tests/ -x -q`
 
 ### Fixing a Bug
 
 1. **Reproduce** - Understand the issue
-2. **🚨 CRITICAL: Check port 8766 trap first!** - If service won't start or reboot loops:
+2. **Check logs**:
    ```bash
-   ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-     "lsof -i :8766 && pkill -f 'anima.*--sse'; systemctl --user reset-failed anima"
+   ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83 \
+     "sudo journalctl -u anima -n 50"
    ```
-   See `docs/operations/REBOOT_LOOP_PREVENTION.md` for details.
-3. **Check logs** - What's actually happening?
-4. **Check docs** - Known issues? Workarounds?
-5. **Choose script** - Use `stable_creature.py` for sensor/I2C debugging, `anima --sse` otherwise
-6. **Toggle if needed** - Automatically stop conflicting script, start appropriate one
-7. **Fix** - Minimal change, maximum impact
-8. **Test** - Verify fix works
-9. **Update docs** - Document fix
-10. **Restore default** - Switch back to `anima --sse` if you used `stable_creature.py`
+3. **Check docs** - Known issues? Workarounds?
+4. **Fix** - Minimal change, maximum impact
+5. **Test** - `python3 -m pytest tests/ -x -q`
+6. **Deploy** - `git push && mcp__anima__git_pull(restart=true)`
 
 ### Changing Config
 
-1. **Read `docs/CONFIGURATION_GUIDE.md`**
+1. **Read `docs/features/CONFIGURATION_GUIDE.md`**
 2. **Check `anima_config.yaml.example`**
 3. **Understand impact** - What uses this config?
 4. **Change** - Update config.py if needed
@@ -156,7 +147,7 @@ Before considering work "done":
 - [ ] Imports work (`python3 -c 'import ...'`)
 - [ ] No obvious errors
 - [ ] Docs updated
-- [ ] `.agent-coordination` updated
+- [ ] Docs updated if needed
 
 ---
 
@@ -173,8 +164,8 @@ Before considering work "done":
 - Don't reinvent wheels
 
 ### ❌ Don't Work in Isolation
-- Check `.agent-coordination`
-- Leave notes for other agents
+- Check recent git history
+- Leave notes for other agents via knowledge graph
 - Coordinate on shared files
 
 ---
@@ -220,8 +211,8 @@ Don't try:
 
 **Just do:**
 ```bash
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "systemctl --user restart anima"
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83 \
+  "sudo systemctl restart anima"
 ```
 
 The systemd service handles everything. See `docs/operations/RESTART_GUIDE.md`.
