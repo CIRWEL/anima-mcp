@@ -123,38 +123,38 @@ class TextToSpeech:
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
                 output_path = f.name
 
-            # Build piper command
-            cmd = [
-                "piper",
-                "--model", self._voice.name,
-                "--output_file", output_path,
-            ]
+            try:
+                # Build piper command
+                cmd = [
+                    "piper",
+                    "--model", self._voice.name,
+                    "--output_file", output_path,
+                ]
 
-            # Add speed adjustment if not default
-            if self._speed != 1.0:
-                cmd.extend(["--length_scale", str(1.0 / self._speed)])
+                # Add speed adjustment if not default
+                if self._speed != 1.0:
+                    cmd.extend(["--length_scale", str(1.0 / self._speed)])
 
-            # Run piper with text input
-            result = subprocess.run(
-                cmd,
-                input=text,
-                capture_output=True,
-                text=True,
-                timeout=30
-            )
+                # Run piper with text input
+                result = subprocess.run(
+                    cmd,
+                    input=text,
+                    capture_output=True,
+                    text=True,
+                    timeout=30
+                )
 
-            if result.returncode != 0:
-                print(f"[TTS] Piper error: {result.stderr}", file=sys.stderr, flush=True)
-                return None
+                if result.returncode != 0:
+                    print(f"[TTS] Piper error: {result.stderr}", file=sys.stderr, flush=True)
+                    return None
 
-            # Read the generated audio
-            with wave.open(output_path, 'rb') as wav:
-                audio_bytes = wav.readframes(wav.getnframes())
+                # Read the generated audio
+                with wave.open(output_path, 'rb') as wav:
+                    audio_bytes = wav.readframes(wav.getnframes())
 
-            # Clean up temp file
-            Path(output_path).unlink()
-
-            return audio_bytes
+                return audio_bytes
+            finally:
+                Path(output_path).unlink(missing_ok=True)
 
         except subprocess.TimeoutExpired:
             print("[TTS] Synthesis timed out", file=sys.stderr, flush=True)

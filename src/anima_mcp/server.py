@@ -927,7 +927,7 @@ async def _update_display_loop():
                 _health.heartbeat("sensors")
                 _health.heartbeat("anima")
             except Exception:
-                pass
+                _health = None
 
             # Identity heartbeat: accumulate alive_seconds incrementally
             # Prevents losing session time on crashes/restarts
@@ -946,7 +946,7 @@ async def _update_display_loop():
                     stability=anima.stability,
                     presence=anima.presence,
                 )
-                _health.heartbeat("trajectory")
+                if _health: _health.heartbeat("trajectory")
             except Exception as e:
                 if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
 
@@ -1594,7 +1594,7 @@ async def _update_display_loop():
                             print("[Loop] Display update timed out (2s)", file=sys.stderr, flush=True)
                     display_updated = display_result is True
                     if display_updated:
-                        _health.heartbeat("display")
+                        if _health: _health.heartbeat("display")
 
                     if display_updated:
                         display_duration = time.time() - update_start
@@ -1668,7 +1668,7 @@ async def _update_display_loop():
                 led_state = safe_call(update_leds, default=None, log_error=True)
                 led_updated = led_state is not None
                 if led_updated:
-                    _health.heartbeat("leds")
+                    if _health: _health.heartbeat("leds")
                 if led_updated and loop_count == 1:
                     total_duration = time.time() - update_start
                     print(f"[Loop] LED update took {total_duration*1000:.1f}ms", file=sys.stderr, flush=True)
@@ -1715,7 +1715,7 @@ async def _update_display_loop():
                             presence=anima.presence,
                             mood=mood
                         )
-                        _health.heartbeat("voice")
+                        if _health: _health.heartbeat("voice")
 
                         if readings:
                             voice.update_environment(
@@ -2082,7 +2082,7 @@ async def _update_display_loop():
                         add_observation(milestone, author="lumen")
 
                 safe_call(growth_observe, default=None, log_error=True)
-                _health.heartbeat("growth")
+                if _health: _health.heartbeat("growth")
 
             # Goal system: Suggest new goals every ~2 hours
             if loop_count % GOAL_SUGGEST_INTERVAL == 0 and anima and _growth:
@@ -2198,7 +2198,7 @@ async def _update_display_loop():
             if loop_count % GOVERNANCE_INTERVAL == 0 and readings and anima and identity:
                 # Heartbeat fires when governance block runs (liveness),
                 # regardless of check-in success. Probe tracks connectivity.
-                _health.heartbeat("governance")
+                if _health: _health.heartbeat("governance")
 
                 import os
                 unitares_url = os.environ.get("UNITARES_URL")
@@ -2757,6 +2757,13 @@ def sleep():
                 print(f"[Sleep] Error closing UnitaresBridge: {e}", file=sys.stderr, flush=True)
             except (ValueError, OSError):
                 pass
+
+    # Close SelfReflection SQLite connection
+    try:
+        from .self_reflection import get_reflection_system
+        get_reflection_system().close()
+    except Exception:
+        pass
 
     # Stop voice system if running
     if _voice_instance:

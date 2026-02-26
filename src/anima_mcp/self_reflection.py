@@ -95,6 +95,7 @@ class SelfReflectionSystem:
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
         self._insights: Dict[str, Insight] = {}
+        self._max_insights: int = 500
         self._last_analysis_time: Optional[datetime] = None
         self._analysis_interval = timedelta(hours=1)  # Reflect every hour
 
@@ -179,6 +180,20 @@ class SelfReflectionSystem:
         ))
         conn.commit()
         self._insights[insight.id] = insight
+        self._prune_if_needed()
+
+    def _prune_if_needed(self):
+        """Remove weakest insights when exceeding max_insights cap."""
+        if len(self._insights) <= self._max_insights:
+            return
+        # Sort by strength ascending, prune weakest
+        by_strength = sorted(self._insights.values(), key=lambda i: i.strength())
+        to_remove = len(self._insights) - self._max_insights
+        conn = self._connect()
+        for insight in by_strength[:to_remove]:
+            del self._insights[insight.id]
+            conn.execute("DELETE FROM insights WHERE id = ?", (insight.id,))
+        conn.commit()
 
     def should_reflect(self) -> bool:
         """Check if it's time for periodic self-reflection."""

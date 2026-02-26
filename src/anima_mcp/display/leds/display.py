@@ -199,8 +199,9 @@ class LEDDisplay:
                 print("[LEDs] set_all called but LEDs unavailable", file=sys.stderr, flush=True)
             return
         state = self._apply_flash(state)
-        self._last_state = state
-        self._update_count += 1
+        with self._spi_lock:
+            self._last_state = state
+            self._update_count += 1
 
     def quick_flash(self, color: Tuple[int, int, int] = (100, 100, 100), duration_ms: int = 50):
         if self._dots:
