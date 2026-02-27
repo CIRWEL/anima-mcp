@@ -104,6 +104,15 @@
 | `features/BRAIN_HAT_*.md` | BrainCraft HAT sensors |
 | `features/UNIFIED_WORKFLOWS.md` | UNITARES bridge |
 
+## Plans & Roadmap
+
+| Doc | What it covers |
+|-----|----------------|
+| `plans/FURTHER_STEPS.md` | **Current:** What's done, immediate/short/medium/long-term next steps |
+| `scripts/visualize_trajectory.py` | Trajectory Σ visualization (ASCII + optional HTML) |
+| `plans/2026-02-22-schema-hub-design.md` | SchemaHub architecture (implemented) |
+| `plans/2026-02-23-computational-selfhood-*.md` | Calibration drift, value tension (implemented) |
+
 ## Common Mistakes
 
 - SSH: port **22**, user **unitares-anima**, key `~/.ssh/id_ed25519_pi`

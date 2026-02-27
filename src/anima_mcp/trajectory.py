@@ -750,3 +750,55 @@ def load_genesis(path: Optional[Path] = None) -> Optional[TrajectorySignature]:
     except Exception as e:
         print(f"[Trajectory] Could not load genesis: {e}", file=sys.stderr)
         return None
+
+
+# Path for last trajectory (overwritten on each save, unlike genesis)
+_TRAJECTORY_LAST_PATH = Path.home() / ".anima" / "trajectory_last.json"
+
+
+def save_trajectory(signature: TrajectorySignature, path: Optional[Path] = None) -> bool:
+    """
+    Persist current trajectory to disk. Overwrites previous (unlike genesis).
+
+    Used for anomaly detection: compare current to last persisted.
+
+    Args:
+        signature: The trajectory signature to save
+        path: Override path (default ~/.anima/trajectory_last.json)
+
+    Returns:
+        True if saved successfully
+    """
+    dest = path or _TRAJECTORY_LAST_PATH
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        data = signature.to_dict()
+        data["saved_at"] = datetime.now().isoformat()
+        atomic_json_write(dest, data, indent=2)
+        return True
+    except Exception as e:
+        print(f"[Trajectory] Could not save last trajectory: {e}", file=sys.stderr)
+        return False
+
+
+def load_trajectory(path: Optional[Path] = None) -> Optional[TrajectorySignature]:
+    """
+    Load last persisted trajectory from disk.
+
+    Args:
+        path: Override path
+
+    Returns:
+        TrajectorySignature or None if no file exists
+    """
+    src = path or _TRAJECTORY_LAST_PATH
+    if not src.exists():
+        return None
+
+    try:
+        with open(src, "r") as f:
+            data = json.load(f)
+        return TrajectorySignature.from_dict(data)
+    except Exception as e:
+        print(f"[Trajectory] Could not load last trajectory: {e}", file=sys.stderr)
+        return None

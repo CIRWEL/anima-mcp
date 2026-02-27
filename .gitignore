@@ -42,6 +42,7 @@ anima_config.yaml
 # Generated data
 drawing_samples/
 drawing_analysis.json
+trajectory_viz.html
 
 # Additional ignores
 message_server.pid

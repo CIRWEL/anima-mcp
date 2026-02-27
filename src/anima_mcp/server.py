@@ -2742,6 +2742,28 @@ def sleep():
             except (ValueError, OSError):
                 pass
 
+    # Persist trajectory for anomaly detection on next session
+    if _growth:
+        try:
+            from .trajectory import compute_trajectory_signature, save_trajectory
+            from .anima_history import get_anima_history
+            from .self_model import get_self_model
+            sig = compute_trajectory_signature(
+                growth_system=_growth,
+                self_model=get_self_model(),
+                anima_history=get_anima_history(),
+            )
+            if save_trajectory(sig):
+                try:
+                    print(f"[Sleep] Trajectory persisted", file=sys.stderr, flush=True)
+                except (ValueError, OSError):
+                    pass
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error persisting trajectory: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
+
     # Close UnitaresBridge session (prevents "unclosed client session" warnings)
     if _unitares_bridge:
         try:

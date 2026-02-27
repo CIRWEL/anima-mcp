@@ -141,7 +141,8 @@ Schema → History → Trajectory → feeds back as nodes → Next Schema
 - **Identity texture** — alive_ratio, awakening count, age visible as schema nodes
 - **Kintsugi gaps** — discontinuities become visible structure, not hidden defects
 - **Trajectory feedback** — identity maturity, attractor position, stability score computed from schema history
-- **Semantic edges** — trajectory nodes connect back to anima dimensions
+- **Semantic edges** — sensor→belief, belief→belief (sensors sharing domain), trajectory→anima
+- **Trajectory persistence** — saved on sleep to `~/.anima/trajectory_last.json` for anomaly detection
 
 | Node Type | Examples |
 |-----------|----------|
@@ -149,7 +150,7 @@ Schema → History → Trajectory → feeds back as nodes → Next Schema
 | **Meta (gap)** | `meta_gap_duration`, `meta_state_delta` |
 | **Trajectory** | `traj_identity_maturity`, `traj_attractor_position`, `traj_stability_score` |
 
-Persists last schema to `~/.anima/last_schema.json` for gap recovery on wake.
+Persists last schema to `~/.anima/last_schema.json` for gap recovery on wake. Visualize trajectory: `python scripts/visualize_trajectory.py [--html]`.
 
 ### Learning Systems
 
@@ -180,7 +181,7 @@ Run in the hardware broker, persist across restarts:
 | `get_health` | Subsystem health status |
 | `diagnostics` | System diagnostics and debug info |
 | `capture_screen` | Screenshot of current display |
-| `get_trajectory` | Identity trajectory and schema |
+| `get_trajectory` | Identity trajectory (use `compare_to_historical: true` for anomaly detection) |
 | `query` | General-purpose Pi queries |
 | `primitive_feedback` | Direct sensory feedback (touch, sound) |
 
@@ -232,6 +233,7 @@ After restart, wait 30-60 seconds for the Pi to boot the services.
 | Agent instructions | `CLAUDE.md` |
 | Deployment | `DEPLOYMENT.md` |
 | Schema Hub design | `docs/plans/2026-02-22-schema-hub-design.md` |
+| Further steps | `docs/plans/FURTHER_STEPS.md` |
 | Secrets & env vars | `docs/operations/SECRETS_AND_ENV.md` |
 | OAuth 2.1 design | `docs/plans/2026-02-21-oauth-claude-web-design.md` |
 | Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |

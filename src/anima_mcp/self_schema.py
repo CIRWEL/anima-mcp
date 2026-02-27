@@ -529,6 +529,47 @@ def extract_self_schema(
                     except Exception:
                         pass  # Non-fatal
 
+    # === EDGES (sensor → belief: "this belief is about this sensor") ===
+    # Semantic: beliefs that modulate sensor→anima edges are informed by those sensors
+    node_ids = {n.node_id for n in nodes}
+    for belief_id in (BELIEF_EDGE_MODULATIONS.keys() | BELIEF_SENSITIVITY_MODULATIONS.keys()):
+        sensor_id = None
+        if belief_id in BELIEF_EDGE_MODULATIONS:
+            sensor_id = BELIEF_EDGE_MODULATIONS[belief_id][0]
+        elif belief_id in BELIEF_SENSITIVITY_MODULATIONS:
+            sensor_id = BELIEF_SENSITIVITY_MODULATIONS[belief_id]
+        if sensor_id:
+            belief_node_id = f"belief_{belief_id}"
+            if sensor_id in node_ids and belief_node_id in node_ids:
+                edges.append(SchemaEdge(
+                    source_id=sensor_id,
+                    target_id=belief_node_id,
+                    weight=0.3,  # Semantic "informs" edge
+                ))
+
+    # === EDGES (belief → belief: beliefs sharing a sensor domain) ===
+    # e.g., temp_sensitive and temp_clarity_correlation both relate to temp
+    _belief_sensor_map: Dict[str, str] = {}
+    for bid, (sensor, _) in BELIEF_EDGE_MODULATIONS.items():
+        _belief_sensor_map[bid] = sensor
+    for bid, sensor in BELIEF_SENSITIVITY_MODULATIONS.items():
+        _belief_sensor_map[bid] = sensor
+    # Group beliefs by sensor
+    _sensor_to_beliefs: Dict[str, List[str]] = {}
+    for bid, sensor in _belief_sensor_map.items():
+        _sensor_to_beliefs.setdefault(sensor, []).append(bid)
+    for sensor, belief_ids in _sensor_to_beliefs.items():
+        if len(belief_ids) >= 2:
+            # Connect first to rest (minimal spanning)
+            for i, bid in enumerate(belief_ids[1:], 1):
+                a, b = f"belief_{belief_ids[0]}", f"belief_{bid}"
+                if a in node_ids and b in node_ids:
+                    edges.append(SchemaEdge(
+                        source_id=a,
+                        target_id=b,
+                        weight=0.2,  # Weak "related" edge
+                    ))
+
     # === EDGES (belief → anima: "I believe X affects Y") ===
     if belief_summary:
         # Map belief_id to which anima dimension it relates to

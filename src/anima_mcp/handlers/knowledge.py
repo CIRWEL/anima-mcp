@@ -288,30 +288,43 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
             result["identity_status"] = "stable"
             result["note"] = "Identity is stable - consistent patterns established"
 
-        # Anomaly detection via genesis (Σ₀) lineage comparison
+        # Anomaly detection via genesis (Σ₀) and last persisted
         if compare_historical:
+            from ..trajectory import load_trajectory, GENESIS_MIN_OBSERVATIONS
+
+            anomaly_data = {"available": True, "has_genesis": signature.genesis_signature is not None}
+
+            # Lineage: compare to genesis
             if signature.genesis_signature is not None:
                 lineage_sim = signature.lineage_similarity()
-                result["anomaly_detection"] = {
-                    "available": True,
-                    "lineage_similarity": round(lineage_sim, 4) if lineage_sim is not None else None,
-                    "has_genesis": True,
-                    "genesis_observations": signature.genesis_signature.observation_count,
-                    "genesis_computed_at": signature.genesis_signature.computed_at.isoformat(),
-                    "drift_status": (
-                        "stable" if lineage_sim is not None and lineage_sim >= 0.7
-                        else "drifting" if lineage_sim is not None and lineage_sim >= 0.5
-                        else "diverged" if lineage_sim is not None
-                        else "unknown"
-                    ),
+                anomaly_data["lineage_similarity"] = round(lineage_sim, 4) if lineage_sim is not None else None
+                anomaly_data["genesis_observations"] = signature.genesis_signature.observation_count
+                anomaly_data["genesis_computed_at"] = signature.genesis_signature.computed_at.isoformat()
+                anomaly_data["drift_status"] = (
+                    "stable" if lineage_sim is not None and lineage_sim >= 0.7
+                    else "drifting" if lineage_sim is not None and lineage_sim >= 0.5
+                    else "diverged" if lineage_sim is not None
+                    else "unknown"
+                )
+
+            # Coherence: compare to last persisted (short-term)
+            last_sig = load_trajectory()
+            if last_sig is not None:
+                coherence = signature.detect_anomaly(last_sig, threshold=0.7)
+                anomaly_data["last_persisted"] = {
+                    "similarity": coherence["similarity"],
+                    "is_anomaly": coherence["is_anomaly"],
                 }
+
+            if signature.genesis_signature is not None or last_sig is not None:
+                result["anomaly_detection"] = anomaly_data
             else:
-                from ..trajectory import GENESIS_MIN_OBSERVATIONS
                 result["anomaly_detection"] = {
                     "available": False,
                     "has_genesis": False,
                     "note": f"Genesis forms after {GENESIS_MIN_OBSERVATIONS} observations "
-                            f"(current: {signature.observation_count})",
+                            f"(current: {signature.observation_count}). "
+                            "Last trajectory persists after first sleep.",
                 }
 
         return [TextContent(type="text", text=json.dumps(result, indent=2))]

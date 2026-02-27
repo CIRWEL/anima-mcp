@@ -18,6 +18,8 @@ from anima_mcp.trajectory import (
     compare_signatures,
     save_genesis,
     load_genesis,
+    save_trajectory,
+    load_trajectory,
     GENESIS_MIN_OBSERVATIONS,
 )
 
@@ -893,6 +895,35 @@ class TestGenesisPersistence:
             sig = compute_trajectory_signature(anima_history=mock_history)
             assert sig.genesis_signature is None
             assert not (tmp_path / "genesis.json").exists()
+
+
+# =============================================================================
+# Test: Last Trajectory Persistence (save_trajectory / load_trajectory)
+# =============================================================================
+
+class TestLastTrajectoryPersistence:
+    """Tests for save_trajectory() and load_trajectory() - overwrite semantics."""
+
+    def test_save_and_load_roundtrip(self, full_signature, tmp_path):
+        """Last trajectory should roundtrip through file."""
+        path = tmp_path / "last.json"
+        assert save_trajectory(full_signature, path=path) is True
+        loaded = load_trajectory(path=path)
+        assert loaded is not None
+        assert loaded.observation_count == full_signature.observation_count
+
+    def test_save_overwrites(self, full_signature, tmp_path):
+        """Second save should overwrite (unlike genesis)."""
+        path = tmp_path / "last.json"
+        assert save_trajectory(full_signature, path=path) is True
+        sig2 = TrajectorySignature(observation_count=999)
+        assert save_trajectory(sig2, path=path) is True
+        loaded = load_trajectory(path=path)
+        assert loaded.observation_count == 999
+
+    def test_load_nonexistent_returns_none(self, tmp_path):
+        """Loading from nonexistent path should return None."""
+        assert load_trajectory(path=tmp_path / "nonexistent.json") is None
 
 
 if __name__ == "__main__":

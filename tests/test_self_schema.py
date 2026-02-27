@@ -454,6 +454,25 @@ class TestExtractSelfSchema:
             assert edge.source_id in node_ids, f"Edge source {edge.source_id} not in nodes"
             assert edge.target_id in node_ids, f"Edge target {edge.target_id} not in nodes"
 
+    def test_semantic_sensor_to_belief_edges(self):
+        """Test sensor→belief edges for beliefs that modulate sensor→anima."""
+        mock_self_model = MagicMock()
+        mock_self_model.get_belief_summary.return_value = {
+            "temp_clarity_correlation": {
+                "confidence": 0.7, "value": 0.6, "evidence": "5+ / 1-",
+            },
+            "light_sensitive": {
+                "confidence": 0.8, "value": 0.7, "evidence": "8+ / 2-",
+            },
+        }
+
+        schema = extract_self_schema(self_model=mock_self_model)
+
+        sensor_to_belief = [e for e in schema.edges if e.target_id.startswith("belief_") and e.source_id.startswith("sensor_")]
+        assert len(sensor_to_belief) >= 2
+        assert any(e.source_id == "sensor_temp" and e.target_id == "belief_temp_clarity_correlation" for e in sensor_to_belief)
+        assert any(e.source_id == "sensor_light" and e.target_id == "belief_light_sensitive" for e in sensor_to_belief)
+
 
 class TestGetCurrentSchema:
     """Test get_current_schema wrapper."""
