@@ -13,9 +13,14 @@ from mcp.types import TextContent
 
 
 async def _delayed_restart():
-    """Restart anima service after a brief delay."""
+    """Restart both anima services (broker + server) after a brief delay."""
     await asyncio.sleep(1)
     try:
+        # Restart broker first (owns hardware, writes SHM)
+        subprocess.run(
+            ["sudo", "systemctl", "restart", "anima-broker"],
+            timeout=30, check=False, capture_output=True
+        )
         result = subprocess.run(
             ["sudo", "systemctl", "restart", "anima"],
             timeout=30, check=False, capture_output=True
