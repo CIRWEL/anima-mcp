@@ -67,7 +67,7 @@ from .server_state import (
     INPUT_POLL_INTERVAL_SECONDS, SHUTDOWN_LONG_PRESS_SECONDS,
     METACOG_INTERVAL, AGENCY_INTERVAL, SELF_MODEL_INTERVAL,
     PRIMITIVE_LANG_INTERVAL, VOICE_INTERVAL, GROWTH_INTERVAL,
-    TRAJECTORY_INTERVAL, GOVERNANCE_INTERVAL, LEARNING_INTERVAL,
+    TRAJECTORY_INTERVAL, SHM_GOVERNANCE_STALE_SECONDS, LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
     GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL, META_LEARNING_INTERVAL,
@@ -98,7 +98,6 @@ _anima_id: str | None = None
 _display_update_task: asyncio.Task | None = None
 _shm_client: SharedMemoryClient | None = None
 _metacog_monitor: "MetacognitiveMonitor | None" = None  # Forward ref - prediction-error based self-awareness
-_unitares_bridge: "UnitaresBridge | None" = None  # Forward ref - singleton to avoid creating new sessions
 _growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
 _activity: ActivityManager | None = None  # Activity/wakefulness cycle (circadian LED dimming)
 # SchemaHub - central schema composition with trajectory feedback
@@ -270,33 +269,6 @@ def _get_metacog_monitor():
                     reflection_cooldown_seconds=120.0,  # 2 min between reflections
                 )
     return _metacog_monitor
-
-def _get_unitares_bridge(unitares_url: str, identity=None):
-    """Get or create singleton UnitaresBridge to avoid creating new sessions each check-in."""
-    global _unitares_bridge
-
-    if _unitares_bridge is None:
-        with _state_lock:
-            # Double-check inside lock to prevent race condition
-            if _unitares_bridge is None:
-                from .unitares_bridge import UnitaresBridge
-                _unitares_bridge = UnitaresBridge(unitares_url=unitares_url)
-                print("[Server] UnitaresBridge initialized (singleton, connection pooling enabled)", file=sys.stderr, flush=True)
-
-    # Update identity binding if provided (creature_id may not be known at init time)
-    if identity:
-        _unitares_bridge.set_agent_id(identity.creature_id)
-        _unitares_bridge.set_session_id(f"anima-{identity.creature_id[:8]}")
-
-    return _unitares_bridge
-
-async def _close_unitares_bridge():
-    """Close the UnitaresBridge session (call during shutdown)."""
-    global _unitares_bridge
-    if _unitares_bridge:
-        await _unitares_bridge.close()
-        _unitares_bridge = None
-        print("[Server] UnitaresBridge closed", file=sys.stderr, flush=True)
 
 _last_shm_data = None  # Cached per-iteration shared memory read
 
@@ -1519,10 +1491,28 @@ async def _update_display_loop():
             # Joystick button = screen-specific action (art eras: select era)
             # Separate button = screen-specific action (messages: expand, notepad: save, long-press: shutdown)
 
-            # Read governance from cached shared memory (already read by _get_readings_and_anima)
+            # Sync governance from broker's SHM data (broker is sole UNITARES caller)
             governance_decision_for_display = _last_governance_decision
             if _last_shm_data and "governance" in _last_shm_data and isinstance(_last_shm_data["governance"], dict):
-                governance_decision_for_display = _last_shm_data["governance"]
+                shm_gov = _last_shm_data["governance"]
+                governance_decision_for_display = shm_gov
+                # Sync into _last_governance_decision if SHM data is fresh
+                gov_at = shm_gov.get("governance_at")
+                if gov_at:
+                    from datetime import datetime as _dt
+                    try:
+                        gov_ts = _dt.fromisoformat(gov_at).timestamp()
+                        if time.time() - gov_ts < SHM_GOVERNANCE_STALE_SECONDS:
+                            _last_governance_decision = shm_gov
+                            # Update connection status based on SHM governance source
+                            if _screen_renderer:
+                                is_unitares = shm_gov.get("source") == "unitares"
+                                _screen_renderer.update_connection_status(governance=is_unitares)
+                            # Fire health heartbeat for fresh governance
+                            if _health:
+                                _health.heartbeat("governance")
+                    except (ValueError, TypeError):
+                        pass
             
             # Initialize screen renderer if display is available
             if _display and _display.is_available():
@@ -1753,20 +1743,15 @@ async def _update_display_loop():
                 
                 safe_call(try_learning, default=None, log_error=True)
             
-            # Lumen's unified reflection: Every ~30 minutes, one LLM call with all context
-            # Replaces lumen_speak + lumen_wonder + lumen_reflect + lumen_respond
-            # If LLM is down, stay silent rather than fake it with templates
+            # Lumen's unified reflection: Every ~30 minutes
+            # Simple context → traceable template (anima_to_self_report)
+            # Complex context → LLM (what matters most)
             if loop_count % UNIFIED_REFLECTION_INTERVAL == 0 and readings and anima and identity:
-                from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
+                from .llm_gateway import ReflectionContext, generate_reflection
                 from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
 
-                gateway = get_gateway()
-
                 async def lumen_unified_reflect():
-                    """Single unified voice: gathers all context, asks LLM what matters most.
-
-                    Replaces lumen_speak + lumen_wonder + lumen_reflect + lumen_respond.
-                    If LLM is unavailable, stays silent rather than faking with templates.
+                    """Unified voice: template for simple anima report, LLM for complex.
                     """
                     import os
 
@@ -1780,13 +1765,7 @@ async def _update_display_loop():
                     except Exception:
                         pass
 
-                    # === 2. LLM required ===
-                    if not gateway.enabled:
-                        if loop_count % ERROR_LOG_THROTTLE == 0:
-                            print("[Lumen/Unified] No LLM configured — staying quiet", file=sys.stderr, flush=True)
-                        return
-
-                    # === 3. Gather context signals ===
+                    # === 2. Gather context (template path works without LLM) ===
                     # Advocate: what Lumen feels and wants
                     advocate_feeling = None
                     advocate_desire = None
@@ -1923,7 +1902,7 @@ async def _update_display_loop():
                             _screen_renderer.clear_loading()
 
                     if reflection is None:
-                        print("[Lumen/Unified] LLM unavailable — staying quiet", file=sys.stderr, flush=True)
+                        print("[Lumen/Unified] No reflection — staying quiet", file=sys.stderr, flush=True)
                         return
 
                     # === 6. Post result ===
@@ -2190,92 +2169,8 @@ async def _update_display_loop():
 
                 safe_call(record_history, default=None, log_error=True)
 
-            # UNITARES governance check-in: Every 30 iterations (~1 minute)
-            # Provides continuous governance feedback for self-regulation
-            # Uses Lumen's actual identity (creature_id) for proper binding
-            # Syncs identity metadata on first check-in
-            if loop_count % GOVERNANCE_INTERVAL == 0 and readings and anima and identity:
-                # Heartbeat fires when governance block runs (liveness),
-                # regardless of check-in success. Probe tracks connectivity.
-                if _health: _health.heartbeat("governance")
-
-                import os
-                unitares_url = os.environ.get("UNITARES_URL")
-                if unitares_url:
-                    # Track if this is the first check-in (for identity sync)
-                    is_first_check_in = (loop_count == 30)
-
-                    # Get DrawingEISV from screen renderer (None when not drawing)
-                    drawing_eisv = None
-                    if _screen_renderer:
-                        try:
-                            drawing_eisv = _screen_renderer.get_drawing_eisv()
-                        except Exception:
-                            pass
-
-                    async def check_in_governance():
-                        # Use singleton bridge (connection pooling, no session leaks)
-                        bridge = _get_unitares_bridge(unitares_url, identity)
-                        # Pass calibration weights (from config) through to EISV mapping
-                        cal = get_calibration()
-                        decision = await bridge.check_in(
-                            anima, readings,
-                            neural_weight=cal.neural_weight,
-                            physical_weight=cal.physical_weight,
-                            identity=identity,
-                            is_first_check_in=is_first_check_in,
-                            drawing_eisv=drawing_eisv
-                        )
-                        return decision
-
-                    try:
-                        decision = await safe_call_async(check_in_governance, default=None, log_error=True)
-                        if decision:
-                            # Store governance decision for potential expression feedback and diagnostics screen
-                            # Future: Could influence face/LED expression based on governance state
-                            _last_governance_decision = decision
-
-                            # Update screen renderer connection status (for status bar)
-                            if _screen_renderer:
-                                _screen_renderer.update_connection_status(wifi=True, governance=True)
-
-                            # Log periodically (or always on non-proceed)
-                            action = decision.get("action", "unknown")
-                            margin = decision.get("margin", "unknown")
-                            source = decision.get("source", "unknown")
-                            if loop_count % WARN_LOG_THROTTLE == 0 or action != "proceed":
-                                de = f" drawing={drawing_eisv}" if drawing_eisv else ""
-                                print(f"[Governance] {action} ({margin}) from {source}{de}", file=sys.stderr, flush=True)
-                        else:
-                            _last_governance_decision = None
-                            # Update screen renderer - governance not responding
-                            if _screen_renderer:
-                                _screen_renderer.update_connection_status(governance=False)
-                    except Exception as e:
-                        # Non-fatal - governance check-ins are optional
-                        # Network failures are expected when WiFi is down - Lumen operates autonomously
-                        _last_governance_decision = None
-                        error_str = str(e).lower()
-                        is_network_error = any(x in error_str for x in [
-                            'network', 'connection', 'timeout', 'unreachable', 'resolve',
-                            'name resolution', 'no route', 'host unreachable', 'network unreachable'
-                        ])
-
-                        # Update screen renderer connection status (for status bar)
-                        if _screen_renderer:
-                            if is_network_error:
-                                _screen_renderer.update_connection_status(wifi=False, governance=False)
-                            else:
-                                _screen_renderer.update_connection_status(governance=False)
-
-                        # Only log network errors occasionally (they're expected when WiFi is down)
-                        # Log other errors more frequently (they might indicate real issues)
-                        if is_network_error:
-                            if loop_count % ERROR_LOG_THROTTLE == 0:  # Log every 10 minutes for network errors
-                                print(f"[Governance] Network unavailable - Lumen operating autonomously (WiFi down?)", file=sys.stderr, flush=True)
-                        else:
-                            if loop_count % WARN_LOG_THROTTLE == 0:  # Log every 2 minutes for other errors
-                                print(f"[Governance] Check-in skipped: {e}", file=sys.stderr, flush=True)
+            # Governance is handled by the broker (sole UNITARES caller).
+            # Server reads governance from SHM in the display block above.
 
             # === SLOW CLOCK: Self-Schema G_t extraction (every 5 minutes) ===
             # PoC for StructScore visual integrity evaluation
@@ -2576,11 +2471,9 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
                 _health.register("growth", probe=lambda: _growth is not None, stale_threshold=90.0)
                 _health.register("governance", probe=lambda: (
-                    _last_governance_decision is not None or (
-                        _last_shm_data and "governance" in _last_shm_data
-                        and isinstance(_last_shm_data["governance"], dict)
-                    )
-                ), stale_threshold=90.0)
+                    _last_shm_data and "governance" in _last_shm_data
+                    and isinstance(_last_shm_data["governance"], dict)
+                ), stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
                 _health.register("drawing", probe=lambda: _screen_renderer is not None and hasattr(_screen_renderer, '_canvas'))
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
                 _health.register("voice", probe=lambda: _voice_instance is not None)
@@ -2710,7 +2603,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
 def sleep():
     """Go to sleep. Call on server shutdown."""
-    global _store, _unitares_bridge, _voice_instance, _schema_hub, _calibration_drift
+    global _store, _voice_instance, _schema_hub, _calibration_drift
 
     # Persist calibration drift state
     if _calibration_drift:
@@ -2761,24 +2654,6 @@ def sleep():
         except Exception as e:
             try:
                 print(f"[Sleep] Error persisting trajectory: {e}", file=sys.stderr, flush=True)
-            except (ValueError, OSError):
-                pass
-
-    # Close UnitaresBridge session (prevents "unclosed client session" warnings)
-    if _unitares_bridge:
-        try:
-            import asyncio
-            try:
-                loop = asyncio.get_event_loop()
-                if loop.is_running():
-                    loop.create_task(_close_unitares_bridge())
-                else:
-                    loop.run_until_complete(_close_unitares_bridge())
-            except RuntimeError:
-                asyncio.run(_close_unitares_bridge())
-        except Exception as e:
-            try:
-                print(f"[Sleep] Error closing UnitaresBridge: {e}", file=sys.stderr, flush=True)
             except (ValueError, OSError):
                 pass
 

@@ -61,12 +61,13 @@ class UnitaresBridge:
         self._session_id = None
         self._available = None  # None = not checked, True/False = checked
         self._last_availability_check = None  # Timestamp of last check
-        self._availability_check_interval = 60.0  # Recheck every 60 seconds if unavailable
-        # Circuit breaker: after N consecutive failures, skip UNITARES for T seconds
+        # Circuit breaker: after N consecutive failures, skip UNITARES with exponential backoff
         self._circuit_failures = 0
         self._circuit_open_until = 0.0  # Timestamp when circuit closes (half-open)
-        self._circuit_threshold = 3
-        self._circuit_open_seconds = 90.0
+        self._circuit_threshold = 2
+        self._circuit_backoff_base = 15.0
+        self._circuit_backoff_max = 120.0
+        self._circuit_current_backoff = 15.0
         self._http_session = None  # Reusable aiohttp session
         self._session_timeout = None  # Timeout config for session
         # Previous check-in state for computing deltas (ethical_drift, confidence)
@@ -144,19 +145,14 @@ class UnitaresBridge:
         import time
         current_time = time.time()
 
-        # Circuit breaker: skip checks while open
+        # Circuit breaker: skip checks while open (backoff handles retry timing)
         if current_time < self._circuit_open_until:
             return False
 
-        # Recheck periodically if previously unavailable (allows recovery)
-        if self._available is False and self._last_availability_check is not None:
-            time_since_check = current_time - self._last_availability_check
-            if time_since_check < self._availability_check_interval:
-                # Still within cooldown, return cached result
-                return False
-            # Cooldown expired, reset cache to recheck
+        # If circuit was open and backoff expired, reset to allow recheck
+        if self._available is False and self._circuit_open_until > 0:
             self._available = None
-        
+
         # If already available, return immediately (no need to recheck)
         if self._available is True:
             return True
@@ -173,6 +169,7 @@ class UnitaresBridge:
                     if response.status == 200:
                         self._available = True
                         self._circuit_failures = 0
+                        self._circuit_current_backoff = self._circuit_backoff_base
                         self._last_availability_check = current_time
                         return True
                     elif response.status == 401:
@@ -203,6 +200,7 @@ class UnitaresBridge:
                     if response.status == 200:
                         self._available = True
                         self._circuit_failures = 0
+                        self._circuit_current_backoff = self._circuit_backoff_base
                         self._last_availability_check = current_time
                         return True
                     elif response.status == 401:
@@ -235,12 +233,16 @@ class UnitaresBridge:
             return False
 
     def _maybe_open_circuit(self, current_time: float) -> None:
-        """Open circuit breaker if failure threshold reached."""
+        """Open circuit breaker if failure threshold reached (exponential backoff)."""
         if self._circuit_failures >= self._circuit_threshold:
-            self._circuit_open_until = current_time + self._circuit_open_seconds
+            self._circuit_open_until = current_time + self._circuit_current_backoff
             logger.info(
                 "UNITARES circuit breaker open for %.0fs (%d consecutive failures)",
-                self._circuit_open_seconds, self._circuit_failures
+                self._circuit_current_backoff, self._circuit_failures
+            )
+            # Double backoff for next time, capped at max
+            self._circuit_current_backoff = min(
+                self._circuit_current_backoff * 2, self._circuit_backoff_max
             )
     
     async def check_in(
@@ -299,6 +301,7 @@ class UnitaresBridge:
                 result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv)
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 self._circuit_failures = 0  # Success resets circuit
+                self._circuit_current_backoff = self._circuit_backoff_base
                 return result
             except Exception as e:
                 # Fallback to local governance on error

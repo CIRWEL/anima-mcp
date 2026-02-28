@@ -214,8 +214,7 @@ class TestCommunicationSmoke:
         """post_message handler returns error when message is empty."""
         from anima_mcp.handlers.communication import handle_post_message
 
-        with patch("anima_mcp.server._unitares_bridge", None), \
-             patch("anima_mcp.server._growth", None), \
+        with patch("anima_mcp.server._growth", None), \
              patch("anima_mcp.server._activity", None), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.server._store", None):

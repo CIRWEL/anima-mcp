@@ -25,6 +25,25 @@ from ..anima import Anima
 from ..expression_moods import ExpressionMoodTracker
 
 
+_drawing_bridge = None  # Lazy bridge for outcome reporting
+
+def _get_drawing_bridge():
+    """Get or create a UnitaresBridge for drawing outcome reporting."""
+    global _drawing_bridge
+    if _drawing_bridge is not None:
+        return _drawing_bridge
+    import os
+    unitares_url = os.environ.get("UNITARES_URL")
+    if not unitares_url:
+        return None
+    try:
+        from ..unitares_bridge import UnitaresBridge
+        _drawing_bridge = UnitaresBridge(unitares_url=unitares_url)
+        return _drawing_bridge
+    except Exception:
+        return None
+
+
 def _get_canvas_path() -> Path:
     """Get persistent path for canvas state."""
     anima_dir = Path.home() / ".anima"
@@ -1423,7 +1442,7 @@ class DrawingEngine:
 
             # Report drawing outcome to UNITARES for EISV validation
             try:
-                from ..server import _unitares_bridge
+                _unitares_bridge = _get_drawing_bridge()
                 if _unitares_bridge:
                     import asyncio
                     _sat = self.canvas.compositional_satisfaction()

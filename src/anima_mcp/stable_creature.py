@@ -17,11 +17,11 @@ HOW IT WORKS:
 - This script owns I2C sensors exclusively (no conflicts)
 - Reads sensors every 2 seconds
 - Writes data to shared memory (/dev/shm or Redis)
-- The MCP server (anima --sse) reads from shared memory
+- The MCP server (anima --http) reads from shared memory
 
 YOU CAN NOW RUN BOTH:
   - stable_creature.py (hardware broker - this script)
-  - anima --sse (MCP server - reads from shared memory)
+  - anima --http (MCP server - reads from shared memory)
 
 BENEFITS:
 - No I2C conflicts
@@ -317,7 +317,7 @@ def run_creature():
     last_dialectic_time = 0  # Rate limit dialectic synthesis
     last_governance_time = 0  # Rate limit governance check-ins (every 10s, not every 2s)
     _last_memory_context = None  # Retrieved memories for dialectic synthesis (past informs present)
-    GOVERNANCE_INTERVAL = 10.0  # Seconds between governance check-ins
+    GOVERNANCE_INTERVAL = 15.0  # Seconds between governance check-ins
     last_action = None  # Track last action for outcome recording
     last_state_for_action = None  # State before action for learning
     last_learning_save = time.time()  # Track periodic learning saves
@@ -746,7 +746,7 @@ def run_creature():
                             identity=_gov_identity,
                             is_first_check_in=_gov_first
                         ),
-                        timeout=5.0  # total budget for availability check + check-in
+                        timeout=10.0  # total budget for availability check + check-in
                     )
                     return {"decision": decision, "time": _gov_time, "first": _gov_first}
 
@@ -772,7 +772,7 @@ def run_creature():
                 }
             }
             if last_decision:
-                shm_data["governance"] = last_decision
+                shm_data["governance"] = {**last_decision, "governance_at": datetime.now().isoformat()}
 
             # Add activity state if available
             if activity_state:

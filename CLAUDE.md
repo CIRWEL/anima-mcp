@@ -56,7 +56,7 @@ Handler modules use late imports from `server.py` for global state access (e.g.,
 
 Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth, governance) use 90s.
 
-**Governance health** checks both the server's own check-in result AND the broker's shared memory governance data (matching diagnostics screen behavior). The broker checks in every 10s; the server every ~60s.
+**Governance health** checks broker's shared memory governance data (broker is sole UNITARES caller, every 15s). Stale threshold: 45s.
 
 ### Learning Systems (run in broker only)
 
@@ -346,11 +346,7 @@ ssh unitares-anima@100.79.215.83 'cd ~/anima-mcp && git pull && sudo systemctl r
 
 ## UNITARES Integration
 
-Lumen checks in with UNITARES governance via Tailscale from **two processes**:
-- **Broker** (`stable_creature.py`): every 10s, writes decision to shared memory
-- **Server** (`server.py`): every ~60s, stores in `_last_governance_decision`
-
-Both use the same bridge:
+The **broker** (`stable_creature.py`) is the sole UNITARES caller. It checks in every 15s and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM only — it does not call UNITARES directly.
 
 ```
 UNITARES_URL=http://100.96.201.46:8767/mcp/
@@ -358,14 +354,15 @@ UNITARES_URL=http://100.96.201.46:8767/mcp/
 
 Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
 
+**Circuit breaker** (in `unitares_bridge.py`): 2 consecutive failures trigger exponential backoff (15s→30s→60s→120s). Any success resets to 15s.
+
 **Three EISV contexts:**
 - **DrawingEISV** (screens.py) — proprioceptive, drives drawing behavior (closed loop)
 - **Mapped EISV** (eisv_mapper.py) — anima→EISV for governance reporting
 - **Governance EISV** (Mac, dynamics.py) — full thermodynamics (open loop, advisory)
 
-DrawingEISV state is included in governance check-in payload (`sensor_data.drawing_eisv`) when drawing.
 Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
-Non-proceed verdicts are logged immediately with DrawingEISV state if available.
+Server syncs `_last_governance_decision` from SHM when `governance_at` is within `SHM_GOVERNANCE_STALE_SECONDS` (45s).
 
 ## Operational Facts
 

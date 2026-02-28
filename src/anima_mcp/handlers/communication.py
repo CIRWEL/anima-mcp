@@ -98,25 +98,23 @@ def _resolve_caller_name(arguments: dict) -> str:
     return "agent"
 
 
+_comm_bridge = None  # Module-level lazy bridge for identity resolution
+
 def _get_unitares_bridge():
-    """Get the UNITARES bridge, creating lazily if needed.
+    """Get or create a UnitaresBridge for identity resolution (lazy singleton)."""
+    global _comm_bridge
+    if _comm_bridge is not None:
+        return _comm_bridge
 
-    Falls back to creating a fresh bridge from UNITARES_URL env var
-    if the singleton hasn't been initialized by the governance loop yet.
-    """
     import os
-    from ..server import _unitares_bridge
-    if _unitares_bridge is not None:
-        return _unitares_bridge
-
-    # Singleton not created yet — try to create one lazily
     unitares_url = os.environ.get("UNITARES_URL")
     if not unitares_url:
         return None
 
     try:
-        from ..server import _get_unitares_bridge as _factory
-        return _factory(unitares_url)
+        from ..unitares_bridge import UnitaresBridge
+        _comm_bridge = UnitaresBridge(unitares_url=unitares_url)
+        return _comm_bridge
     except Exception:
         return None
 
