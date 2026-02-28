@@ -83,22 +83,37 @@ class UnitaresBridge:
             self._basic_auth = aiohttp.BasicAuth(user, password)
 
     async def _get_session(self):
-        """Get or create reusable HTTP session."""
-        if self._http_session is None or self._http_session.closed:
-            import aiohttp
-            # Create session with connection pooling
-            connector = aiohttp.TCPConnector(
-                limit=5,  # Max 5 concurrent connections
-                limit_per_host=3,  # Max 3 per host
-                ttl_dns_cache=300,  # Cache DNS for 5 min
-                keepalive_timeout=30,  # Keep connections alive
-            )
-            self._session_timeout = aiohttp.ClientTimeout(total=self._timeout)
-            self._http_session = aiohttp.ClientSession(
-                timeout=self._session_timeout,
-                connector=connector,
-                auth=self._basic_auth  # Basic auth for ngrok tunnels
-            )
+        """Get or create reusable HTTP session (event-loop aware).
+
+        Creates a new session if the event loop has changed (e.g. broker's
+        _run_async_in_background creates a fresh loop per call).
+        """
+        import asyncio, aiohttp
+        current_loop = asyncio.get_running_loop()
+        # Recreate session if loop changed or session is closed
+        if (self._http_session is not None
+                and not self._http_session.closed
+                and getattr(self, '_session_loop', None) is current_loop):
+            return self._http_session
+        # Close stale session from a different loop
+        if self._http_session is not None and not self._http_session.closed:
+            try:
+                await self._http_session.close()
+            except Exception:
+                pass
+        connector = aiohttp.TCPConnector(
+            limit=5,
+            limit_per_host=3,
+            ttl_dns_cache=300,
+            keepalive_timeout=30,
+        )
+        self._session_timeout = aiohttp.ClientTimeout(total=self._timeout)
+        self._http_session = aiohttp.ClientSession(
+            timeout=self._session_timeout,
+            connector=connector,
+            auth=self._basic_auth,
+        )
+        self._session_loop = current_loop
         return self._http_session
 
     def _get_mcp_url(self) -> str:
