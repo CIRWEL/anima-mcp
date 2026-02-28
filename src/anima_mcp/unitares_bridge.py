@@ -386,7 +386,6 @@ class UnitaresBridge:
                 "confidence": confidence,
                 "ethical_drift": ethical_drift,
                 "response_text": status_text,
-                "parameters": [{"key": "sensor_data", "value": json.dumps(sensor_data)}]
             }
 
             # Add trajectory signature if available (enables lineage tracking in UNITARES)
