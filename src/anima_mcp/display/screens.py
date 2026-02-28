@@ -1481,7 +1481,7 @@ class ScreenRenderer:
             return
 
         # Cache: anima values + governance state rounded to display precision
-        gov_state = governance.get("unitares_agent_id", "")[:8] if governance else ""
+        gov_state = (governance.get("unitares_agent_id") or "")[:8] if governance else ""
         try:
             from ..eisv import get_trajectory_awareness
             _traj_shape = get_trajectory_awareness().current_shape or ""
