@@ -243,16 +243,14 @@ def run_creature():
     # and checks results on the next iteration instead of blocking.
     _bg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="creature-bg")
 
-    def _run_async_in_background(coro, timeout=5.0):
-        """Run an async coroutine in the background thread's event loop with timeout.
+    _bg_loop = asyncio.new_event_loop()  # Single reusable loop for async bridge calls
 
-        Returns the result of the coroutine. Exceptions propagate to the Future.
+    def _run_async_in_background(coro, timeout=10.0):
+        """Run an async coroutine in the persistent background event loop with timeout.
+
+        Reuses a single event loop so aiohttp sessions stay valid across calls.
         """
-        bg_loop = asyncio.new_event_loop()
-        try:
-            return bg_loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
-        finally:
-            bg_loop.close()
+        return _bg_loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
 
     # Track background futures so the main loop can skip if still running
     _governance_future = None   # type: Optional[concurrent.futures.Future]
@@ -925,10 +923,14 @@ def run_creature():
         except Exception:
             pass
 
-        # Close UNITARES bridge session (connection pooling cleanup)
+        # Close UNITARES bridge session (uses _bg_loop where session was created)
         if bridge:
             try:
-                loop.run_until_complete(bridge.close())
+                _bg_loop.run_until_complete(bridge.close())
+            except Exception:
+                pass
+            try:
+                _bg_loop.close()
             except Exception:
                 pass
 
