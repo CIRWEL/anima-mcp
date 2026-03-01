@@ -374,10 +374,10 @@ class ActionSelector:
         """Get expected value for an action, including exploration bonus."""
         base_value = self._action_values.get(action_key, 0.5)  # Default neutral value
 
-        # Exploration bonus (UCB-style)
+        # Exploration bonus (UCB-style) — scales with log(total)/count for all actions
         count = self._action_counts.get(action_key, 0)
         total_count = sum(self._action_counts.values()) + 1
-        exploration_bonus = math.sqrt(2 * math.log(total_count) / (count + 1)) if count < 10 else 0
+        exploration_bonus = math.sqrt(2 * math.log(total_count) / (count + 1))
 
         return base_value + exploration_bonus * self._exploration_rate
 
@@ -454,9 +454,13 @@ class ActionSelector:
         learning_rate = 0.1
         self._action_values[action_key] = old_value + learning_rate * (reward - old_value)
 
-        # Decay exploration rate
-        self._exploration_rate *= self._exploration_decay
-        self._exploration_rate = max(0.05, self._exploration_rate)  # Minimum exploration
+        # Adjust exploration rate: decay normally, but recover when surprised
+        # High surprise signals environment change — explore more to adapt.
+        if surprise_after > 0.3:
+            self._exploration_rate = min(1.0, self._exploration_rate + 0.02 * surprise_after)
+        else:
+            self._exploration_rate *= self._exploration_decay
+        self._exploration_rate = max(0.05, min(1.0, self._exploration_rate))
 
         # Persist learned values
         self._persist_action(action_key)

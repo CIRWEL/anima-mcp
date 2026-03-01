@@ -14,11 +14,13 @@ States:
 This creates a more natural, lifelike presence.
 """
 
+import json
 import sys
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from pathlib import Path
 from typing import Optional, Tuple, List
 import math
 
@@ -75,6 +77,7 @@ class ActivityManager:
             12: 0.9, 13: 0.8, 14: 0.9, 15: 1.0, 16: 1.0, 17: 0.8,  # Afternoon
             18: 0.6, 19: 0.5, 20: 0.4, 21: 0.3, 22: 0.2, 23: 0.15,  # Evening (gentler dusk)
         }
+        self._load_circadian_schedule()
 
         # State-specific settings
         self._level_settings = {
@@ -305,14 +308,14 @@ class ActivityManager:
             }
         elif self._current_level == ActivityLevel.DROWSY:
             return {
-                "brightness_override": 0.5,  # Half brightness
+                "brightness_override": 0.6,  # Matches brightness_mult
                 "breathing_speed": 0.5,  # Slower breathing
                 "color_saturation": 0.7,  # Slightly muted colors
                 "transition_speed": 0.5,  # Slower transitions
             }
         else:  # RESTING
             return {
-                "brightness_override": 0.15,  # Very dim
+                "brightness_override": 0.35,  # Matches brightness_mult
                 "breathing_speed": 0.25,  # Very slow breathing
                 "color_saturation": 0.3,  # Muted colors
                 "transition_speed": 0.2,  # Very slow transitions
@@ -342,6 +345,32 @@ class ActivityManager:
             "last_interaction_seconds_ago": now - self._last_interaction_time,
             "settings": self._level_settings[self._current_level],
         }
+
+    def _circadian_path(self) -> Path:
+        return Path.home() / ".anima" / "circadian_schedule.json"
+
+    def _load_circadian_schedule(self):
+        """Load learned circadian adjustments from disk."""
+        try:
+            path = self._circadian_path()
+            if path.exists():
+                data = json.loads(path.read_text())
+                for hour_str, value in data.items():
+                    hour = int(hour_str)
+                    if 0 <= hour <= 23 and 0.1 <= value <= 1.0:
+                        self._circadian_schedule[hour] = value
+                print(f"[Activity] Loaded circadian schedule ({len(data)} hours)", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[Activity] Could not load circadian schedule: {e}", file=sys.stderr, flush=True)
+
+    def _save_circadian_schedule(self):
+        """Persist learned circadian adjustments to disk."""
+        try:
+            path = self._circadian_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(self._circadian_schedule, indent=2))
+        except Exception as e:
+            print(f"[Activity] Could not save circadian schedule: {e}", file=sys.stderr, flush=True)
 
     def apply_learned_patterns(
         self,
@@ -411,6 +440,9 @@ class ActivityManager:
                         adjustments["evening_warmth_boost"] = round(boost, 3)
             except Exception:
                 pass
+
+        if adjustments:
+            self._save_circadian_schedule()
 
         return adjustments
 

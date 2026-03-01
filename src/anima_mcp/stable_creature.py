@@ -674,8 +674,10 @@ def run_creature():
                             if "clarity_change" in action_predictions:
                                 actual["clarity_change"] = anima.clarity - last_state_for_action.get("clarity", 0.5)
                             if "fast_recovery" in action_predictions:
-                                recovery = 1.0 if anima.stability > 0.5 else anima.stability
-                                actual["fast_recovery"] = recovery
+                                # Recovery speed: how much stability rebounded since last observation
+                                # Clamp to [0,1] — 0 means no recovery, 1 means full rebound
+                                prev_stab = last_state_for_action.get("stability", 0.5)
+                                actual["fast_recovery"] = max(0.0, min(1.0, anima.stability - prev_stab + 0.5))
                             self_model.verify_prediction(action_pred_context, action_predictions, actual)
                         except Exception:
                             pass

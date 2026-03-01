@@ -180,11 +180,11 @@ class TestActivityState:
 
         manager._current_level = ActivityLevel.DROWSY
         drowsy_leds = manager.get_led_settings()
-        assert drowsy_leds["brightness_override"] == 0.5
+        assert drowsy_leds["brightness_override"] == 0.6  # Matches brightness_mult
 
         manager._current_level = ActivityLevel.RESTING
         resting_leds = manager.get_led_settings()
-        assert resting_leds["brightness_override"] == 0.15
+        assert resting_leds["brightness_override"] == 0.35  # Matches brightness_mult
 
     def test_get_status_returns_dict(self, manager):
         """Test get_status returns expected keys."""
