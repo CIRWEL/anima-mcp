@@ -204,10 +204,13 @@ async def _server_governance_fallback(anima, readings):
     """
     bridge = _get_server_bridge()
     if bridge is None:
+        print("[Server] Governance fallback: no bridge (UNITARES_URL not set?)", file=sys.stderr, flush=True)
         return None
     try:
         identity = _store.identity if _store else None
         decision = await bridge.check_in(anima, readings, identity=identity)
+        source = decision.get("source", "?") if decision else "None"
+        print(f"[Server] Governance fallback: source={source}", file=sys.stderr, flush=True)
         return decision
     except Exception as e:
         print(f"[Server] Governance fallback error: {e}", file=sys.stderr, flush=True)
@@ -1576,12 +1579,14 @@ async def _update_display_loop():
                 _last_server_checkin_time = time.time()
                 try:
                     fallback_decision = await _server_governance_fallback(anima, readings)
-                    if fallback_decision and fallback_decision.get("source") == "unitares":
+                    if fallback_decision:
+                        is_unitares_fb = fallback_decision.get("source") == "unitares"
                         _last_governance_decision = fallback_decision
                         governance_decision_for_display = fallback_decision
-                        _last_unitares_success_time = time.time()
+                        if is_unitares_fb:
+                            _last_unitares_success_time = time.time()
                         if _screen_renderer:
-                            _screen_renderer.update_connection_status(governance=True)
+                            _screen_renderer.update_connection_status(governance=is_unitares_fb)
                         if _health:
                             _health.heartbeat("governance")
                 except Exception:
