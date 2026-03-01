@@ -46,7 +46,8 @@ StandardError=journal
 SyslogIdentifier=anima
 
 # Security
-NoNewPrivileges=true
+# NoNewPrivileges omitted: server needs sudo for operational tasks
+# (service sync, systemctl restart, system_service handler)
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=no
