@@ -16,7 +16,7 @@ EnvironmentFile=-/home/unitares-anima/.anima/anima.env
 Environment="ANIMA_ID=49e14444-b59e-48f1-83b8-b36a988c9975"
 Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
 Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
-Environment="UNITARES_URL=http://unitares.tail76aee6.ts.net:8767/mcp/"
+Environment="UNITARES_URL=http://100.96.201.46:8767/mcp/"
 Environment="ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io"
 Environment="ANIMA_OAUTH_AUTO_APPROVE=true"
 Environment="PYTHONUNBUFFERED=1"
