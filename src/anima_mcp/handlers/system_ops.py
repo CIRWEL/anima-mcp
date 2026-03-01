@@ -15,23 +15,22 @@ from mcp.types import TextContent
 async def _delayed_restart():
     """Restart both anima services (broker + server) after a brief delay.
 
-    Uses a detached subprocess because restarting anima-broker kills anima
-    (systemd Requires= dependency), so we can't run sequential subprocess.run
-    calls from within the server process.
+    Uses systemd-run to escape the current service's cgroup. Without this,
+    systemd kills child processes (even detached ones) when stopping the
+    anima service, so the broker never gets restarted on deploy.
     """
     await asyncio.sleep(1)
     try:
-        # Spawn a detached shell that restarts both services.
-        # start_new_session=True ensures the process survives when systemd
-        # kills the anima server as part of the broker restart cascade.
-        subprocess.Popen(
-            ["sh", "-c", "sleep 1 && sudo systemctl restart anima-broker anima"],
-            start_new_session=True,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        # systemd-run --no-block creates a transient scope unit that runs
+        # independently of the anima.service cgroup. This survives the
+        # Requires= cascade (restarting broker stops anima).
+        subprocess.run(
+            ["sudo", "systemd-run", "--no-block",
+             "systemctl", "restart", "anima-broker", "anima"],
+            timeout=5, check=False, capture_output=True,
         )
     except Exception:
+        # Fallback: just exit and let systemd Restart=on-failure handle it
         import os
         os._exit(1)
 
