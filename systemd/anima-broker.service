@@ -4,6 +4,8 @@ After=network.target redis.service
 Wants=network-online.target
 # Broker must start before MCP server (mind)
 Before=anima.service
+# PartOf: when anima is restarted (e.g. deploy), broker also restarts
+PartOf=anima.service
 # Prevent rapid restarts - wait for hardware to stabilize
 OnFailure=anima-broker-failed.service
 

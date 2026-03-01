@@ -196,7 +196,7 @@ def run_creature():
     # This prevents I2C conflicts between broker and MCP server
     
     unitares_url = os.environ.get("UNITARES_URL")
-    bridge = UnitaresBridge(unitares_url=unitares_url, timeout=3.0) if unitares_url else None
+    bridge = UnitaresBridge(unitares_url=unitares_url) if unitares_url else None
     
     # Initialize Shared Memory (Broker Mode)
     # Using file backend for maximum stability (Redis caused hangs)
