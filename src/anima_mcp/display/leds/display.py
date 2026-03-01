@@ -93,6 +93,7 @@ class LEDDisplay:
         self._pulse_amount = 0.05
         self._flash_until = 0.0
         self._flash_color = (100, 100, 100)
+        self._last_applied_brightness = self._base_brightness  # Actual brightness sent to hardware
         self._spi_lock = threading.Lock()
         self._animation_running = False
         self._animation_thread: Optional[threading.Thread] = None
@@ -152,8 +153,10 @@ class LEDDisplay:
                             phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
                             mod = (0.92 + 0.08 * math.sin(phase)) * rgb_scale
                             self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
-                        self._dots.brightness = max(self._hardware_brightness_floor, perceptual)
+                        final_brightness = max(self._hardware_brightness_floor, perceptual)
+                        self._dots.brightness = final_brightness
                         self._dots.show()
+                    self._last_applied_brightness = final_brightness
             except Exception:
                 pass
             time.sleep(0.25)
@@ -222,7 +225,7 @@ class LEDDisplay:
 
     def get_proprioceptive_state(self) -> dict:
         return {
-            "brightness": self._known_brightness,
+            "brightness": self._last_applied_brightness,
             "expression_mode": self._expression_mode,
             "is_dancing": self._current_dance is not None and not self._current_dance.is_complete,
             "dance_type": self._current_dance.dance_type.value if self._current_dance and not self._current_dance.is_complete else None,

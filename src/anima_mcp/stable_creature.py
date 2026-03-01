@@ -331,6 +331,7 @@ def run_creature():
     except Exception:
         _prev_led_brightness = 0.04  # Default matches LEDDisplay default
     _world_light_buffer = deque(maxlen=WORLD_LIGHT_SMOOTH_WINDOW)  # Rolling avg
+    _prev_activity_level = None  # Track activity state transitions for buffer flush
 
     try:
         while running:
@@ -355,10 +356,12 @@ def run_creature():
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
-            # 1b. LED Proprioception: estimate brightness BEFORE sense_self()
-            # Use previous cycle's base brightness + current breathing pulse phase
-            # so clarity's world_light correction tracks actual LED output.
-            _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
+            # 1b. LED Proprioception: use actual applied brightness from hardware
+            # Prefer the real value from the animation loop over the sine-wave estimate.
+            try:
+                _instantaneous_led = _led_display.get_proprioceptive_state().get("brightness", _prev_led_brightness)
+            except Exception:
+                _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
             readings.led_brightness = _instantaneous_led
 
             # 1c. Compute smoothed world_light for activity manager
@@ -380,6 +383,12 @@ def run_creature():
                     stability=anima.stability,
                     light_level=_smoothed_world_light,
                 )
+                # Flush world_light buffer on activity state transitions
+                # (brightness changes invalidate old samples)
+                if _prev_activity_level is not None and activity_state.level != _prev_activity_level:
+                    _world_light_buffer.clear()
+                    print(f"[Creature] Activity transition {_prev_activity_level} → {activity_state.level}, flushed world_light buffer", file=sys.stderr, flush=True)
+                _prev_activity_level = activity_state.level
                 # Update LED brightness estimate for next cycle using actual manual setting
                 try:
                     _known_br = _led_display.get_proprioceptive_state().get("brightness", 0.04)
@@ -620,6 +629,17 @@ def run_creature():
                     elif selected_action.action_type == ActionType.ASK_QUESTION:
                         # Generate question from metacognition (existing functionality)
                         pass  # Question generation already happens via metacognition
+
+                    elif selected_action.action_type == ActionType.LED_BRIGHTNESS:
+                        direction = selected_action.parameters.get("direction", "increase")
+                        if _led_display:
+                            current = _led_display._manual_brightness_factor
+                            if direction == "increase":
+                                new_val = min(1.0, current * 1.2)
+                            else:
+                                new_val = max(0.05, current * 0.8)
+                            _led_display._manual_brightness_factor = new_val
+                            print(f"[Agency] LED brightness {direction}: {current:.2f} → {new_val:.2f}", file=sys.stderr, flush=True)
 
                     # Record state for action outcome learning
                     satisfaction_before = preferences.get_overall_satisfaction(current_state)
