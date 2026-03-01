@@ -67,7 +67,8 @@ from .server_state import (
     INPUT_POLL_INTERVAL_SECONDS, SHUTDOWN_LONG_PRESS_SECONDS,
     METACOG_INTERVAL, AGENCY_INTERVAL, SELF_MODEL_INTERVAL,
     PRIMITIVE_LANG_INTERVAL, VOICE_INTERVAL, GROWTH_INTERVAL,
-    TRAJECTORY_INTERVAL, SHM_GOVERNANCE_STALE_SECONDS, LEARNING_INTERVAL,
+    TRAJECTORY_INTERVAL, SHM_GOVERNANCE_STALE_SECONDS, SERVER_GOVERNANCE_FALLBACK_SECONDS,
+    LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
     GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL, META_LEARNING_INTERVAL,
@@ -92,6 +93,10 @@ _sep_btn_press_start: float | None = None  # Track separate button press start t
 _joy_btn_press_start: float | None = None  # Track joystick button hold for controls overlay
 _joy_btn_help_shown: bool = False
 _last_governance_decision: Dict[str, Any] | None = None
+# Server-side UNITARES fallback — activates only when broker can't reach UNITARES
+_server_bridge = None  # Lazy UnitaresBridge for fallback
+_last_server_checkin_time: float = 0.0  # Last time server did its own UNITARES check-in
+_last_unitares_success_time: float = 0.0  # Last time we saw source=unitares from ANY source
 _last_input_error_log: float = 0.0
 _leds: LEDDisplay | None = None
 _anima_id: str | None = None
@@ -167,6 +172,47 @@ def _get_shm_client() -> SharedMemoryClient:
         # Use file backend to match broker (Redis caused hangs)
         _shm_client = SharedMemoryClient(mode="read", backend="file")
     return _shm_client
+
+def _get_server_bridge():
+    """Lazy UNITARES bridge for server-side fallback check-in.
+
+    Only used when the broker's SHM governance is stale/local for too long.
+    The server's native async event loop avoids the broker's thread+loop issues.
+    """
+    global _server_bridge
+    if _server_bridge is not None:
+        return _server_bridge
+    unitares_url = os.environ.get("UNITARES_URL")
+    if not unitares_url:
+        return None
+    try:
+        from .unitares_bridge import UnitaresBridge
+        _server_bridge = UnitaresBridge(unitares_url=unitares_url, timeout=8.0)
+        # Set agent identity if store is available
+        if _store:
+            _server_bridge.set_agent_id(_store.identity.creature_id)
+            _server_bridge.set_session_id(f"anima-server-{_store.identity.creature_id[:8]}")
+        return _server_bridge
+    except Exception:
+        return None
+
+
+async def _server_governance_fallback(anima, readings):
+    """Call UNITARES directly from the server when broker can't reach it.
+
+    Returns governance decision dict or None on failure.
+    """
+    bridge = _get_server_bridge()
+    if bridge is None:
+        return None
+    try:
+        identity = _store.identity if _store else None
+        decision = await bridge.check_in(anima, readings, identity=identity)
+        return decision
+    except Exception as e:
+        print(f"[Server] Governance fallback error: {e}", file=sys.stderr, flush=True)
+        return None
+
 
 def _get_schema_hub() -> SchemaHub:
     """Get or create the SchemaHub singleton for schema composition."""
@@ -569,6 +615,7 @@ async def _update_display_loop():
     
     # Global variables for screen switching and governance
     global _screen_renderer, _joystick_enabled, _last_governance_decision, _led_proprioception
+    global _last_server_checkin_time, _last_unitares_success_time
     
     # Start fast input polling task (runs every 100ms for responsive button detection)
     async def fast_input_poll():
@@ -1491,8 +1538,9 @@ async def _update_display_loop():
             # Joystick button = screen-specific action (art eras: select era)
             # Separate button = screen-specific action (messages: expand, notepad: save, long-press: shutdown)
 
-            # Sync governance from broker's SHM data (broker is sole UNITARES caller)
+            # Sync governance from broker's SHM data (broker is primary UNITARES caller)
             governance_decision_for_display = _last_governance_decision
+            _shm_gov_is_fresh_unitares = False
             if _last_shm_data and "governance" in _last_shm_data and isinstance(_last_shm_data["governance"], dict):
                 shm_gov = _last_shm_data["governance"]
                 governance_decision_for_display = shm_gov
@@ -1504,15 +1552,40 @@ async def _update_display_loop():
                         gov_ts = _dt.fromisoformat(gov_at).timestamp()
                         if time.time() - gov_ts < SHM_GOVERNANCE_STALE_SECONDS:
                             _last_governance_decision = shm_gov
+                            is_unitares = shm_gov.get("source") == "unitares"
+                            if is_unitares:
+                                _shm_gov_is_fresh_unitares = True
+                                _last_unitares_success_time = time.time()
                             # Update connection status based on SHM governance source
                             if _screen_renderer:
-                                is_unitares = shm_gov.get("source") == "unitares"
                                 _screen_renderer.update_connection_status(governance=is_unitares)
                             # Fire health heartbeat for fresh governance
                             if _health:
                                 _health.heartbeat("governance")
                     except (ValueError, TypeError):
                         pass
+
+            # Server-side UNITARES fallback: if broker hasn't delivered a fresh
+            # "via unitares" decision for too long, the server calls UNITARES
+            # directly using its native async event loop (avoids broker's
+            # thread+loop issues). Rate-limited to every 60s.
+            if (not _shm_gov_is_fresh_unitares
+                    and time.time() - _last_unitares_success_time > SERVER_GOVERNANCE_FALLBACK_SECONDS
+                    and time.time() - _last_server_checkin_time > SERVER_GOVERNANCE_FALLBACK_SECONDS
+                    and readings is not None and anima is not None):
+                _last_server_checkin_time = time.time()
+                try:
+                    fallback_decision = await _server_governance_fallback(anima, readings)
+                    if fallback_decision and fallback_decision.get("source") == "unitares":
+                        _last_governance_decision = fallback_decision
+                        governance_decision_for_display = fallback_decision
+                        _last_unitares_success_time = time.time()
+                        if _screen_renderer:
+                            _screen_renderer.update_connection_status(governance=True)
+                        if _health:
+                            _health.heartbeat("governance")
+                except Exception:
+                    pass  # Non-fatal, broker may recover
             
             # Initialize screen renderer if display is available
             if _display and _display.is_available():
@@ -2656,6 +2729,18 @@ def sleep():
                 print(f"[Sleep] Error persisting trajectory: {e}", file=sys.stderr, flush=True)
             except (ValueError, OSError):
                 pass
+
+    # Close server-side UNITARES bridge if it was used
+    if _server_bridge:
+        try:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_server_bridge.close())
+            else:
+                loop.run_until_complete(_server_bridge.close())
+        except Exception:
+            pass
 
     # Close SelfReflection SQLite connection
     try:

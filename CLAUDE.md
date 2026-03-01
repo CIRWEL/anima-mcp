@@ -346,7 +346,7 @@ ssh unitares-anima@100.79.215.83 'cd ~/anima-mcp && git pull && sudo systemctl r
 
 ## UNITARES Integration
 
-The **broker** (`stable_creature.py`) is the sole UNITARES caller. It checks in every 15s and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM only — it does not call UNITARES directly.
+The **broker** (`stable_creature.py`) is the primary UNITARES caller. It checks in every 15s and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM and has a fallback: if no "via unitares" decision arrives for 60s (`SERVER_GOVERNANCE_FALLBACK_SECONDS`), the server calls UNITARES directly using its native async event loop. This fallback exists because the broker's sync+ThreadPoolExecutor+new-event-loop pattern has reliability issues with aiohttp sessions.
 
 ```
 UNITARES_URL=http://100.96.201.46:8767/mcp/
