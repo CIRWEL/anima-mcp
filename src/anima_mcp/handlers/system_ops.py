@@ -15,14 +15,19 @@ from mcp.types import TextContent
 async def _delayed_restart():
     """Restart both anima services after a brief delay.
 
-    Exits the server process with failure code. systemd's Restart=on-failure
-    restarts anima, and PartOf=anima.service in the broker's service file
-    ensures the broker also restarts. This avoids cgroup/process-group issues
-    that prevented previous approaches (Popen, systemd-run) from working.
+    Dispatches 'systemctl restart anima' to systemd via Popen.
+    This is an explicit restart, so PartOf=anima.service on the broker's
+    unit file causes the broker to also restart. systemd (PID 1) receives
+    the D-Bus command before it kills our cgroup, so the restart proceeds
+    even after our process dies.
     """
     await asyncio.sleep(1)
-    import os
-    os._exit(1)
+    # Dispatch restart — same pattern as handle_system_power reboot
+    subprocess.Popen(
+        ["sudo", "systemctl", "restart", "anima"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _sync_systemd_services(repo_root: Path) -> list[str]:
@@ -215,6 +220,7 @@ async def handle_system_service(arguments: dict) -> list[TextContent]:
         "rpi-connect",
         "rpi-connect-wayvnc",
         "anima",
+        "anima-broker",
         "anima-mcp",
         "ssh",
         "sshd",
