@@ -187,9 +187,10 @@ class FieldEra:
             field_dir = self._field_angle(state, focus_x, focus_y)
             step = 2.5 + random.random() * 3.0
 
-            # Blend field direction with current direction for smoothness
+            # Blend field direction with current direction (circular interpolation)
             blend = 0.7  # Strong field influence
-            direction = direction * (1 - blend) + field_dir * blend
+            diff = math.atan2(math.sin(field_dir - direction), math.cos(field_dir - direction))
+            direction = direction + blend * diff
 
             focus_x += math.cos(direction) * step
             focus_y += math.sin(direction) * step

@@ -59,7 +59,7 @@ class CanvasState:
     pixels: Dict[Tuple[int, int], Tuple[int, int, int]] = field(default_factory=dict)
     # Drawing memory - helps Lumen build on previous work
     recent_locations: List[Tuple[int, int]] = field(default_factory=list)
-    drawing_phase: str = "exploring"  # exploring, building, reflecting, resting
+    drawing_phase: str = "opening"  # opening, developing, resolving, closing
     phase_start_time: float = field(default_factory=time.time)
 
     # Autonomy tracking
@@ -312,8 +312,10 @@ class CanvasState:
 
         # Load scalar fields with type validation
         try:
-            phase = data.get("drawing_phase", "exploring")
-            if isinstance(phase, str) and phase in ("exploring", "building", "reflecting", "resting"):
+            phase = data.get("drawing_phase", "opening")
+            _valid_phases = ("opening", "developing", "resolving", "closing",
+                             "exploring", "building", "reflecting", "resting")
+            if isinstance(phase, str) and phase in _valid_phases:
                 self.drawing_phase = phase
         except Exception:
             pass
@@ -797,6 +799,10 @@ class DrawingEngine:
         if era_state.gesture_remaining <= 0:
             self.active_era.choose_gesture(era_state, clarity, stability, presence, C)
 
+        # Sample intentionality BEFORE decrement so short-gesture eras
+        # (e.g. geometric with gesture_remaining=1) report their in-gesture value.
+        I_signal = era_state.intentionality() if era_state else 0.1
+
         # Detect gesture switch for fatigue tracking
         old_gesture = era_state.gesture
         self.active_era.place_mark(
@@ -824,9 +830,6 @@ class DrawingEngine:
 
         # Detect gesture switch
         gesture_switch = len(state.gesture_history) >= 2 and state.gesture_history[-1] != state.gesture_history[-2]
-
-        # Get I and S signals from EISV for attention update
-        I_signal = era_state.intentionality() if era_state else 0.1
         gesture_count = len(era_state.gestures()) if era_state else 5
         max_entropy = math.log2(max(gesture_count, 2))
         if len(state.gesture_history) >= 5:
@@ -1050,7 +1053,9 @@ class DrawingEngine:
 
         if current_phase == "opening":
             # Transition to developing once intentionality builds
-            if state.i_momentum > 0.4 and marks > 10:
+            # Threshold 0.3 allows gestural era (baseline I~0.28) to transition
+            # during normal multi-mark runs without requiring direction locks.
+            if state.i_momentum > 0.3 and marks > 10:
                 transition_to("developing")
 
         elif current_phase == "developing":
@@ -1074,51 +1079,6 @@ class DrawingEngine:
             if not self.canvas.is_satisfied:
                 self.canvas.mark_satisfied()
 
-    def _update_drawing_phase(self, anima: Anima):
-        """Update Lumen's drawing phase based on energy level.
-
-        Phases driven by energy (organic depletion), not pixel count thresholds:
-        - exploring (energy > 0.7): free wandering, frequent focus jumps
-        - building (0.3-0.7): settling into patterns
-        - reflecting (0.1-0.3): slowing down
-        - resting (< 0.1): nearly done
-        """
-        now = time.time()
-        phase_duration = now - self.canvas.phase_start_time
-        energy = self.intent.energy
-        pixel_count = len(self.canvas.pixels)
-        current_phase = self.canvas.drawing_phase
-
-        def transition_to(new_phase: str):
-            """Helper to transition phase with logging."""
-            if self.canvas.drawing_phase != new_phase:
-                old_phase = self.canvas.drawing_phase
-                self.canvas.drawing_phase = new_phase
-                self.canvas.phase_start_time = now
-                try:
-                    from ..computational_neural import get_computational_neural_sensor
-                    sensor = get_computational_neural_sensor()
-                    sensor.drawing_phase = new_phase
-                    n = sensor.get_neural_state()
-                    print(f"[Canvas] Phase: {old_phase} -> {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s) neural: d={n.delta:.2f} t={n.theta:.2f} a={n.alpha:.2f} b={n.beta:.2f} g={n.gamma:.2f}", file=sys.stderr, flush=True)
-                except Exception:
-                    print(f"[Canvas] Phase: {old_phase} -> {new_phase} (energy={energy:.2f}, {pixel_count}px, {phase_duration:.0f}s)", file=sys.stderr, flush=True)
-
-        # Fresh canvas = exploring regardless of energy
-        if pixel_count < 10:
-            transition_to("exploring")
-            return
-
-        # Energy-driven phase progression
-        if energy > 0.7:
-            transition_to("exploring")
-        elif energy > 0.3:
-            transition_to("building")
-        elif energy > 0.1:
-            transition_to("reflecting")
-        else:
-            transition_to("resting")
-
     def get_current_era(self) -> dict:
         """Return current era info and all available eras."""
         from .eras import list_all_era_info, auto_rotate
@@ -1130,10 +1090,10 @@ class DrawingEngine:
         }
 
     def get_drawing_eisv(self) -> Optional[Dict]:
-        """Return current drawing state for governance reporting.
+        """Return current drawing EISV state for governance reporting.
 
-        Returns None when not actively drawing. Includes EISV core signals
-        plus attention/coherence/narrative state for comprehensive monitoring.
+        Always returns a dict with EISV core signals plus attention/coherence/
+        narrative state. Returns None only if DrawingIntent is not initialized.
         """
         if not self.intent or not hasattr(self.intent, 'state'):
             return None

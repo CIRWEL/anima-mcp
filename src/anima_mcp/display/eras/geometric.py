@@ -344,14 +344,17 @@ class GeometricEra:
                     canvas.draw_pixel(x, y, color)
 
     def _draw_organic(self, canvas, cx, cy, color, energy, scale):
-        base_radius = int((8 + energy * 15) * scale)
-        for dx in range(-base_radius * 2, base_radius * 2 + 1):
-            for dy in range(-base_radius * 2, base_radius * 2 + 1):
+        # Radius scaled for 240×240 canvas: 3-8px produces 28-200px marks,
+        # comparable to other eras. Previous values (8-34px) filled 20%+ of
+        # the 15,000px canvas cap in a single mark.
+        base_radius = int((3 + energy * 5) * scale)
+        for dx in range(-base_radius, base_radius + 1):
+            for dy in range(-base_radius, base_radius + 1):
                 px, py = cx + dx, cy + dy
                 if 0 <= px < 240 and 0 <= py < 240:
                     dist = math.sqrt(dx * dx + dy * dy)
-                    if dist < base_radius * 1.2:
-                        if random.random() < 0.85:
+                    if dist < base_radius * 1.1:
+                        if random.random() < 0.75:
                             canvas.draw_pixel(px, py, color)
 
     def _draw_layered(self, canvas, cx, cy, color, energy, scale):

@@ -1713,10 +1713,12 @@ async def _update_display_loop():
                     if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[ActivityBrightness] Error: {e}", file=sys.stderr, flush=True)
 
                 # Sync manual brightness dimmer to LED controller
-                # Use _screen_renderer._display when available; fallback to _display (e.g. before ScreenRenderer init)
+                # Priority: 1) Screen renderer manual override, 2) Broker agency brightness from SHM
                 display_with_brightness = _screen_renderer._display if _screen_renderer else _display
                 if display_with_brightness and getattr(display_with_brightness, '_manual_led_brightness', None) is not None:
                     _leds._manual_brightness_factor = display_with_brightness._manual_led_brightness
+                elif _last_shm_data and "agency_led_brightness" in _last_shm_data:
+                    _leds._manual_brightness_factor = _last_shm_data["agency_led_brightness"]
 
                 def update_leds():
                     # LEDs derive their own state directly from anima - no face influence

@@ -56,7 +56,8 @@ from collections import deque
 from .anima import sense_self
 from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW
 from .display.leds.brightness import estimate_instantaneous_brightness
-from .display.leds.display import get_led_display
+# NOTE: Broker does NOT import or init LEDDisplay — server owns LED hardware.
+# Agency LED brightness is communicated via shared memory.
 from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from .identity import IdentityStore
@@ -324,12 +325,11 @@ def run_creature():
     last_learning_save = time.time()  # Track periodic learning saves
     readings = None  # Initialize before loop (first iteration has no prior readings)
     last_pattern_apply = 0  # Track periodic learned pattern application
-    # Get initial LED brightness from display singleton (manual dimmer setting)
-    try:
-        _led_display = get_led_display()
-        _prev_led_brightness = _led_display.get_proprioceptive_state().get("brightness", 0.04)
-    except Exception:
-        _prev_led_brightness = 0.04  # Default matches LEDDisplay default
+    # LED brightness tracking (broker doesn't own LED hardware — server does)
+    # We track the agency-desired brightness locally and write it to SHM;
+    # the server reads SHM and applies it to the actual LEDs.
+    _prev_led_brightness = 0.04  # Estimate for world_light correction
+    _agency_led_brightness = 1.0  # Agency-desired manual brightness factor [0.05, 1.0]
     _world_light_buffer = deque(maxlen=WORLD_LIGHT_SMOOTH_WINDOW)  # Rolling avg
     _prev_activity_level = None  # Track activity state transitions for buffer flush
 
@@ -356,12 +356,10 @@ def run_creature():
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
-            # 1b. LED Proprioception: use actual applied brightness from hardware
-            # Prefer the real value from the animation loop over the sine-wave estimate.
-            try:
-                _instantaneous_led = _led_display.get_proprioceptive_state().get("brightness", _prev_led_brightness)
-            except Exception:
-                _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
+            # 1b. LED Proprioception: estimate brightness for world_light correction
+            # The server owns LEDs and writes actual brightness to its readings;
+            # the broker estimates from the previous cycle's base + breathing pulse.
+            _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
             readings.led_brightness = _instantaneous_led
 
             # 1c. Compute smoothed world_light for activity manager
@@ -389,12 +387,10 @@ def run_creature():
                     _world_light_buffer.clear()
                     print(f"[Creature] Activity transition {_prev_activity_level} → {activity_state.level}, flushed world_light buffer", file=sys.stderr, flush=True)
                 _prev_activity_level = activity_state.level
-                # Update LED brightness estimate for next cycle using actual manual setting
-                try:
-                    _known_br = _led_display.get_proprioceptive_state().get("brightness", 0.04)
-                except Exception:
-                    _known_br = 0.04
-                _prev_led_brightness = _known_br * activity_state.brightness_multiplier
+                # Update LED brightness estimate for next cycle
+                # Base brightness × agency dimmer × activity multiplier
+                _base_br = 0.04  # LEDDisplay default base brightness
+                _prev_led_brightness = _base_br * _agency_led_brightness * activity_state.brightness_multiplier
                 readings.led_brightness = _prev_led_brightness
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
@@ -632,14 +628,12 @@ def run_creature():
 
                     elif selected_action.action_type == ActionType.LED_BRIGHTNESS:
                         direction = selected_action.parameters.get("direction", "increase")
-                        if _led_display:
-                            current = _led_display._manual_brightness_factor
-                            if direction == "increase":
-                                new_val = min(1.0, current * 1.2)
-                            else:
-                                new_val = max(0.05, current * 0.8)
-                            _led_display._manual_brightness_factor = new_val
-                            print(f"[Agency] LED brightness {direction}: {current:.2f} → {new_val:.2f}", file=sys.stderr, flush=True)
+                        current = _agency_led_brightness
+                        if direction == "increase":
+                            _agency_led_brightness = min(1.0, current * 1.2)
+                        else:
+                            _agency_led_brightness = max(0.05, current * 0.8)
+                        print(f"[Agency] LED brightness {direction}: {current:.2f} → {_agency_led_brightness:.2f}", file=sys.stderr, flush=True)
 
                     # Record state for action outcome learning
                     satisfaction_before = preferences.get_overall_satisfaction(current_state)
@@ -837,6 +831,10 @@ def run_creature():
                         pass
                 if learning_state:
                     shm_data["learning"] = learning_state
+
+            # Agency LED brightness: broker's desired manual brightness for server to apply
+            if _agency_led_brightness != 1.0:
+                shm_data["agency_led_brightness"] = _agency_led_brightness
 
             shm_client.write(shm_data)
 
