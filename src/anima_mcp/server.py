@@ -370,14 +370,12 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     """
     global _last_shm_data
     # Try shared memory first (broker mode)
+    # SharedMemoryClient.read() already returns envelope["data"] (the inner dict)
     shm_client = _get_shm_client()
     shm_data = shm_client.read()
-    # Unwrap nested "data" envelope if present (broker writes {updated_at, pid, data: {readings, anima, ...}})
-    if shm_data and "data" in shm_data and isinstance(shm_data["data"], dict):
-        shm_data = shm_data["data"]
     _last_shm_data = shm_data  # Cache for reuse within same iteration
 
-    # Check if shared memory data is recent (within last 5 seconds)
+    # Check if shared memory data is recent
     shm_stale = True
     shm_valid = False
     if shm_data:
@@ -434,11 +432,17 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
         # Check if broker is running (for logging purposes)
         broker_running = _is_broker_running()
 
-        # Log why we're falling back
-        if broker_running and not shm_valid:
-            print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'invalid/empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
-        elif not broker_running:
-            print("[Server] Broker not running - using direct sensor access", file=sys.stderr, flush=True)
+        # Log why we're falling back (throttled to avoid spam)
+        import time as _time
+        _now = _time.time()
+        if not hasattr(_get_readings_and_anima, '_last_fallback_log'):
+            _get_readings_and_anima._last_fallback_log = 0.0
+        if _now - _get_readings_and_anima._last_fallback_log > 30.0:
+            _get_readings_and_anima._last_fallback_log = _now
+            if broker_running and not shm_valid:
+                print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'invalid/empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
+            elif not broker_running:
+                print("[Server] Broker not running - using direct sensor access", file=sys.stderr, flush=True)
         
         try:
             sensors = _get_sensors()

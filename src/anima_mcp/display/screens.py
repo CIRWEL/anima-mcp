@@ -1854,15 +1854,17 @@ class ScreenRenderer:
             self._display.render_text("NEURAL\n\nNo data", (10, 10))
             return
 
-        # Cache: neural bands + anima state rounded to display precision
+        # Cache: neural bands rounded to display-appropriate precision
+        # 1 decimal place = 10 levels per band = ~12px per step on 126px bar area
+        # This lets the cache hit when bands fluctuate by <0.05 (invisible on LCD)
         raw = readings.to_dict()
         neural_key = (
-            f"{raw.get('eeg_delta_power', 0):.2f}|{raw.get('eeg_theta_power', 0):.2f}|"
-            f"{raw.get('eeg_alpha_power', 0):.2f}|{raw.get('eeg_beta_power', 0):.2f}|"
-            f"{raw.get('eeg_gamma_power', 0):.2f}"
+            f"{raw.get('eeg_delta_power', 0):.1f}|{raw.get('eeg_theta_power', 0):.1f}|"
+            f"{raw.get('eeg_alpha_power', 0):.1f}|{raw.get('eeg_beta_power', 0):.1f}|"
+            f"{raw.get('eeg_gamma_power', 0):.1f}"
         )
         if anima:
-            neural_key += f"|{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|{anima.presence:.2f}"
+            neural_key += f"|{anima.warmth:.1f}|{anima.clarity:.1f}|{anima.stability:.1f}|{anima.presence:.1f}"
         if self._check_screen_cache("neural", neural_key):
             return
 
@@ -1915,6 +1917,7 @@ class ScreenRenderer:
             draw.rectangle([bar_start_x - 6, bar_area_top - 4, bar_start_x + total_bars_width + 6, bar_area_bottom + 4],
                           fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
 
+            from .design import lighten_color
             for i, (name, value, color, freq) in enumerate(bands):
                 x = bar_start_x + i * (bar_width + bar_gap)
 
@@ -1926,7 +1929,6 @@ class ScreenRenderer:
                 fill_height = int(value * bar_area_height)
                 if fill_height > 0:
                     bar_top = bar_area_bottom - fill_height
-                    from .design import lighten_color
                     draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom],
                                   fill=color)
                     # Bright cap at top of bar

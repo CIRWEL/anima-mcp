@@ -526,11 +526,13 @@ class AssociativeMemory:
                   f"accuracy {accuracy:.2f} (confidence was {ant.confidence:.2f})",
                   file=sys.stderr, flush=True)
 
-        # Log blend factor adjustments
+        # Log blend factor adjustments (only significant changes to avoid spam)
         if old_blend != self._adaptive_blend_factor:
-            direction = "increased" if self._adaptive_blend_factor > old_blend else "decreased"
-            print(f"[Memory] Blend factor {direction}: {old_blend:.3f} -> {self._adaptive_blend_factor:.3f} "
-                  f"(accuracy={accuracy:.2f})", file=sys.stderr, flush=True)
+            delta = abs(self._adaptive_blend_factor - old_blend)
+            if delta >= 0.01:  # Only log changes >= 1%
+                direction = "increased" if self._adaptive_blend_factor > old_blend else "decreased"
+                print(f"[Memory] Blend factor {direction}: {old_blend:.3f} -> {self._adaptive_blend_factor:.3f} "
+                      f"(accuracy={accuracy:.2f})", file=sys.stderr, flush=True)
 
         return result
 
