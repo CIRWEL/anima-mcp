@@ -54,3 +54,4 @@ config/anima.env
 *.env
 !*.env.example
 .worktrees/
+.claude/
