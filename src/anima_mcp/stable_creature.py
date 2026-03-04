@@ -954,11 +954,12 @@ def run_creature():
         # Close UNITARES bridge session (connection pooling cleanup)
         if bridge:
             try:
-                loop.run_until_complete(bridge.close())
+                asyncio.run_coroutine_threadsafe(bridge.close(), _bg_loop).result(timeout=3)
             except Exception:
                 pass
 
-        loop.close()
+        _bg_loop.call_soon_threadsafe(_bg_loop.stop)
+        _bg_loop.close()
         if store:
             store.sleep()
             store.close()
