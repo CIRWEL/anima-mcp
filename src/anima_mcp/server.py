@@ -208,7 +208,8 @@ async def _server_governance_fallback(anima, readings):
         return None
     try:
         identity = _store.identity if _store else None
-        decision = await bridge.check_in(anima, readings, identity=identity)
+        drawing_eisv = _screen_renderer.get_drawing_eisv() if _screen_renderer else None
+        decision = await bridge.check_in(anima, readings, identity=identity, drawing_eisv=drawing_eisv)
         source = decision.get("source", "?") if decision else "None"
         print(f"[Server] Governance fallback: source={source}", file=sys.stderr, flush=True)
         return decision
@@ -2550,7 +2551,22 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             try:
                 from .health import get_health_registry
                 _health = get_health_registry()
-                _health.register("sensors", probe=lambda: _sensors is not None or _last_shm_data is not None)
+                def _sensor_probe():
+                    if _sensors is not None:
+                        return True
+                    if _last_shm_data and "readings" in _last_shm_data:
+                        ts = _last_shm_data.get("timestamp")
+                        if ts:
+                            from datetime import datetime
+                            try:
+                                t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                                age = (datetime.now(t.tzinfo) - t).total_seconds()
+                                return age < SHM_STALE_THRESHOLD_SECONDS * 2  # 30s grace
+                            except (ValueError, AttributeError):
+                                pass
+                        return True  # Data exists but no timestamp — assume ok
+                    return False
+                _health.register("sensors", probe=_sensor_probe)
                 _health.register("display", probe=lambda: _display is not None and _display.is_available())
                 _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
                 _health.register("growth", probe=lambda: _growth is not None, stale_threshold=90.0)

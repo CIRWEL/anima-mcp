@@ -180,47 +180,74 @@ class TestSHMToNeuralWiring:
 class TestHealthProbeWiring:
     """Verify health probes reflect correct state in both modes."""
 
-    def test_sensor_probe_ok_with_shm_data(self):
-        """In broker mode: _sensors=None but _last_shm_data present → probe ok."""
+    @staticmethod
+    def _make_probe(_sensors, _last_shm_data, shm_stale_threshold=15.0):
+        """Build a sensor probe matching the real server logic."""
+        def probe():
+            if _sensors is not None:
+                return True
+            if _last_shm_data and "readings" in _last_shm_data:
+                ts = _last_shm_data.get("timestamp")
+                if ts:
+                    from datetime import datetime
+                    try:
+                        t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                        age = (datetime.now(t.tzinfo) - t).total_seconds()
+                        return age < shm_stale_threshold * 2
+                    except (ValueError, AttributeError):
+                        pass
+                return True  # Data but no timestamp
+            return False
+        return probe
+
+    def test_sensor_probe_ok_with_fresh_shm(self):
+        """In broker mode: fresh SHM data → probe ok."""
         from anima_mcp.health import SubsystemHealth
 
-        # Simulate broker mode: no direct sensors, but SHM data available
-        _sensors = None
-        _last_shm_data = {"readings": {"cpu_temp_c": 50.0}}
-
-        probe = lambda: _sensors is not None or _last_shm_data is not None
+        shm_data = {
+            "readings": {"cpu_temp_c": 50.0},
+            "timestamp": datetime.now().isoformat(),
+        }
+        probe = self._make_probe(None, shm_data)
         sub = SubsystemHealth(name="sensors", probe_fn=probe)
         sub.heartbeat()
         sub.last_probe_time = 0
-
         assert sub.get_status() == "ok"
 
     def test_sensor_probe_ok_with_direct_sensors(self):
-        """In standalone mode: _sensors present, _last_shm_data=None → probe ok."""
+        """In standalone mode: _sensors present → probe ok regardless of SHM."""
         from anima_mcp.health import SubsystemHealth
 
-        _sensors = MagicMock()  # Direct sensor object
-        _last_shm_data = None
-
-        probe = lambda: _sensors is not None or _last_shm_data is not None
+        probe = self._make_probe(MagicMock(), None)
         sub = SubsystemHealth(name="sensors", probe_fn=probe)
         sub.heartbeat()
         sub.last_probe_time = 0
-
         assert sub.get_status() == "ok"
 
     def test_sensor_probe_fails_when_neither_available(self):
         """No sensors AND no SHM → probe fails → degraded."""
         from anima_mcp.health import SubsystemHealth
 
-        _sensors = None
-        _last_shm_data = None
-
-        probe = lambda: _sensors is not None or _last_shm_data is not None
+        probe = self._make_probe(None, None)
         sub = SubsystemHealth(name="sensors", probe_fn=probe)
         sub.heartbeat()
         sub.last_probe_time = 0
+        assert sub.get_status() == "degraded"
 
+    def test_sensor_probe_fails_with_stale_shm(self):
+        """SHM data exists but timestamp is old → probe fails."""
+        from anima_mcp.health import SubsystemHealth
+        from datetime import timedelta
+
+        stale_time = (datetime.now() - timedelta(seconds=60)).isoformat()
+        shm_data = {
+            "readings": {"cpu_temp_c": 50.0},
+            "timestamp": stale_time,
+        }
+        probe = self._make_probe(None, shm_data, shm_stale_threshold=15.0)
+        sub = SubsystemHealth(name="sensors", probe_fn=probe)
+        sub.heartbeat()
+        sub.last_probe_time = 0
         assert sub.get_status() == "degraded"
 
 
