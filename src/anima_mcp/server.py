@@ -643,12 +643,23 @@ async def _update_display_loop():
                     print(f"[Input] Failed to enable input: {e}", file=sys.stderr, flush=True)
                     fast_input_poll._logged_error = True
         
+        _input_poll_count = 0
+        _last_input_debug = 0.0
         while True:
             try:
+                _input_poll_count += 1
                 # Capture renderer locally to avoid race if it's being initialized
                 renderer = _screen_renderer
                 if _joystick_enabled and renderer:
                     input_state = brainhat.read()
+                    # Periodic debug: log every 30s to confirm poll is running
+                    import time as _t
+                    if _t.time() - _last_input_debug > 30.0:
+                        _last_input_debug = _t.time()
+                        dir_str = input_state.joystick_direction.value if input_state else "None"
+                        btn = input_state.joystick_button if input_state else False
+                        avail = brainhat.is_available()
+                        print(f"[Input] poll alive #{_input_poll_count} dir={dir_str} btn={btn} avail={avail}", file=sys.stderr, flush=True)
                     if input_state:
                         prev_state = brainhat.get_prev_state()
                         current_mode = renderer.get_mode()
