@@ -866,6 +866,11 @@ class DrawingEngine:
             pass
 
         # --- Record DrawingEISV for history (every 10 marks to throttle I/O) ---
+        if self.intent.mark_count % 10 == 0 and not self._identity_store:
+            if not getattr(self, '_warned_no_store', False):
+                import sys
+                print(f"[DrawingEngine] WARNING: _identity_store is None, cannot record drawing_history", file=sys.stderr, flush=True)
+                self._warned_no_store = True
         if self._identity_store and self.intent.mark_count % 10 == 0:
             try:
                 # Compute switching rate from gesture history
