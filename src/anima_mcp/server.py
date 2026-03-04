@@ -393,23 +393,14 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
                     shm_stale = age_seconds > SHM_STALE_THRESHOLD_SECONDS
                     if not shm_stale:
                         shm_valid = True
-                    elif not hasattr(_get_readings_and_anima, '_shm_debug_logged'):
-                        _get_readings_and_anima._shm_debug_logged = True
-                        print(f"[SHM-DEBUG] stale! ts={timestamp_str} age={age_seconds:.1f}s threshold={SHM_STALE_THRESHOLD_SECONDS}s", file=sys.stderr, flush=True)
                 else:
                     # No timestamp - assume fresh if data exists
                     shm_valid = True
-            elif not hasattr(_get_readings_and_anima, '_shm_keys_logged'):
-                _get_readings_and_anima._shm_keys_logged = True
-                print(f"[SHM-DEBUG] missing fields! keys={list(shm_data.keys())[:6]}", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[Server] Error checking shared memory timestamp: {e}", file=sys.stderr, flush=True)
             # If timestamp check fails but data exists, try to use it anyway
             if shm_data and "readings" in shm_data and "anima" in shm_data:
                 shm_valid = True
-    elif not hasattr(_get_readings_and_anima, '_shm_none_logged'):
-        _get_readings_and_anima._shm_none_logged = True
-        print(f"[SHM-DEBUG] read returned None!", file=sys.stderr, flush=True)
     
     # Try to use shared memory if valid
     if shm_valid:
@@ -652,23 +643,12 @@ async def _update_display_loop():
                     print(f"[Input] Failed to enable input: {e}", file=sys.stderr, flush=True)
                     fast_input_poll._logged_error = True
         
-        _input_poll_count = 0
-        _last_input_debug = 0.0
         while True:
             try:
-                _input_poll_count += 1
                 # Capture renderer locally to avoid race if it's being initialized
                 renderer = _screen_renderer
                 if _joystick_enabled and renderer:
                     input_state = brainhat.read()
-                    # Periodic debug: log every 30s to confirm poll is running
-                    import time as _t
-                    if _t.time() - _last_input_debug > 30.0:
-                        _last_input_debug = _t.time()
-                        dir_str = input_state.joystick_direction.value if input_state else "None"
-                        btn = input_state.joystick_button if input_state else False
-                        avail = brainhat.is_available()
-                        print(f"[Input] poll alive #{_input_poll_count} dir={dir_str} btn={btn} avail={avail}", file=sys.stderr, flush=True)
                     if input_state:
                         prev_state = brainhat.get_prev_state()
                         current_mode = renderer.get_mode()

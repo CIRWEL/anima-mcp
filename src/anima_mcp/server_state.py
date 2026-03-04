@@ -15,7 +15,7 @@ from .sensors import SensorReadings
 # Configuration constants
 # ---------------------------------------------------------------------------
 
-SHM_STALE_THRESHOLD_SECONDS = 5.0  # Shared memory data older than this is considered stale
+SHM_STALE_THRESHOLD_SECONDS = 15.0  # Broker writes SHM every ~7s; threshold must exceed that
 INPUT_ERROR_LOG_INTERVAL = 5.0     # Minimum seconds between input error log messages
 
 # === Loop timing constants ===
