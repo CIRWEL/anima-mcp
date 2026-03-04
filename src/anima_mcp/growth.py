@@ -349,6 +349,23 @@ class GrowthSystem:
                 name TEXT PRIMARY KEY,
                 value INTEGER DEFAULT 0
             );
+
+            -- Per-drawing records for data-grounded self-answers
+            CREATE TABLE IF NOT EXISTS drawing_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                pixel_count INTEGER,
+                phase TEXT,
+                warmth REAL,
+                clarity REAL,
+                stability REAL,
+                presence REAL,
+                wellness REAL,
+                light_lux REAL,
+                ambient_temp_c REAL,
+                humidity_pct REAL,
+                hour INTEGER
+            );
         """)
         conn.commit()
 
@@ -778,10 +795,26 @@ class GrowthSystem:
                 "I draw in the morning", 1.0
             ) or insight
 
+        # Record per-drawing data for correlation analysis
+        conn = self._connect()
+        conn.execute("""
+            INSERT INTO drawing_records
+            (timestamp, pixel_count, phase, warmth, clarity, stability, presence,
+             wellness, light_lux, ambient_temp_c, humidity_pct, hour)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            now.isoformat(), pixel_count, phase,
+            anima_state.get("warmth"), anima_state.get("clarity"),
+            anima_state.get("stability"), anima_state.get("presence"),
+            wellness,
+            environment.get("light_lux"), environment.get("temp_c"),
+            environment.get("humidity_pct"), hour,
+        ))
+        conn.commit()
+
         # Record as autobiographical memory at milestone drawing counts
         self._drawings_observed += 1
         # Persist counter so it survives restarts (avoids duplicate milestones)
-        conn = self._connect()
         conn.execute(
             "INSERT OR REPLACE INTO counters (name, value) VALUES ('drawings_observed', ?)",
             (self._drawings_observed,)
@@ -798,6 +831,30 @@ class GrowthSystem:
             )
 
         return insight
+
+    def get_drawing_records(self, limit: Optional[int] = None,
+                           since: Optional[str] = None) -> List[dict]:
+        """Get per-drawing records for correlation analysis.
+
+        Args:
+            limit: Max records to return (None = all).
+            since: ISO timestamp — only records after this time.
+
+        Returns:
+            List of dicts with drawing data, ordered by timestamp ascending.
+        """
+        conn = self._connect()
+        query = "SELECT * FROM drawing_records"
+        params: list = []
+        if since:
+            query += " WHERE timestamp > ?"
+            params.append(since)
+        query += " ORDER BY timestamp ASC"
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        rows = conn.execute(query, params).fetchall()
+        return [dict(r) for r in rows]
 
     def record_drawing_completion(
         self,

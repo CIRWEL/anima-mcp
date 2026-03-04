@@ -586,9 +586,19 @@ What pattern or feeling surfaces from these memories? Share one dream-like refle
             except Exception:
                 pass
 
+            # Data analysis for correlation/drawing questions
+            data_analysis = ""
+            try:
+                from .drawing_analysis import analyze_for_question
+                result = analyze_for_question(question_text)
+                if result:
+                    data_analysis = "\n\nWhat my data actually shows:\n" + result
+            except Exception:
+                pass
+
             return f"""{state_desc}
 
-A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{day_context}
+A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{day_context}{data_analysis}
 
 What do my actual sensor readings, patterns, and history tell me about this question?
 If my data answers it, explain how. If it doesn't, say what I don't know and what I'd need to find out.
@@ -700,9 +710,42 @@ def get_gateway() -> LLMGateway:
     return _gateway
 
 
+def _is_simple_context(context: ReflectionContext) -> bool:
+    """Context has no messages, questions, advocate signals, or surprise — template-worthy."""
+    if context.recent_messages:
+        return False
+    if context.unanswered_questions:
+        return False
+    if context.advocate_feeling and context.advocate_feeling.strip():
+        return False
+    if context.advocate_desire and context.advocate_desire.strip():
+        return False
+    if context.surprise_sources:
+        return False
+    if context.learned_insights and len(context.learned_insights) > 2:
+        return False
+    return True
+
+
 async def generate_reflection(context: ReflectionContext, mode: str = "wonder") -> Optional[str]:
-    """Convenience function for generating reflections."""
-    return await get_gateway().reflect(context, mode)
+    """
+    Generate reflection: template for simple anima report, LLM for complex.
+
+    When context is minimal (no messages, questions, advocate, surprise) and
+    mode is unified/observe, use traceable template. Otherwise use LLM.
+    """
+    if mode in ("unified", "observe") and _is_simple_context(context):
+        from .anima_utterance import anima_to_self_report
+        template = anima_to_self_report(
+            context.warmth, context.clarity, context.stability, context.presence,
+        )
+        if template:
+            return template
+
+    gateway = get_gateway()
+    if not gateway.enabled:
+        return None
+    return await gateway.reflect(context, mode)
 
 
 def build_follow_up_prompt(question: str, answer: str) -> str:
