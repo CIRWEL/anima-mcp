@@ -39,6 +39,7 @@ import signal
 import sys
 import asyncio
 import concurrent.futures
+import threading
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -235,9 +236,16 @@ def run_creature():
     print(f"[StableCreature] Creature '{identity.name or '(unnamed)'}' is alive.")
     print("[StableCreature] Entering main loop...")
 
-    # Initialize event loop for async calls (used by background thread)
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    # Persistent event loop for async calls (governance, cognitive, memory).
+    # A single loop runs in a dedicated daemon thread so aiohttp sessions
+    # are reused across calls instead of being recreated per invocation.
+    _bg_loop = asyncio.new_event_loop()
+
+    def _bg_loop_thread():
+        asyncio.set_event_loop(_bg_loop)
+        _bg_loop.run_forever()
+
+    threading.Thread(target=_bg_loop_thread, daemon=True, name="creature-async").start()
 
     # Background thread executor for non-blocking governance/cognitive calls.
     # Single worker prevents concurrency issues; the main loop submits work
@@ -245,16 +253,13 @@ def run_creature():
     _bg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="creature-bg")
 
     def _run_async_in_background(coro, timeout=10.0):
-        """Run an async coroutine in a fresh event loop with timeout.
+        """Run an async coroutine on the persistent event loop with timeout.
 
-        Creates a new loop per call (safe for concurrent thread pool use).
-        The bridge's _get_session() handles loop changes by recreating sessions.
+        Uses asyncio.run_coroutine_threadsafe to schedule onto _bg_loop,
+        so the bridge's aiohttp session stays on a single consistent loop.
         """
-        bg_loop = asyncio.new_event_loop()
-        try:
-            return bg_loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
-        finally:
-            bg_loop.close()
+        future = asyncio.run_coroutine_threadsafe(coro, _bg_loop)
+        return future.result(timeout=timeout)
 
     # Track background futures so the main loop can skip if still running
     _governance_future = None   # type: Optional[concurrent.futures.Future]

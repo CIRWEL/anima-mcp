@@ -145,6 +145,9 @@ class IdentityStore:
 
             CREATE INDEX IF NOT EXISTS idx_drawing_history_time
                 ON drawing_history(timestamp DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_state_history_time
+                ON state_history(timestamp);
         """)
 
         # Add last_heartbeat_at column (persists heartbeat timestamp for gap detection)

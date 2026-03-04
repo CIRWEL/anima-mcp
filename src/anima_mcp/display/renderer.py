@@ -214,13 +214,14 @@ class PilRenderer(DisplayRenderer):
         try:
             import board
             import digitalio
-            from adafruit_rgb_display import st7789
-
+            import spidev
+            
             # BrainCraft HAT pin configuration — store refs for cleanup
             # CE0=CS, D25=DC
             # D22=backlight, D24=reset — both set HIGH then released for joystick
             self._cs_pin = digitalio.DigitalInOut(board.CE0)
             self._dc_pin = digitalio.DigitalInOut(board.D25)
+            self._dc_pin.direction = digitalio.Direction.OUTPUT
 
             # Backlight on D22 — set HIGH then release
             # BrainCraft HAT has hardware pull-up on backlight, keeps it HIGH
@@ -243,20 +244,51 @@ class PilRenderer(DisplayRenderer):
             _time.sleep(0.15)  # Wait for ST7789 to boot after reset
             _rst.deinit()  # Release D24 — not needed after reset pulse
 
-            # SPI setup - use high speed for fast display updates
-            spi = board.SPI()
-
-            self._display = st7789.ST7789(
-                spi,
-                height=self.config.height,
-                width=self.config.width,
-                y_offset=80,
-                rotation=self.config.rotation,
-                cs=self._cs_pin,
-                dc=self._dc_pin,
-                rst=None,  # Already reset manually above
-                baudrate=24000000,  # 24 MHz - max SPI speed for ST7789
-            )
+            # Direct SPI setup using spidev for blazing fast writes
+            try:
+                self._spi = spidev.SpiDev()
+                self._spi.open(0, 0) # bus 0, device 0 (CE0)
+                self._spi.max_speed_hz = 64000000 # 64MHz
+                self._spi.mode = 0
+                self._display = True # Used as a flag now
+                
+                # ST7789 Init Sequence (minimal required to wake up)
+                def write_cmd(cmd: int, data: list = None):
+                    self._dc_pin.value = False # Command mode
+                    self._spi.writebytes([cmd])
+                    if data:
+                        self._dc_pin.value = True # Data mode
+                        self._spi.writebytes(data)
+                
+                # Wake from sleep
+                write_cmd(0x11)
+                _time.sleep(0.120)
+                
+                # Display ON
+                write_cmd(0x29)
+                _time.sleep(0.020)
+                
+                # Interface Pixel Format (16-bit)
+                write_cmd(0x3A, [0x05])
+                
+                # Memory Data Access Control (Rotation=180)
+                write_cmd(0x36, [0x00]) # Try defaults first
+                
+            except ImportError:
+                print("spidev not found, falling back to adafruit if available", file=sys.stderr)
+                from adafruit_rgb_display import st7789
+                spi = board.SPI()
+                self._display = st7789.ST7789(
+                    spi,
+                    height=self.config.height,
+                    width=self.config.width,
+                    y_offset=80,
+                    rotation=self.config.rotation,
+                    cs=self._cs_pin,
+                    dc=self._dc_pin,
+                    rst=None,  # Already reset manually above
+                    baudrate=24000000,
+                )
 
             print("BrainCraft HAT display initialized", file=sys.stderr, flush=True)
 
@@ -717,10 +749,50 @@ class PilRenderer(DisplayRenderer):
                     self._cached_source_id = None
                     img_to_show = self._image
                 if img_to_show is not None:
-                    # Wrap to return True on success (image() returns None)
-                    # Use 3.0s timeout — first render after boot can be very slow
+                    # Wrap to return True on success
+                    def _do_push():
+                        if hasattr(self, '_spi') and self._spi is not None:
+                            import numpy as np
+                            # Convert to numpy array
+                            pixels = np.array(img_to_show, dtype=np.uint8)
+                            
+                            # Convert RGB888 to RGB565 and swap bytes for ST7789
+                            pixels_16 = ((pixels[:,:,0] & 0xF8) << 8) | ((pixels[:,:,1] & 0xFC) << 3) | (pixels[:,:,2] >> 3)
+                            
+                            pixels_bytes = np.empty((self.config.height, self.config.width, 2), dtype=np.uint8)
+                            pixels_bytes[:, :, 0] = (pixels_16 >> 8) & 0xFF
+                            pixels_bytes[:, :, 1] = pixels_16 & 0xFF
+                            
+                            # 2A 00 00 00 EF (Column Address Set)
+                            self._dc_pin.value = False
+                            self._spi.writebytes([0x2A])
+                            self._dc_pin.value = True
+                            self._spi.writebytes([0x00, 0x00, 0x00, 0xEF])
+                            
+                            # 2B 00 00 00 EF (Row Address Set)
+                            self._dc_pin.value = False
+                            self._spi.writebytes([0x2B])
+                            self._dc_pin.value = True
+                            self._spi.writebytes([0x00, 0x00, 0x00, 0xEF])
+                            
+                            # 2C (Memory Write)
+                            self._dc_pin.value = False
+                            self._spi.writebytes([0x2C])
+                            
+                            # Send data
+                            self._dc_pin.value = True
+                            data = pixels_bytes.tobytes()
+                            chunk_size = 4096
+                            for i in range(0, len(data), chunk_size):
+                                self._spi.writebytes(data[i:i+chunk_size])
+                            
+                        else:
+                            # Fallback to adafruit library
+                            self._display.image(img_to_show)
+                        return True
+
                     result = safe_call_with_timeout(
-                        lambda: (self._display.image(img_to_show), True)[1],
+                        _do_push,
                         timeout_seconds=3.0,
                         default=False,
                         log_error=True
@@ -735,7 +807,9 @@ class PilRenderer(DisplayRenderer):
                         self._display_fail_count = 0
             except Exception as e:
                 self._display_fail_count += 1
+                import traceback
                 print(f"[Display] Hardware error during show: {e} (fail #{self._display_fail_count})", file=sys.stderr, flush=True)
+                traceback.print_exc(file=sys.stderr)
                 if self._display_fail_count >= 10:
                     print("[Display] Marking display as unavailable for reinit", file=sys.stderr, flush=True)
                     self._display = None
