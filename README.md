@@ -199,7 +199,7 @@ Falls back to mock sensors on Mac/Linux for development.
 
 ## UNITARES Governance
 
-Lumen checks in with [UNITARES governance](https://github.com/CIRWEL/governance-mcp-v1) every ~60 seconds. Set the `UNITARES_URL` environment variable to point at your governance MCP server.
+Lumen checks in with [UNITARES governance](https://github.com/CIRWEL/unitares) every ~60 seconds. Set the `UNITARES_URL` environment variable to point at your governance MCP server.
 
 **Three EISV contexts exist:**
 

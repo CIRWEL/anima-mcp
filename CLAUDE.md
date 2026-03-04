@@ -375,6 +375,7 @@ Things agents keep re-discovering. Read this so you don't waste time.
 | **Ports** | anima-mcp = **8766**, UNITARES governance = **8767**. Never guess. |
 | **Pi restart time** | 30-60 seconds after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. |
 | **Tailscale IPs** | Pi: `100.79.215.83`, Mac: `100.96.201.46`. These are stable. |
+| **SSH to Pi** | Port 22 standard. If SSH times out/refused, try port 2222: `ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83` (see `docs/operations/PI_ACCESS.md`). |
 | **alive_ratio** | `total_alive_seconds / age_seconds`. Lumen is ~15% alive (Pi sleeps/reboots often). This is normal. |
 | **Neural waves** | Computational proprioception from CPU/memory/IO — not real EEG. High delta = stable system, not sleep. |
 | **No client uses /sse** | Claude Code, Claude Desktop, Cursor all connect to `/mcp/`. |

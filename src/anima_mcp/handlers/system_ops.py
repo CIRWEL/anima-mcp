@@ -306,42 +306,70 @@ async def handle_system_service(arguments: dict) -> list[TextContent]:
 
 async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
     """
-    Switch SSH to port 2222 (headless fix when port 22 is blocked).
+    Switch SSH to port 2222/22222 (headless fix when port 22 is blocked), or reset to port 22.
     Call via HTTP when SSH times out: avoids need for keyboard/monitor.
+    Use port=22 to remove alternate port lines and restore default (22).
     """
     port = arguments.get("port", 2222)
-    if port not in (2222, 22222):
+    if port not in (22, 2222, 22222):
         return [TextContent(type="text", text=json.dumps({
-            "error": "port must be 2222 or 22222 (safety)",
-            "usage": "After running: ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165"
+            "error": "port must be 22, 2222, or 22222",
+            "usage_2222": "ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
+            "usage_22": "ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
         }))]
 
     try:
-        # Check if already configured
+        if port == 22:
+            # Reset to default: remove Port 2222 and Port 22222 lines from sshd_config
+            sed = subprocess.run(
+                ["sudo", "sed", "-i.bak", "/^Port 2222$/d; /^Port 22222$/d", "/etc/ssh/sshd_config"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if sed.returncode != 0:
+                return [TextContent(type="text", text=json.dumps({
+                    "success": False,
+                    "error": f"Failed to edit sshd_config: {sed.stderr}"
+                }))]
+            restart = subprocess.run(
+                ["sudo", "systemctl", "restart", "ssh"],
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+            return [TextContent(type="text", text=json.dumps({
+                "success": restart.returncode == 0,
+                "port": 22,
+                "message": "SSH reset to port 22 (default). Connect with:",
+                "connect": "ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
+                "stderr": restart.stderr.strip() if restart.stderr else None,
+            }))]
+
+        # Switch to 2222 or 22222
         check = subprocess.run(
             ["grep", "-q", f"^Port {port}", "/etc/ssh/sshd_config"],
             capture_output=True,
-            timeout=5
+            timeout=5,
         )
         if check.returncode == 0:
             subprocess.run(
                 ["sudo", "systemctl", "restart", "ssh"],
                 capture_output=True,
                 text=True,
-                timeout=15
+                timeout=15,
             )
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "message": f"SSH already on port {port}, restarted",
-                "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@<PI_IP>"
+                "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
             }))]
 
-        # Add Port 2222 to sshd_config
         echo = subprocess.run(
             ["sh", "-c", f"echo 'Port {port}' | sudo tee -a /etc/ssh/sshd_config"],
             capture_output=True,
             text=True,
-            timeout=10
+            timeout=10,
         )
         if echo.returncode != 0:
             return [TextContent(type="text", text=json.dumps({
@@ -349,19 +377,18 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
                 "error": f"Failed to update sshd_config: {echo.stderr}"
             }))]
 
-        # Restart SSH
         restart = subprocess.run(
             ["sudo", "systemctl", "restart", "ssh"],
             capture_output=True,
             text=True,
-            timeout=15
+            timeout=15,
         )
 
         return [TextContent(type="text", text=json.dumps({
             "success": restart.returncode == 0,
             "port": port,
             "message": f"SSH now on port {port}. Connect with:",
-            "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165",
+            "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
             "stderr": restart.stderr.strip() if restart.stderr else None,
         }))]
     except subprocess.TimeoutExpired:

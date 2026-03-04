@@ -1,7 +1,7 @@
 # Hardware Broker Pattern - Future Architecture
 
 **Created:** January 12, 2026  
-**Last Updated:** January 12, 2026  
+**Last Updated:** February 27, 2026  
 **Status:** Implemented (Phase 3 Complete)
 
 ---
@@ -25,10 +25,10 @@
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Hardware Broker (stable_creature.py)                   │
-│  - Owns I2C bus                                         │
+│  - Owns I2C bus (sensors only)                          │
 │  - Reads sensors continuously                           │
 │  - Writes latest readings to Shared Memory              │
-│  - Updates TFT display + LEDs                           │
+│  - Does NOT own display or LEDs (avoids I2C conflicts)   │
 └───────────────────────┬─────────────────────────────────┘
                         │
                         │ Reads from Shared Memory
@@ -36,10 +36,10 @@
                         ▼
 ┌─────────────────────────────────────────────────────────┐
 │  MCP Server (server.py)                                 │
-│  - Lightweight interface layer                          │
-│  - Reads from Shared Memory (microseconds)               │
+│  - Reads from Shared Memory (microseconds)              │
+│  - Owns TFT display + LEDs (exclusive I2C access)       │
 │  - Provides MCP tools (get_state, set_name, etc.)        │
-│  - No I2C access                                         │
+│  - Drives drawing, face, diagnostics screens            │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -48,20 +48,20 @@
 #### 1. Core Process (Hardware Broker)
 - **File:** `stable_creature.py` (refactored)
 - **Responsibilities:**
-  - Owns I2C bus exclusively
+  - Owns I2C bus for sensors only (BME280, VEML7700)
   - Reads sensors at fixed interval (2s)
   - Updates anima state
   - Writes latest readings to Shared Memory
-  - Updates TFT display + LEDs
-  - Handles all hardware interactions
+  - Does NOT own display or LEDs (MCP server owns them to avoid I2C conflicts)
 
 #### 2. Interface Layer (MCP Server)
 - **File:** `server.py` (refactored)
 - **Responsibilities:**
   - Reads from Shared Memory (not sensors)
+  - Owns TFT display + LEDs (exclusive I2C access for display hardware)
   - Provides MCP tools
-  - Handles network connections (SSE)
-  - No direct hardware access
+  - Handles network connections (Streamable HTTP)
+  - Drives drawing engine, face, diagnostics
 
 #### 3. Shared Memory Layer
 **Options:**
@@ -122,9 +122,8 @@ def run_broker():
             "identity": identity.to_dict()
         })
         
-        # Update hardware
-        display.update(anima)
-        leds.update(anima)
+        # NOTE: Display and LEDs are owned by MCP server, not broker
+        # (avoids I2C conflicts; broker only writes sensor data)
         
         time.sleep(2.0)
 ```

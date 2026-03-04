@@ -8,7 +8,7 @@
 
 ## Quick Setup
 
-**For new deployments, see:** [`PI_DEPLOYMENT.md`](PI_DEPLOYMENT.md) - Complete Pi deployment guide
+**For new deployments, see:** [`PI_DEPLOYMENT.md`](../../operations/PI_DEPLOYMENT.md) - Complete Pi deployment guide
 
 **Quick setup script:**
 ```bash
@@ -186,7 +186,7 @@ sudo systemctl enable lumen
 
 ## Related Documentation
 
-- **`PI_DEPLOYMENT.md`** - Complete Pi deployment guide (recommended for new setups)
+- **[PI_DEPLOYMENT.md](../../operations/PI_DEPLOYMENT.md)** - Complete Pi deployment guide (recommended for new setups)
 - **`monitor_health_pi.sh`** - Health monitoring script
 - **`setup_pi_service.sh`** - Automated service setup script
 

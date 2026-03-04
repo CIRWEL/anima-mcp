@@ -368,13 +368,13 @@ TOOLS_STANDARD = [
     ),
     Tool(
         name="fix_ssh_port",
-        description="Switch SSH to port 2222 when port 22 is blocked (headless fix, no keyboard needed). Call via HTTP.",
+        description="Switch SSH to port 2222/22222 when port 22 is blocked, or reset to port 22. Call via HTTP (no keyboard needed).",
         inputSchema={
             "type": "object",
             "properties": {
                 "port": {
                     "type": "integer",
-                    "description": "Port for SSH (2222 or 22222)",
+                    "description": "22 = reset to default; 2222 or 22222 = use alternate port when 22 blocked",
                     "default": 2222,
                 },
             },
