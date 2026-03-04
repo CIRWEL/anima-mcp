@@ -2550,7 +2550,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             try:
                 from .health import get_health_registry
                 _health = get_health_registry()
-                _health.register("sensors", probe=lambda: _sensors is not None)
+                _health.register("sensors", probe=lambda: _sensors is not None or _last_shm_data is not None)
                 _health.register("display", probe=lambda: _display is not None and _display.is_available())
                 _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
                 _health.register("growth", probe=lambda: _growth is not None, stale_threshold=90.0)
