@@ -514,8 +514,9 @@ class IdentityStore:
                 ),
             )
             conn.commit()
-        except Exception:
-            pass  # Best-effort — never crash the drawing loop
+        except Exception as e:
+            import sys
+            print(f"[IdentityStore] record_drawing_state failed: {e}", file=sys.stderr, flush=True)
 
     def get_recent_drawing_history(self, limit: int = 100) -> list[dict]:
         """Get recent drawing_history entries, ascending timestamp."""
