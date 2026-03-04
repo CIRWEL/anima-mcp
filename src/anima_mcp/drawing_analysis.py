@@ -11,7 +11,6 @@ Data sources:
 - PNG file timestamps — fallback for historical drawings before recording started
 """
 
-import re
 import sqlite3
 import sys
 from datetime import datetime, timedelta
@@ -300,110 +299,6 @@ def analyze_drawing_effect(dimension: str) -> Optional[str]:
     else:
         return (f"My {dimension} {direction} by {abs(diff):.3f} on average after drawing "
                 f"(before: {_fmt(avg_before)}, after: {_fmt(avg_after)}, n={n})")
-
-
-# ---------------------------------------------------------------------------
-# Backfill from PNG timestamps
-# ---------------------------------------------------------------------------
-
-def backfill_from_png_timestamps() -> int:
-    """Backfill drawing_records from PNG file timestamps + state_history.
-
-    Scans ~/.anima/drawings/lumen_drawing_*.png, parses timestamps from
-    filenames, and for each matches the nearest state_history record.
-
-    Returns count of records inserted.
-    """
-    drawings_dir = Path.home() / ".anima" / "drawings"
-    if not drawings_dir.exists():
-        return 0
-
-    pattern = re.compile(r"lumen_drawing_(\d{8}_\d{6})(_manual)?\.png")
-    png_files = sorted(drawings_dir.glob("lumen_drawing_*.png"))
-
-    if not png_files:
-        return 0
-
-    try:
-        conn = _connect()
-        # Check which timestamps already exist
-        existing = set()
-        for row in conn.execute("SELECT timestamp FROM drawing_records"):
-            existing.add(row["timestamp"][:15])  # Compare up to minute precision
-
-        inserted = 0
-        for path in png_files:
-            match = pattern.match(path.name)
-            if not match:
-                continue
-
-            ts_str = match.group(1)  # "20260215_143022"
-            try:
-                dt = datetime.strptime(ts_str, "%Y%m%d_%H%M%S")
-            except ValueError:
-                continue
-
-            # Skip if already have a record near this time
-            ts_key = dt.isoformat()[:15]
-            if ts_key in existing:
-                continue
-
-            # Find nearest state_history record (within 60s)
-            # Use simple BETWEEN + LIMIT 1 — avoids expensive julianday() scan
-            window_start = (dt - timedelta(seconds=60)).isoformat()
-            window_end = (dt + timedelta(seconds=60)).isoformat()
-            state = conn.execute(
-                "SELECT warmth, clarity, stability, presence, sensors "
-                "FROM state_history "
-                "WHERE timestamp BETWEEN ? AND ? "
-                "ORDER BY timestamp "
-                "LIMIT 1",
-                (window_start, window_end)
-            ).fetchone()
-
-            if not state:
-                continue
-
-            warmth = state["warmth"]
-            clarity = state["clarity"]
-            stability = state["stability"]
-            presence = state["presence"]
-            wellness = None
-            if all(v is not None for v in [warmth, clarity, stability, presence]):
-                wellness = (warmth + clarity + stability + presence) / 4.0
-
-            # Extract environment from sensors JSON
-            light_lux = None
-            ambient_temp_c = None
-            humidity_pct = None
-            try:
-                import json
-                sensors = json.loads(state["sensors"]) if state["sensors"] else {}
-                light_lux = sensors.get("light_lux") or sensors.get("world_light_lux")
-                ambient_temp_c = sensors.get("ambient_temp_c")
-                humidity_pct = sensors.get("humidity_pct")
-            except Exception:
-                pass
-
-            conn.execute("""
-                INSERT INTO drawing_records
-                (timestamp, pixel_count, phase, warmth, clarity, stability, presence,
-                 wellness, light_lux, ambient_temp_c, humidity_pct, hour)
-                VALUES (?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                dt.isoformat(), warmth, clarity, stability, presence,
-                wellness, light_lux, ambient_temp_c, humidity_pct, dt.hour,
-            ))
-            inserted += 1
-
-        conn.commit()
-        conn.close()
-        print(f"[DrawingAnalysis] Backfilled {inserted} records from PNG timestamps",
-              file=sys.stderr, flush=True)
-        return inserted
-    except Exception as e:
-        print(f"[DrawingAnalysis] Backfill error: {e}", file=sys.stderr, flush=True)
-        return 0
 
 
 # ---------------------------------------------------------------------------
