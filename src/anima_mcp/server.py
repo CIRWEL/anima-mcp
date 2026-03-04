@@ -1949,6 +1949,14 @@ async def _update_display_loop():
                         trigger_parts.append("resting/dreaming")
 
                     # === 4. Build enriched context ===
+                    recent_obs_texts = []
+                    try:
+                        from .messages import get_board
+                        recent_obs = get_board().get_recent(limit=5, msg_type="observation")
+                        recent_obs_texts = [o.text for o in recent_obs]
+                    except Exception:
+                        pass
+
                     context = ReflectionContext(
                         warmth=anima.warmth,
                         clarity=anima.clarity,
@@ -1974,6 +1982,7 @@ async def _update_display_loop():
                         anticipation_sample_count=ant_samples,
                         rest_duration_minutes=rest_duration / 60.0,
                         is_dreaming=is_dreaming,
+                        recent_observations=recent_obs_texts,
                     )
 
                     # === 5. Call LLM ===
@@ -2045,6 +2054,15 @@ async def _update_display_loop():
                         # Calculate time alive
                         time_alive = identity.total_alive_seconds / 3600.0
 
+                        # Get recent observations for richer self-answers
+                        sa_obs_texts = []
+                        try:
+                            from .messages import get_board as _get_board_sa
+                            sa_obs = _get_board_sa().get_recent(limit=5, msg_type="observation")
+                            sa_obs_texts = [o.text for o in sa_obs]
+                        except Exception:
+                            pass
+
                         for question in to_answer:
                             # Build reflection context with the question as trigger
                             context = ReflectionContext(
@@ -2060,6 +2078,7 @@ async def _update_display_loop():
                                 trigger_details=question.text,
                                 led_brightness=readings.led_brightness if readings else None,
                                 light_lux=readings.light_lux if readings else None,
+                                recent_observations=sa_obs_texts,
                             )
 
                             # Show loading indicator during LLM call

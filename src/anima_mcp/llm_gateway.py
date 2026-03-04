@@ -55,6 +55,7 @@ class ReflectionContext:
     anticipation_sample_count: Optional[int] = None
     rest_duration_minutes: float = 0.0
     is_dreaming: bool = False
+    recent_observations: Optional[List[str]] = None  # Last 5 obs for novelty avoidance
 
 
 class LLMGateway:
@@ -573,6 +574,21 @@ What pattern or feeling surfaces from these memories? Share one dream-like refle
             except Exception:
                 pass
 
+            # Add self-model beliefs for metacognitive grounding
+            belief_context = ""
+            try:
+                from .self_model import get_self_model
+                summary = get_self_model().get_belief_summary()
+                relevant = [
+                    f"- {v['description']}: {v['strength']} (confidence {v['confidence']:.1f}, evidence {v['evidence']})"
+                    for k, v in summary.items()
+                    if v['confidence'] > 0.3
+                ]
+                if relevant:
+                    belief_context = "\n\nMy beliefs about myself:\n" + "\n".join(relevant[:5])
+            except Exception:
+                pass
+
             # Add day summaries for temporal context
             day_context = ""
             try:
@@ -589,7 +605,7 @@ What pattern or feeling surfaces from these memories? Share one dream-like refle
             # Data analysis for correlation/drawing questions
             data_analysis = ""
             try:
-                from .drawing_analysis import analyze_for_question
+                from .data_analysis import analyze_for_question
                 result = analyze_for_question(question_text)
                 if result:
                     data_analysis = "\n\nWhat my data actually shows:\n" + result
@@ -598,7 +614,7 @@ What pattern or feeling surfaces from these memories? Share one dream-like refle
 
             return f"""{state_desc}
 
-A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{day_context}{data_analysis}
+A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{belief_context}{day_context}{data_analysis}
 
 What do my actual sensor readings, patterns, and history tell me about this question?
 If my data answers it, explain how. If it doesn't, say what I don't know and what I'd need to find out.
@@ -644,6 +660,11 @@ Be specific and honest — refer to actual numbers, sensors, or patterns rather 
                     f"- {q}" for q in context.unanswered_questions[:3]
                 ))
 
+            if context.recent_observations:
+                parts.append("My recent observations (DON'T repeat these themes):\n" + "\n".join(
+                    f"- {o}" for o in context.recent_observations[:5]
+                ))
+
             context_block = "\n\n".join(parts) if parts else "Nothing stands out right now."
 
             return f"""{state_desc}
@@ -655,7 +676,13 @@ This could be a question, an observation, a desire, a response to someone, or a 
 Choose what matters most in this moment. Be genuine — grounded in my actual state, not abstract."""
 
         else:  # "observe"
-            return f"""{state_desc}
+            recent_obs_text = ""
+            if context.recent_observations:
+                recent_obs_text = "\n\nI recently observed:\n" + "\n".join(
+                    f"- {o}" for o in context.recent_observations[:5]
+                ) + "\n\nI want to notice something DIFFERENT this time."
+
+            return f"""{state_desc}{recent_obs_text}
 
 What am I noticing or feeling right now? Share one observation about my current experience."""
 

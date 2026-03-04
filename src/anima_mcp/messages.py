@@ -221,7 +221,7 @@ class MessageBoard:
 
         new_words = get_words(text)
         if new_words:  # Only check if we have meaningful words
-            for obs in recent_observations[-10:]:  # Check last 10 observations
+            for obs in recent_observations[-15:]:  # Check last 15 observations
                 obs_words = get_words(obs.text)
                 if obs_words:
                     # Jaccard similarity
@@ -229,7 +229,7 @@ class MessageBoard:
                     union = new_words | obs_words
                     similarity = len(intersection) / len(union) if union else 0
 
-                    if similarity > 0.50:  # More than 50% overlap
+                    if similarity > 0.35:  # 35% overlap — catches theme repetition
                         return None  # Too similar to recent observation
 
         return self.add_message(text, MESSAGE_TYPE_OBSERVATION, author=author)
