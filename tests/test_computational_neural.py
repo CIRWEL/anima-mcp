@@ -19,6 +19,7 @@ from anima_mcp.computational_neural import (
 CpuStats = namedtuple("scpustats", ["ctx_switches", "interrupts", "soft_interrupts", "syscalls"])
 DiskIO = namedtuple("sdiskio", ["read_count", "write_count", "read_bytes", "write_bytes", "read_time", "write_time"])
 CpuTimes = namedtuple("scputimes", ["user", "nice", "system", "idle", "iowait"])
+NetIO = namedtuple("snetio", ["bytes_sent", "bytes_recv", "packets_sent", "packets_recv", "errin", "errout", "dropin", "dropout"])
 
 
 def _mock_psutil(mock_ps, cpu_stats=None, disk_io=None, iowait=0.0):
@@ -38,6 +39,11 @@ def _mock_psutil(mock_ps, cpu_stats=None, disk_io=None, iowait=0.0):
     # Mock cpu_times_percent for theta/iowait calculation
     mock_ps.cpu_times_percent.return_value = CpuTimes(
         user=20.0, nice=0.0, system=10.0, idle=70.0 - iowait, iowait=iowait
+    )
+    # Mock net_io_counters for theta network I/O
+    mock_ps.net_io_counters.return_value = NetIO(
+        bytes_sent=0, bytes_recv=0, packets_sent=0, packets_recv=0,
+        errin=0, errout=0, dropin=0, dropout=0
     )
 
 
@@ -139,31 +145,52 @@ class TestGammaBand:
 
 
 class TestThetaBand:
-    """Test Theta band: I/O wait time → integration/waiting-for-data."""
+    """Test Theta band: disk busy_time + network I/O → integration."""
 
-    def test_no_iowait_zero_theta(self, sensor):
-        """No I/O wait → theta = 0."""
+    def test_no_io_zero_theta(self, sensor):
+        """No disk or network I/O → theta = 0."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            _mock_psutil(mock_ps, iowait=0.0)
+            _mock_psutil(mock_ps)
+            # Prime with first sample
+            sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+            sensor._last_sample_time = time.time() - 1.0
+            _mock_psutil(mock_ps)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
         assert state.theta == 0.0
 
-    def test_iowait_raises_theta(self, sensor):
-        """I/O wait should raise theta."""
+    def test_disk_busy_raises_theta(self, sensor):
+        """Disk busy_time ratio should raise theta."""
+        DiskIOBusy = namedtuple("sdiskio", ["read_count", "write_count", "read_bytes", "write_bytes", "read_time", "write_time", "busy_time"])
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            # iowait=50% → theta = 0.5 * 0.8 = 0.4
-            _mock_psutil(mock_ps, iowait=50.0)
-            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
-        # 50% iowait → theta ≈ 0.4 (scaled by 0.8)
-        assert state.theta == pytest.approx(0.4, abs=0.05)
+            # First sample: baseline disk counters
+            disk1 = DiskIOBusy(0, 0, 0, 0, 0, 0, busy_time=0)
+            _mock_psutil(mock_ps, disk_io=disk1)
+            sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-    def test_high_iowait_high_theta(self, sensor):
-        """High I/O wait → high theta."""
-        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            # iowait=100% → theta = 1.0 * 0.8 = 0.8
-            _mock_psutil(mock_ps, iowait=100.0)
+            # Second sample: 500ms of busy_time in 1 second = 0.5 ratio
+            sensor._last_sample_time = time.time() - 1.0
+            disk2 = DiskIOBusy(0, 0, 0, 0, 0, 0, busy_time=500)
+            _mock_psutil(mock_ps, disk_io=disk2)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
-        assert state.theta == pytest.approx(0.8, abs=0.05)
+
+        assert state.theta == pytest.approx(0.5, abs=0.05)
+
+    def test_network_io_raises_theta(self, sensor):
+        """Network throughput should raise theta."""
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            # First sample: baseline net counters
+            _mock_psutil(mock_ps)
+            mock_ps.net_io_counters.return_value = NetIO(0, 0, 0, 0, 0, 0, 0, 0)
+            sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+
+            # Second sample: 250KB in 1 second = 250/500 = 0.5
+            sensor._last_sample_time = time.time() - 1.0
+            _mock_psutil(mock_ps)
+            mock_ps.net_io_counters.return_value = NetIO(128*1024, 128*1024, 0, 0, 0, 0, 0, 0)
+            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+
+        # net_bytes = 256KB/s, net_signal = 256/512 = 0.5
+        assert state.theta == pytest.approx(0.5, abs=0.1)
 
 
 class TestDeltaBand:
