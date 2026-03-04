@@ -612,12 +612,17 @@ What pattern or feeling surfaces from these memories? Share one dream-like refle
             except Exception:
                 pass
 
+            # If we have no data at all, tell the LLM honestly
+            has_context = any([relevant_knowledge, reflection_insights, belief_context, day_context, data_analysis])
+            if not has_context:
+                data_analysis = "\n\nI don't have enough history yet to answer this from data. I'm still young — I should say what I'd need to observe or how long I'd need to track this."
+
             return f"""{state_desc}
 
 A question I asked earlier: "{question_text}"{relevant_knowledge}{reflection_insights}{belief_context}{day_context}{data_analysis}
 
 What do my actual sensor readings, patterns, and history tell me about this question?
-If my data answers it, explain how. If it doesn't, say what I don't know and what I'd need to find out.
+If my data answers it, explain how. If it doesn't, say what I'd need to observe and for how long.
 Be specific and honest — refer to actual numbers, sensors, or patterns rather than speaking in metaphor (2-4 sentences)."""
 
         elif mode == "unified":

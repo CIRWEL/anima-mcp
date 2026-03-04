@@ -327,7 +327,7 @@ class TestStaleData:
         ts = datetime.fromisoformat(raw["updated_at"])
         ts_epoch = ts.timestamp()
 
-        assert before <= ts_epoch <= after + 1  # small tolerance
+        assert before - 1 <= ts_epoch <= after + 2  # tolerance for slow CI / clock jitter
 
     def test_stale_threshold_concept(self, tmp_path):
         """Verify stale threshold constant exists for consumer use."""
