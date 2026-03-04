@@ -99,10 +99,10 @@ class ComputationalNeuralSensor:
                 # Rate per second
                 ctx_rate = ctx_delta / dt
                 int_rate = int_delta / dt
-                # Normalize: ~5000 ctx/s is moderate Pi activity, ~20000 is intense
-                # ~50000 interrupts/s is moderate, ~200000 is intense
-                ctx_norm = min(1.0, ctx_rate / 20000.0)
-                int_norm = min(1.0, int_rate / 200000.0)
+                # Pi Zero 2W typical: ~1000 ctx/s idle, ~3000 moderate, ~6000+ busy
+                # Interrupts similar range. Normalize to Pi-appropriate values.
+                ctx_norm = min(1.0, ctx_rate / 5000.0)
+                int_norm = min(1.0, int_rate / 5000.0)
                 gamma = ctx_norm * 0.6 + int_norm * 0.4
             self._last_cpu_stats = cpu_stats
         except (OSError, AttributeError):
@@ -113,40 +113,47 @@ class ComputationalNeuralSensor:
         memory_headroom = (100.0 - memory_percent) / 100.0
         alpha = max(0.0, min(1.0, memory_headroom))
 
-        # === THETA: I/O wait time (integration/waiting-for-data) ===
+        # === THETA: I/O integration (disk + network activity) ===
         # In neuroscience, theta reflects integration - the brain waiting for and processing
-        # incoming data. I/O wait (CPU time blocked waiting for disk) is the computational
-        # equivalent: the system pausing while data arrives.
+        # incoming data. On the Pi, this maps to disk I/O (SHM writes, DB, logs) and
+        # network I/O (HTTP requests, UNITARES governance calls, Groq API).
         theta = 0.0
         try:
-            # Primary: Linux iowait percentage (CPU time waiting for I/O)
-            cpu_times = psutil.cpu_times_percent(interval=None)
-            io_wait = getattr(cpu_times, 'iowait', 0) / 100.0  # Linux only, 0 on Mac/Windows
+            disk_io = psutil.disk_io_counters()
+            disk_signal = 0.0
+            net_signal = 0.0
 
-            # Fallback: disk busy_time if iowait not available
-            if io_wait == 0:
-                disk_io = psutil.disk_io_counters()
-                if disk_io and self._last_disk_io is not None and dt > 0:
-                    # busy_time is in milliseconds, available on Linux/some systems
-                    if hasattr(disk_io, 'busy_time') and hasattr(self._last_disk_io, 'busy_time'):
-                        busy_delta = disk_io.busy_time - self._last_disk_io.busy_time
-                        # Normalize: busy_time delta as fraction of elapsed wall time
-                        io_wait = min(1.0, busy_delta / (dt * 1000))
-                    else:
-                        # Final fallback: use throughput as a weak proxy
-                        read_delta = disk_io.read_bytes - self._last_disk_io.read_bytes
-                        write_delta = disk_io.write_bytes - self._last_disk_io.write_bytes
-                        bytes_per_sec = (read_delta + write_delta) / dt
-                        io_wait = min(1.0, bytes_per_sec / (10 * 1024 * 1024))
-                if disk_io:
-                    self._last_disk_io = disk_io
-            else:
-                # Still update disk_io for next iteration
-                disk_io = psutil.disk_io_counters()
-                if disk_io:
-                    self._last_disk_io = disk_io
+            if disk_io and self._last_disk_io is not None and dt > 0:
+                # Primary: disk busy_time ratio (how much of wall time disk was active)
+                # Pi Zero: ~0.05 idle writes, ~0.2 moderate, ~0.5 heavy
+                if hasattr(disk_io, 'busy_time') and hasattr(self._last_disk_io, 'busy_time'):
+                    busy_delta = disk_io.busy_time - self._last_disk_io.busy_time
+                    disk_signal = min(1.0, busy_delta / (dt * 1000))
+                else:
+                    # Fallback: throughput-based estimate
+                    read_delta = disk_io.read_bytes - self._last_disk_io.read_bytes
+                    write_delta = disk_io.write_bytes - self._last_disk_io.write_bytes
+                    bytes_per_sec = (read_delta + write_delta) / dt
+                    # Pi Zero: ~1.5 MB/s normal, ~5 MB/s heavy
+                    disk_signal = min(1.0, bytes_per_sec / (5 * 1024 * 1024))
+            if disk_io:
+                self._last_disk_io = disk_io
 
-            theta = io_wait * 0.8  # Scale to typical range
+            # Network I/O: HTTP requests, UNITARES calls, Groq API
+            try:
+                net_io = psutil.net_io_counters()
+                if hasattr(self, '_last_net_io') and self._last_net_io is not None and dt > 0:
+                    net_bytes = (
+                        (net_io.bytes_sent - self._last_net_io.bytes_sent) +
+                        (net_io.bytes_recv - self._last_net_io.bytes_recv)
+                    ) / dt
+                    # Pi Zero: ~10 KB/s idle, ~100 KB/s moderate, ~500 KB/s heavy
+                    net_signal = min(1.0, net_bytes / (500 * 1024))
+                self._last_net_io = net_io
+            except (OSError, AttributeError):
+                pass
+
+            theta = max(disk_signal, net_signal)  # Whichever I/O source is busier
         except (OSError, AttributeError):
             theta = 0.0
 
