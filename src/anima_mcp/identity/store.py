@@ -497,23 +497,31 @@ class IdentityStore:
         arc_phase: str | None, gesture_entropy: float,
         switching_rate: float, intentionality: float,
     ) -> None:
-        """Record DrawingEISV state snapshot. Best-effort, never raises."""
+        """Record DrawingEISV state snapshot. Best-effort, never raises.
+
+        Uses a dedicated connection because this is called from the display
+        render thread, not the main server thread — SQLite connections can't
+        cross threads.
+        """
         try:
-            conn = self._connect()
-            conn.execute(
-                """INSERT INTO drawing_history
-                   (timestamp, E, I, S, V, C, marks, phase, era, energy,
-                    curiosity, engagement, fatigue, arc_phase,
-                    gesture_entropy, switching_rate, intentionality)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    datetime.now().isoformat(),
-                    E, I, S, V, C, marks, phase, era, energy,
-                    curiosity, engagement, fatigue, arc_phase,
-                    gesture_entropy, switching_rate, intentionality,
-                ),
-            )
-            conn.commit()
+            conn = sqlite3.connect(self.db_path, timeout=5.0)
+            try:
+                conn.execute(
+                    """INSERT INTO drawing_history
+                       (timestamp, E, I, S, V, C, marks, phase, era, energy,
+                        curiosity, engagement, fatigue, arc_phase,
+                        gesture_entropy, switching_rate, intentionality)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        datetime.now().isoformat(),
+                        E, I, S, V, C, marks, phase, era, energy,
+                        curiosity, engagement, fatigue, arc_phase,
+                        gesture_entropy, switching_rate, intentionality,
+                    ),
+                )
+                conn.commit()
+            finally:
+                conn.close()
         except Exception as e:
             import sys
             print(f"[IdentityStore] record_drawing_state failed: {e}", file=sys.stderr, flush=True)
