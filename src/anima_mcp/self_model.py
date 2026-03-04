@@ -203,6 +203,24 @@ class SelfModel:
                             b.value = bdata.get("value", 0.5)
                             b.supporting_count = bdata.get("supporting_count", 0)
                             b.contradicting_count = bdata.get("contradicting_count", 0)
+
+                # Migration: reset beliefs corrupted by testing noise as evidence.
+                # Pre-fix, every 2s observation tested correlation even when input
+                # was constant, logging "contradicting" 100K+ times. Reset these
+                # to fresh state so they can learn honestly with the CV>5% gate.
+                if not data.get("_migrated_noise_reset"):
+                    for bid, b in self._beliefs.items():
+                        total = b.supporting_count + b.contradicting_count
+                        if total > 10000:
+                            print(f"[SelfModel] Resetting noisy belief '{bid}' "
+                                  f"(+{b.supporting_count}/-{b.contradicting_count})",
+                                  flush=True)
+                            b.confidence = 0.5
+                            b.value = 0.5
+                            b.supporting_count = 0
+                            b.contradicting_count = 0
+                    self._save()  # Saves with fresh counts + migration flag
+
             except Exception as e:
                 print(f"[SelfModel] Could not load: {e}")
 
@@ -230,6 +248,7 @@ class SelfModel:
                     for bid, b in self._beliefs.items()
                 },
                 "last_saved": datetime.now().isoformat(),
+                "_migrated_noise_reset": True,
             }
             atomic_json_write(self.persistence_path, data, indent=2)
         except Exception as e:
@@ -432,6 +451,13 @@ class SelfModel:
         if sum_sq_x < EPSILON or sum_sq_y < EPSILON:
             return  # Values are constant or near-constant, no meaningful correlation
 
+        # Only test when there's real variance in the input (coefficient of variation > 5%).
+        # In a lunchbox with stable light, most 50-sample windows show noise.
+        # Testing noise as "weak correlation → contradicting" buries real signal.
+        cv_x = math.sqrt(sum_sq_x / n) / (abs(mean_x) + EPSILON)
+        if cv_x < 0.05:
+            return  # Input hasn't changed meaningfully — not evidence either way
+
         denom_x = math.sqrt(sum_sq_x)
         denom_y = math.sqrt(sum_sq_y)
 
@@ -446,8 +472,9 @@ class SelfModel:
             # Update value to reflect correlation direction
             belief.value = 0.5 + correlation * 0.5  # Map -1,1 to 0,1
         else:
-            # Weak correlation contradicts
-            belief.update_from_evidence(supports=False, strength=1 - abs(correlation))
+            # Weak correlation contradicts — but only mildly, since we confirmed
+            # there was real input variance
+            belief.update_from_evidence(supports=False, strength=0.3)
         self._maybe_save()
 
     def observe_interaction(self, clarity_before: float, clarity_after: float):
