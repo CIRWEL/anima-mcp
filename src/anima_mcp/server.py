@@ -393,14 +393,23 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
                     shm_stale = age_seconds > SHM_STALE_THRESHOLD_SECONDS
                     if not shm_stale:
                         shm_valid = True
+                    elif not hasattr(_get_readings_and_anima, '_shm_debug_logged'):
+                        _get_readings_and_anima._shm_debug_logged = True
+                        print(f"[SHM-DEBUG] stale! ts={timestamp_str} age={age_seconds:.1f}s threshold={SHM_STALE_THRESHOLD_SECONDS}s", file=sys.stderr, flush=True)
                 else:
                     # No timestamp - assume fresh if data exists
                     shm_valid = True
+            elif not hasattr(_get_readings_and_anima, '_shm_keys_logged'):
+                _get_readings_and_anima._shm_keys_logged = True
+                print(f"[SHM-DEBUG] missing fields! keys={list(shm_data.keys())[:6]}", file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[Server] Error checking shared memory timestamp: {e}", file=sys.stderr, flush=True)
             # If timestamp check fails but data exists, try to use it anyway
             if shm_data and "readings" in shm_data and "anima" in shm_data:
                 shm_valid = True
+    elif not hasattr(_get_readings_and_anima, '_shm_none_logged'):
+        _get_readings_and_anima._shm_none_logged = True
+        print(f"[SHM-DEBUG] read returned None!", file=sys.stderr, flush=True)
     
     # Try to use shared memory if valid
     if shm_valid:
