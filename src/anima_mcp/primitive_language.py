@@ -417,12 +417,12 @@ class PrimitiveLanguageSystem:
         for name in PRIMITIVES:
             weights[name] = self.compute_token_weight(name, state)
 
-        # Boost trajectory-suggested tokens (gentle influence, not override)
+        # Boost trajectory-suggested tokens
         if suggested_tokens:
             suggested_set = set(suggested_tokens)
             for name in PRIMITIVES:
                 if name in suggested_set:
-                    weights[name] *= 2.0
+                    weights[name] *= 3.5
 
         selected = []
         available = list(PRIMITIVES.keys())
@@ -430,6 +430,16 @@ class PrimitiveLanguageSystem:
         for i in range(count):
             if not available:
                 break
+
+            # First slot: anchor on a suggested token (if available)
+            if i == 0 and suggested_tokens:
+                anchor_candidates = [t for t in suggested_tokens if t in available]
+                if anchor_candidates:
+                    anchor_weights = [weights[t] for t in anchor_candidates]
+                    chosen = random.choices(anchor_candidates, weights=anchor_weights)[0]
+                    selected.append(chosen)
+                    available.remove(chosen)
+                    continue
 
             # Adjust weights based on already selected tokens
             adjusted_weights = []
