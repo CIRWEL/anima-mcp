@@ -880,6 +880,8 @@ class DrawingEngine:
                     sr = switches / (len(gh) - 1)
                 else:
                     sr = 0.0
+                import sys
+                print(f"[DrawingEngine] recording mark {self.intent.mark_count}, store={type(self._identity_store).__name__}, db={getattr(self._identity_store, 'db_path', '?')}", file=sys.stderr, flush=True)
                 self._identity_store.record_drawing_state(
                     E=state.E, I=state.I, S=state.S, V=state.V,
                     C=C,
@@ -895,6 +897,7 @@ class DrawingEngine:
                     switching_rate=sr,
                     intentionality=I_signal,
                 )
+                print(f"[DrawingEngine] record OK for mark {self.intent.mark_count}", file=sys.stderr, flush=True)
             except Exception as e:
                 import sys
                 print(f"[DrawingEngine] record_drawing_state failed: {e}", file=sys.stderr, flush=True)
