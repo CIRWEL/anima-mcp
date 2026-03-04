@@ -104,3 +104,8 @@ exclude_lines = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/anima_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.4",
+]
