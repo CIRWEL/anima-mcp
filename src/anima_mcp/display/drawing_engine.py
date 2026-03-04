@@ -890,8 +890,9 @@ class DrawingEngine:
                     switching_rate=sr,
                     intentionality=I_signal,
                 )
-            except Exception:
-                pass  # Never crash drawing for history
+            except Exception as e:
+                import sys
+                print(f"[DrawingEngine] record_drawing_state failed: {e}", file=sys.stderr, flush=True)
 
     def _eisv_step(self) -> Tuple[float, float]:
         """Step EISV thermodynamics -- same equations as governance, proprioceptive signals.
