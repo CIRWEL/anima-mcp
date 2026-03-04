@@ -6,12 +6,12 @@ Handlers: capture_screen, show_face, diagnostics, manage_display.
 import json
 import sys
 
-from mcp.types import TextContent
+from mcp.types import TextContent, ImageContent
 
 
-async def handle_capture_screen(arguments: dict) -> list[TextContent]:
+async def handle_capture_screen(arguments: dict) -> list[TextContent | ImageContent]:
     """
-    Capture current display screen as base64-encoded PNG image.
+    Capture current display screen as a viewable PNG image.
 
     Returns the actual visual output on Lumen's 240×240 LCD display,
     allowing remote viewing of what Lumen is drawing, showing, or expressing.
@@ -52,18 +52,17 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent]:
         if screen_mode == "art_eras" and hasattr(_screen_renderer, '_active_era') and _screen_renderer._active_era:
             era_name = _screen_renderer._active_era.name
 
-        result = {
-            "success": True,
-            "image_base64": img_base64,
-            "width": current_image.width,
-            "height": current_image.height,
-            "screen": screen_mode,
-            "era": era_name,
-            "format": "PNG",
-            "note": "Display as: <img src='data:image/png;base64,{image_base64}' />"
-        }
-
-        return [TextContent(type="text", text=json.dumps(result))]
+        # Return image as ImageContent (viewable by agents) + metadata as TextContent
+        return [
+            ImageContent(type="image", data=img_base64, mimeType="image/png"),
+            TextContent(type="text", text=json.dumps({
+                "success": True,
+                "width": current_image.width,
+                "height": current_image.height,
+                "screen": screen_mode,
+                "era": era_name,
+            }))
+        ]
 
     except Exception as e:
         import traceback
