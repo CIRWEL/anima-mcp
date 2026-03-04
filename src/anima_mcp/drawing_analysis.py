@@ -349,15 +349,16 @@ def backfill_from_png_timestamps() -> int:
                 continue
 
             # Find nearest state_history record (within 60s)
+            # Use simple BETWEEN + LIMIT 1 — avoids expensive julianday() scan
             window_start = (dt - timedelta(seconds=60)).isoformat()
             window_end = (dt + timedelta(seconds=60)).isoformat()
             state = conn.execute(
                 "SELECT warmth, clarity, stability, presence, sensors "
                 "FROM state_history "
                 "WHERE timestamp BETWEEN ? AND ? "
-                "ORDER BY ABS(julianday(timestamp) - julianday(?)) "
+                "ORDER BY timestamp "
                 "LIMIT 1",
-                (window_start, window_end, dt.isoformat())
+                (window_start, window_end)
             ).fetchone()
 
             if not state:

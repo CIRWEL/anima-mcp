@@ -493,7 +493,10 @@ class GrowthSystem:
         print("[Growth] Identity migration v1 complete.", file=sys.stderr, flush=True)
 
     def _backfill_drawing_records(self, conn: sqlite3.Connection):
-        """One-time backfill of drawing_records from PNG file timestamps."""
+        """One-time backfill of drawing_records from PNG file timestamps.
+
+        Runs in a background thread to avoid blocking startup on slow Pi hardware.
+        """
         SENTINEL = "_backfill_drawing_records_v1"
         row = conn.execute(
             "SELECT name FROM preferences WHERE name = ?", (SENTINEL,)
@@ -501,22 +504,29 @@ class GrowthSystem:
         if row:
             return  # Already ran
 
-        try:
-            from .drawing_analysis import backfill_from_png_timestamps
-            count = backfill_from_png_timestamps()
-            print(f"[Growth] Drawing records backfill: {count} records from PNG timestamps",
-                  file=sys.stderr, flush=True)
-        except Exception as e:
-            print(f"[Growth] Drawing records backfill failed: {e}",
-                  file=sys.stderr, flush=True)
-
-        # Write sentinel so this never runs again
+        # Write sentinel immediately so restart won't re-trigger if backfill is slow
         conn.execute("""
             INSERT OR REPLACE INTO preferences
             (name, category, description, value, confidence, observation_count, last_confirmed)
             VALUES (?, 'system', 'drawing-records backfill sentinel', 1.0, 1.0, 1, ?)
         """, (SENTINEL, datetime.now().isoformat()))
         conn.commit()
+
+        import threading
+        def _run_backfill():
+            try:
+                from .drawing_analysis import backfill_from_png_timestamps
+                count = backfill_from_png_timestamps()
+                print(f"[Growth] Drawing records backfill: {count} records from PNG timestamps",
+                      file=sys.stderr, flush=True)
+            except Exception as e:
+                print(f"[Growth] Drawing records backfill failed: {e}",
+                      file=sys.stderr, flush=True)
+
+        t = threading.Thread(target=_run_backfill, daemon=True)
+        t.start()
+        print("[Growth] Drawing records backfill started in background",
+              file=sys.stderr, flush=True)
 
     def _load_all(self):
         """Load all growth data from database."""
