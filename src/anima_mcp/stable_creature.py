@@ -33,6 +33,7 @@ See docs/operations/BROKER_ARCHITECTURE.md for details.
 ─────────────────────────────────────────────────────────────
 """
 
+import json
 import time
 import os
 import signal
@@ -656,11 +657,12 @@ def run_creature():
                     elif selected_action.action_type == ActionType.LED_BRIGHTNESS:
                         direction = selected_action.parameters.get("direction", "increase")
                         current = _agency_led_brightness
-                        if direction == "increase":
+                        if direction == "increase" and current < 1.0:
                             _agency_led_brightness = min(1.0, current * 1.2)
-                        else:
+                            print(f"[Agency] LED brightness increase: {current:.2f} → {_agency_led_brightness:.2f}", file=sys.stderr, flush=True)
+                        elif direction == "decrease" and current > 0.05:
                             _agency_led_brightness = max(0.05, current * 0.8)
-                        print(f"[Agency] LED brightness {direction}: {current:.2f} → {_agency_led_brightness:.2f}", file=sys.stderr, flush=True)
+                            print(f"[Agency] LED brightness decrease: {current:.2f} → {_agency_led_brightness:.2f}", file=sys.stderr, flush=True)
 
                     # Record state for action outcome learning
                     satisfaction_before = preferences.get_overall_satisfaction(current_state)
