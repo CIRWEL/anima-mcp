@@ -38,7 +38,8 @@ class ScreenMode(Enum):
     SENSORS = "sensors"              # Sensor readings (temp, humidity, etc.)
     IDENTITY = "identity"            # Name, age, awakenings, alive time
     DIAGNOSTICS = "diagnostics"      # System health, governance status
-    NEURAL = "neural"                # Neural activity - EEG frequency bands
+    NEURAL = "neural"                # Neural activity - computational EEG bands
+    INNER_LIFE = "inner_life"        # Inner life - cognitive and emotional state
     LEARNING = "learning"            # Learning visualization - why Lumen feels what it feels
     SELF_GRAPH = "self_graph"        # Self-schema G_t visualization
     NOTEPAD = "notepad"              # Drawing canvas - Lumen's creative space
@@ -468,7 +469,7 @@ class ScreenRenderer:
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""
         # Cycle through all screens including notepad, questions, and visitors
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -480,7 +481,7 @@ class ScreenRenderer:
     def previous_mode(self):
         """Cycle to previous screen mode (including notepad)."""
         # Cycle through all screens including notepad, questions, and visitors
-        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
+        regular_modes = [ScreenMode.FACE, ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS, ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]
         if self._state.mode not in regular_modes:
             # If somehow on unknown mode, go to face
             self.set_mode(ScreenMode.FACE)
@@ -569,9 +570,10 @@ class ScreenRenderer:
         ScreenMode.SENSORS: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
         ScreenMode.DIAGNOSTICS: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
         ScreenMode.HEALTH: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
-        ScreenMode.NEURAL: ("mind", [ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.NEURAL: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.INNER_LIFE: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
         ScreenMode.MESSAGES: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
         ScreenMode.QUESTIONS: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
         ScreenMode.VISITORS: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
@@ -783,7 +785,7 @@ class ScreenRenderer:
         """Get one-line control hint shown at bottom-left."""
         if mode == ScreenMode.FACE:
             return "L/R groups  U/D LEDs"
-        if mode in (ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH):
+        if mode in (ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH):
             return "L/R groups  U/D pages"
         if mode in (ScreenMode.MESSAGES, ScreenMode.VISITORS):
             return "U/D scroll  btn expand"
@@ -950,6 +952,8 @@ class ScreenRenderer:
                 elif mode == ScreenMode.DIAGNOSTICS:
                     self._render_diagnostics(anima, readings, governance)
                 elif mode == ScreenMode.NEURAL:
+                    self._render_neural(anima, readings)
+                elif mode == ScreenMode.INNER_LIFE:
                     self._render_inner_life()
                 elif mode == ScreenMode.LEARNING:
                     self._render_learning(anima, readings)
@@ -1900,6 +1904,144 @@ class ScreenRenderer:
             print(f"[Screen] Health render error: {e}", file=sys.stderr, flush=True)
             self._display.render_text(f"HEALTH\n\n{overall}\n\nError:\n{str(e)[:40]}", (10, 10))
 
+    def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
+        """Render neural activity screen - EEG frequency band visualization."""
+        if not readings:
+            self._display.render_text("NEURAL\n\nNo data", (10, 10))
+            return
+
+        raw = readings.to_dict()
+        neural_key = (
+            f"{raw.get('eeg_delta_power', 0):.1f}|{raw.get('eeg_theta_power', 0):.1f}|"
+            f"{raw.get('eeg_alpha_power', 0):.1f}|{raw.get('eeg_beta_power', 0):.1f}|"
+            f"{raw.get('eeg_gamma_power', 0):.1f}"
+        )
+        if anima:
+            neural_key += f"|{anima.warmth:.1f}|{anima.clarity:.1f}|{anima.stability:.1f}|{anima.presence:.1f}"
+        if self._check_screen_cache("neural", neural_key):
+            return
+
+        try:
+            if not hasattr(self._display, '_create_canvas'):
+                self._render_neural_text_fallback(readings)
+                return
+
+            image, draw = self._display._create_canvas(COLORS.BG_DARK)
+
+            fonts = self._get_fonts()
+            font_small = fonts['small']
+            font_medium = fonts['medium']
+            font_title = fonts['title']
+            font_tiny = fonts['tiny']
+            font_micro = fonts['micro']
+
+            DIM = COLORS.TEXT_DIM
+            SECONDARY = COLORS.TEXT_SECONDARY
+
+            bands = [
+                ("delta",  raw.get("eeg_delta_power") or 0, (100, 100, 240),  "0.5-4 Hz"),
+                ("theta",  raw.get("eeg_theta_power") or 0, (140, 92, 246),   "4-8 Hz"),
+                ("alpha",  raw.get("eeg_alpha_power") or 0, (6, 182, 212),    "8-13 Hz"),
+                ("beta",   raw.get("eeg_beta_power") or 0,  (34, 197, 94),    "13-30 Hz"),
+                ("gamma",  raw.get("eeg_gamma_power") or 0, (245, 158, 11),   "30+ Hz"),
+            ]
+
+            # Title
+            draw.text((10, 6), "Neural Activity", fill=COLORS.SOFT_CYAN, font=font_title)
+
+            # Dominant band indicator
+            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
+            dominant_name = bands[dominant_idx][0]
+            dominant_color = bands[dominant_idx][2]
+            draw.text((10, 26), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
+
+            # ---- Vertical bar chart ----
+            bar_area_top = 58
+            bar_area_bottom = 184
+            bar_area_height = bar_area_bottom - bar_area_top
+            bar_width = 28
+            bar_gap = 12
+            total_bars_width = len(bands) * bar_width + (len(bands) - 1) * bar_gap
+            bar_start_x = (240 - total_bars_width) // 2
+
+            # Background area
+            draw.rectangle([bar_start_x - 6, bar_area_top - 4, bar_start_x + total_bars_width + 6, bar_area_bottom + 4],
+                          fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
+
+            from .design import lighten_color
+            for i, (name, value, color, freq) in enumerate(bands):
+                x = bar_start_x + i * (bar_width + bar_gap)
+
+                # Bar track
+                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
+                              fill=(15, 15, 22))
+
+                # Filled bar (bottom-up)
+                fill_height = int(value * bar_area_height)
+                if fill_height > 0:
+                    bar_top = bar_area_bottom - fill_height
+                    draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom],
+                                  fill=color)
+                    if fill_height > 3:
+                        bright = lighten_color(color, 60)
+                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2],
+                                      fill=bright)
+
+                # Value text above bar
+                pct_text = f"{value * 100:.0f}%"
+                draw.text((x + 2, bar_area_top - 14), pct_text, fill=color, font=font_micro)
+
+                # Greek letter label below bar
+                greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
+                letter = greek.get(name, name[0])
+                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 6), letter, fill=SECONDARY, font=font_medium)
+
+            # ---- Band descriptions at bottom ----
+            y_desc = 202
+            desc_map = {
+                "delta": "deep rest",
+                "theta": "meditation",
+                "alpha": "awareness",
+                "beta": "focus",
+                "gamma": "cognition",
+            }
+            freq_map = {
+                "delta": "0.5-4 Hz",
+                "theta": "4-8 Hz",
+                "alpha": "8-13 Hz",
+                "beta": "13-30 Hz",
+                "gamma": "30+ Hz",
+            }
+            dominant_desc = desc_map.get(dominant_name, "")
+            draw.text((10, y_desc), f"{dominant_name}: {dominant_desc}", fill=dominant_color, font=font_small)
+            freq_range = freq_map.get(dominant_name, "")
+            if freq_range:
+                draw.text((10, y_desc + 14), freq_range, fill=DIM, font=font_tiny)
+
+            self._draw_status_bar(draw)
+
+            self._store_screen_cache("neural", neural_key, image)
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+
+        except Exception as e:
+            import traceback
+            print(f"[Neural Screen] Error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+            self._render_neural_text_fallback(readings)
+
+    def _render_neural_text_fallback(self, readings: Optional[SensorReadings]):
+        """Text-only fallback for neural screen."""
+        raw = readings.to_dict() if readings else {}
+        lines = ["NEURAL ACTIVITY", ""]
+        for band in ["delta", "theta", "alpha", "beta", "gamma"]:
+            val = raw.get(f"eeg_{band}_power") or 0
+            bar = "#" * int(val * 20)
+            lines.append(f"{band:6s} {val:.0%} {bar}")
+        self._display.render_text("\n".join(lines), (10, 10))
+
     def _render_inner_life(self):
         """Render inner life screen — actual cognitive and emotional state."""
         shm = self._shm_data or {}
@@ -1934,7 +2076,7 @@ class ScreenRenderer:
             f"{d_warmth:.1f}|{d_clarity:.1f}|{d_stability:.1f}|{d_presence:.1f}|"
             f"{activity_level}|{total_patterns}"
         )
-        if self._check_screen_cache("neural", cache_key):
+        if self._check_screen_cache("inner_life", cache_key):
             return
 
         if not hasattr(self._display, '_create_canvas'):
@@ -2079,7 +2221,7 @@ class ScreenRenderer:
 
             self._draw_status_bar(draw)
 
-            self._store_screen_cache("neural", cache_key, image)
+            self._store_screen_cache("inner_life", cache_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
