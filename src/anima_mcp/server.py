@@ -321,6 +321,7 @@ def _get_metacog_monitor():
     return _metacog_monitor
 
 _last_shm_data = None  # Cached per-iteration shared memory read
+_consumed_drive_events = set()  # Track consumed drive events to avoid re-posting
 
 def _get_warm_start_anticipation():
     """Consume warm start state as a synthetic Anticipation (one-shot).
@@ -955,6 +956,24 @@ async def _update_display_loop():
                 _health.heartbeat("anima")
             except Exception:
                 _health = None
+
+            # Consume drive events from broker (via SHM) → message board observations
+            try:
+                if _last_shm_data:
+                    _drive_evts = _last_shm_data.get("drive_events", [])
+                    if _drive_evts:
+                        from .messages import add_observation
+                        for _de in _drive_evts:
+                            # Deduplicate: dimension+event_type is unique per crossing
+                            _evt_key = (_de["dimension"], _de["event_type"], _de.get("drive_value"))
+                            if _evt_key not in _consumed_drive_events:
+                                _consumed_drive_events.add(_evt_key)
+                                add_observation(_de["text"], author="lumen")
+                    elif _consumed_drive_events:
+                        # Broker cleared events — reset our dedup set
+                        _consumed_drive_events.clear()
+            except Exception:
+                pass  # Drive observations are advisory, never block main loop
 
             # Identity heartbeat: accumulate alive_seconds incrementally
             # Prevents losing session time on crashes/restarts
@@ -1636,6 +1655,11 @@ async def _update_display_loop():
 
                         # Use screen renderer if available (supports multiple screens)
                         if _screen_renderer:
+                            # Pass inner life drives to drawing engine for color influence
+                            if _last_shm_data and hasattr(_screen_renderer, 'drawing_engine'):
+                                _il_drives = (_last_shm_data.get("inner_life") or {}).get("drives")
+                                if _il_drives:
+                                    _screen_renderer.drawing_engine.set_drives(_il_drives)
                             # governance_decision_for_display is set by governance check-in (runs every 30 iterations)
                             # It's None on most iterations, but will have value after governance check-ins
                             _screen_renderer.render(

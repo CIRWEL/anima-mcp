@@ -171,6 +171,20 @@ class SelfModel:
                 confidence=0.5,
                 value=0.5,  # 1 = strong effect, 0 = no effect
             ),
+
+            # Temperament baseline beliefs (from inner life)
+            "warmth_baseline_low": SelfBelief(
+                belief_id="warmth_baseline_low",
+                description="My baseline warmth tends to stay low",
+                confidence=0.3,
+                value=0.5,  # 1 = definitely low baseline, 0 = high baseline
+            ),
+            "presence_baseline_low": SelfBelief(
+                belief_id="presence_baseline_low",
+                description="My baseline presence tends to stay low",
+                confidence=0.3,
+                value=0.5,
+            ),
         }
 
         # Public read-only access (use self.beliefs instead of self._beliefs from outside)
@@ -186,6 +200,7 @@ class SelfModel:
         }
         self._surprise_data: deque = deque(maxlen=50)  # (source, surprise_level)
         self._prev_led_brightness: Optional[float] = None  # Track LED changes
+        self._temperament_samples: deque = deque(maxlen=30)  # Recent temperament snapshots
 
         # Load persisted model
         self._load()
@@ -508,6 +523,36 @@ class SelfModel:
                 strength=abs(clarity - 0.5),
             )
 
+    def observe_temperament(self, temperament: Dict[str, float]):
+        """Test temperament baseline beliefs using slow-moving averages.
+
+        Called with inner life temperament values (already slow EMA).
+        Samples every call but only tests beliefs when enough data accumulates.
+        """
+        self._temperament_samples.append(temperament)
+
+        # Need enough samples for meaningful test (~1 min of data)
+        if len(self._temperament_samples) < 15:
+            return
+
+        # Test warmth baseline
+        warmth_vals = [s.get("warmth", 0.5) for s in self._temperament_samples]
+        warmth_mean = sum(warmth_vals) / len(warmth_vals)
+        self._beliefs["warmth_baseline_low"].update_from_evidence(
+            supports=warmth_mean < 0.40,
+            strength=abs(warmth_mean - 0.40) * 2.0,
+        )
+
+        # Test presence baseline
+        presence_vals = [s.get("presence", 0.5) for s in self._temperament_samples]
+        presence_mean = sum(presence_vals) / len(presence_vals)
+        self._beliefs["presence_baseline_low"].update_from_evidence(
+            supports=presence_mean < 0.35,
+            strength=abs(presence_mean - 0.35) * 2.0,
+        )
+
+        self._maybe_save()
+
     def predict_own_response(self, context: str) -> Dict[str, float]:
         """Predict how Lumen will respond to a situation based on self-beliefs.
 
@@ -597,6 +642,18 @@ class SelfModel:
                     descriptions.append(f"I am {strength} that my own LEDs affect my light readings")
                 elif belief.value < 0.4:
                     descriptions.append(f"I am {strength} that my light readings are from the environment, not my LEDs")
+
+            elif belief_id == "warmth_baseline_low":
+                if belief.value > 0.6:
+                    descriptions.append(f"I am {strength} that my warmth tends to stay low")
+                elif belief.value < 0.4:
+                    descriptions.append(f"I am {strength} that my warmth baseline is comfortable")
+
+            elif belief_id == "presence_baseline_low":
+                if belief.value > 0.6:
+                    descriptions.append(f"I am {strength} that my sense of presence tends to be low")
+                elif belief.value < 0.4:
+                    descriptions.append(f"I am {strength} that I generally feel present")
 
         if not descriptions:
             return "I am still learning about myself."

@@ -78,6 +78,19 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
         "is_pi": sensors.is_pi(),
     }
 
+    # Add inner life from shared memory (temperament, drives)
+    try:
+        from ..server import _last_shm_data
+        il = _last_shm_data.get("inner_life") if _last_shm_data else None
+        if il:
+            result["inner_life"] = {
+                "temperament": il.get("temperament"),
+                "drives": il.get("drives"),
+                "strongest_drive": il.get("strongest_drive"),
+            }
+    except Exception:
+        pass
+
     # Record state for history
     store.record_state(
         anima.warmth, anima.clarity, anima.stability, anima.presence,

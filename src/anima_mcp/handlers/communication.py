@@ -5,8 +5,11 @@ Handlers: lumen_qa, post_message, say, configure_voice, primitive_feedback.
 
 import json
 import sys
+from pathlib import Path
 
 from mcp.types import TextContent
+
+_SOCIAL_BOOST_PATH = Path("/dev/shm/anima_social_boost")
 
 
 def _get_request_headers() -> dict | None:
@@ -195,6 +198,12 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         # Add answer via add_agent_message (handles responds_to linking)
         result = add_agent_message(answer, agent_name=agent_name, responds_to=validated_question_id)
 
+        # Signal social boost to broker (someone answered Lumen's question)
+        try:
+            _SOCIAL_BOOST_PATH.touch()
+        except Exception:
+            pass
+
         # Extract insight from Q&A (inline so result visible in response)
         # This populates Lumen's knowledge base with learnings from answers
         insight_result = None
@@ -340,6 +349,11 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     _activity.record_interaction()
             except Exception:
                 pass
+            # Signal social boost to broker (inner life mood contagion)
+            try:
+                _SOCIAL_BOOST_PATH.touch()
+            except Exception:
+                pass
             # Snapshot clarity for self-model interaction observation
             try:
                 _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
@@ -408,6 +422,11 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             try:
                 if _activity:
                     _activity.record_interaction()
+            except Exception:
+                pass
+            # Signal social boost to broker (inner life mood contagion)
+            try:
+                _SOCIAL_BOOST_PATH.touch()
             except Exception:
                 pass
             # Snapshot clarity for self-model interaction observation

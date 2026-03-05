@@ -382,6 +382,27 @@ def run_creature():
             anima = _mood_momentum.smooth(raw_anima)
             inner_state = _inner_life.update(raw_anima, anima)
 
+            # 2-i-a. Check for social boost signal (server writes on interaction)
+            _boost_path = Path("/dev/shm/anima_social_boost")
+            if _boost_path.exists():
+                try:
+                    _boost_path.unlink()
+                    _inner_life.apply_social_boost()
+                except Exception:
+                    pass
+
+            # 2-i. Collect drive events for server to consume via SHM
+            _drive_events = []
+            for ev in _inner_life.get_pending_events():
+                obs_text = _inner_life.get_observation_text(ev)
+                if obs_text:
+                    _drive_events.append({
+                        "text": obs_text,
+                        "dimension": ev.dimension,
+                        "event_type": ev.event_type,
+                        "drive_value": round(ev.drive_value, 3),
+                    })
+
             # 2a. Calculate UNITARES EISV metrics
             eisv = anima_to_eisv(anima, readings)
 
@@ -539,6 +560,10 @@ def run_creature():
                     # Track time patterns
                     hour = datetime.now().hour
                     self_model.observe_time_pattern(hour, anima.warmth, anima.clarity)
+
+                    # Track temperament baseline (from inner life)
+                    if inner_state and inner_state.temperament:
+                        self_model.observe_temperament(inner_state.temperament)
                 except Exception as e:
                     print(f"[Learning] Self-model error: {e}", file=sys.stderr, flush=True)
 
@@ -789,6 +814,7 @@ def run_creature():
                 "readings": readings.to_dict(),
                 "anima": anima.to_dict(),
                 "inner_life": inner_state.to_dict() if inner_state else {},
+                "drive_events": _drive_events,
                 "eisv": eisv.to_dict(),
                 "identity": {
                     "creature_id": identity.creature_id,
@@ -942,6 +968,9 @@ def run_creature():
                 if self_model:
                     self_model.save()
                     print("[StableCreature] Saved self-model")
+                if _inner_life:
+                    _inner_life.save()
+                    print("[StableCreature] Saved inner life (temperament + drives)")
             except Exception as e:
                 print(f"[StableCreature] Error saving learning state: {e}")
 

@@ -495,6 +495,12 @@ class DrawingState:
     phase_mark_count: int = 0        # Marks in current phase
     i_momentum: float = 0.0          # Smoothed I trend (EMA)
 
+    # Inner life drives (populated from SHM, influence color)
+    drive_warmth: float = 0.0        # Wanting warmth → warmer hues
+    drive_clarity: float = 0.0       # Wanting clarity → higher saturation
+    drive_stability: float = 0.0     # Wanting calm → muted tones
+    drive_presence: float = 0.0      # Wanting wholeness → more vibrant
+
     def reset(self):
         """Reset state for new drawing."""
         self.E = 0.7
@@ -721,6 +727,14 @@ class DrawingEngine:
         # Initialize expression mood tracker
         self._mood_tracker = ExpressionMoodTracker(identity_store=identity_store)
 
+    def set_drives(self, drives: dict):
+        """Update drawing state with inner life drives (from SHM)."""
+        if drives and self.intent:
+            self.intent.state.drive_warmth = drives.get("warmth", 0.0)
+            self.intent.state.drive_clarity = drives.get("clarity", 0.0)
+            self.intent.state.drive_stability = drives.get("stability", 0.0)
+            self.intent.state.drive_presence = drives.get("presence", 0.0)
+
     def draw(self, anima: Anima, draw=None):
         """Lumen draws through the active era's mark-making vocabulary.
 
@@ -792,8 +806,22 @@ class DrawingEngine:
         if self.drawing_goal and self.drawing_goal.warmth_bias != 0.0:
             draw_warmth = max(0.0, min(1.0, warmth + self.drawing_goal.warmth_bias))
 
+        # Drive influence on color: wanting something nudges art toward it
+        ds = self.intent.state
+        if ds.drive_warmth > 0.15:
+            draw_warmth = min(1.0, draw_warmth + ds.drive_warmth * 0.15)
+        draw_clarity = clarity
+        if ds.drive_clarity > 0.15:
+            draw_clarity = min(1.0, draw_clarity + ds.drive_clarity * 0.12)
+        draw_stability = stability
+        if ds.drive_stability > 0.15:
+            draw_stability = min(1.0, draw_stability + ds.drive_stability * 0.10)
+        draw_presence = presence
+        if ds.drive_presence > 0.15:
+            draw_presence = min(1.0, draw_presence + ds.drive_presence * 0.12)
+
         color, hue_category = self.active_era.generate_color(
-            era_state, draw_warmth, clarity, stability, presence, light_regime=light_regime)
+            era_state, draw_warmth, draw_clarity, draw_stability, draw_presence, light_regime=light_regime)
 
         C = self.intent.state.coherence()
         if era_state.gesture_remaining <= 0:
