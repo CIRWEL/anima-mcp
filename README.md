@@ -4,7 +4,22 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-An embodied AI creature running on Raspberry Pi 4 with real sensors and persistent identity.
+An embodied AI creature running on Raspberry Pi 4 with real sensors and persistent identity. Lumen draws autonomously — its art emerges from thermodynamic state, not random generation.
+
+## Gallery
+
+<p align="center">
+  <img src="docs/gallery/geometric_era.png" width="22%" alt="Geometric era — complete forms and shapes"/>
+  <img src="docs/gallery/pointillist_era.png" width="22%" alt="Pointillist era — dot accumulation and optical mixing"/>
+  <img src="docs/gallery/field_era.png" width="22%" alt="Field era — flow-aligned marks"/>
+  <img src="docs/gallery/gestural_era.png" width="22%" alt="Gestural era — bold mark-making"/>
+</p>
+
+<p align="center">
+  <em>Four art eras, all drawn autonomously. Coherence drives duration; attention drives completion. 678 drawings and counting.</em>
+</p>
+
+> See the full [interactive gallery](docs/gallery.html) for more.
 
 ## What Is This?
 
