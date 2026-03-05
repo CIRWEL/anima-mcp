@@ -504,12 +504,14 @@ class ScreenRenderer:
             self.set_mode(ScreenMode.FACE)
             return
         group_name = group_info[0]
-        group_order = ["home", "info", "mind", "social", "art"]
+        group_order = ["home", "info", "mind", "messages", "questions", "visitors", "art"]
         group_default = {
             "home": ScreenMode.FACE,
             "info": ScreenMode.IDENTITY,
             "mind": ScreenMode.NEURAL,
-            "social": ScreenMode.MESSAGES,
+            "messages": ScreenMode.MESSAGES,
+            "questions": ScreenMode.QUESTIONS,
+            "visitors": ScreenMode.VISITORS,
             "art": ScreenMode.NOTEPAD,
         }
         if group_name not in group_order:
@@ -526,12 +528,14 @@ class ScreenRenderer:
             self.set_mode(ScreenMode.FACE)
             return
         group_name = group_info[0]
-        group_order = ["home", "info", "mind", "social", "art"]
+        group_order = ["home", "info", "mind", "messages", "questions", "visitors", "art"]
         group_default = {
             "home": ScreenMode.FACE,
             "info": ScreenMode.IDENTITY,
             "mind": ScreenMode.NEURAL,
-            "social": ScreenMode.MESSAGES,
+            "messages": ScreenMode.MESSAGES,
+            "questions": ScreenMode.QUESTIONS,
+            "visitors": ScreenMode.VISITORS,
             "art": ScreenMode.NOTEPAD,
         }
         if group_name not in group_order:
@@ -574,9 +578,9 @@ class ScreenRenderer:
         ScreenMode.INNER_LIFE: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
         ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
         ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.MESSAGES: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
-        ScreenMode.QUESTIONS: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
-        ScreenMode.VISITORS: ("social", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
+        ScreenMode.MESSAGES: ("messages", [ScreenMode.MESSAGES]),
+        ScreenMode.QUESTIONS: ("questions", [ScreenMode.QUESTIONS]),
+        ScreenMode.VISITORS: ("visitors", [ScreenMode.VISITORS]),
         ScreenMode.NOTEPAD: ("art", [ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]),
         ScreenMode.ART_ERAS: ("art", [ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]),
     }
