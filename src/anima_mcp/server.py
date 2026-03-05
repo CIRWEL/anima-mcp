@@ -45,7 +45,7 @@ from .display.screens import ScreenRenderer, ScreenMode
 from .input.brainhat_input import get_brainhat_input, JoystickDirection as InputDirection
 from .next_steps_advocate import get_advocate
 from .eisv_mapper import anima_to_eisv
-from .config import get_calibration, LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, estimated_led_glow
+from .config import get_calibration, estimated_led_glow
 from .learning import get_learner
 from .messages import add_observation, add_agent_message, add_question, get_unanswered_questions
 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection

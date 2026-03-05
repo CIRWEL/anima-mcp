@@ -21,7 +21,7 @@ import sys
 
 from .sensors.base import SensorReadings
 from .anima import Anima
-from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, estimated_led_glow
+from .config import estimated_led_glow
 
 
 @dataclass

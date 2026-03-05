@@ -335,8 +335,8 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             slope = ss_xy / ss_xx if ss_xx > 0 else 0
             intercept = mean_y - slope * mean_x
             fitted = {
-                "LED_LUX_PER_BRIGHTNESS": round(slope, 1),
-                "LED_LUX_AMBIENT_FLOOR": round(intercept, 1),
+                "LED_LUX_QUADRATIC_linear_slope": round(slope, 1),
+                "LED_LUX_QUADRATIC_linear_intercept": round(intercept, 1),
             }
 
         zero_reading = next((d for d in calibration_data if d["brightness"] == 0.0), None)
@@ -348,10 +348,10 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "ambient_lux_at_zero_brightness": zero_reading["raw_lux"] if zero_reading else None,
             "fitted_constants": fitted,
             "current_config": {
-                "LED_LUX_PER_BRIGHTNESS": 400.0,
-                "LED_LUX_AMBIENT_FLOOR": 8.0,
+                "LED_LUX_QUADRATIC": 1150.0,
+                "model": "quadratic: glow = 1150 * brightness^2",
             },
-            "note": "Compare fitted_constants against current_config. Update config.py if significantly different.",
+            "note": "Compare fitted data against current_config. Update config.py if significantly different.",
         }, indent=2))]
 
     else:

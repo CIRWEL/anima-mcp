@@ -56,7 +56,7 @@ from .sensors import get_sensors
 from collections import deque
 from .anima import sense_self, MoodMomentum
 from .inner_life import InnerLife
-from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW, estimated_led_glow
+from .config import WORLD_LIGHT_SMOOTH_WINDOW, estimated_led_glow
 from .display.leds.brightness import estimate_instantaneous_brightness
 # NOTE: Broker does NOT import or init LEDDisplay — server owns LED hardware.
 # Agency LED brightness is communicated via shared memory.
@@ -336,9 +336,18 @@ def run_creature():
     readings = None  # Initialize before loop (first iteration has no prior readings)
     last_pattern_apply = 0  # Track periodic learned pattern application
     # LED brightness tracking (broker doesn't own LED hardware — server does)
-    # We track the agency-desired brightness locally and write it to SHM;
-    # the server reads SHM and applies it to the actual LEDs.
-    _prev_led_brightness = 0.04  # Estimate for world_light correction
+    # Read actual brightness preset from disk (renderer saves to ~/.anima/display_brightness.json).
+    # Falls back to Medium preset (0.12) — NOT the old 0.04 config default.
+    _brightness_preset_path = Path.home() / ".anima" / "display_brightness.json"
+    _preset_led_brightness = 0.12  # Medium preset default
+    try:
+        if _brightness_preset_path.exists():
+            _br_data = json.loads(_brightness_preset_path.read_text())
+            _preset_led_brightness = _br_data.get("leds", 0.12)
+            print(f"[StableCreature] LED brightness from preset: {_preset_led_brightness}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+    _prev_led_brightness = _preset_led_brightness  # Estimate for world_light correction
     _agency_led_brightness = 1.0  # Agency-desired manual brightness factor [0.05, 1.0]
     _world_light_buffer = deque(maxlen=WORLD_LIGHT_SMOOTH_WINDOW)  # Rolling avg
     _prev_activity_level = None  # Track activity state transitions for buffer flush
@@ -421,8 +430,8 @@ def run_creature():
                     print(f"[Creature] Activity transition {_prev_activity_level} → {activity_state.level}, flushed world_light buffer", file=sys.stderr, flush=True)
                 _prev_activity_level = activity_state.level
                 # Update LED brightness estimate for next cycle
-                # Base brightness × agency dimmer × activity multiplier
-                _base_br = 0.04  # LEDDisplay default base brightness
+                # Preset brightness × agency dimmer × activity multiplier
+                _base_br = _preset_led_brightness
                 _prev_led_brightness = _base_br * _agency_led_brightness * activity_state.brightness_multiplier
                 readings.led_brightness = _prev_led_brightness
                 # Skip some updates when resting/drowsy (power saving)

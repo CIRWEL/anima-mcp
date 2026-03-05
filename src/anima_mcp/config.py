@@ -22,36 +22,34 @@ from .atomic_write import atomic_json_write
 
 # === LED Self-Glow Estimation ===
 # The VEML7700 light sensor sits next to the DotStar LEDs.
-# These constants estimate how much lux the LEDs contribute to the sensor reading.
-# Formula: estimated_glow = LED_LUX_PER_BRIGHTNESS * brightness + LED_LUX_AMBIENT_FLOOR
+# LED glow follows a quadratic relationship (non-linear LED response at low current).
 #
 # Empirically calibrated 2026-02-18 via manage_display(action="calibrate_leds"):
 #   brightness=0.00 → ~15-44 lux (ambient only, LEDs off)
 #   brightness=0.12 → ~29-62 lux (LED adds ~13-17 lux)
 #   brightness=0.25 → ~99-112 lux (LED adds ~68-83 lux)
-#   Fitted slopes: 391, 538 across two runs. Using 400 as conservative mid-value.
-#   Previous guess of 4000 was 10x too high — world_light was near-zero at all times.
 #
-# Floor scales with brightness to avoid overcorrection at very low levels:
-#   At brightness < 0.05 (LEDs barely visible), floor is near zero.
-#   At brightness >= 0.10, floor reaches full 8 lux.
-LED_LUX_PER_BRIGHTNESS: float = 400.0    # lux per unit brightness (0-1 scale)
-LED_LUX_AMBIENT_FLOOR: float = 8.0       # max ambient floor when LEDs are on
-LED_LUX_FLOOR_ONSET: float = 0.05        # brightness below which floor scales down
+# Quadratic fit: glow = 1150 * brightness^2
+#   At 0.12: 1150 * 0.0144 = 16.6 lux  (calibration: 13-17 ✓)
+#   At 0.25: 1150 * 0.0625 = 71.9 lux  (calibration: 68-83 ✓)
+#   At 0.04: 1150 * 0.0016 = 1.8 lux   (barely visible LEDs)
+#
+# Previous linear model (400*b + 8) overcorrected at low brightness:
+#   At 0.12: gave 56 lux (actual ~16) — 3.5x too high.
+LED_LUX_QUADRATIC: float = 1150.0       # quadratic coefficient for LED glow
 WORLD_LIGHT_SMOOTH_WINDOW: int = 4       # rolling average samples (~8s at 2s interval)
 
 
 def estimated_led_glow(brightness: float) -> float:
     """Estimate how much lux the LEDs contribute to the light sensor.
 
-    The floor scales with brightness so near-off LEDs don't overcorrect:
-      brightness=0.00 → glow=0 (LEDs off, no correction needed)
-      brightness=0.02 → glow=0.02*400 + 8*(0.02/0.05) = 8+3.2 = 11.2
-      brightness=0.10 → glow=0.10*400 + 8 = 48
-      brightness=0.25 → glow=0.25*400 + 8 = 108
+    LED glow is quadratic in brightness (non-linear LED response):
+      brightness=0.00 → glow=0
+      brightness=0.04 → glow≈1.8 lux
+      brightness=0.12 → glow≈17 lux
+      brightness=0.25 → glow≈72 lux
     """
-    floor_scale = min(1.0, brightness / LED_LUX_FLOOR_ONSET) if brightness > 0 else 0.0
-    return brightness * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR * floor_scale
+    return LED_LUX_QUADRATIC * brightness * brightness
 
 
 @dataclass

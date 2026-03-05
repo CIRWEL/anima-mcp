@@ -109,7 +109,13 @@ class PiSensors(SensorBackend):
         # VEML7700 light sensor at 0x10 with retry
         def init_light():
             import adafruit_veml7700
-            return adafruit_veml7700.VEML7700(self._i2c)
+            sensor = adafruit_veml7700.VEML7700(self._i2c)
+            # Default gain is 1/8 (lowest sensitivity) — too coarse for indoor light.
+            # Gain 1x with 200ms integration gives ~16x more counts per lux,
+            # much better precision at typical indoor levels (50-500 lux).
+            sensor.light_gain = sensor.ALS_GAIN_1
+            sensor.light_integration_time = sensor.ALS_200MS
+            return sensor
         
         self._light_sensor = safe_call(
             lambda: retry_with_backoff(init_light, config=init_config),
@@ -220,7 +226,10 @@ class PiSensors(SensorBackend):
         elif sensor_name == "veml7700":
             def init_light():
                 import adafruit_veml7700
-                return adafruit_veml7700.VEML7700(self._i2c)
+                sensor = adafruit_veml7700.VEML7700(self._i2c)
+                sensor.light_gain = sensor.ALS_GAIN_1
+                sensor.light_integration_time = sensor.ALS_200MS
+                return sensor
 
             result = safe_call(
                 lambda: retry_with_backoff(init_light, config=init_config),

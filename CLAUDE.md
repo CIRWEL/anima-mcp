@@ -99,16 +99,16 @@ Source: `computational_neural.py` (used by both `pi.py` and `mock.py` sensors)
 
 ### Light Sensor & World Light
 
-The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCraft HAT. At typical brightness (0.12), the LEDs contribute ~488 lux to the sensor — far more than typical indoor ambient light. **Raw lux is LED-dominated.**
+The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCraft HAT. LED glow follows a quadratic relationship (non-linear LED response at low current).
 
 **World light** = raw lux minus estimated LED self-glow:
 ```python
-from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
-estimated_glow = led_brightness * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
-world_light = max(0.0, raw_lux - estimated_glow)
+from .config import estimated_led_glow
+glow = estimated_led_glow(led_brightness)  # = 1150 * brightness^2
+world_light = max(0.0, raw_lux - glow)
 ```
 
-Constants in `config.py`: `LED_LUX_PER_BRIGHTNESS = 4000.0`, `LED_LUX_AMBIENT_FLOOR = 8.0`
+At typical brightness (0.12), LED glow ≈ 17 lux. At 0.25, ≈ 72 lux. Constant in `config.py`: `LED_LUX_QUADRATIC = 1150.0`
 
 **Where raw vs corrected lux is used:**
 
