@@ -794,7 +794,7 @@ async def _update_display_loop():
                         # Group-local up/down for screens that don't consume up/down directly
                         if current_mode in (
                             ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH,
-                            ScreenMode.NEURAL, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.NOTEPAD
+                            ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.NOTEPAD
                         ):
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
