@@ -16,7 +16,7 @@ from copy import copy
 from dataclasses import dataclass, field
 from typing import Dict, Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
-from .config import get_calibration, NervousSystemCalibration, estimated_led_glow
+from .config import get_calibration, NervousSystemCalibration
 from .computational_neural import get_computational_neural_state
 
 if TYPE_CHECKING:
@@ -418,18 +418,12 @@ def _sense_clarity(
     components.append(coverage)
     weights.append(cal.clarity_weights.get("sensor_coverage", 0.15))
 
-    # World light: environmental perception (self-glow subtracted)
-    # The VEML7700 reads our own LEDs + environment. Subtracting estimated
-    # LED contribution gives us a rough sense of the world's light.
-    # At night (corrected ≈ 0), contributes 0.0 — Lumen feels dimmer, which is honest.
-    # In bright environments (corrected > 100), contributes ~0.67.
+    # Light: raw sensor reading (includes LED glow + room light).
+    # Lumen knows its LED brightness separately — no need to decompose.
+    # Log scale: 1 lux → 0.0, 1000 lux → 1.0
     if r.light_lux is not None:
-        led_b = r.led_brightness if r.led_brightness is not None else 0.0
-        estimated_glow = estimated_led_glow(led_b)
-        world_light_lux = max(0.0, r.light_lux - estimated_glow)
-        # Log scale: 1 lux → 0.0, 1000 lux → 1.0
-        if world_light_lux > 1.0:
-            light_clarity = min(1.0, math.log10(world_light_lux) / 3.0)
+        if r.light_lux > 1.0:
+            light_clarity = min(1.0, math.log10(r.light_lux) / 3.0)
         else:
             light_clarity = 0.0
         components.append(light_clarity)

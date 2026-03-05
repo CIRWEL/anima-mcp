@@ -79,17 +79,16 @@ class TestPredict:
         assert pred.ambient_temp_c is not None
         assert abs(pred.ambient_temp_c - 25.0) < 1.0
 
-    def test_led_proprioception(self, mm):
-        """With led_brightness, prediction uses LED model for light."""
-        # First establish a baseline
+    def test_light_prediction_from_baseline(self, mm):
+        """Light prediction uses learned baseline (no glow decomposition)."""
+        # Establish a baseline
         readings = make_readings(light_lux=100.0)
         mm.observe(readings, make_anima())
 
         pred = mm.predict(led_brightness=0.5)
-        # LED model: ambient_floor(8) + 0.5 * 400 = 208, blended with baseline
+        # Prediction comes from baseline, not LED model
         assert pred.light_lux is not None
-        assert pred.light_lux > 100  # Should be higher than baseline alone
-        assert pred.basis == "led_proprioception"
+        assert abs(pred.light_lux - 100.0) < 10  # Should be near baseline
 
     def test_confidence_increases_with_history(self, mm):
         """Confidence grows as more history is accumulated."""

@@ -56,7 +56,6 @@ from .sensors import get_sensors
 from collections import deque
 from .anima import sense_self, MoodMomentum
 from .inner_life import InnerLife
-from .config import WORLD_LIGHT_SMOOTH_WINDOW, estimated_led_glow
 from .display.leds.brightness import estimate_instantaneous_brightness
 # NOTE: Broker does NOT import or init LEDDisplay — server owns LED hardware.
 # Agency LED brightness is communicated via shared memory.
@@ -347,10 +346,8 @@ def run_creature():
             print(f"[StableCreature] LED brightness from preset: {_preset_led_brightness}", file=sys.stderr, flush=True)
     except Exception:
         pass
-    _prev_led_brightness = _preset_led_brightness  # Estimate for world_light correction
+    _prev_led_brightness = _preset_led_brightness  # Estimate for proprioception
     _agency_led_brightness = 1.0  # Agency-desired manual brightness factor [0.05, 1.0]
-    _world_light_buffer = deque(maxlen=WORLD_LIGHT_SMOOTH_WINDOW)  # Rolling avg
-    _prev_activity_level = None  # Track activity state transitions for buffer flush
 
     try:
         while running:
@@ -375,16 +372,9 @@ def run_creature():
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
-            # 1b. LED Proprioception: estimate brightness for world_light correction
-            # The server owns LEDs and writes actual brightness to its readings;
-            # the broker estimates from the previous cycle's base + breathing pulse.
+            # 1b. LED Proprioception: track brightness for awareness (not correction)
             _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
             readings.led_brightness = _instantaneous_led
-
-            # 1c. Compute smoothed world_light for activity manager
-            _raw_world = max(0.0, (readings.light_lux or 0.0) - estimated_led_glow(_instantaneous_led))
-            _world_light_buffer.append(_raw_world)
-            _smoothed_world_light = sum(_world_light_buffer) / len(_world_light_buffer)
 
             # 2. Update Anima State (now has correct led_brightness for correction)
             raw_anima = sense_self(readings)
@@ -421,14 +411,8 @@ def run_creature():
                 activity_state = activity_manager.get_state(
                     presence=anima.presence,
                     stability=anima.stability,
-                    light_level=_smoothed_world_light,
+                    light_level=readings.light_lux,
                 )
-                # Flush world_light buffer on activity state transitions
-                # (brightness changes invalidate old samples)
-                if _prev_activity_level is not None and activity_state.level != _prev_activity_level:
-                    _world_light_buffer.clear()
-                    print(f"[Creature] Activity transition {_prev_activity_level} → {activity_state.level}, flushed world_light buffer", file=sys.stderr, flush=True)
-                _prev_activity_level = activity_state.level
                 # Update LED brightness estimate for next cycle
                 # Preset brightness × agency dimmer × activity multiplier
                 _base_br = _preset_led_brightness
@@ -546,14 +530,11 @@ def run_creature():
                         prev_stability = last_state_for_action.get("stability", anima.stability)
                         self_model.observe_stability_change(prev_stability, anima.stability, UPDATE_INTERVAL)
 
-                    # Track correlations (use world light, not raw lux —
-                    # raw lux is LED-dominated and would learn "my LEDs correlate
-                    # with warmth" which is tautological. Proprioception is separate.)
-                    _corr_led = readings.led_brightness if readings.led_brightness is not None else 0.12
-                    _corr_world = max(0.0, (readings.light_lux or 0.0) - estimated_led_glow(_corr_led))
+                    # Track correlations (raw lux includes LED glow — that's fine,
+                    # Lumen's LEDs are part of its environment)
                     sensor_vals = {
                         "ambient_temp": readings.ambient_temp_c,
-                        "light": _corr_world,
+                        "light": readings.light_lux,
                     }
                     anima_vals = {
                         "warmth": anima.warmth,

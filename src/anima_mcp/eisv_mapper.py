@@ -277,20 +277,13 @@ def compute_ethical_drift(
             if temp_change > 2.0:  # >2°C change is significant
                 env_amplifier = 1.0 + min(temp_change / 10.0, 1.0)  # Up to 2x
 
-        # Light change amplifies emotional drift
-        # Use corrected (world) light — subtract LED self-glow so that
-        # activity-state LED dimming doesn't trigger spurious drift
+        # Light change amplifies emotional drift (raw lux — includes LED glow)
         curr_light = getattr(current_readings, 'light_lux', None)
         prev_light = getattr(prev_readings, 'light_lux', None)
         if curr_light is not None and prev_light is not None:
-            from .config import estimated_led_glow
-            curr_led = getattr(current_readings, 'led_brightness', None) or 0.0
-            prev_led = getattr(prev_readings, 'led_brightness', None) or 0.0
-            curr_world = max(0.0, curr_light - estimated_led_glow(curr_led))
-            prev_world = max(0.0, prev_light - estimated_led_glow(prev_led))
-            if prev_world > 1.0:  # Need meaningful baseline to compute ratio
-                light_ratio = abs(curr_world - prev_world) / prev_world
-                if light_ratio > 0.3:  # >30% change in world light
+            if prev_light > 1.0:  # Need meaningful baseline to compute ratio
+                light_ratio = abs(curr_light - prev_light) / prev_light
+                if light_ratio > 0.3:  # >30% change in light
                     env_amplifier = max(env_amplifier, 1.0 + min(light_ratio, 1.0))
 
     drift = [

@@ -749,19 +749,12 @@ class DrawingEngine:
         # Store last anima for goal generation at canvas_clear time
         self.last_anima = anima
 
-        # Light regime: dark / dim / bright
-        # Uses corrected lux (self-glow subtracted) -- raw lux is dominated by
-        # LED self-illumination (168-728 lux depending on brightness), so raw
-        # would never reach "dark" and would flip regimes from LED changes alone.
+        # Light regime: dark / dim / bright (raw lux — includes LED glow)
         light_lux = anima.readings.light_lux if anima.readings else None
         if light_lux is not None:
-            from ..config import estimated_led_glow
-            led_b = anima.readings.led_brightness if anima.readings.led_brightness is not None else 0.0
-            estimated_glow = estimated_led_glow(led_b)
-            env_lux = max(0.0, light_lux - estimated_glow)
-            if env_lux < 20:
+            if light_lux < 5:
                 light_regime = "dark"
-            elif env_lux < 200:
+            elif light_lux < 100:
                 light_regime = "dim"
             else:
                 light_regime = "bright"
@@ -1389,13 +1382,8 @@ class DrawingEngine:
                         "presence": anima.presence,
                     }
                     # Correct for LED self-glow: growth preferences should
-                    # reflect actual environment, not Lumen's own LEDs
-                    from ..config import estimated_led_glow as _est_glow
-                    _raw_lux = readings.light_lux or 0.0
-                    _led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
-                    _world_light = max(0.0, _raw_lux - _est_glow(_led_b))
                     environment = {
-                        "light_lux": _world_light,
+                        "light_lux": readings.light_lux or 0.0,
                         "temp_c": readings.ambient_temp_c or 22,
                         "humidity_pct": readings.humidity_pct or 50,
                     }

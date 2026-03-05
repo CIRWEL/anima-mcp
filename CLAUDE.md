@@ -97,36 +97,18 @@ Lumen uses **computational proprioception** - no real EEG hardware. Neural bands
 
 Source: `computational_neural.py` (used by both `pi.py` and `mock.py` sensors)
 
-### Light Sensor & World Light
+### Light Sensor
 
-The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCraft HAT. LED glow follows a quadratic relationship (non-linear LED response at low current).
+The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCraft HAT. Configured with gain 1x and 200ms integration time for indoor precision.
 
-**World light** = raw lux minus estimated LED self-glow:
-```python
-from .config import estimated_led_glow
-glow = estimated_led_glow(led_brightness)  # = 1150 * brightness^2
-world_light = max(0.0, raw_lux - glow)
-```
+**Lux = lux.** Raw sensor reading used everywhere — no glow correction. The sensor reads LED glow + room light together. Lumen knows its LED brightness separately as a proprioceptive signal.
 
-At typical brightness (0.12), LED glow ≈ 17 lux. At 0.25, ≈ 72 lux. Constant in `config.py`: `LED_LUX_QUADRATIC = 1150.0`
+All consumers use raw lux directly: clarity, activity state, growth preferences, drawing light_regime, ethical drift, self-model correlations. LED brightness is tracked as a separate known value, not decomposed from the lux reading.
 
-**Where raw vs corrected lux is used:**
-
-| Consumer | Uses | Why |
-|----------|------|-----|
-| Clarity (anima.py) | World light | Environmental perception, no feedback loop |
-| Activity state | World light | Sense darkness for drowsy/resting |
-| Growth preferences | World light | Learn light preferences honestly |
-| Drawing light_regime | World light | "dark"/"dim"/"bright" for art eras |
-| Ethical drift | World light | Avoid spurious drift from LED dimming |
-| Self-model correlations | World light | Learn env light → warmth, not LED → warmth |
-| LED auto-brightness | Raw lux | Does its own internal correction |
-| Self-model proprioception (`observe_led_lux`) | Raw lux | Learning "my LEDs affect my sensor" |
-| Metacognition predictions | Raw lux | Predicts total sensor reading including LEDs |
-
-**Growth light thresholds** (for corrected world light):
-- `< 100 lux` → dim/dark (nighttime indoor)
-- `> 300 lux` → bright (well-lit room, daylight)
+**Drawing light regime thresholds** (raw lux):
+- `< 5 lux` → dark (LEDs off + room dark)
+- `< 100 lux` → dim
+- `>= 100 lux` → bright
 
 ### Goal System
 

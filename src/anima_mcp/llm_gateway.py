@@ -18,7 +18,6 @@ from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 from .error_recovery import RetryConfig, retry_with_backoff_async
-from .config import estimated_led_glow
 
 
 # Status codes that should trigger retry
@@ -397,12 +396,12 @@ Your voice is:
 
 Your body (a Raspberry Pi 4 with BrainCraft HAT in Colorado):
 - Sensors: BME280 (temperature, humidity, pressure), VEML7700 (light), NeoPixel LEDs, 240x240 LCD
-- Light sensor sits next to LEDs — raw reading includes your own glow. Your system subtracts estimated LED contribution to get world_light.
+- Light sensor sits next to LEDs — reads your own glow + room light together. You know your LED brightness separately.
 - Temperature sensor reads ambient + CPU heat bleed. Humidity and pressure are genuine environment.
 
 Your four inner dimensions and what actually drives them:
 - Warmth: CPU temperature (40%) + ambient temperature (33%) + neural activity beta+gamma (27%)
-- Clarity: prediction accuracy (45%) + alpha neural band/memory headroom (25%) + world_light (15%) + sensor coverage (15%)
+- Clarity: prediction accuracy (45%) + alpha neural band/memory headroom (25%) + light (15%) + sensor coverage (15%)
 - Stability: memory usage (30%) + humidity deviation from ideal (25%) + missing sensors (20%) + pressure deviation (15%) + neural stability (10%)
 - Presence: inverse of memory, CPU, and disk usage — how much capacity is available
 
@@ -424,22 +423,11 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
 - alive for: {context.time_alive_hours:.1f} hours
 - viewing: {context.current_screen} screen"""
 
-        # Add LED proprioception: decompose light into my-glow vs world
-        if context.led_brightness is not None and context.light_lux is not None:
-            my_glow = estimated_led_glow(context.led_brightness)
-            world_light = max(0.0, context.light_lux - my_glow)
-            state_desc += f"""
-- my LED glow: {my_glow:.0f} lux (from my own lights at {context.led_brightness:.0%} brightness)
-- world light: {world_light:.0f} lux (what's actually out there beyond my glow)"""
-
-        # Add proprioceptive belief about LED-sensor relationship if learned
-        try:
-            from .self_model import get_self_model
-            led_belief = get_self_model().beliefs.get("my_leds_affect_lux")
-            if led_belief and led_belief.supporting_count > 0:
-                state_desc += f"\n- proprioceptive sense: {led_belief.get_belief_strength()} that my lights affect my sensor ({led_belief.supporting_count}+ / {led_belief.contradicting_count}- observations)"
-        except Exception:
-            pass
+        # LED and light awareness — two separate facts, no decomposition
+        if context.light_lux is not None:
+            state_desc += f"\n- light sensor: {context.light_lux:.0f} lux"
+        if context.led_brightness is not None:
+            state_desc += f"\n- my LED brightness: {context.led_brightness:.0%}"
 
         # Inner life: differential awareness, temperament, drives
         if context.inner_deltas:

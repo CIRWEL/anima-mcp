@@ -21,7 +21,6 @@ import sys
 
 from .sensors.base import SensorReadings
 from .anima import Anima
-from .config import estimated_led_glow
 
 
 @dataclass
@@ -349,32 +348,10 @@ class MetacognitiveMonitor:
         prediction.light_lux = self._baseline_light
         prediction.pressure_hpa = self._baseline_pressure
 
-        # === PROPRIOCEPTIVE LIGHT PREDICTION ===
-        # Lumen's brightness is manually controlled (dimmer). Lumen knows the
-        # current setting as _known_brightness. This is a stable value that only
-        # changes when Kenny adjusts the dimmer — NOT from auto-brightness.
-        # Prediction errors therefore reflect genuine environmental changes
-        # (lamp on, sunrise) rather than self-inflicted brightness oscillation.
-        #
-        # Empirically calibrated 2026-02-18 via manage_display(action="calibrate_leds"):
-        #   LED brightness 0.00 → ~15-44 lux (ambient only, LEDs off)
-        #   LED brightness 0.12 → ~29-62 lux (LED adds ~13-17 lux)
-        #   LED brightness 0.25 → ~99-112 lux (LED adds ~68-83 lux)
-        # Roughly: lux ≈ brightness * 400 + ambient_floor
-        # We use a learned baseline for the ambient floor.
-        if led_brightness is not None and led_brightness >= 0:
-            # Estimate expected lux from our own LED output
-            predicted_lux = estimated_led_glow(led_brightness)
-
-            # Blend with baseline if available (baseline captures ambient + LED together)
-            if prediction.light_lux is not None:
-                # Trust LED-based prediction more (0.7) but keep some baseline (0.3)
-                # as ambient light does vary slightly (window, screen, etc.)
-                prediction.light_lux = 0.7 * predicted_lux + 0.3 * prediction.light_lux
-            else:
-                prediction.light_lux = predicted_lux
-
-            prediction.basis = "led_proprioception"
+        # === LIGHT PREDICTION ===
+        # Use learned baseline (captures LED glow + room light together).
+        # No glow decomposition — the baseline IS what the sensor reads.
+        # Prediction errors reflect genuine environmental changes (lamp, sunrise).
 
         # Enhance with diurnal patterns if available
         hour = current_time.hour

@@ -45,7 +45,7 @@ from .display.screens import ScreenRenderer, ScreenMode
 from .input.brainhat_input import get_brainhat_input, JoystickDirection as InputDirection
 from .next_steps_advocate import get_advocate
 from .eisv_mapper import anima_to_eisv
-from .config import get_calibration, estimated_led_glow
+from .config import get_calibration
 from .learning import get_learner
 from .messages import add_observation, add_agent_message, add_question, get_unanswered_questions
 from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
@@ -1400,8 +1400,7 @@ async def _update_display_loop():
                         if readings.ambient_temp_c is not None:
                             sensor_vals["ambient_temp"] = readings.ambient_temp_c
                         if readings.light_lux is not None:
-                            _sm_led = readings.led_brightness if readings.led_brightness is not None else 0.12
-                            sensor_vals["light"] = max(0.0, readings.light_lux - estimated_led_glow(_sm_led))
+                            sensor_vals["light"] = readings.light_lux
                         if sensor_vals:
                             sm.observe_correlation(
                                 sensor_values=sensor_vals,
@@ -1727,14 +1726,10 @@ async def _update_display_loop():
                         global _activity
                         if _activity is None:
                             _activity = get_activity_manager()
-                        # Correct for LED self-glow: activity_state needs world light,
-                        # not raw lux dominated by Lumen's own LEDs
-                        _led_b = readings.led_brightness if readings and readings.led_brightness is not None else 0.12
-                        _world_light = max(0.0, (light_level or 0.0) - estimated_led_glow(_led_b)) if light_level is not None else None
                         activity_state = _activity.get_state(
                             presence=anima.presence,
                             stability=anima.stability,
-                            light_level=_world_light,
+                            light_level=light_level,
                         )
                         activity_brightness = activity_state.brightness_multiplier
                 except Exception as e:
@@ -2168,13 +2163,9 @@ async def _update_display_loop():
                         "presence": anima.presence,
                     }
                     # Prepare environment dict from sensor readings
-                    # Use world_light (ambient minus LED glow) so preferences
-                    # reflect actual environment, not Lumen's own LEDs
-                    led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
-                    my_glow = estimated_led_glow(led_b)
-                    world_light = max(0.0, (readings.light_lux or 0.0) - my_glow)
+                    # Raw lux includes LED glow — that's Lumen's actual light environment
                     environment = {
-                        "light_lux": world_light,
+                        "light_lux": readings.light_lux or 0.0,
                         "temp_c": readings.ambient_temp_c,
                         "humidity_pct": readings.humidity_pct,
                     }
