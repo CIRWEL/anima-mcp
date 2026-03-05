@@ -210,6 +210,18 @@ class SchemaHub:
             "persisted_at": datetime.now().isoformat(),
         }
 
+        # Persist trajectory so it survives restarts
+        if self.last_trajectory:
+            try:
+                traj = self.last_trajectory
+                data["_trajectory"] = {
+                    "observation_count": traj.observation_count,
+                    "attractor": traj.attractor,
+                    "beliefs": traj.beliefs if hasattr(traj, 'beliefs') else {},
+                }
+            except Exception:
+                pass
+
         try:
             atomic_json_write(self.persist_path, data, indent=2)
             return True
@@ -304,13 +316,34 @@ class SchemaHub:
         Called when Lumen wakes up after a gap.
 
         Loads previous schema, computes gap delta, stores for injection
-        into next schema composition.
+        into next schema composition. Seeds history so trajectory nodes
+        don't have to wait for 10+ fresh compositions.
         """
         previous = self.load_previous_schema()
         if previous is None:
             self.last_gap_delta = None
             self._previous_schema = None
             return None
+
+        # Seed history with previous schema so trajectory feedback
+        # doesn't have to wait for 10+ fresh compositions to appear.
+        if not self.schema_history:
+            self.schema_history.append(previous)
+
+        # Restore persisted trajectory so nodes appear immediately on wake
+        if self.last_trajectory is None:
+            try:
+                data = json.loads(self.persist_path.read_text())
+                traj_data = data.get("_trajectory")
+                if traj_data:
+                    from .trajectory import TrajectorySignature
+                    self.last_trajectory = TrajectorySignature(
+                        observation_count=traj_data.get("observation_count", 0),
+                        attractor=traj_data.get("attractor"),
+                        beliefs=traj_data.get("beliefs", {}),
+                    )
+            except Exception:
+                pass
 
         self._previous_schema = previous  # Store for anima_delta computation
 
