@@ -84,6 +84,45 @@ class Anima:
         }
 
 
+class MoodMomentum:
+    """Temporal inertia for anima dimensions. State lingers."""
+
+    ALPHA = {
+        "warmth": 0.08,
+        "clarity": 0.15,
+        "stability": 0.08,
+        "presence": 0.25,
+    }
+
+    def __init__(self):
+        self._prev = None
+
+    def smooth(self, anima: Anima) -> Anima:
+        if self._prev is None:
+            self._prev = {
+                "warmth": anima.warmth, "clarity": anima.clarity,
+                "stability": anima.stability, "presence": anima.presence,
+            }
+            return anima
+
+        smoothed = {}
+        for dim in ("warmth", "clarity", "stability", "presence"):
+            raw = getattr(anima, dim)
+            alpha = self.ALPHA[dim]
+            smoothed[dim] = alpha * raw + (1 - alpha) * self._prev[dim]
+            self._prev[dim] = smoothed[dim]
+
+        return Anima(
+            warmth=round(smoothed["warmth"], 3),
+            clarity=round(smoothed["clarity"], 3),
+            stability=round(smoothed["stability"], 3),
+            presence=round(smoothed["presence"], 3),
+            readings=anima.readings,
+            anticipation=anima.anticipation,
+            is_anticipating=anima.is_anticipating,
+        )
+
+
 def _apply_drift_to_calibration(
     cal: NervousSystemCalibration,
     drift_midpoints: Dict[str, float],

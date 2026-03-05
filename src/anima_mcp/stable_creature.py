@@ -54,7 +54,7 @@ if sys.stdout.encoding != 'utf-8':
 
 from .sensors import get_sensors
 from collections import deque
-from .anima import sense_self
+from .anima import sense_self, MoodMomentum
 from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW
 from .display.leds.brightness import estimate_instantaneous_brightness
 # NOTE: Broker does NOT import or init LEDDisplay — server owns LED hardware.
@@ -236,6 +236,8 @@ def run_creature():
     print(f"[StableCreature] Creature '{identity.name or '(unnamed)'}' is alive.")
     print("[StableCreature] Entering main loop...")
 
+    _mood_momentum = MoodMomentum()
+
     # Persistent event loop for async calls (governance, cognitive, memory).
     # A single loop runs in a dedicated daemon thread so aiohttp sessions
     # are reused across calls instead of being recreated per invocation.
@@ -374,6 +376,7 @@ def run_creature():
 
             # 2. Update Anima State (now has correct led_brightness for correction)
             anima = sense_self(readings)
+            anima = _mood_momentum.smooth(anima)
 
             # 2a. Calculate UNITARES EISV metrics
             eisv = anima_to_eisv(anima, readings)
