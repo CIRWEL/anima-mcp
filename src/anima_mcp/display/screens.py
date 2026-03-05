@@ -1340,7 +1340,7 @@ class ScreenRenderer:
                 text = "\n".join([line for line, _ in lines_with_colors])
                 self._display.render_text(text, (10, 10))
         else:
-            self._display.render_text("SENSORS\n\nno data", (10, 10), color=COLORS.TEXT_DIM)
+            self._display.render_text("sensors\n\nno data", (10, 10), color=COLORS.TEXT_DIM)
     
     def _draw_sensor_sparklines(self, draw, readings):
         """Draw tiny sparklines to the right of gauge bars (not overlapping)."""
@@ -1402,6 +1402,14 @@ class ScreenRenderer:
         alive_pct = identity.alive_ratio() * 100
         name = identity.name or "unnamed"
 
+        # Cache: round values to avoid redraws for invisible changes
+        id_key = (
+            f"{name}|{age_days:.1f}|{alive_hours:.1f}|{alive_pct:.0f}|"
+            f"{identity.total_awakenings}|{self._unitares_agent_id or ''}"
+        )
+        if self._check_screen_cache("identity", id_key):
+            return
+
         # Try canvas-based rendering for nav dots
         if hasattr(self._display, '_create_canvas'):
             try:
@@ -1417,7 +1425,9 @@ class ScreenRenderer:
 
                 # Name (larger, prominent)
                 draw.text((10, y), f"i am {name}", fill=CYAN, font=font)
-                y += 28
+                y += 22
+                draw.line([(10, y), (230, y)], fill=(30, 30, 40), width=1)
+                y += 6
 
                 # Age
                 if age_days < 1:
@@ -1493,11 +1503,11 @@ class ScreenRenderer:
                 except Exception:
                     pass  # Non-fatal
 
-                # Status bar + screen indicator
+                # Status bar
                 self._draw_status_bar(draw)
-                pass  # screen indicator removed
 
                 # Update display
+                self._store_screen_cache("identity", id_key, image)
                 if hasattr(self._display, '_image'):
                     self._display._image = image
                 if hasattr(self._display, '_show'):
@@ -1537,7 +1547,7 @@ class ScreenRenderer:
     def _render_diagnostics(self, anima: Optional[Anima], readings: Optional[SensorReadings], governance: Optional[Dict[str, Any]]):
         """Render diagnostics screen with visual gauges for anima values."""
         if not anima:
-            self._display.render_text("DIAGNOSTICS\n\nNo data", (10, 10))
+            self._display.render_text("diagnostics\n\nno data", (10, 10))
             return
 
         # Cache: anima values + governance state rounded to display precision
@@ -1581,7 +1591,14 @@ class ScreenRenderer:
             font_small = fonts['small']
             font_large = fonts['large']
 
+            font_title = fonts['title']
+
             y_offset = 6
+            draw.text((10, y_offset), "diagnostics", fill=CYAN, font=font_title)
+            y_offset += 22
+            draw.line([(10, y_offset), (230, y_offset)], fill=(30, 30, 40), width=1)
+            y_offset += 4
+
             bar_x = 10
             bar_width = 130
             bar_height = 10
@@ -1748,7 +1765,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
+
 
             # Update display + cache
             self._store_screen_cache("diagnostics", diag_key, image)
@@ -1804,7 +1821,7 @@ class ScreenRenderer:
             from ..health import get_health_registry
             registry = get_health_registry()
         except Exception:
-            self._display.render_text("HEALTH\n\nNo registry", (10, 10))
+            self._display.render_text("health\n\nno registry", (10, 10))
             return
 
         status_data = registry.status()
@@ -1820,7 +1837,7 @@ class ScreenRenderer:
                 image, draw = self._display._create_canvas(COLORS.BG_DARK)
             else:
                 # Text fallback
-                lines = ["HEALTH", f"overall: {overall}", ""]
+                lines = ["health", f"overall: {overall}", ""]
                 for name, info in sorted(status_data.items()):
                     s = info.get("status", "?")
                     hb = info.get("last_heartbeat_ago_s")
@@ -1853,13 +1870,13 @@ class ScreenRenderer:
 
             # Header
             y = 6
-            draw.text((10, y), "HEALTH", fill=COLORS.TEXT_PRIMARY, font=font_med)
+            draw.text((10, y), "health", fill=COLORS.SOFT_CYAN, font=fonts['title'])
             overall_color = OVERALL_COLORS.get(overall, COLORS.TEXT_DIM)
-            draw.text((90, y), overall, fill=overall_color, font=font_med)
-            y += 20
+            draw.text((90, y + 2), overall, fill=overall_color, font=font_small)
+            y += 22
 
             # Thin separator line
-            draw.line([(10, y), (230, y)], fill=COLORS.BG_SUBTLE, width=1)
+            draw.line([(10, y), (230, y)], fill=(30, 30, 40), width=1)
             y += 4
 
             # One row per subsystem
@@ -1899,19 +1916,19 @@ class ScreenRenderer:
                 y += row_height
 
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
+
 
             self._display.render_image(image)
             self._store_screen_cache("health", health_key, image)
 
         except Exception as e:
             print(f"[Screen] Health render error: {e}", file=sys.stderr, flush=True)
-            self._display.render_text(f"HEALTH\n\n{overall}\n\nError:\n{str(e)[:40]}", (10, 10))
+            self._display.render_text(f"health\n\n{overall}\n\nerror:\n{str(e)[:40]}", (10, 10))
 
     def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
         """Render neural activity screen - EEG frequency band visualization."""
         if not readings:
-            self._display.render_text("NEURAL\n\nNo data", (10, 10))
+            self._display.render_text("neural\n\nno data", (10, 10))
             return
 
         raw = readings.to_dict()
@@ -1951,13 +1968,14 @@ class ScreenRenderer:
             ]
 
             # Title
-            draw.text((10, 6), "Neural Activity", fill=COLORS.SOFT_CYAN, font=font_title)
+            draw.text((10, 6), "neural activity", fill=COLORS.SOFT_CYAN, font=font_title)
+            draw.line([(10, 28), (230, 28)], fill=(30, 30, 40), width=1)
 
             # Dominant band indicator
             dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
             dominant_name = bands[dominant_idx][0]
             dominant_color = bands[dominant_idx][2]
-            draw.text((10, 26), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
+            draw.text((10, 32), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
 
             # ---- Vertical bar chart ----
             bar_area_top = 58
@@ -2039,7 +2057,7 @@ class ScreenRenderer:
     def _render_neural_text_fallback(self, readings: Optional[SensorReadings]):
         """Text-only fallback for neural screen."""
         raw = readings.to_dict() if readings else {}
-        lines = ["NEURAL ACTIVITY", ""]
+        lines = ["neural activity", ""]
         for band in ["delta", "theta", "alpha", "beta", "gamma"]:
             val = raw.get(f"eeg_{band}_power") or 0
             bar = "#" * int(val * 20)
@@ -2257,7 +2275,7 @@ class ScreenRenderer:
     def _render_learning(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
         """Render learning visualization screen - visual comfort zones and why Lumen feels what it feels."""
         if not anima or not readings:
-            self._display.render_text("LEARNING\n\nNo data", (10, 10))
+            self._display.render_text("learning\n\nno data", (10, 10))
             return
 
         try:
@@ -2305,7 +2323,7 @@ class ScreenRenderer:
             summary = self._learning_cache
             if summary is None:
                 # First load still in progress, show loading message
-                self._display.render_text("LEARNING\n\nLoading...", (10, 10))
+                self._display.render_text("learning\n\nloading...", (10, 10))
                 return
 
             # Create canvas for visual rendering
@@ -2516,7 +2534,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
+
 
             # Update display
             if hasattr(self._display, '_image'):
@@ -2530,7 +2548,7 @@ class ScreenRenderer:
             print(f"[Learning Screen] Error: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
             error_msg = str(e)[:20]
-            self._display.render_text(f"LEARNING\n\nError:\n{error_msg}", (10, 10))
+            self._display.render_text(f"learning\n\nerror:\n{error_msg}", (10, 10))
 
     def _render_learning_text_fallback(self, summary: Dict[str, Any], readings: SensorReadings, anima: Anima):
         """Text-only fallback for learning screen when canvas not available."""
@@ -2858,7 +2876,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
+
 
             # Cache the rendered image for fast subsequent renders
             self._messages_cache_image = image.copy()
@@ -2902,6 +2920,18 @@ class ScreenRenderer:
 
         try:
             if hasattr(self._display, '_create_canvas'):
+                # Cache: era state + cursor + drawings + phase (skip cache when marquee scrolling)
+                current_name = self._active_era.name if self._active_era else "gestural"
+                energy = self._intent.state.derived_energy if self._intent else 0.0
+                drawings = self._canvas.drawings_saved if self._canvas else 0
+                phase = self._canvas.drawing_phase if self._canvas else "?"
+                era_key = (
+                    f"{current_name}|{self._state.era_cursor}|{_auto_rotate}|"
+                    f"{drawings}|{phase}|{energy:.1f}|{self._state.era_marquee_offset}"
+                )
+                if self._check_screen_cache("art_eras", era_key):
+                    return
+
                 image, draw = self._display._create_canvas(COLORS.BG_DARK)
                 fonts = self._get_fonts()
 
@@ -2923,7 +2953,6 @@ class ScreenRenderer:
                 y += 8
 
                 # Era list + toggle row at the end
-                current_name = self._active_era.name if self._active_era else "gestural"
                 all_eras = list_all_era_info()
                 # Total items = eras + 1 (auto-rotate toggle)
                 total_items = len(all_eras) + 1
@@ -2995,10 +3024,6 @@ class ScreenRenderer:
                 y += 20
 
                 # --- Drawing stats ---
-                energy = self._intent.state.derived_energy if self._intent else 0.0
-                drawings = self._canvas.drawings_saved if self._canvas else 0
-                phase = self._canvas.drawing_phase if self._canvas else "?"
-
                 # Energy bar
                 bar_x, bar_w, bar_h = 150, 60, 8
                 draw.text((10, y), f"drawing #{drawings}", fill=DIM, font=fonts['small'])
@@ -3014,10 +3039,10 @@ class ScreenRenderer:
 
                 draw.text((10, y), f"phase: {phase}", fill=DIM, font=fonts['small'])
 
-                # Status bar + screen indicator
+                # Status bar
                 self._draw_status_bar(draw)
-                pass  # screen indicator removed
 
+                self._store_screen_cache("art_eras", era_key, image)
                 if hasattr(self._display, '_image'):
                     self._display._image = image
                 if hasattr(self._display, '_show'):
@@ -3225,7 +3250,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
+
 
             # Always update display - ensure image is set and shown
             self._store_screen_cache(title, cache_key, image)
@@ -3553,7 +3578,7 @@ class ScreenRenderer:
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
+
 
             # Always update display - ensure image is set and shown
             self._store_screen_cache("qa", qa_cache_key, image)
@@ -3831,8 +3856,13 @@ class ScreenRenderer:
                 self_model=get_self_model(),
             )
 
+        # Cache: schema node/edge count + node names hash
+        sg_key = f"{len(schema.nodes)}|{len(schema.edges)}|{hash(tuple(n.name for n in schema.nodes)) % 100000}"
+        if self._check_screen_cache("self_graph", sg_key):
+            return
+
         if not hasattr(self._display, '_create_canvas'):
-            text = f"SELF GRAPH\n\n{len(schema.nodes)} nodes\n{len(schema.edges)} edges"
+            text = f"self graph\n\n{len(schema.nodes)} nodes\n{len(schema.edges)} edges"
             self._display.render_text(text, (10, 10))
             return
 
@@ -3875,8 +3905,8 @@ class ScreenRenderer:
                 lx += 6 + len(label) * 6 + 4
 
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
 
+            self._store_screen_cache("self_graph", sg_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
