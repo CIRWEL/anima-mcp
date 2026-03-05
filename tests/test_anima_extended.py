@@ -121,7 +121,7 @@ class TestOverallMood:
 
     def test_stressed_extreme_ambient_temp(self):
         """Extreme ambient temperature → 'stressed' regardless of anima values."""
-        readings = _readings(ambient_temp_c=42.0)
+        readings = _readings(ambient_temp_c=48.0)
         assert _overall_mood(0.5, 0.5, 0.5, 0.5, readings) == "stressed"
 
         cold_readings = _readings(ambient_temp_c=5.0)

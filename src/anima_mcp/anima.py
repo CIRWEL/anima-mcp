@@ -637,8 +637,8 @@ def _overall_mood(warmth: float, clarity: float, stability: float, presence: flo
     # Check if physical environment is extreme (sync with reality, not just learned limits)
     if readings is not None:
         # Only temperature matters for Pi stress - electronics prefer dry conditions
-        # Relaxed for hot climates (Arizona desert can hit 40°C+ regularly)
-        ABSOLUTE_TEMP_MAX = 38.0  # 100°F - above this = physically stressful
+        # Sensor sits on BrainCraft HAT above Pi SoC — reads 10-15°C above room temp
+        ABSOLUTE_TEMP_MAX = 45.0  # ~113°F - accounts for Pi self-heating
         ABSOLUTE_TEMP_MIN = 10.0  # 50°F - below this = physically stressful
 
         if readings.ambient_temp_c is not None:
