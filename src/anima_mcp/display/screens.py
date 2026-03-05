@@ -3857,7 +3857,7 @@ class ScreenRenderer:
             )
 
         # Cache: schema node/edge count + node names hash
-        sg_key = f"{len(schema.nodes)}|{len(schema.edges)}|{hash(tuple(n.name for n in schema.nodes)) % 100000}"
+        sg_key = f"{len(schema.nodes)}|{len(schema.edges)}|{hash(tuple(n.node_id for n in schema.nodes)) % 100000}"
         if self._check_screen_cache("self_graph", sg_key):
             return
 
