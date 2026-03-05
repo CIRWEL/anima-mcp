@@ -1653,11 +1653,13 @@ async def _update_display_loop():
 
                         # Use screen renderer if available (supports multiple screens)
                         if _screen_renderer:
-                            # Pass inner life drives to drawing engine for color influence
-                            if _last_shm_data and hasattr(_screen_renderer, 'drawing_engine'):
-                                _il_drives = (_last_shm_data.get("inner_life") or {}).get("drives")
-                                if _il_drives:
-                                    _screen_renderer.drawing_engine.set_drives(_il_drives)
+                            # Pass SHM data to renderer (for inner life screen + drive colors)
+                            if _last_shm_data:
+                                _screen_renderer._shm_data = _last_shm_data
+                                if hasattr(_screen_renderer, 'drawing_engine'):
+                                    _il_drives = (_last_shm_data.get("inner_life") or {}).get("drives")
+                                    if _il_drives:
+                                        _screen_renderer.drawing_engine.set_drives(_il_drives)
                             # governance_decision_for_display is set by governance check-in (runs every 30 iterations)
                             # It's None on most iterations, but will have value after governance check-ins
                             _screen_renderer.render(

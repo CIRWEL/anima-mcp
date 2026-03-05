@@ -146,6 +146,8 @@ class ScreenRenderer:
         self._screen_cache_order: List[str] = []  # LRU order
         # UNITARES agent_id (for display on identity screen)
         self._unitares_agent_id: Optional[str] = None
+        # Shared memory data (set by server.py before render())
+        self._shm_data: Optional[Dict[str, Any]] = None
         # Sensor sparkline history
         from collections import deque
         self._sensor_history: deque = deque(maxlen=40)
@@ -948,7 +950,7 @@ class ScreenRenderer:
                 elif mode == ScreenMode.DIAGNOSTICS:
                     self._render_diagnostics(anima, readings, governance)
                 elif mode == ScreenMode.NEURAL:
-                    self._render_neural(anima, readings)
+                    self._render_inner_life()
                 elif mode == ScreenMode.LEARNING:
                     self._render_learning(anima, readings)
                 elif mode == ScreenMode.SELF_GRAPH:
@@ -1898,132 +1900,186 @@ class ScreenRenderer:
             print(f"[Screen] Health render error: {e}", file=sys.stderr, flush=True)
             self._display.render_text(f"HEALTH\n\n{overall}\n\nError:\n{str(e)[:40]}", (10, 10))
 
-    def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
-        """Render neural activity screen - EEG frequency band visualization."""
-        if not readings:
-            self._display.render_text("NEURAL\n\nNo data", (10, 10))
+    def _render_inner_life(self):
+        """Render inner life screen — actual cognitive and emotional state."""
+        shm = self._shm_data or {}
+        if not shm:
+            self._display.render_text("inner life\n\nwaiting...", (10, 10), color=COLORS.TEXT_DIM)
             return
 
-        # Cache: neural bands rounded to display-appropriate precision
-        # 1 decimal place = 10 levels per band = ~12px per step on 126px bar area
-        # This lets the cache hit when bands fluctuate by <0.05 (invisible on LCD)
-        raw = readings.to_dict()
-        neural_key = (
-            f"{raw.get('eeg_delta_power', 0):.1f}|{raw.get('eeg_theta_power', 0):.1f}|"
-            f"{raw.get('eeg_alpha_power', 0):.1f}|{raw.get('eeg_beta_power', 0):.1f}|"
-            f"{raw.get('eeg_gamma_power', 0):.1f}"
+        # Extract signals from SHM
+        meta = shm.get("metacognition", {})
+        il = shm.get("inner_life", {})
+        drives = il.get("drives", {})
+        activity = shm.get("activity", {})
+        learning = shm.get("learning", {})
+        agency = learning.get("agency", {})
+        prefs = learning.get("preferences", {})
+        pred = learning.get("prediction_accuracy", {})
+
+        surprise = meta.get("surprise", 0.0)
+        confidence = meta.get("prediction_confidence", 0.5)
+        exploration = agency.get("exploration_rate", 0.5)
+        satisfaction = prefs.get("satisfaction", 0.5)
+        activity_level = activity.get("level", "active")
+        strongest_drive = il.get("strongest_drive")
+        total_patterns = pred.get("total_patterns", 0)
+        d_warmth = drives.get("warmth", 0.0)
+        d_clarity = drives.get("clarity", 0.0)
+        d_stability = drives.get("stability", 0.0)
+        d_presence = drives.get("presence", 0.0)
+
+        cache_key = (
+            f"{surprise:.1f}|{confidence:.1f}|{exploration:.1f}|{satisfaction:.1f}|"
+            f"{d_warmth:.1f}|{d_clarity:.1f}|{d_stability:.1f}|{d_presence:.1f}|"
+            f"{activity_level}|{total_patterns}"
         )
-        if anima:
-            neural_key += f"|{anima.warmth:.1f}|{anima.clarity:.1f}|{anima.stability:.1f}|{anima.presence:.1f}"
-        if self._check_screen_cache("neural", neural_key):
+        if self._check_screen_cache("neural", cache_key):
+            return
+
+        if not hasattr(self._display, '_create_canvas'):
+            self._render_inner_life_text_fallback(shm)
             return
 
         try:
-            if not hasattr(self._display, '_create_canvas'):
-                self._render_neural_text_fallback(readings)
-                return
-
+            from .design import lighten_color, blend_color
             image, draw = self._display._create_canvas(COLORS.BG_DARK)
-
             fonts = self._get_fonts()
-            font_small = fonts['small']
-            font_medium = fonts['medium']
-            font_title = fonts['title']
-            font_tiny = fonts['tiny']
-            font_micro = fonts['micro']
+            f_title = fonts['title']
+            f_small = fonts['small']
+            f_tiny = fonts['tiny']
+            f_micro = fonts['micro']
 
             DIM = COLORS.TEXT_DIM
             SECONDARY = COLORS.TEXT_SECONDARY
 
-            # Band data from readings
-            raw = readings.to_dict()
-            bands = [
-                ("delta",  raw.get("eeg_delta_power") or 0, (100, 100, 240),  "0.5-4 Hz"),
-                ("theta",  raw.get("eeg_theta_power") or 0, (140, 92, 246),   "4-8 Hz"),
-                ("alpha",  raw.get("eeg_alpha_power") or 0, (6, 182, 212),    "8-13 Hz"),
-                ("beta",   raw.get("eeg_beta_power") or 0,  (34, 197, 94),    "13-30 Hz"),
-                ("gamma",  raw.get("eeg_gamma_power") or 0, (245, 158, 11),   "30+ Hz"),
+            # ── Title ──
+            draw.text((10, 6), "inner life", fill=COLORS.SOFT_CYAN, font=f_title)
+
+            # ── State summary ──
+            if surprise > 0.6:
+                state_word, state_color = "surprised", COLORS.SOFT_CORAL
+            elif exploration > 0.6:
+                state_word, state_color = "exploring", COLORS.SOFT_PURPLE
+            elif confidence > 0.7 and satisfaction > 0.7:
+                state_word, state_color = "settled", COLORS.SOFT_GREEN
+            elif satisfaction < 0.3:
+                state_word, state_color = "unsatisfied", COLORS.SOFT_ORANGE
+            else:
+                state_word, state_color = "aware", COLORS.SOFT_BLUE
+            draw.text((10, 26), state_word, fill=state_color, font=f_small)
+
+            # ── Hero signal bars ──
+            draw.line([(10, 40), (230, 40)], fill=(30, 30, 40), width=1)
+
+            hero_signals = [
+                ("surprise",     surprise,     COLORS.SOFT_GREEN,  COLORS.SOFT_CORAL),
+                ("exploring",    exploration,  COLORS.SOFT_BLUE,   COLORS.SOFT_PURPLE),
+                ("confidence",   confidence,   COLORS.SOFT_ORANGE, COLORS.SOFT_CYAN),
+                ("satisfaction", satisfaction, COLORS.SOFT_CORAL,  COLORS.SOFT_GREEN),
             ]
 
-            # Title
-            draw.text((10, 6), "Neural Activity", fill=COLORS.SOFT_CYAN, font=font_title)
+            BAR_X = 10
+            BAR_W = 120
+            BAR_H = 10
+            y = 46
 
-            # Dominant band indicator
-            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
-            dominant_name = bands[dominant_idx][0]
-            dominant_color = bands[dominant_idx][2]
-            draw.text((10, 26), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
+            for label, value, color_low, color_high in hero_signals:
+                bar_color = blend_color(color_low, color_high, value)
 
-            # ---- Vertical bar chart ----
-            bar_area_top = 58
-            bar_area_bottom = 184
-            bar_area_height = bar_area_bottom - bar_area_top
-            bar_width = 28
-            bar_gap = 12
-            total_bars_width = len(bands) * bar_width + (len(bands) - 1) * bar_gap
-            bar_start_x = (240 - total_bars_width) // 2
+                # Bar track
+                draw.rectangle([BAR_X, y, BAR_X + BAR_W, y + BAR_H], fill=(15, 15, 22))
 
-            # Background area
-            draw.rectangle([bar_start_x - 6, bar_area_top - 4, bar_start_x + total_bars_width + 6, bar_area_bottom + 4],
-                          fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
-
-            from .design import lighten_color
-            for i, (name, value, color, freq) in enumerate(bands):
-                x = bar_start_x + i * (bar_width + bar_gap)
-
-                # Bar background (track)
-                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
-                              fill=(15, 15, 22))
-
-                # Filled bar (bottom-up)
-                fill_height = int(value * bar_area_height)
-                if fill_height > 0:
-                    bar_top = bar_area_bottom - fill_height
-                    draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom],
-                                  fill=color)
-                    # Bright cap at top of bar
-                    if fill_height > 3:
-                        bright = lighten_color(color, 60)
-                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2],
+                # Bar fill
+                fill_w = int(value * BAR_W)
+                if fill_w > 0:
+                    draw.rectangle([BAR_X, y, BAR_X + fill_w, y + BAR_H], fill=bar_color)
+                    if fill_w > 3:
+                        bright = lighten_color(bar_color, 60)
+                        draw.rectangle([BAR_X + fill_w - 2, y, BAR_X + fill_w, y + BAR_H],
                                       fill=bright)
 
-                # Value text above bar
-                pct_text = f"{value * 100:.0f}%"
-                draw.text((x + 2, bar_area_top - 14), pct_text, fill=color, font=font_micro)
+                # Label + value
+                draw.text((BAR_X + BAR_W + 6, y - 1), label, fill=SECONDARY, font=f_tiny)
+                draw.text((214, y - 1), f"{value:.0%}", fill=bar_color, font=f_tiny)
 
-                # Greek letter label below bar
-                greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
-                letter = greek.get(name, name[0])
-                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 6), letter, fill=SECONDARY, font=font_medium)
+                y += 18
 
-            # ---- Band descriptions at bottom ----
-            y_desc = 202
-            desc_map = {
-                "delta": "deep rest",
-                "theta": "meditation",
-                "alpha": "awareness",
-                "beta": "focus",
-                "gamma": "cognition",
-            }
-            freq_map = {
-                "delta": "0.5-4 Hz",
-                "theta": "4-8 Hz",
-                "alpha": "8-13 Hz",
-                "beta": "13-30 Hz",
-                "gamma": "30+ Hz",
-            }
-            dominant_desc = desc_map.get(dominant_name, "")
-            draw.text((10, y_desc), f"{dominant_name}: {dominant_desc}", fill=dominant_color, font=font_small)
-            freq_range = freq_map.get(dominant_name, "")
-            if freq_range:
-                draw.text((10, y_desc + 14), freq_range, fill=DIM, font=font_tiny)
+            # ── Drives section ──
+            y = 122
+            draw.text((10, y), "drives", fill=DIM, font=f_tiny)
+            draw.line([(50, y + 6), (230, y + 6)], fill=(30, 30, 40), width=1)
 
-            # Status bar + screen indicator
+            # Four vertical bars (like the old neural screen)
+            drive_data = [
+                ("wrm", d_warmth,    COLORS.SOFT_ORANGE),
+                ("clr", d_clarity,   COLORS.SOFT_CYAN),
+                ("stb", d_stability, COLORS.SOFT_GREEN),
+                ("prs", d_presence,  COLORS.SOFT_PURPLE),
+            ]
+
+            vbar_width = 28
+            vbar_gap = 20
+            total_vbars = len(drive_data) * vbar_width + (len(drive_data) - 1) * vbar_gap
+            vbar_start_x = (240 - total_vbars) // 2
+            vbar_top = 140
+            vbar_bottom = 190
+            vbar_height = vbar_bottom - vbar_top
+
+            # Background panel
+            draw.rectangle([vbar_start_x - 6, vbar_top - 4, vbar_start_x + total_vbars + 6, vbar_bottom + 4],
+                          fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
+
+            for i, (short_label, drive_val, color) in enumerate(drive_data):
+                x = vbar_start_x + i * (vbar_width + vbar_gap)
+
+                # Bar track
+                draw.rectangle([x, vbar_top, x + vbar_width, vbar_bottom], fill=(15, 15, 22))
+
+                # Filled bar (bottom-up)
+                fill_h = int(drive_val * vbar_height)
+                if fill_h > 0:
+                    bar_top_y = vbar_bottom - fill_h
+                    draw.rectangle([x, bar_top_y, x + vbar_width, vbar_bottom], fill=color)
+                    if fill_h > 3:
+                        bright = lighten_color(color, 60)
+                        draw.rectangle([x, bar_top_y, x + vbar_width, bar_top_y + 2], fill=bright)
+
+                # Strongest drive indicator (triangle above)
+                dim_name = {"wrm": "warmth", "clr": "clarity", "stb": "stability", "prs": "presence"}
+                if strongest_drive and dim_name.get(short_label) == strongest_drive:
+                    cx = x + vbar_width // 2
+                    draw.polygon([(cx, vbar_top - 8), (cx - 4, vbar_top - 3), (cx + 4, vbar_top - 3)],
+                                fill=COLORS.TEXT_PRIMARY)
+
+                # Label below
+                draw.text((x + 4, vbar_bottom + 5), short_label, fill=SECONDARY, font=f_tiny)
+
+            # ── Context footer ──
+            draw.line([(10, 208), (230, 208)], fill=(30, 30, 40), width=1)
+
+            # Activity level
+            level_colors = {"active": COLORS.SOFT_GREEN, "drowsy": COLORS.SOFT_YELLOW, "resting": COLORS.SOFT_PURPLE}
+            draw.text((10, 212), activity_level, fill=level_colors.get(activity_level, DIM), font=f_tiny)
+
+            # Strongest drive or "content"
+            if strongest_drive:
+                drive_colors = {"warmth": COLORS.SOFT_ORANGE, "clarity": COLORS.SOFT_CYAN,
+                               "stability": COLORS.SOFT_GREEN, "presence": COLORS.SOFT_PURPLE}
+                draw.text((80, 212), f"wanting: {strongest_drive}",
+                         fill=drive_colors.get(strongest_drive, SECONDARY), font=f_tiny)
+            else:
+                draw.text((80, 212), "content", fill=COLORS.SOFT_GREEN, font=f_tiny)
+
+            # Patterns learned
+            if total_patterns:
+                draw.text((10, 226), f"{total_patterns} patterns learned", fill=DIM, font=f_micro)
+            else:
+                draw.text((10, 226), "learning...", fill=DIM, font=f_micro)
+
             self._draw_status_bar(draw)
-            pass  # screen indicator removed
 
-            # Cache + push to display
-            self._store_screen_cache("neural", neural_key, image)
+            self._store_screen_cache("neural", cache_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
@@ -2031,18 +2087,25 @@ class ScreenRenderer:
 
         except Exception as e:
             import traceback
-            print(f"[Neural Screen] Error: {e}", file=sys.stderr, flush=True)
+            print(f"[Inner Life Screen] Error: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
-            self._render_neural_text_fallback(readings)
+            self._render_inner_life_text_fallback(shm)
 
-    def _render_neural_text_fallback(self, readings: Optional[SensorReadings]):
-        """Text-only fallback for neural screen."""
-        raw = readings.to_dict() if readings else {}
-        lines = ["NEURAL ACTIVITY", ""]
-        for band in ["delta", "theta", "alpha", "beta", "gamma"]:
-            val = raw.get(f"eeg_{band}_power") or 0
+    def _render_inner_life_text_fallback(self, shm: dict):
+        """Text-only fallback for inner life screen."""
+        meta = shm.get("metacognition", {})
+        il = shm.get("inner_life", {})
+        drives = il.get("drives", {})
+        lines = [
+            "INNER LIFE", "",
+            f"surprise:   {meta.get('surprise', 0):.0%}",
+            f"confidence: {meta.get('prediction_confidence', 0):.0%}",
+            "",
+        ]
+        for dim in ["warmth", "clarity", "stability", "presence"]:
+            val = drives.get(dim, 0)
             bar = "#" * int(val * 20)
-            lines.append(f"{band:6s} {val:.0%} {bar}")
+            lines.append(f"{dim[:4]:4s} drive {val:.0%} {bar}")
         self._display.render_text("\n".join(lines), (10, 10))
 
     def _render_learning(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
