@@ -47,6 +47,7 @@ class PiSensors(SensorBackend):
         self._light_sensor = None
         self._bmp280 = None
         self._last_pressure = None
+        self._smoothed_lux: Optional[float] = None  # EMA for light sensor
 
         # Consecutive failure tracking per sensor
         self._failure_counts: dict[str, int] = {
@@ -354,6 +355,12 @@ class PiSensors(SensorBackend):
             )
             if light is not None:
                 self._record_success("veml7700")
+                # EMA smoothing — sensor is close to LEDs, raw values swing wildly
+                if self._smoothed_lux is None:
+                    self._smoothed_lux = light
+                else:
+                    self._smoothed_lux = 0.8 * self._smoothed_lux + 0.2 * light
+                light = self._smoothed_lux
             else:
                 self._record_failure("veml7700")
         else:
