@@ -2137,13 +2137,9 @@ async def _update_display_loop():
                         if len(unanswered) < 5 and to_answer and answer:
                             try:
                                 from .llm_gateway import generate_follow_up
-                                from .messages import add_question, get_recent_questions
-                                # Pass recent questions so follow-up avoids repetitive topics
-                                recent_qs = get_recent_questions(limit=10)
-                                recent_topics = [q["text"] for q in recent_qs]
+                                from .messages import add_question
                                 follow_up = await generate_follow_up(
-                                    to_answer[-1].text, answer,
-                                    recent_topics=recent_topics,
+                                    to_answer[-1].text, answer
                                 )
                                 if follow_up:
                                     add_question(follow_up, author="lumen",

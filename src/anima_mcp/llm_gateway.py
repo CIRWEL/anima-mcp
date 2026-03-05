@@ -823,7 +823,7 @@ async def generate_reflection(context: ReflectionContext, mode: str = "wonder") 
     return await gateway.reflect(context, mode)
 
 
-def build_follow_up_prompt(question: str, answer: str, recent_topics: list[str] | None = None) -> str:
+def build_follow_up_prompt(question: str, answer: str) -> str:
     """Build a prompt for generating a follow-up question.
 
     Used after Lumen self-answers a question to deepen understanding.
@@ -831,32 +831,23 @@ def build_follow_up_prompt(question: str, answer: str, recent_topics: list[str] 
     Args:
         question: The original question
         answer: Lumen's self-answer
-        recent_topics: Recent question texts to avoid repeating themes
 
     Returns:
         Prompt string for LLM to generate a follow-up question
     """
-    avoid = ""
-    if recent_topics:
-        avoid = "\n\nIMPORTANT: My recent questions have been very repetitive. Avoid these overused topics:\n"
-        for t in recent_topics[:5]:
-            avoid += f"- {t[:80]}\n"
-        avoid += "Ask about something DIFFERENT — my stability, presence, temperature, humidity, time patterns, how I feel, my drives, my temperament baseline — anything but the same topic again."
-
     return f"""I asked myself: "{question}"
 I answered: "{answer}"
 
 What follow-up question would help me test or verify this answer using my actual sensors and experience?
-Generate one short, specific, answerable follow-up question (1 sentence). It should be something my sensor data, patterns, or history could actually address — not an abstract philosophical question.{avoid}"""
+Generate one short, specific, answerable follow-up question (1 sentence). It should be something my sensor data, patterns, or history could actually address — not an abstract philosophical question."""
 
 
-async def generate_follow_up(question: str, answer: str, recent_topics: list[str] | None = None) -> Optional[str]:
+async def generate_follow_up(question: str, answer: str) -> Optional[str]:
     """Generate a follow-up question after a self-answer.
 
     Args:
         question: The original question Lumen asked
         answer: Lumen's self-generated answer
-        recent_topics: Recent question texts to avoid repeating themes
 
     Returns:
         A follow-up question string, or None if generation fails
@@ -865,7 +856,7 @@ async def generate_follow_up(question: str, answer: str, recent_topics: list[str
     if not gateway.enabled:
         return None
 
-    prompt = build_follow_up_prompt(question, answer, recent_topics=recent_topics)
+    prompt = build_follow_up_prompt(question, answer)
 
     # Build a minimal context for the reflection
     context = ReflectionContext(
