@@ -1061,24 +1061,22 @@ class ScreenRenderer:
             self._display.show_default()
     
     def _render_sensors(self, readings: Optional[SensorReadings]):
-        """Render sensor readings screen with colors and nav dots."""
+        """Render sensor readings with gauge bars and visual grouping."""
         if not readings:
             self._display.render_text("feeling\nblind", (10, 10), color=COLORS.TEXT_DIM)
             return
 
         # Cache: sensor values rounded to display precision (avoids redraw for noise)
-        # Use (x or 0) to handle None when I2C/sensors fail
         throttle = getattr(readings, 'throttle_bits', None) or 0
         cache_key = (
             f"{(readings.ambient_temp_c or 0):.1f}|{(readings.humidity_pct or 0):.0f}|"
             f"{(readings.light_lux or 0):.0f}|{(readings.cpu_temp_c or 0):.1f}|"
             f"{(readings.cpu_percent or 0):.0f}|{(readings.disk_percent or 0):.0f}|"
-            f"{throttle}"
+            f"{(readings.memory_percent or 0):.0f}|{throttle}"
         )
         if self._check_screen_cache("sensors", cache_key):
             return
 
-        # Use design system colors (warm, elegant)
         CYAN = COLORS.SOFT_CYAN
         BLUE = COLORS.SOFT_BLUE
         YELLOW = COLORS.SOFT_YELLOW
@@ -1087,181 +1085,235 @@ class ScreenRenderer:
         GREEN = COLORS.SOFT_GREEN
         PURPLE = COLORS.SOFT_PURPLE
         WHITE = COLORS.TEXT_PRIMARY
-        LIGHT_CYAN = COLORS.TEXT_SECONDARY
+        SECONDARY = COLORS.TEXT_SECONDARY
+        DIM = COLORS.TEXT_DIM
+        DIVIDER = (56, 54, 50)
 
-        # Try canvas-based rendering for nav dots
-        if hasattr(self._display, '_create_canvas'):
-            try:
-                image, draw = self._display._create_canvas(COLORS.BG_DARK)
+        if not hasattr(self._display, '_create_canvas'):
+            self._render_sensors_text_fallback(readings)
+            return
 
-                # Use cached fonts (loading from disk is slow)
-                fonts = self._get_fonts()
-                font = fonts['small']
-                font_small = fonts['tiny']
+        try:
+            from .design import lighten_color
+            image, draw = self._display._create_canvas(COLORS.BG_DARK)
+            fonts = self._get_fonts()
+            f_title = fonts['title']
+            f_small = fonts['small']
+            f_tiny = fonts['tiny']
+            f_micro = fonts['micro']
 
-                # Title
-                draw.text((10, 6), "sensors", fill=CYAN, font=fonts['medium'])
-                y = 24
-                line_height = 18
+            BAR_X = 10
+            BAR_W = 220  # full width bar (10 to 230)
+            BAR_H = 6
+            INLINE_BAR_W = 80
+            INLINE_BAR_H = 4
 
-                # Temperature
-                if readings.ambient_temp_c:
-                    temp = readings.ambient_temp_c
-                    if temp > 25:
-                        temp_feel, temp_color = "warm", ORANGE
-                    elif temp < 18:
-                        temp_feel, temp_color = "cool", CYAN
-                    else:
-                        temp_feel, temp_color = "mild", GREEN
-                    draw.text((10, y), f"air: {temp:.1f}°C", fill=temp_color, font=font)
-                    draw.text((140, y), f"({temp_feel})", fill=LIGHT_CYAN, font=font_small)
+            # ── Title ──
+            draw.text((10, 6), "sensors", fill=CYAN, font=f_title)
+
+            # ── Section: environment ──
+            y = 28
+            draw.text((10, y), "environment", fill=DIM, font=f_tiny)
+            draw.line([(80, y + 6), (230, y + 6)], fill=DIVIDER, width=1)
+            y += 16
+
+            # Environment gauges: (label, value_str, fill_frac, color, feel)
+            env_gauges = []
+
+            # Temperature
+            temp = readings.ambient_temp_c
+            if temp is not None:
+                if temp > 35:
+                    feel, color = "hot", RED
+                elif temp > 25:
+                    feel, color = "warm", ORANGE
+                elif temp < 10:
+                    feel, color = "cold", CYAN
+                elif temp < 18:
+                    feel, color = "cool", CYAN
                 else:
-                    draw.text((10, y), "air: --", fill=LIGHT_CYAN, font=font)
-                y += line_height
+                    feel, color = "mild", GREEN
+                frac = max(0.0, min(1.0, temp / 50.0))
+                env_gauges.append(("temp", f"{temp:.1f}\u00b0C", frac, color, feel))
+            else:
+                env_gauges.append(("temp", "--", 0, DIM, ""))
 
-                # Humidity
-                if readings.humidity_pct:
-                    hum = readings.humidity_pct
-                    if hum < 30:
-                        hum_feel, hum_color = "dry", YELLOW
-                    elif hum > 70:
-                        hum_feel, hum_color = "damp", BLUE
-                    else:
-                        hum_feel, hum_color = "ok", GREEN
-                    draw.text((10, y), f"humidity: {hum:.0f}%", fill=hum_color, font=font)
-                    draw.text((140, y), f"({hum_feel})", fill=LIGHT_CYAN, font=font_small)
+            # Humidity
+            hum = readings.humidity_pct
+            if hum is not None:
+                if hum < 30:
+                    feel, color = "dry", YELLOW
+                elif hum > 70:
+                    feel, color = "damp", BLUE
                 else:
-                    draw.text((10, y), "humidity: --", fill=LIGHT_CYAN, font=font)
-                y += line_height
+                    feel, color = "ok", GREEN
+                frac = max(0.0, min(1.0, hum / 100.0))
+                env_gauges.append(("humidity", f"{hum:.0f}%", frac, color, feel))
+            else:
+                env_gauges.append(("humidity", "--", 0, DIM, ""))
 
-                # Light
-                if readings.light_lux:
-                    light = readings.light_lux
-                    if light > 500:
-                        light_feel, light_color = "bright", YELLOW
-                    elif light < 50:
-                        light_feel, light_color = "dim", PURPLE
-                    else:
-                        light_feel, light_color = "soft", WHITE
-                    draw.text((10, y), f"light: {light:.0f} lux", fill=light_color, font=font)
-                    draw.text((140, y), f"({light_feel})", fill=LIGHT_CYAN, font=font_small)
+            # Light
+            light = readings.light_lux
+            if light is not None:
+                if light > 1000:
+                    feel, color = "vivid", YELLOW
+                elif light > 500:
+                    feel, color = "bright", YELLOW
+                elif light < 5:
+                    feel, color = "dark", PURPLE
+                elif light < 50:
+                    feel, color = "dim", PURPLE
                 else:
-                    draw.text((10, y), "light: --", fill=LIGHT_CYAN, font=font)
-                y += line_height + 10
+                    feel, color = "soft", WHITE
+                frac = max(0.0, min(1.0, light / 2000.0))
+                env_gauges.append(("light", f"{light:.0f} lux", frac, color, feel))
+            else:
+                env_gauges.append(("light", "--", 0, DIM, ""))
 
-                # System (handle None when sensors fail)
-                cpu_temp = readings.cpu_temp_c or 0
-                if cpu_temp > 60:
-                    cpu_color = RED
-                elif cpu_temp > 50:
-                    cpu_color = ORANGE
+            # Draw environment gauges
+            for label, val_str, frac, color, feel in env_gauges:
+                # Label (left) + value (center-left) + feel (right)
+                draw.text((BAR_X, y), label, fill=DIM, font=f_small)
+                draw.text((70, y), val_str, fill=color, font=f_small)
+                if feel:
+                    draw.text((200, y), feel, fill=color, font=f_small)
+                y += 14
+
+                # Bar track
+                draw.rectangle([BAR_X, y, BAR_X + BAR_W, y + BAR_H],
+                              fill=COLORS.BG_SUBTLE)
+                # Bar fill
+                fill_w = int(frac * BAR_W)
+                if fill_w > 0:
+                    draw.rectangle([BAR_X, y, BAR_X + fill_w, y + BAR_H],
+                                  fill=color)
+                    # Bright cap at end
+                    if fill_w > 3:
+                        cap_color = lighten_color(color, 60)
+                        draw.rectangle([BAR_X + fill_w - 2, y, BAR_X + fill_w, y + BAR_H],
+                                      fill=cap_color)
+                y += BAR_H + 6
+
+            # I2C hint
+            if not any([readings.ambient_temp_c, readings.humidity_pct, readings.light_lux]):
+                draw.text((BAR_X, y - 4), "I2C off? sudo raspi-config", fill=DIM, font=f_micro)
+
+            # ── Section: system ──
+            y = 132
+            draw.text((10, y), "system", fill=DIM, font=f_tiny)
+            draw.line([(52, y + 6), (230, y + 6)], fill=DIVIDER, width=1)
+            y += 16
+
+            # System inline gauges: (label, value_str, fill_frac, color)
+            sys_gauges = []
+
+            cpu_temp = readings.cpu_temp_c or 0
+            cpu_color = RED if cpu_temp > 60 else ORANGE if cpu_temp > 50 else GREEN
+            cpu_frac = max(0.0, min(1.0, (cpu_temp - 30) / 55.0))
+            sys_gauges.append(("cpu", f"{cpu_temp:.0f}\u00b0C", cpu_frac, cpu_color))
+
+            cpu_pct = readings.cpu_percent or 0
+            sys_gauges.append(("load", f"{cpu_pct:.0f}%", max(0.0, min(1.0, cpu_pct / 100.0)), SECONDARY))
+
+            mem_pct = readings.memory_percent or 0
+            sys_gauges.append(("mem", f"{mem_pct:.0f}%", max(0.0, min(1.0, mem_pct / 100.0)), SECONDARY))
+
+            disk = readings.disk_percent or 0
+            disk_color = RED if disk > 80 else ORANGE if disk > 60 else GREEN
+            sys_gauges.append(("disk", f"{disk:.0f}%", max(0.0, min(1.0, disk / 100.0)), disk_color))
+
+            for label, val_str, frac, color in sys_gauges:
+                # Label + value + inline bar on one line
+                draw.text((BAR_X, y), label, fill=DIM, font=f_small)
+                draw.text((48, y), val_str, fill=color, font=f_small)
+
+                # Inline bar (vertically centered with text)
+                bar_y = y + 5
+                bar_x = 100
+                draw.rectangle([bar_x, bar_y, bar_x + INLINE_BAR_W, bar_y + INLINE_BAR_H],
+                              fill=COLORS.BG_SUBTLE)
+                fill_w = int(frac * INLINE_BAR_W)
+                if fill_w > 0:
+                    draw.rectangle([bar_x, bar_y, bar_x + fill_w, bar_y + INLINE_BAR_H],
+                                  fill=color)
+                y += 16
+
+            # ── Footer ──
+            y = 220
+            footer_parts = []
+
+            # Power status
+            if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now is not None:
+                if readings.undervoltage_now:
+                    footer_parts.append(("\u26a1UNDERVOLT", RED))
+                elif readings.undervoltage_occurred:
+                    footer_parts.append(("pwr:warn", ORANGE))
+                elif readings.throttled_now:
+                    footer_parts.append(("pwr:throttle", ORANGE))
                 else:
-                    cpu_color = GREEN
-                draw.text((10, y), f"cpu: {cpu_temp:.1f}°C", fill=cpu_color, font=font)
-                y += line_height
-                cpu_pct = readings.cpu_percent or 0
-                draw.text((10, y), f"load: {cpu_pct:.0f}%", fill=LIGHT_CYAN, font=font)
-                y += line_height
+                    footer_parts.append(("pwr:ok", GREEN))
 
-                # Disk space
-                disk = readings.disk_percent or 0
-                if disk > 80:
-                    disk_color = RED
-                elif disk > 60:
-                    disk_color = ORANGE
-                else:
-                    disk_color = GREEN
-                draw.text((10, y), f"disk: {disk:.0f}%", fill=disk_color, font=font)
-                y += line_height
+            # Pressure
+            if readings.pressure_hpa:
+                footer_parts.append((f"{readings.pressure_hpa:.0f}hPa", DIM))
 
-                # Hint when I2C sensors (air, humidity, light) all missing
-                if not any([readings.ambient_temp_c, readings.humidity_pct, readings.light_lux]):
-                    draw.text((10, y), "I2C off? run: sudo raspi-config", fill=COLORS.TEXT_DIM, font=font_small)
-                    y += line_height
+            # WiFi
+            wifi_status = self._get_wifi_status()
+            if wifi_status["connected"]:
+                ssid = wifi_status.get("ssid", "")[:8]
+                signal = wifi_status.get("signal", 0)
+                wifi_color = GREEN if signal > 70 else YELLOW if signal > 40 else ORANGE
+                footer_parts.append((f"{ssid} {signal}%", wifi_color))
+            else:
+                footer_parts.append(("no wifi", RED))
 
-                # Voltage / throttle status
-                if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now is not None:
-                    if readings.undervoltage_now:
-                        draw.text((10, y), "⚡ UNDERVOLT!", fill=RED, font=font)
-                    elif readings.undervoltage_occurred:
-                        draw.text((10, y), "pwr: warn (was low)", fill=ORANGE, font=font)
-                    elif readings.throttled_now:
-                        draw.text((10, y), "pwr: throttled", fill=ORANGE, font=font)
-                    else:
-                        draw.text((10, y), "pwr: ok", fill=GREEN, font=font)
-                    y += line_height
-                y += 8
+            # Draw footer parts spaced across bottom
+            fx = BAR_X
+            for text, color in footer_parts:
+                draw.text((fx, y), text, fill=color, font=f_micro)
+                fx += len(text) * 6 + 10  # rough char width spacing
 
-                # WiFi status
-                wifi_status = self._get_wifi_status()
-                if wifi_status["connected"]:
-                    ssid = wifi_status.get("ssid", "")[:10]  # Truncate long SSIDs
-                    signal = wifi_status.get("signal", 0)
-                    ip = wifi_status.get("ip", "")
-                    if signal > 70:
-                        wifi_color = GREEN
-                    elif signal > 40:
-                        wifi_color = YELLOW
-                    else:
-                        wifi_color = ORANGE
-                    draw.text((10, y), f"wifi: {ssid}", fill=wifi_color, font=font_small)
-                    draw.text((140, y), f"{signal}%", fill=LIGHT_CYAN, font=font_small)
-                    y += line_height - 6
-                    # Show IP address for reconnection
-                    if ip:
-                        draw.text((10, y), f"ip: {ip}", fill=LIGHT_CYAN, font=font_small)
-                        y += line_height - 6
-                else:
-                    draw.text((10, y), "wifi: disconnected", fill=RED, font=font_small)
-                    y += line_height - 4
+            # Record sensor history for sparklines
+            self._sensor_history.append((
+                readings.ambient_temp_c or 0,
+                readings.humidity_pct or 0,
+                readings.cpu_temp_c or 0,
+            ))
+            if len(self._sensor_history) >= 5:
+                self._draw_sensor_sparklines(draw, readings)
 
-                # Battery status (if available)
-                battery = self._get_battery_status()
-                if battery["available"]:
-                    level = battery["level"]
-                    charging = battery.get("charging", False)
-                    if level > 60:
-                        bat_color = GREEN
-                    elif level > 20:
-                        bat_color = YELLOW
-                    else:
-                        bat_color = RED
-                    charge_str = "⚡" if charging else ""
-                    draw.text((10, y), f"battery: {level}%{charge_str}", fill=bat_color, font=font_small)
+            self._draw_status_bar(draw)
 
-                # Record sensor history for sparklines
-                self._sensor_history.append((
-                    readings.ambient_temp_c or 0,
-                    readings.humidity_pct or 0,
-                    readings.cpu_temp_c or 0,
-                ))
+            self._store_screen_cache("sensors", cache_key, image)
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+            return
+        except Exception as e:
+            import traceback
+            print(f"[Sensors Screen] Canvas error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
 
-                # Draw sparklines next to key values (if enough history)
-                if len(self._sensor_history) >= 5:
-                    self._draw_sensor_sparklines(draw, readings)
+        self._render_sensors_text_fallback(readings)
 
-                # Status bar + screen indicator
-                self._draw_status_bar(draw)
-                # Screen indicator removed — linear L/R cycling makes group labels confusing
+    def _render_sensors_text_fallback(self, readings: SensorReadings):
+        """Text-only fallback for sensors screen."""
+        CYAN = COLORS.SOFT_CYAN
+        ORANGE = COLORS.SOFT_ORANGE
+        GREEN = COLORS.SOFT_GREEN
+        YELLOW = COLORS.SOFT_YELLOW
+        BLUE = COLORS.SOFT_BLUE
+        RED = COLORS.SOFT_CORAL
+        WHITE = COLORS.TEXT_PRIMARY
 
-                # Update display + cache
-                self._store_screen_cache("sensors", cache_key, image)
-                if hasattr(self._display, '_image'):
-                    self._display._image = image
-                if hasattr(self._display, '_show'):
-                    self._display._show()
-                return
-            except Exception as e:
-                print(f"[Sensors Screen] Canvas error: {e}", file=sys.stderr, flush=True)
-
-        # Fallback to text rendering
         lines_with_colors = []
         if not any([readings.ambient_temp_c, readings.humidity_pct, readings.light_lux]):
             lines_with_colors.append(("I2C off? sudo raspi-config", COLORS.TEXT_DIM))
         if readings.ambient_temp_c:
             temp = readings.ambient_temp_c
             temp_color = ORANGE if temp > 25 else CYAN if temp < 18 else GREEN
-            lines_with_colors.append((f"air: {temp:.1f}°C", temp_color))
+            lines_with_colors.append((f"air: {temp:.1f}\u00b0C", temp_color))
         if readings.humidity_pct:
             hum = readings.humidity_pct
             hum_color = YELLOW if hum < 30 else BLUE if hum > 70 else GREEN
@@ -1269,7 +1321,7 @@ class ScreenRenderer:
         if readings.light_lux:
             lines_with_colors.append((f"light: {readings.light_lux:.0f}", WHITE))
         cpu_t = readings.cpu_temp_c or 0
-        lines_with_colors.append((f"cpu: {cpu_t:.1f}°C", GREEN))
+        lines_with_colors.append((f"cpu: {cpu_t:.1f}\u00b0C", GREEN))
         if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now:
             lines_with_colors.append(("UNDERVOLT!", RED))
         elif hasattr(readings, 'undervoltage_occurred') and readings.undervoltage_occurred:
@@ -1295,15 +1347,16 @@ class ScreenRenderer:
         GREEN = COLORS.SOFT_GREEN
 
         # Sparkline config: (data_index, y_center, color)
+        # y positions match new gauge layout: temp bar=58, humidity bar=84, cpu row=148
         sparklines = [
-            (0, 21, ORANGE if (readings.ambient_temp_c or 0) > 25 else GREEN),  # temp
-            (1, 43, GREEN),   # humidity
-            (2, 95, GREEN),   # cpu temp
+            (0, 59, ORANGE if (readings.ambient_temp_c or 0) > 25 else GREEN),  # temp
+            (1, 85, GREEN),   # humidity
+            (2, 151, GREEN),  # cpu temp
         ]
 
-        spark_x = 175
-        spark_w = 40
-        spark_h = 12
+        spark_x = 180
+        spark_w = 48
+        spark_h = 10
 
         for data_idx, y_center, color in sparklines:
             values = [h[data_idx] for h in history]
