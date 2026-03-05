@@ -1103,7 +1103,7 @@ class ScreenRenderer:
             f_micro = fonts['micro']
 
             BAR_X = 10
-            BAR_W = 220  # full width bar (10 to 230)
+            BAR_W = 160  # env bars (10 to 170), sparklines go to the right
             BAR_H = 6
             INLINE_BAR_W = 80
             INLINE_BAR_H = 4
@@ -1239,39 +1239,34 @@ class ScreenRenderer:
                 y += 16
 
             # ── Footer ──
-            y = 220
-            footer_parts = []
-
+            y = 216
             # Power status
             if hasattr(readings, 'undervoltage_now') and readings.undervoltage_now is not None:
                 if readings.undervoltage_now:
-                    footer_parts.append(("\u26a1UNDERVOLT", RED))
+                    draw.text((BAR_X, y), "\u26a1UNDERVOLT!", fill=RED, font=f_micro)
                 elif readings.undervoltage_occurred:
-                    footer_parts.append(("pwr:warn", ORANGE))
+                    draw.text((BAR_X, y), "pwr:warn", fill=ORANGE, font=f_micro)
                 elif readings.throttled_now:
-                    footer_parts.append(("pwr:throttle", ORANGE))
+                    draw.text((BAR_X, y), "pwr:throttle", fill=ORANGE, font=f_micro)
                 else:
-                    footer_parts.append(("pwr:ok", GREEN))
+                    draw.text((BAR_X, y), "pwr:ok", fill=GREEN, font=f_micro)
 
             # Pressure
             if readings.pressure_hpa:
-                footer_parts.append((f"{readings.pressure_hpa:.0f}hPa", DIM))
+                draw.text((70, y), f"{readings.pressure_hpa:.0f}hPa", fill=DIM, font=f_micro)
 
-            # WiFi
+            # WiFi + IP
             wifi_status = self._get_wifi_status()
             if wifi_status["connected"]:
                 ssid = wifi_status.get("ssid", "")[:8]
                 signal = wifi_status.get("signal", 0)
+                ip = wifi_status.get("ip", "")
                 wifi_color = GREEN if signal > 70 else YELLOW if signal > 40 else ORANGE
-                footer_parts.append((f"{ssid} {signal}%", wifi_color))
+                draw.text((130, y), f"{ssid} {signal}%", fill=wifi_color, font=f_micro)
+                if ip:
+                    draw.text((BAR_X, y + 11), f"ip: {ip}", fill=DIM, font=f_micro)
             else:
-                footer_parts.append(("no wifi", RED))
-
-            # Draw footer parts spaced across bottom
-            fx = BAR_X
-            for text, color in footer_parts:
-                draw.text((fx, y), text, fill=color, font=f_micro)
-                fx += len(text) * 6 + 10  # rough char width spacing
+                draw.text((130, y), "no wifi", fill=RED, font=f_micro)
 
             # Record sensor history for sparklines
             self._sensor_history.append((
@@ -1279,6 +1274,7 @@ class ScreenRenderer:
                 readings.humidity_pct or 0,
                 readings.cpu_temp_c or 0,
             ))
+            # Draw sparklines in dedicated strip between system gauges and footer
             if len(self._sensor_history) >= 5:
                 self._draw_sensor_sparklines(draw, readings)
 
@@ -1337,7 +1333,7 @@ class ScreenRenderer:
             self._display.render_text("SENSORS\n\nno data", (10, 10), color=COLORS.TEXT_DIM)
     
     def _draw_sensor_sparklines(self, draw, readings):
-        """Draw tiny sparklines to the right of sensor values."""
+        """Draw tiny sparklines to the right of gauge bars (not overlapping)."""
         history = list(self._sensor_history)
         n = len(history)
         if n < 5:
@@ -1346,25 +1342,26 @@ class ScreenRenderer:
         ORANGE = COLORS.SOFT_ORANGE
         GREEN = COLORS.SOFT_GREEN
 
-        # Sparkline config: (data_index, y_center, color)
-        # y positions match new gauge layout: temp bar=58, humidity bar=84, cpu row=148
+        # Sparkline config: (data_index, y_top, color)
+        # Positioned to the right of env bars (bars end at x=170)
+        # Env bar y positions: temp=58, humidity=84, light=110 (each 6px tall)
+        # CPU system row at y=148
         sparklines = [
-            (0, 59, ORANGE if (readings.ambient_temp_c or 0) > 25 else GREEN),  # temp
-            (1, 85, GREEN),   # humidity
-            (2, 151, GREEN),  # cpu temp
+            (0, 57, ORANGE if (readings.ambient_temp_c or 0) > 25 else GREEN),  # temp
+            (1, 83, GREEN),   # humidity
+            (2, 152, GREEN),  # cpu temp (next to inline bar)
         ]
 
-        spark_x = 180
-        spark_w = 48
-        spark_h = 10
+        spark_x = 178
+        spark_w = 50
+        spark_h = 8
 
-        for data_idx, y_center, color in sparklines:
+        for data_idx, y_top, color in sparklines:
             values = [h[data_idx] for h in history]
             v_min = min(values)
             v_max = max(values)
             v_range = v_max - v_min if v_max > v_min else 1.0
 
-            y_top = y_center - spark_h // 2
             points = []
             for i, v in enumerate(values):
                 x = spark_x + int(i * spark_w / (n - 1))
