@@ -210,6 +210,7 @@ class ActionSelector:
         can_speak: bool = False,
         self_predictions: Optional[Dict[str, float]] = None,
         conflict_rates: Optional[Dict[str, float]] = None,
+        drives: Optional[Dict[str, float]] = None,
     ) -> Action:
         """
         Select an action based on current context.
@@ -314,6 +315,28 @@ class ActionSelector:
                         motivation=f"Adjusting warmth expression",
                     ),
                     self._get_action_value("led_brightness") + abs(direction) * 0.4,
+                ))
+
+        # 6b. Drive-motivated actions (from inner life)
+        if drives:
+            strongest_dim = max(drives, key=drives.get)
+            strongest_val = drives[strongest_dim]
+            if strongest_val > 0.2:
+                drive_actions = {
+                    "warmth": (ActionType.LED_BRIGHTNESS, {"direction": "increase"}),
+                    "clarity": (ActionType.REQUEST_REFLECTION, {}),
+                    "stability": (ActionType.ADJUST_SENSITIVITY, {"direction": "decrease"}),
+                    "presence": (ActionType.ASK_QUESTION, {"surprise_sources": ["presence"]}),
+                }
+                if strongest_dim == "presence" and can_speak:
+                    drive_actions["presence"] = (ActionType.SPEAK, {"trigger": "drive"})
+                action_type, params = drive_actions[strongest_dim]
+                candidates.append((
+                    Action(
+                        action_type, params,
+                        motivation=f"drive: wanting {strongest_dim} ({strongest_val:.2f})",
+                    ),
+                    self._get_action_value(action_type.value) + strongest_val * 0.4,
                 ))
 
         # 7. Prediction-informed adjustments

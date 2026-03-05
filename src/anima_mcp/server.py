@@ -1957,6 +1957,9 @@ async def _update_display_loop():
                     except Exception:
                         pass
 
+                    # Read inner life from shared memory (broker writes it)
+                    _il_data = _last_shm_data.get("inner_life") if _last_shm_data else None
+
                     context = ReflectionContext(
                         warmth=anima.warmth,
                         clarity=anima.clarity,
@@ -1983,6 +1986,11 @@ async def _update_display_loop():
                         rest_duration_minutes=rest_duration / 60.0,
                         is_dreaming=is_dreaming,
                         recent_observations=recent_obs_texts,
+                        inner_deltas=_il_data.get("deltas") if _il_data else None,
+                        temperament=_il_data.get("temperament") if _il_data else None,
+                        mood_vs_temperament=_il_data.get("mood_vs_temperament") if _il_data else None,
+                        drives=_il_data.get("drives") if _il_data else None,
+                        strongest_drive=_il_data.get("strongest_drive") if _il_data else None,
                     )
 
                     # === 5. Call LLM ===

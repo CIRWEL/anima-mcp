@@ -55,6 +55,7 @@ if sys.stdout.encoding != 'utf-8':
 from .sensors import get_sensors
 from collections import deque
 from .anima import sense_self, MoodMomentum
+from .inner_life import InnerLife
 from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW
 from .display.leds.brightness import estimate_instantaneous_brightness
 # NOTE: Broker does NOT import or init LEDDisplay — server owns LED hardware.
@@ -237,6 +238,8 @@ def run_creature():
     print("[StableCreature] Entering main loop...")
 
     _mood_momentum = MoodMomentum()
+    _inner_life = InnerLife()
+    inner_state = None
 
     # Persistent event loop for async calls (governance, cognitive, memory).
     # A single loop runs in a dedicated daemon thread so aiohttp sessions
@@ -375,8 +378,9 @@ def run_creature():
             _smoothed_world_light = sum(_world_light_buffer) / len(_world_light_buffer)
 
             # 2. Update Anima State (now has correct led_brightness for correction)
-            anima = sense_self(readings)
-            anima = _mood_momentum.smooth(anima)
+            raw_anima = sense_self(readings)
+            anima = _mood_momentum.smooth(raw_anima)
+            inner_state = _inner_life.update(raw_anima, anima)
 
             # 2a. Calculate UNITARES EISV metrics
             eisv = anima_to_eisv(anima, readings)
@@ -617,6 +621,7 @@ def run_creature():
                         surprise_sources=pred_error.surprise_sources,
                         can_speak=voice is not None,
                         self_predictions=action_predictions,
+                        drives=inner_state.drives if inner_state else None,
                     )
 
                     # Execute action effects
@@ -783,6 +788,7 @@ def run_creature():
                 "timestamp": datetime.now().isoformat(),
                 "readings": readings.to_dict(),
                 "anima": anima.to_dict(),
+                "inner_life": inner_state.to_dict() if inner_state else {},
                 "eisv": eisv.to_dict(),
                 "identity": {
                     "creature_id": identity.creature_id,

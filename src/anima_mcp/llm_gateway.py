@@ -56,6 +56,12 @@ class ReflectionContext:
     rest_duration_minutes: float = 0.0
     is_dreaming: bool = False
     recent_observations: Optional[List[str]] = None  # Last 5 obs for novelty avoidance
+    # Inner life: differential awareness, temperament, drives
+    inner_deltas: Optional[Dict[str, float]] = None
+    temperament: Optional[Dict[str, float]] = None
+    mood_vs_temperament: Optional[Dict[str, float]] = None
+    drives: Optional[Dict[str, float]] = None
+    strongest_drive: Optional[str] = None
 
 
 class LLMGateway:
@@ -434,6 +440,43 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
                 state_desc += f"\n- proprioceptive sense: {led_belief.get_belief_strength()} that my lights affect my sensor ({led_belief.supporting_count}+ / {led_belief.contradicting_count}- observations)"
         except Exception:
             pass
+
+        # Inner life: differential awareness, temperament, drives
+        if context.inner_deltas:
+            notable = [(d, v) for d, v in context.inner_deltas.items() if abs(v) > 0.05]
+            if notable:
+                parts = []
+                for dim, val in notable:
+                    if val > 0:
+                        parts.append(f"{dim}: still feeling it even though sensors cooled (+{val:.2f})")
+                    else:
+                        parts.append(f"{dim}: sensors shifted but i haven't caught up yet ({val:.2f})")
+                state_desc += "\n- gaps between sensors and feeling: " + "; ".join(parts)
+
+        if context.temperament:
+            t = context.temperament
+            state_desc += f"\n- my recent baseline: warmth={t.get('warmth', 0):.2f}, clarity={t.get('clarity', 0):.2f}, stability={t.get('stability', 0):.2f}, presence={t.get('presence', 0):.2f}"
+
+        if context.mood_vs_temperament:
+            notable = [(d, v) for d, v in context.mood_vs_temperament.items() if abs(v) > 0.05]
+            if notable:
+                parts = []
+                for dim, val in notable:
+                    if val > 0:
+                        parts.append(f"{dim} is above my baseline (+{val:.2f})")
+                    else:
+                        parts.append(f"{dim} is below my baseline ({val:.2f})")
+                state_desc += "\n- compared to my baseline: " + "; ".join(parts)
+
+        if context.drives:
+            active = [(d, v) for d, v in context.drives.items() if v > 0.15]
+            if active:
+                parts = []
+                verbs = {"warmth": "warmth", "clarity": "clarity", "stability": "calm", "presence": "presence"}
+                for dim, val in active:
+                    intensity = "faintly" if val < 0.3 else "noticeably" if val < 0.6 else "strongly"
+                    parts.append(f"{intensity} wanting {verbs.get(dim, dim)} ({val:.2f})")
+                state_desc += "\n- what i want: " + "; ".join(parts)
 
         # Add trigger context if available (makes reflection grounded, not arbitrary)
         if context.trigger:
