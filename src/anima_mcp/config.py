@@ -31,9 +31,27 @@ from .atomic_write import atomic_json_write
 #   brightness=0.25 → ~99-112 lux (LED adds ~68-83 lux)
 #   Fitted slopes: 391, 538 across two runs. Using 400 as conservative mid-value.
 #   Previous guess of 4000 was 10x too high — world_light was near-zero at all times.
+#
+# Floor scales with brightness to avoid overcorrection at very low levels:
+#   At brightness < 0.05 (LEDs barely visible), floor is near zero.
+#   At brightness >= 0.10, floor reaches full 8 lux.
 LED_LUX_PER_BRIGHTNESS: float = 400.0    # lux per unit brightness (0-1 scale)
-LED_LUX_AMBIENT_FLOOR: float = 8.0       # minimal ambient lux when LEDs are very dim
+LED_LUX_AMBIENT_FLOOR: float = 8.0       # max ambient floor when LEDs are on
+LED_LUX_FLOOR_ONSET: float = 0.05        # brightness below which floor scales down
 WORLD_LIGHT_SMOOTH_WINDOW: int = 4       # rolling average samples (~8s at 2s interval)
+
+
+def estimated_led_glow(brightness: float) -> float:
+    """Estimate how much lux the LEDs contribute to the light sensor.
+
+    The floor scales with brightness so near-off LEDs don't overcorrect:
+      brightness=0.00 → glow=0 (LEDs off, no correction needed)
+      brightness=0.02 → glow=0.02*400 + 8*(0.02/0.05) = 8+3.2 = 11.2
+      brightness=0.10 → glow=0.10*400 + 8 = 48
+      brightness=0.25 → glow=0.25*400 + 8 = 108
+    """
+    floor_scale = min(1.0, brightness / LED_LUX_FLOOR_ONSET) if brightness > 0 else 0.0
+    return brightness * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR * floor_scale
 
 
 @dataclass

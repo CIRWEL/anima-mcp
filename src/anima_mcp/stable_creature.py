@@ -56,7 +56,7 @@ from .sensors import get_sensors
 from collections import deque
 from .anima import sense_self, MoodMomentum
 from .inner_life import InnerLife
-from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW
+from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, WORLD_LIGHT_SMOOTH_WINDOW, estimated_led_glow
 from .display.leds.brightness import estimate_instantaneous_brightness
 # NOTE: Broker does NOT import or init LEDDisplay — server owns LED hardware.
 # Agency LED brightness is communicated via shared memory.
@@ -373,7 +373,7 @@ def run_creature():
             readings.led_brightness = _instantaneous_led
 
             # 1c. Compute smoothed world_light for activity manager
-            _raw_world = max(0.0, (readings.light_lux or 0.0) - (_instantaneous_led * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
+            _raw_world = max(0.0, (readings.light_lux or 0.0) - estimated_led_glow(_instantaneous_led))
             _world_light_buffer.append(_raw_world)
             _smoothed_world_light = sum(_world_light_buffer) / len(_world_light_buffer)
 
@@ -541,8 +541,7 @@ def run_creature():
                     # raw lux is LED-dominated and would learn "my LEDs correlate
                     # with warmth" which is tautological. Proprioception is separate.)
                     _corr_led = readings.led_brightness if readings.led_brightness is not None else 0.12
-                    _corr_world = max(0.0, (readings.light_lux or 0.0) - (
-                        _corr_led * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
+                    _corr_world = max(0.0, (readings.light_lux or 0.0) - estimated_led_glow(_corr_led))
                     sensor_vals = {
                         "ambient_temp": readings.ambient_temp_c,
                         "light": _corr_world,

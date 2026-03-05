@@ -755,9 +755,9 @@ class DrawingEngine:
         # would never reach "dark" and would flip regimes from LED changes alone.
         light_lux = anima.readings.light_lux if anima.readings else None
         if light_lux is not None:
-            from ..config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+            from ..config import estimated_led_glow
             led_b = anima.readings.led_brightness if anima.readings.led_brightness is not None else 0.0
-            estimated_glow = led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR
+            estimated_glow = estimated_led_glow(led_b)
             env_lux = max(0.0, light_lux - estimated_glow)
             if env_lux < 20:
                 light_regime = "dark"
@@ -1390,10 +1390,10 @@ class DrawingEngine:
                     }
                     # Correct for LED self-glow: growth preferences should
                     # reflect actual environment, not Lumen's own LEDs
-                    from ..config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+                    from ..config import estimated_led_glow as _est_glow
                     _raw_lux = readings.light_lux or 0.0
                     _led_b = readings.led_brightness if readings.led_brightness is not None else 0.0
-                    _world_light = max(0.0, _raw_lux - (_led_b * LED_LUX_PER_BRIGHTNESS + LED_LUX_AMBIENT_FLOOR))
+                    _world_light = max(0.0, _raw_lux - _est_glow(_led_b))
                     environment = {
                         "light_lux": _world_light,
                         "temp_c": readings.ambient_temp_c or 22,

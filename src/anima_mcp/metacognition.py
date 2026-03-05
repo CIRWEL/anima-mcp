@@ -21,7 +21,7 @@ import sys
 
 from .sensors.base import SensorReadings
 from .anima import Anima
-from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR
+from .config import LED_LUX_PER_BRIGHTNESS, LED_LUX_AMBIENT_FLOOR, estimated_led_glow
 
 
 @dataclass
@@ -364,8 +364,7 @@ class MetacognitiveMonitor:
         # We use a learned baseline for the ambient floor.
         if led_brightness is not None and led_brightness >= 0:
             # Estimate expected lux from our own LED output
-            led_contribution = led_brightness * LED_LUX_PER_BRIGHTNESS
-            predicted_lux = LED_LUX_AMBIENT_FLOOR + led_contribution
+            predicted_lux = estimated_led_glow(led_brightness)
 
             # Blend with baseline if available (baseline captures ambient + LED together)
             if prediction.light_lux is not None:
