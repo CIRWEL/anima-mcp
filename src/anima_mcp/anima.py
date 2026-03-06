@@ -420,10 +420,11 @@ def _sense_clarity(
 
     # Light: raw sensor reading (includes LED glow + room light).
     # Lumen knows its LED brightness separately — no need to decompose.
-    # Log scale: 1 lux → 0.0, 1000 lux → 1.0
+    # Log scale: 1 lux → 0.0, light_max_lux → 1.0
     if r.light_lux is not None:
         if r.light_lux > 1.0:
-            light_clarity = min(1.0, math.log10(r.light_lux) / 3.0)
+            log_max = math.log10(max(10.0, cal.light_max_lux))
+            light_clarity = min(1.0, math.log10(r.light_lux) / log_max)
         else:
             light_clarity = 0.0
         components.append(light_clarity)

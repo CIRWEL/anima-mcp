@@ -103,63 +103,70 @@ class AdaptiveLearner:
     def get_recent_observations(
         self,
         days: Optional[int] = None
-    ) -> Tuple[List[float], List[float], List[float]]:
+    ) -> Tuple[List[float], List[float], List[float], List[float]]:
         """
         Get recent sensor observations from state history.
-        
+
         Handles gaps by expanding window if needed to get enough observations.
-        
+
         Returns:
-            Tuple of (temperatures, pressures, humidities) lists
+            Tuple of (temperatures, pressures, humidities, light_readings) lists
         """
         if not self.db_path.exists():
-            return ([], [], [])
-        
+            return ([], [], [], [])
+
         conn = self._connect()
         days = days or self.learning_window_days
-        
+
         # Detect gap - if there's a significant gap, expand window to get more data
         gap = self.detect_gap()
         if gap and gap.days > days:
             # Gap longer than window - expand window to include pre-gap data
             days = min(gap.days + 7, 30)  # Expand up to 30 days max
-        
+
         cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        
+
         # Query state history for sensor readings
         rows = conn.execute(
-            """SELECT sensors FROM state_history 
-               WHERE timestamp > ? 
-               ORDER BY timestamp DESC 
+            """SELECT sensors FROM state_history
+               WHERE timestamp > ?
+               ORDER BY timestamp DESC
                LIMIT 1000""",
             (cutoff,)
         ).fetchall()
-        
+
         temps = []
         pressures = []
         humidities = []
-        
+        light_readings = []
+
         import json
         for row in rows:
             try:
                 sensors = json.loads(row["sensors"])
-                
+
                 # Collect ambient temperatures
                 if "ambient_temp_c" in sensors and sensors["ambient_temp_c"] is not None:
                     temps.append(float(sensors["ambient_temp_c"]))
-                
+
                 # Collect pressures
                 if "pressure_hpa" in sensors and sensors["pressure_hpa"] is not None:
                     pressures.append(float(sensors["pressure_hpa"]))
-                
+
                 # Collect humidity
                 if "humidity_pct" in sensors and sensors["humidity_pct"] is not None:
                     humidities.append(float(sensors["humidity_pct"]))
-                    
+
+                # Collect light readings
+                if "light_lux" in sensors and sensors["light_lux"] is not None:
+                    lux = float(sensors["light_lux"])
+                    if lux > 0:
+                        light_readings.append(lux)
+
             except (json.JSONDecodeError, KeyError, ValueError):
                 continue
-        
-        return (temps, pressures, humidities)
+
+        return (temps, pressures, humidities, light_readings)
     
     def learn_calibration(
         self,
@@ -176,14 +183,14 @@ class AdaptiveLearner:
         Returns:
             Learned calibration, or None if not enough data
         """
-        temps, pressures, humidities = self.get_recent_observations()
-        
+        temps, pressures, humidities, light_readings = self.get_recent_observations()
+
         # Need minimum observations to learn
         if len(temps) < min_observations and len(pressures) < min_observations:
             return None
-        
+
         learned = NervousSystemCalibration.from_dict(current_calibration.to_dict())
-        
+
         # Learn ambient temperature range
         if len(temps) >= min_observations:
             temp_min = min(temps)
@@ -196,17 +203,23 @@ class AdaptiveLearner:
             # Minimum range: 15-35°C so 20-25°C feels comfortable (mid-range)
             learned.ambient_temp_min = min(learned.ambient_temp_min, 15.0)
             learned.ambient_temp_max = max(learned.ambient_temp_max, 35.0)
-        
+
         # Learn pressure baseline (mean of observations)
         if len(pressures) >= min_observations:
             learned.pressure_ideal = sum(pressures) / len(pressures)
-        
+
         # Learn humidity ideal (mean of observations)
         if len(humidities) >= min_observations:
             learned.humidity_ideal = sum(humidities) / len(humidities)
             # Clamp to reasonable range
             learned.humidity_ideal = max(20, min(80, learned.humidity_ideal))
-        
+
+        # Learn light max (95th percentile of observations)
+        if len(light_readings) >= min_observations:
+            sorted_light = sorted(light_readings)
+            p95_idx = int(len(sorted_light) * 0.95)
+            learned.light_max_lux = max(10.0, sorted_light[p95_idx])
+
         return learned
     
     def should_adapt(
@@ -244,10 +257,16 @@ class AdaptiveLearner:
             learned_calibration.humidity_ideal - current_calibration.humidity_ideal
         ) / max(1, current_calibration.humidity_ideal)
 
+        # Check if light max changed significantly
+        light_change = abs(
+            learned_calibration.light_max_lux - current_calibration.light_max_lux
+        ) / max(1, current_calibration.light_max_lux)
+
         # Adapt if any change is significant
         return (pressure_changed or
                 temp_change > threshold or
-                humidity_change > threshold)
+                humidity_change > threshold or
+                light_change > threshold)
     
     def get_last_adaptation_time(self, config_manager: Optional[ConfigManager] = None) -> Optional[datetime]:
         """
@@ -372,9 +391,9 @@ class AdaptiveLearner:
         Returns:
             True if enough observations exist
         """
-        temps, pressures, humidities = self.get_recent_observations()
-        return (len(temps) >= min_observations or 
-                len(pressures) >= min_observations or 
+        temps, pressures, humidities, _light = self.get_recent_observations()
+        return (len(temps) >= min_observations or
+                len(pressures) >= min_observations or
                 len(humidities) >= min_observations)
 
 

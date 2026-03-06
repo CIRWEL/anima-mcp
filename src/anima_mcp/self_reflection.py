@@ -485,6 +485,24 @@ class SelfReflectionSystem:
                 return metric
         return None
 
+    @staticmethod
+    def _extract_condition_from_id(insight_id: str) -> str:
+        """Extract the condition prefix from an insight ID.
+
+        Insight IDs are ``{condition}_{outcome}`` with spaces replaced by underscores.
+        The outcome portion starts with a known marker word.  We split on the first
+        marker occurrence to recover the condition.
+
+        Examples:
+            'the_night_highest_warmth'     -> 'the_night'
+            'low_light_higher_stability'   -> 'low_light'
+            'the_afternoon_lowest_presence' -> 'the_afternoon'
+        """
+        for marker in ("_highest_", "_lowest_", "_higher_", "_lower_"):
+            if marker in insight_id:
+                return insight_id.split(marker, 1)[0]
+        return ""
+
     def _find_contradicting_insights(
         self, category: InsightCategory, outcome: str, condition: str
     ) -> List[Insight]:
@@ -506,8 +524,7 @@ class SelfReflectionSystem:
             if existing_metric != metric:
                 continue
             # Same category + same metric but different condition → contradiction
-            # The insight ID encodes the condition, so different IDs = different conditions
-            existing_condition = existing.id.rsplit("_higher_", 1)[0] if "_higher_" in existing.id else existing.id.rsplit("_lower_", 1)[0] if "_lower_" in existing.id else ""
+            existing_condition = self._extract_condition_from_id(existing.id)
             new_condition = condition.replace(" ", "_").lower()
             if existing_condition and new_condition and existing_condition != new_condition:
                 contradictions.append(existing)

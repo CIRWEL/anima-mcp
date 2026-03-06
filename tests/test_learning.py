@@ -42,17 +42,21 @@ def _create_schema(db_path: Path):
     conn.close()
 
 
-def _seed_rows(db_path: Path, n: int, temp=22.0, pressure=827.0, humidity=40.0, days_ago=0):
+def _seed_rows(db_path: Path, n: int, temp=22.0, pressure=827.0, humidity=40.0,
+               light_lux=None, days_ago=0):
     """Insert n sensor rows spread over recent hours."""
     conn = sqlite3.connect(str(db_path))
     now = datetime.now()
     for i in range(n):
         ts = (now - timedelta(days=days_ago, hours=i)).isoformat()
-        sensors = json.dumps({
+        data = {
             "ambient_temp_c": temp + (i % 3) * 0.5,
             "pressure_hpa": pressure + (i % 5) * 0.2,
             "humidity_pct": humidity + (i % 4) * 0.3,
-        })
+        }
+        if light_lux is not None:
+            data["light_lux"] = light_lux + (i % 6) * 50.0
+        sensors = json.dumps(data)
         conn.execute(
             "INSERT INTO state_history (timestamp, sensors) VALUES (?, ?)",
             (ts, sensors),
@@ -198,16 +202,16 @@ class TestDetectGap:
 class TestGetRecentObservations:
     def test_no_db_returns_empty(self, tmp_path):
         learner = AdaptiveLearner(db_path=str(tmp_path / "missing.db"))
-        temps, pressures, humidities = learner.get_recent_observations()
-        assert temps == [] and pressures == [] and humidities == []
+        temps, pressures, humidities, light = learner.get_recent_observations()
+        assert temps == [] and pressures == [] and humidities == [] and light == []
 
     def test_empty_db_returns_empty(self, learner):
-        temps, pressures, humidities = learner.get_recent_observations()
-        assert temps == [] and pressures == [] and humidities == []
+        temps, pressures, humidities, light = learner.get_recent_observations()
+        assert temps == [] and pressures == [] and humidities == [] and light == []
 
     def test_valid_rows_parsed(self, learning_db, learner):
         _seed_rows(learning_db, 3, temp=22.0, pressure=827.0, humidity=40.0)
-        temps, pressures, humidities = learner.get_recent_observations()
+        temps, pressures, humidities, _light = learner.get_recent_observations()
         assert len(temps) == 3
         assert len(pressures) == 3
         assert len(humidities) == 3
@@ -229,7 +233,7 @@ class TestGetRecentObservations:
         conn.commit()
         conn.close()
 
-        temps, _, _ = learner.get_recent_observations()
+        temps, _, _, _ = learner.get_recent_observations()
         assert len(temps) == 2
 
     def test_null_sensor_values_skipped(self, learning_db, learner):
@@ -242,7 +246,7 @@ class TestGetRecentObservations:
         conn.commit()
         conn.close()
 
-        temps, pressures, _ = learner.get_recent_observations()
+        temps, pressures, _, _ = learner.get_recent_observations()
         assert len(temps) == 0  # None was skipped
         assert len(pressures) == 1
 
@@ -426,3 +430,44 @@ class TestGetLearner:
             assert l1 is l2
         finally:
             mod._learner = old
+
+
+# ---------------------------------------------------------------------------
+# Light adaptive learning
+# ---------------------------------------------------------------------------
+
+class TestLightLearning:
+    def test_light_readings_collected(self, learning_db, learner):
+        _seed_rows(learning_db, 5, light_lux=500.0)
+        _, _, _, light = learner.get_recent_observations()
+        assert len(light) == 5
+        assert all(lx > 0 for lx in light)
+
+    def test_light_readings_empty_when_not_seeded(self, learning_db, learner):
+        _seed_rows(learning_db, 5)  # No light_lux
+        _, _, _, light = learner.get_recent_observations()
+        assert len(light) == 0
+
+    def test_light_max_learned_from_p95(self, learning_db, learner):
+        _seed_rows(learning_db, 60, light_lux=200.0)
+        cal = NervousSystemCalibration()
+        learned = learner.learn_calibration(cal, min_observations=50)
+        assert learned is not None
+        # light_lux ranges from 200 to 200+250=450 (i%6 * 50)
+        # p95 should be near the high end
+        assert learned.light_max_lux > 200.0
+        assert learned.light_max_lux != cal.light_max_lux  # Changed from default 1000
+
+    def test_light_change_triggers_adaptation(self):
+        learner = AdaptiveLearner(db_path="/nonexistent")
+        current = NervousSystemCalibration()  # light_max_lux=1000
+        learned = NervousSystemCalibration.from_dict(current.to_dict())
+        learned.light_max_lux = 1500.0  # 50% change, well above 10% threshold
+        assert learner.should_adapt(current, learned) is True
+
+    def test_small_light_change_no_adaptation(self):
+        learner = AdaptiveLearner(db_path="/nonexistent")
+        current = NervousSystemCalibration()  # light_max_lux=1000
+        learned = NervousSystemCalibration.from_dict(current.to_dict())
+        learned.light_max_lux = 1050.0  # 5% change, below 10% threshold
+        assert learner.should_adapt(current, learned) is False

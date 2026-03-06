@@ -422,3 +422,78 @@ class TestGetInsights:
         ))
         insights = srs.get_insights()
         assert insights[0].id == "strong"
+
+
+# ==================== Contradiction Detection ====================
+
+class TestContradictionDetection:
+    """Test _find_contradicting_insights and _extract_condition_from_id."""
+
+    def test_extract_condition_highest(self):
+        assert SelfReflectionSystem._extract_condition_from_id("the_night_highest_warmth") == "the_night"
+
+    def test_extract_condition_lowest(self):
+        assert SelfReflectionSystem._extract_condition_from_id("the_morning_lowest_presence") == "the_morning"
+
+    def test_extract_condition_higher(self):
+        assert SelfReflectionSystem._extract_condition_from_id("low_light_higher_stability") == "low_light"
+
+    def test_extract_condition_lower(self):
+        assert SelfReflectionSystem._extract_condition_from_id("high_temp_lower_clarity") == "high_temp"
+
+    def test_extract_condition_unknown_format(self):
+        assert SelfReflectionSystem._extract_condition_from_id("warmth_rises_presence_falls") == ""
+
+    def test_temporal_contradictions_detected(self, srs):
+        """'warmth best at night' and 'warmth best in afternoon' should contradict."""
+        # Seed the 'night' insight first
+        night_pattern = StatePattern(
+            condition="the night", outcome="highest warmth",
+            correlation=0.3, sample_count=200,
+            avg_warmth=0.7, avg_clarity=0.5, avg_stability=0.5, avg_presence=0.5,
+        )
+        srs.generate_insights([night_pattern])
+        night_insight = srs._insights["the_night_highest_warmth"]
+        assert night_insight.confidence == 1.0  # High sample count → max confidence
+
+        # Now generate the contradicting 'afternoon' insight
+        afternoon_pattern = StatePattern(
+            condition="the afternoon", outcome="highest warmth",
+            correlation=0.25, sample_count=150,
+            avg_warmth=0.6, avg_clarity=0.5, avg_stability=0.5, avg_presence=0.5,
+        )
+        new_insights = srs.generate_insights([afternoon_pattern])
+
+        # The afternoon insight should have been penalized
+        afternoon = srs._insights["the_afternoon_highest_warmth"]
+        assert afternoon.contradiction_count == 1
+        assert afternoon.confidence < 1.0  # Penalized by 50%
+
+        # The existing night insight should also have been penalized
+        night_after = srs._insights["the_night_highest_warmth"]
+        assert night_after.contradiction_count == 1
+        assert night_after.confidence < 1.0  # Penalized by 30%
+
+    def test_environment_contradictions_still_work(self, srs):
+        """Verify _higher_/_lower_ environment contradictions still detected."""
+        low_light_pattern = StatePattern(
+            condition="low light", outcome="higher stability",
+            correlation=0.3, sample_count=100,
+            avg_warmth=0.5, avg_clarity=0.5, avg_stability=0.7, avg_presence=0.5,
+        )
+        srs.generate_insights([low_light_pattern])
+
+        high_light_pattern = StatePattern(
+            condition="high light", outcome="higher stability",
+            correlation=0.2, sample_count=80,
+            avg_warmth=0.5, avg_clarity=0.5, avg_stability=0.6, avg_presence=0.5,
+        )
+        srs.generate_insights([high_light_pattern])
+
+        # Both should exist with contradictions noted
+        assert "low_light_higher_stability" in srs._insights
+        assert "high_light_higher_stability" in srs._insights
+        low = srs._insights["low_light_higher_stability"]
+        high = srs._insights["high_light_higher_stability"]
+        assert low.contradiction_count == 1
+        assert high.contradiction_count == 1
