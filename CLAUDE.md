@@ -225,7 +225,7 @@ The `ActivityManager` (in broker) controls Lumen's wakefulness:
 
 Lumen draws autonomously on the 240x240 notepad screen. The system has two layers:
 
-**Engine** (in `screens.py` — universal, stays fixed):
+**Engine** (in `display/drawing_engine.py` — universal, stays fixed):
 - `CanvasState` — pixel buffer, persistence, attention/narrative state
 - `DrawingState` — EISV core + attention signals + coherence tracking + narrative arc
 - `DrawingIntent` — focus position, mark count, state (energy is attention-derived)

@@ -72,23 +72,24 @@ class NervousSystemCalibration:
     pressure_ideal: float = 1013.25 # Sea level standard (hPa)
     
     # Light perception (lux)
-    light_min_lux: float = 1.0
+    light_min_lux: float = 1.0      # Unused — clarity uses hardcoded 1.0 floor. Kept for config compat.
     light_max_lux: float = 1000.0
+
+    # Legacy fields — per-dimension weight dicts below are used instead.
+    # Kept for config file backward compatibility.
+    neural_weight: float = 0.3
+    physical_weight: float = 0.7
     
-    # Neural signal weights (how much neural vs physical signals matter)
-    neural_weight: float = 0.3      # Weight for neural signals
-    physical_weight: float = 0.7    # Weight for physical signals
-    
-    # Component weights for anima dimensions
+    # Component weights for anima dimensions (must sum to ~1.0)
     warmth_weights: Dict[str, float] = field(default_factory=lambda: {
-        "cpu_temp": 0.4,
-        "ambient_temp": 0.33,
-        "neural": 0.27,
+        "cpu_temp": 0.35,
+        "ambient_temp": 0.45,
+        "neural": 0.20,
     })
     
     clarity_weights: Dict[str, float] = field(default_factory=lambda: {
-        "prediction_accuracy": 0.45,  # How well I predict my own state = internal seeing
-        "neural": 0.25,               # Alpha power = relaxed awareness
+        "prediction_accuracy": 0.50,  # How well I predict my own state = internal seeing
+        "neural": 0.30,               # Alpha power = relaxed awareness
         "sensor_coverage": 0.15,      # Data richness
         "world_light": 0.15,          # Environmental light (self-glow subtracted)
     })

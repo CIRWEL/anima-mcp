@@ -504,7 +504,7 @@ class MetacognitiveMonitor:
         if prediction.light_lux is not None and readings.light_lux is not None:
             if prediction.light_lux > 0 and readings.light_lux > 0:
                 log_error = abs(math.log10(prediction.light_lux) - math.log10(readings.light_lux))
-                error.error_light = min(1.0, log_error / 2.0)
+                error.error_light = min(1.0, log_error / 3.0)  # 3 decades (1→1000 lux) = full range
                 # Include in aggregate error (affects prediction accuracy metric)
                 # but do NOT add "light" to surprise_sources — this is self-sensing.
                 errors.append(error.error_light)

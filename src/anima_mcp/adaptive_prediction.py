@@ -412,9 +412,9 @@ class AdaptivePredictionModel:
         if variable in ("warmth", "clarity", "stability", "presence"):
             normalized_deviation = deviation  # Already 0-1 scale
         elif variable == "light":
-            # Log scale for light
+            # Log scale for light — 3 decades (1→1000 lux) = full range
             if predicted > 0 and actual > 0:
-                normalized_deviation = abs(math.log10(actual) - math.log10(predicted)) / 3
+                normalized_deviation = abs(math.log10(actual) - math.log10(predicted)) / 3.0
             else:
                 normalized_deviation = 1.0
         elif variable in ("ambient_temp", "temperature"):
