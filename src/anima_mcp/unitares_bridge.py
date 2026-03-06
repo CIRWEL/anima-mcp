@@ -404,6 +404,7 @@ class UnitaresBridge:
                 "confidence": confidence,
                 "ethical_drift": ethical_drift,
                 "response_text": status_text,
+                "sensor_data": sensor_data,
             }
 
             # Add trajectory signature if available (enables lineage tracking in UNITARES)
