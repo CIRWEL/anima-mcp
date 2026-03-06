@@ -13,6 +13,7 @@ And produces:
 - Periodic reflections surfaced via voice/messages
 """
 
+import re
 import sqlite3
 import json
 import sys
@@ -490,17 +491,26 @@ class SelfReflectionSystem:
         """Extract the condition prefix from an insight ID.
 
         Insight IDs are ``{condition}_{outcome}`` with spaces replaced by underscores.
-        The outcome portion starts with a known marker word.  We split on the first
-        marker occurrence to recover the condition.
+        The outcome portion starts with a known marker word.  We split on the *last*
+        marker occurrence to recover the condition (handles causal IDs where the
+        condition itself contains 'rises'/'falls', e.g. 'warmth_rises_presence_falls').
 
         Examples:
-            'the_night_highest_warmth'     -> 'the_night'
-            'low_light_higher_stability'   -> 'low_light'
-            'the_afternoon_lowest_presence' -> 'the_afternoon'
+            'the_night_highest_warmth'       -> 'the_night'
+            'low_light_higher_stability'     -> 'low_light'
+            'the_afternoon_lowest_presence'  -> 'the_afternoon'
+            'warmth_rises_presence_falls'    -> 'warmth_rises'
+            'clarity_falls_stability_rises'  -> 'clarity_falls'
         """
+        # Outcome markers that appear mid-ID (environment/temporal patterns)
         for marker in ("_highest_", "_lowest_", "_higher_", "_lower_"):
             if marker in insight_id:
-                return insight_id.split(marker, 1)[0]
+                return insight_id.rsplit(marker, 1)[0]
+        # Causal patterns: outcome is at the end (e.g. 'warmth_rises_presence_falls')
+        # The outcome is '{dim}_{direction}' — find the last '{dim}_rises' or '{dim}_falls'
+        m = re.search(r'^(.+)_(warmth|clarity|stability|presence)_(rises|falls)$', insight_id)
+        if m:
+            return m.group(1)
         return ""
 
     def _find_contradicting_insights(
@@ -508,25 +518,36 @@ class SelfReflectionSystem:
     ) -> List[Insight]:
         """Find existing insights that contradict a new one.
 
-        Two insights contradict when they claim the same metric behaves a certain way
-        under mutually exclusive conditions in the same category (e.g. "warmth best at
-        night" vs "warmth best in afternoon").
+        Two contradiction patterns:
+        1. Same metric, different condition: "warmth best at night" vs "warmth best in afternoon"
+        2. Same condition, same metric, different direction: "warmth rises → presence falls"
+           vs "warmth rises → presence rises" (causal contradictions)
         """
         metric = self._extract_outcome_metric(outcome)
         if not metric:
             return []
 
+        new_condition = condition.replace(" ", "_").lower()
+        new_outcome_norm = outcome.replace(" ", "_").lower()
+
         contradictions = []
         for existing in self._insights.values():
             if existing.category != category:
                 continue
-            existing_metric = self._extract_outcome_metric(existing.description)
+            # Extract condition and outcome from the existing insight's ID
+            existing_condition = self._extract_condition_from_id(existing.id)
+            if not existing_condition:
+                continue
+            existing_outcome_part = existing.id[len(existing_condition) + 1:]  # skip '_' separator
+            existing_metric = self._extract_outcome_metric(existing_outcome_part.replace("_", " "))
             if existing_metric != metric:
                 continue
-            # Same category + same metric but different condition → contradiction
-            existing_condition = self._extract_condition_from_id(existing.id)
-            new_condition = condition.replace(" ", "_").lower()
-            if existing_condition and new_condition and existing_condition != new_condition:
+
+            if existing_condition != new_condition:
+                # Pattern 1: same metric, different condition
+                contradictions.append(existing)
+            elif existing_outcome_part != new_outcome_norm:
+                # Pattern 2: same condition, same metric, different outcome direction
                 contradictions.append(existing)
         return contradictions
 

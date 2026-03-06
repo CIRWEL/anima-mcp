@@ -125,6 +125,9 @@ class NervousSystemCalibration:
         if self.ambient_temp_min >= self.ambient_temp_max:
             return False, "ambient_temp_min must be < ambient_temp_max"
         
+        if self.light_max_lux < 10.0:
+            return False, "light_max_lux must be >= 10.0 (log scale floor)"
+
         if self.light_min_lux >= self.light_max_lux:
             return False, "light_min_lux must be < light_max_lux"
         

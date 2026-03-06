@@ -441,8 +441,14 @@ class TestContradictionDetection:
     def test_extract_condition_lower(self):
         assert SelfReflectionSystem._extract_condition_from_id("high_temp_lower_clarity") == "high_temp"
 
+    def test_extract_condition_causal_rises(self):
+        assert SelfReflectionSystem._extract_condition_from_id("warmth_rises_presence_falls") == "warmth_rises"
+
+    def test_extract_condition_causal_falls(self):
+        assert SelfReflectionSystem._extract_condition_from_id("clarity_falls_stability_rises") == "clarity_falls"
+
     def test_extract_condition_unknown_format(self):
-        assert SelfReflectionSystem._extract_condition_from_id("warmth_rises_presence_falls") == ""
+        assert SelfReflectionSystem._extract_condition_from_id("something_completely_different") == ""
 
     def test_temporal_contradictions_detected(self, srs):
         """'warmth best at night' and 'warmth best in afternoon' should contradict."""
@@ -497,3 +503,25 @@ class TestContradictionDetection:
         high = srs._insights["high_light_higher_stability"]
         assert low.contradiction_count == 1
         assert high.contradiction_count == 1
+
+    def test_causal_contradictions_detected(self, srs):
+        """'warmth rises → presence falls' vs 'warmth rises → presence rises' should contradict."""
+        pattern1 = StatePattern(
+            condition="warmth rises", outcome="presence falls",
+            correlation=-0.15, sample_count=100,
+            avg_warmth=0.0, avg_clarity=0.0, avg_stability=0.0, avg_presence=0.0,
+        )
+        srs.generate_insights([pattern1])
+        assert "warmth_rises_presence_falls" in srs._insights
+
+        pattern2 = StatePattern(
+            condition="warmth rises", outcome="presence rises",
+            correlation=0.15, sample_count=80,
+            avg_warmth=0.0, avg_clarity=0.0, avg_stability=0.0, avg_presence=0.0,
+        )
+        srs.generate_insights([pattern2])
+
+        falls = srs._insights["warmth_rises_presence_falls"]
+        rises = srs._insights["warmth_rises_presence_rises"]
+        assert falls.contradiction_count == 1
+        assert rises.contradiction_count == 1
