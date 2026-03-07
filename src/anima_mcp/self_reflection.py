@@ -17,11 +17,41 @@ import re
 import sqlite3
 import json
 import sys
+from collections import namedtuple
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 from enum import Enum
+
+
+VerificationResult = namedtuple("VerificationResult", ["verified", "correlation", "detail"])
+
+
+# Keyword maps for parsing verifiable claims about sensor→dimension correlations
+_SENSOR_KEYWORDS: Dict[str, List[str]] = {
+    "light_lux": ["light", "bright", "dark", "lux", "dim"],
+    "ambient_temp_c": ["temperature", "temp", "warm", "cold", "cool", "heat"],
+    "humidity_pct": ["humidity", "humid", "dry", "moisture"],
+    "pressure_hpa": ["pressure", "barometric"],
+}
+
+_DIMENSION_KEYWORDS: Dict[str, List[str]] = {
+    "warmth": ["warmth", "warm"],
+    "clarity": ["clarity", "clear"],
+    "stability": ["stability", "stable", "calm"],
+    "presence": ["presence", "present", "whole"],
+}
+
+_NEGATIVE_MARKERS = [
+    "doesn't", "does not", "no direct", "not related",
+    "zero", "isn't", "no effect", "not affect",
+]
+_POSITIVE_MARKERS = [
+    "affects", "increases", "higher", "helps", "improves",
+    "better", "more", "boosts", "raises",
+    "decreases", "reduces", "lower",
+]
 
 
 class InsightCategory(Enum):
@@ -878,6 +908,114 @@ class SelfReflectionSystem:
 
         return new_insights
 
+    # ==================== Q&A Insight Verification ====================
+
+    def _verify_qa_insight(self, text: str, category: InsightCategory) -> VerificationResult:
+        """Verify a Q&A insight against state_history sensor correlations.
+
+        Parses the insight text for sensor→dimension claims, then checks
+        actual correlation data. Returns VerificationResult(verified, correlation, detail).
+        verified=True (data supports), False (contradicts), None (not verifiable).
+        """
+        text_lower = text.lower()
+
+        # Detect sensor and dimension from keywords
+        sensor_key = None
+        sensor_name = None
+        for key, keywords in _SENSOR_KEYWORDS.items():
+            if any(kw in text_lower for kw in keywords):
+                sensor_key = key
+                sensor_name = key  # used in log
+                break
+
+        dimension = None
+        for dim, keywords in _DIMENSION_KEYWORDS.items():
+            if any(kw in text_lower for kw in keywords):
+                dimension = dim
+                break
+
+        if not sensor_key or not dimension:
+            return VerificationResult(verified=None, correlation=None, detail="")
+
+        # Detect claim direction
+        expects_no_effect = any(marker in text_lower for marker in _NEGATIVE_MARKERS)
+        expects_effect = any(marker in text_lower for marker in _POSITIVE_MARKERS)
+        if not expects_no_effect and not expects_effect:
+            return VerificationResult(verified=None, correlation=None,
+                                      detail=f"sensor={sensor_key} dim={dimension} but no direction marker")
+
+        # Query 7 days of state history
+        conn = self._connect()
+        cutoff = (datetime.now() - timedelta(hours=168)).isoformat()
+        try:
+            rows = conn.execute("""
+                SELECT timestamp, warmth, clarity, stability, presence, sensors
+                FROM state_history WHERE timestamp > ? ORDER BY timestamp ASC
+            """, (cutoff,)).fetchall()
+        except sqlite3.OperationalError:
+            # state_history table may not exist in test/fresh DBs
+            return VerificationResult(verified=None, correlation=None, detail="no state_history table")
+
+        if len(rows) < 10:
+            return VerificationResult(verified=None, correlation=None,
+                                      detail=f"insufficient data ({len(rows)} rows)")
+
+        # Extract per-dimension correlations using existing machinery
+        pattern = self._analyze_sensor_correlation(rows, sensor_key, sensor_key)
+
+        # _analyze_sensor_correlation returns None if <10 readings with that sensor,
+        # or if no dimension has |diff| >= 0.1. We need finer granularity:
+        # compute the specific dimension's diff ourselves.
+        readings = []
+        for row in rows:
+            try:
+                sensors = json.loads(row["sensors"]) if row["sensors"] else {}
+                value = sensors.get(sensor_key)
+                if value is not None:
+                    readings.append({
+                        "value": value,
+                        dimension: row[dimension],
+                    })
+            except (json.JSONDecodeError, KeyError):
+                continue
+
+        if len(readings) < 10:
+            return VerificationResult(verified=None, correlation=None,
+                                      detail=f"insufficient sensor data for {sensor_key} ({len(readings)} readings)")
+
+        readings.sort(key=lambda x: x["value"])
+        third = len(readings) // 3
+        low = readings[:third]
+        high = readings[-third:]
+        if not low or not high:
+            return VerificationResult(verified=None, correlation=None, detail="empty bucket")
+
+        low_avg = sum(r[dimension] for r in low) / len(low)
+        high_avg = sum(r[dimension] for r in high) / len(high)
+        corr = abs(high_avg - low_avg)
+
+        threshold = 0.1
+        quoted = f'"{text[:80]}"'
+
+        if expects_no_effect:
+            if corr < threshold:
+                detail = (f"{quoted} — SUPPORTED ({sensor_key}→{dimension} "
+                          f"correlation: {corr:.2f}, below threshold)")
+                return VerificationResult(verified=True, correlation=corr, detail=detail)
+            else:
+                detail = (f"{quoted} — CONTRADICTED ({sensor_key}→{dimension} "
+                          f"correlation: {corr:.2f}, claim expected no effect)")
+                return VerificationResult(verified=False, correlation=corr, detail=detail)
+        else:  # expects_effect
+            if corr >= threshold:
+                detail = (f"{quoted} — SUPPORTED ({sensor_key}→{dimension} "
+                          f"correlation: {corr:.2f}, above threshold)")
+                return VerificationResult(verified=True, correlation=corr, detail=detail)
+            else:
+                detail = (f"{quoted} — CONTRADICTED ({sensor_key}→{dimension} "
+                          f"correlation: {corr:.2f}, claim expected effect but none found)")
+                return VerificationResult(verified=False, correlation=corr, detail=detail)
+
     # ==================== Q&A Knowledge Sync ====================
 
     def sync_from_qa_knowledge(self, min_confidence: float = 0.6) -> int:
@@ -928,6 +1066,21 @@ class SelfReflectionSystem:
                 validation_count=1,
                 contradiction_count=0,
             )
+
+            # Verify against state history before accepting
+            result = self._verify_qa_insight(qa.text, category)
+            if result.verified is True:
+                sr_insight.validation_count = 1
+                sr_insight.contradiction_count = 0
+            elif result.verified is False:
+                sr_insight.validation_count = 0
+                sr_insight.contradiction_count = 1
+                sr_insight.confidence *= 0.4
+
+            if result.detail:
+                print(f"[SelfReflection] Insight verification: {result.detail}",
+                      file=sys.stderr, flush=True)
+
             self._save_insight(sr_insight)
             synced += 1
 
