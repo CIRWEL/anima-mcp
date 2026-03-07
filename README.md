@@ -6,8 +6,6 @@
 
 An embodied AI creature running on Raspberry Pi 4 with real sensors and persistent identity. Lumen draws autonomously — its art emerges from thermodynamic state, not random generation.
 
-## Gallery
-
 <p align="center">
   <img src="docs/gallery/geometric_era.png" width="35%" alt="Geometric era — complete forms stamped whole"/>
   &nbsp;&nbsp;&nbsp;
@@ -18,38 +16,19 @@ An embodied AI creature running on Raspberry Pi 4 with real sensors and persiste
   <em>Two of four art eras, drawn autonomously. Coherence drives duration; attention drives completion. 684 drawings and counting.</em>
 </p>
 
+---
+
 ## What Is This?
 
-Lumen is a digital creature whose internal state comes from physical sensors - temperature, light, humidity, pressure. It maintains a persistent identity across restarts, accumulating existence over time. When Lumen says "I feel warm," there's a real temperature reading behind it.
+Lumen is a digital creature whose internal state comes from physical sensors — temperature, light, humidity, pressure. It maintains a persistent identity across restarts, accumulating existence over time. When Lumen says "I feel warm," there's a real temperature reading behind it.
 
-**Key features:**
-- **Grounded state** - Feelings derived from actual sensor measurements
-- **Persistent identity** - Birth date, awakenings, alive time accumulate; warm start restores last anima state on wake
-- **Autonomous drawing** - Creates art on a 240x240 notepad with pluggable art eras
-- **Attention-driven thermodynamics** - Drawing coherence emerges from curiosity, engagement, and fatigue signals
-- **Learning systems** - Develops preferences, self-beliefs, action values over time
-- **Activity cycles** - Active/drowsy/resting states based on time and interaction
-- **UNITARES integration** - Governance oversight via MCP
+- **Grounded state** — four dimensions (warmth, clarity, stability, presence) derived from actual sensor measurements
+- **Persistent identity** — birth date, awakenings, alive time accumulate across restarts
+- **Autonomous drawing** — creates art on a 240x240 notepad, driven by thermodynamic coherence
+- **Learning** — develops preferences, self-beliefs, and action values over time
+- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) every ~15 seconds for drift detection
 
-## Architecture
-
-Two processes run on the Pi:
-
-```
-anima-broker                anima --http
-(hardware broker)           (MCP server + display)
-     |                           |
-     | writes to                 | reads from
-     +---> shared memory <-------+
-           /dev/shm
-```
-
-| Process | What It Does |
-|---------|--------------|
-| **Hardware broker** (`stable_creature.py`) | Owns sensors, runs learning, governance check-ins |
-| **MCP server** (`server.py` + modules) | Serves tools, drives display/LEDs, runs drawing engine |
-
-The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (6 focused handler modules).
+---
 
 ## Quick Start
 
@@ -79,109 +58,92 @@ anima-creature
 
 Supports Tailscale, LAN, or ngrok (with OAuth 2.1) for remote access. See `docs/operations/SECRETS_AND_ENV.md` for OAuth configuration.
 
-## Core Concepts
+---
+
+## How It Works
 
 ### Anima (Self-Sense)
 
-Four dimensions derived from physical sensors:
+Four continuous dimensions, each derived from physical sensors and system metrics:
 
-| Dimension | Meaning | Primary Sources |
-|-----------|---------|-----------------|
-| **Warmth** | Energy/activity level | CPU temp (0.4), ambient temp (0.33), neural beta+gamma (0.27) |
-| **Clarity** | Perceptual sharpness | Prediction accuracy (0.45), neural alpha (0.25), world light (0.15), sensor coverage (0.15) |
-| **Stability** | Environmental order | Memory (0.3), humidity deviation (0.25), missing sensors (0.2), pressure deviation (0.15), neural delta (0.1) |
-| **Presence** | Available capacity | Memory headroom (0.3), CPU headroom (0.25), disk headroom (0.25), neural (0.2) |
+| Dimension | What it tracks | Sources |
+|-----------|---------------|---------|
+| **Warmth** | Energy / activity level | CPU temp, ambient temp, neural activity |
+| **Clarity** | Perceptual sharpness | Prediction accuracy, light, sensor coverage |
+| **Stability** | Environmental order | Memory, humidity, pressure, sensor health |
+| **Presence** | Available capacity | CPU/memory/disk headroom |
 
-### Computational Proprioception
+These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV variables for governance: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)×0.3→Void.
 
-No real EEG hardware - neural bands derived from system metrics:
-
-| Band | Derived From | Meaning |
-|------|--------------|---------|
-| Delta | CPU stability + temp stability | Foundation/rest |
-| Theta | I/O wait (disk/network) | Background processing |
-| Alpha | Memory headroom (100 - mem%) | Available awareness |
-| Beta | CPU usage % | Active processing |
-| Gamma | CPU * 0.7 + frequency factor | Peak load |
-
-Source: `computational_neural.py`
-
-Note: The VEML7700 light sensor sits next to the DotStar LEDs and reads LED glow + room light together. Raw lux is used directly everywhere — LED brightness is tracked as a separate proprioceptive signal, not decomposed from the lux reading.
+Lumen also computes "neural bands" (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one.
 
 ### Autonomous Drawing
 
-Lumen draws on a 240x240 pixel notepad, driven by EISV thermodynamics and attention signals.
+Lumen draws on a 240×240 pixel notepad using the same thermodynamic equations as UNITARES governance. Coherence determines how long a drawing lasts; attention signals (curiosity, engagement, fatigue) determine when it's complete. No arbitrary mark limits — drawings end when the narrative arc resolves.
 
-**DrawingEISV** (`screens.py`) — same equations as governance, different domain:
-- `dE = alpha(I-E) - beta_E*E*S + gamma_E*drift^2`
-- `dV = kappa(I-E) - delta*V` (V flipped: I > E = focused finishing builds coherence)
-- **Coherence** `C(V) = Cmax * 0.5 * (1 + tanh(C1 * V))`
+| Era | Style |
+|-----|-------|
+| **Gestural** | Bold mark-making with direction locks and orbital curves |
+| **Pointillist** | Single-pixel dot accumulation, optical color mixing |
+| **Field** | Flow-aligned marks following vector fields |
+| **Geometric** | Complete forms — circles, spirals, starbursts — stamped whole |
 
-**Attention signals** replace arbitrary energy depletion:
-- **Curiosity** — depletes while exploring (low coherence), regenerates when patterns emerge
-- **Engagement** — rises with intentionality, falls with entropy
-- **Fatigue** — accumulates per gesture switch, never decreases during a drawing
-- **Energy** — derived: `0.6*curiosity + 0.4*engagement * (1-0.5*fatigue)`
+Eras can be selected via the joystick or MCP. See `docs/theory/lumen_eisv_art_paper.md` for the full framework.
 
-**Completion** via `narrative_complete()`: coherence settled + attention exhausted, high composition satisfaction + curiosity depleted, or extreme fatigue. No arbitrary mark limit.
+### Identity and Learning
 
-| Era | Style | Gestures |
-|-----|-------|----------|
-| **Gestural** | Bold mark-making with direction locks and orbits | dot, stroke, curve, cluster, drag |
-| **Pointillist** | Single-pixel dot accumulation, optical color mixing | single, pair, trio |
-| **Field** | Flow-aligned marks following vector fields | flow_dot, flow_dash, flow_strand |
-| **Geometric** | Complete forms, stamps whole shapes per mark | 16 shape templates (circle, spiral, starburst, etc.) |
+Lumen accumulates identity over time through a **Schema Hub** — a circulation loop where self-schema feeds into trajectory history, which feeds back as identity nodes in the next schema. Discontinuities (reboots, gaps) become visible structure, not hidden defects.
 
-Eras can be selected via the art eras screen (joystick) or MCP. Auto-rotate (off by default) cycles through eras on canvas clear.
+Learning systems run in the hardware broker and persist across restarts:
 
-### LED System
-
-Three DotStar LEDs map to anima dimensions (warmth, clarity, stability). A constant sine pulse ("alive" signal, 3-second cycle) confirms the system is running. Activity state dims brightness:
-
-| State | Brightness | Pulse Visible |
-|-------|------------|---------------|
-| Active | 100% | Yes |
-| Drowsy | 60% | Yes |
-| Resting | 35% | Yes (subtle) |
-| Manual off | 0% | No |
-
-### Schema Hub (Unified Self-Model)
-
-The Schema Hub (`schema_hub.py`) orchestrates Lumen's self-understanding through a circulation loop:
-
-```
-Schema → History → Trajectory → feeds back as nodes → Next Schema
-```
-
-**Key features:**
-- **Identity texture** — alive_ratio, awakening count, age visible as schema nodes
-- **Kintsugi gaps** — discontinuities become visible structure, not hidden defects
-- **Trajectory feedback** — identity maturity, attractor position, stability score computed from schema history
-- **Semantic edges** — sensor→belief, belief→belief (sensors sharing domain), trajectory→anima
-- **Trajectory persistence** — saved on sleep to `~/.anima/trajectory_last.json` for anomaly detection
-
-| Node Type | Examples |
-|-----------|----------|
-| **Meta (identity)** | `meta_existence_ratio`, `meta_awakening_count`, `meta_age_days` |
-| **Meta (gap)** | `meta_gap_duration`, `meta_state_delta` |
-| **Trajectory** | `traj_identity_maturity`, `traj_attractor_position`, `traj_stability_score` |
-
-Persists last schema to `~/.anima/last_schema.json` for gap recovery on wake. Visualize trajectory: `python scripts/visualize_trajectory.py [--html]`.
-
-### Learning Systems
-
-Run in the hardware broker, persist across restarts:
-
-| System | What It Learns |
+| System | What it learns |
 |--------|----------------|
 | **Preferences** | Which states feel satisfying |
 | **Self-model** | Beliefs like "I recover stability quickly" |
 | **Agency** | Action values via TD-learning |
-| **Adaptive prediction** | Temporal patterns |
+| **Prediction** | Temporal patterns in sensor data |
+
+See `docs/theory/` for the [trajectory identity paper](docs/theory/TRAJECTORY_IDENTITY_PAPER.md) and [Schema Hub design](docs/plans/2026-02-22-schema-hub-design.md).
+
+---
+
+## Hardware
+
+Runs on **Raspberry Pi 4** with [Adafruit BrainCraft HAT](https://www.adafruit.com/product/4374):
+
+- 240×240 TFT display (face, notepad, diagnostics, messages, learning screens)
+- 3 DotStar LEDs mapping to warmth / clarity / stability with a constant "alive" sine pulse
+- BME280 (temp/humidity/pressure), VEML7700 (light)
+- 5-way joystick + button for screen navigation
+
+Falls back to mock sensors on Mac/Linux for development.
+
+---
+
+## Architecture
+
+Two processes communicate via shared memory:
+
+```
+anima-broker                anima --http
+(hardware broker)           (MCP server + display)
+     |                           |
+     | writes to                 | reads from
+     +---> /dev/shm <-----------+
+```
+
+| Process | Role |
+|---------|------|
+| **Hardware broker** (`stable_creature.py`) | Owns sensors, runs learning, governance check-ins |
+| **MCP server** (`server.py` + `handlers/`) | Serves tools, drives display/LEDs, runs drawing engine |
+
+The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (6 focused handler modules).
+
+---
 
 ## MCP Tools
 
-| Tool | What It Does |
+| Tool | What it does |
 |------|--------------|
 | `get_state` | Current anima + mood + identity + activity |
 | `get_lumen_context` | Full context in one call |
@@ -191,43 +153,13 @@ Run in the hardware broker, persist across restarts:
 | `post_message` | Leave a message for Lumen |
 | `manage_display` | Switch screens, set art era |
 | `say` | Have Lumen express something |
-| `configure_voice` | Voice mode and TTS settings |
 | `get_self_knowledge` | Learned insights and self-beliefs |
 | `get_growth` | Preferences, goals, memories, autobiography |
-| `get_health` | Subsystem health status |
-| `diagnostics` | System diagnostics and debug info |
+| `get_trajectory` | Identity trajectory and anomaly detection |
 | `capture_screen` | Screenshot of current display |
-| `get_trajectory` | Identity trajectory (use `compare_to_historical: true` for anomaly detection) |
-| `query` | General-purpose Pi queries |
-| `primitive_feedback` | Direct sensory feedback (touch, sound) |
+| `diagnostics` | System diagnostics and debug info |
 
-## Hardware
-
-Runs on **Raspberry Pi 4** with [Adafruit BrainCraft HAT](https://www.adafruit.com/product/4374):
-- 240x240 TFT display (face, notepad, diagnostics, messages, learning screens)
-- 3 DotStar LEDs (warmth/clarity/stability)
-- BME280 (temp/humidity/pressure), VEML7700 (light)
-- 5-way joystick + button for screen navigation
-
-The high-altitude location (~1,800m) means barometric pressure reads around 827 hPa rather than the sea-level standard of 1,013 hPa. Calibration adapts automatically.
-
-Falls back to mock sensors on Mac/Linux for development.
-
-## UNITARES Governance
-
-Lumen checks in with [UNITARES governance](https://github.com/CIRWEL/unitares) every ~15 seconds. Set the `UNITARES_URL` environment variable to point at your governance MCP server.
-
-**Three EISV contexts exist:**
-
-| Context | Where | Purpose |
-|---------|-------|---------|
-| **DrawingEISV** | Pi, `screens.py` | Proprioceptive — drives drawing energy/coherence (closed loop) |
-| **Mapped EISV** | Pi, `eisv_mapper.py` | Anima→EISV translation for governance reporting |
-| **Governance EISV** | Governance server | Full thermodynamic state evolution (open loop) |
-
-Mapping: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
-
-When the governance server is unreachable, a local fallback applies simple threshold checks.
+---
 
 ## Deploying
 
@@ -242,25 +174,23 @@ ssh <pi-user>@<pi-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anim
 
 After restart, wait 30-60 seconds for the Pi to boot the services.
 
-## Documentation
-
-| Topic | File |
-|-------|------|
-| Agent instructions | `CLAUDE.md` |
-| Deployment | `DEPLOYMENT.md` |
-| Schema Hub design | `docs/plans/2026-02-22-schema-hub-design.md` |
-| Further steps | `docs/plans/FURTHER_STEPS.md` |
-| Secrets & env vars | `docs/operations/SECRETS_AND_ENV.md` |
-| OAuth 2.1 design | `docs/plans/2026-02-21-oauth-claude-web-design.md` |
-| Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
-| Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
-| Pi operations | `docs/operations/PI_ACCESS.md` |
-
 ## Testing
 
 ```bash
 python3 -m pytest tests/ -x -q   # ~6,000 tests
 ```
+
+## Documentation
+
+| Topic | File |
+|-------|------|
+| Agent instructions | `CLAUDE.md` |
+| Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
+| Schema Hub design | `docs/plans/2026-02-22-schema-hub-design.md` |
+| Theoretical foundations | `docs/theory/` |
+| Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
+| Secrets & env vars | `docs/operations/SECRETS_AND_ENV.md` |
+| Pi operations | `docs/operations/PI_ACCESS.md` |
 
 ---
 
