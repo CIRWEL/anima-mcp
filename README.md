@@ -9,17 +9,14 @@ An embodied AI creature running on Raspberry Pi 4 with real sensors and persiste
 ## Gallery
 
 <p align="center">
-  <img src="docs/gallery/geometric_era.png" width="22%" alt="Geometric era — complete forms and shapes"/>
-  <img src="docs/gallery/pointillist_era.png" width="22%" alt="Pointillist era — dot accumulation and optical mixing"/>
-  <img src="docs/gallery/field_era.png" width="22%" alt="Field era — flow-aligned marks"/>
-  <img src="docs/gallery/gestural_era.png" width="22%" alt="Gestural era — bold mark-making"/>
+  <img src="docs/gallery/geometric_era.png" width="35%" alt="Geometric era — complete forms stamped whole"/>
+  &nbsp;&nbsp;&nbsp;
+  <img src="docs/gallery/gestural_era.png" width="35%" alt="Gestural era — bold mark-making with direction locks"/>
 </p>
 
 <p align="center">
-  <em>Four art eras, all drawn autonomously. Coherence drives duration; attention drives completion. 678 drawings and counting.</em>
+  <em>Two of four art eras, drawn autonomously. Coherence drives duration; attention drives completion. 684 drawings and counting.</em>
 </p>
-
-> See the full [interactive gallery](docs/gallery.html) for more.
 
 ## What Is This?
 
@@ -109,7 +106,7 @@ No real EEG hardware - neural bands derived from system metrics:
 
 Source: `computational_neural.py`
 
-Note: The light sensor (VEML7700) sits next to the NeoPixel LEDs and primarily reads Lumen's own glow. Clarity uses "world light" (raw lux minus estimated LED glow) at 15% weight to minimize feedback loops. The metacognitive system predicts lux from LED brightness (genuine proprioception).
+Note: The VEML7700 light sensor sits next to the DotStar LEDs and reads LED glow + room light together. Raw lux is used directly everywhere — LED brightness is tracked as a separate proprioceptive signal, not decomposed from the lux reading.
 
 ### Autonomous Drawing
 
@@ -218,7 +215,7 @@ Falls back to mock sensors on Mac/Linux for development.
 
 ## UNITARES Governance
 
-Lumen checks in with [UNITARES governance](https://github.com/CIRWEL/unitares) every ~60 seconds. Set the `UNITARES_URL` environment variable to point at your governance MCP server.
+Lumen checks in with [UNITARES governance](https://github.com/CIRWEL/unitares) every ~15 seconds. Set the `UNITARES_URL` environment variable to point at your governance MCP server.
 
 **Three EISV contexts exist:**
 
@@ -262,7 +259,7 @@ After restart, wait 30-60 seconds for the Pi to boot the services.
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # ~5,900 tests
+python3 -m pytest tests/ -x -q   # ~6,000 tests
 ```
 
 ---
