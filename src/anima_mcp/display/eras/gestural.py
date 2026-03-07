@@ -23,17 +23,17 @@ class GesturalState(EraState):
     # Direction memory — when locked, direction resists wobble (sustained lines)
     direction_locked: bool = False
     direction_lock_remaining: int = 0
+    direction_commitment: float = 0.0  # Smooth signal: ramps during locks, decays after
 
     def intentionality(self) -> float:
         """Proprioceptive I_signal for EISV.
 
-        Direction locks (+0.4) and gesture runs (+0.4) contribute to intentionality.
+        Smooth commitment replaces binary lock contribution.
         """
-        I = 0.2
-        if self.direction_locked:
-            I += 0.4
+        I = 0.1
+        I += 0.5 * self.direction_commitment
         if self.gesture_remaining > 0:
-            I += min(0.4, self.gesture_remaining / 20.0 * 0.4)
+            I += min(0.2, self.gesture_remaining / 25.0 * 0.2)
         return min(1.0, I)
 
     def gestures(self) -> List[str]:
@@ -159,9 +159,13 @@ class GesturalEra:
             # Locked: minimal wobble (tight lines)
             direction += random.gauss(0, 0.03)
             state.direction_lock_remaining -= 1
+            # Ramp up commitment smoothly (field-era style)
+            state.direction_commitment = min(1.0, state.direction_commitment + 0.04)
             if state.direction_lock_remaining <= 0:
                 state.direction_locked = False
         else:
+            # Decay commitment gradually (not instant drop)
+            state.direction_commitment *= 0.95
             # Wobble modulated by clarity: high clarity = steadier hand
             wobble = 0.1 + (1.0 - clarity) * 0.2  # 0.1 at clarity=1, 0.3 at clarity=0
             direction += random.gauss(0, wobble)
@@ -200,6 +204,7 @@ class GesturalEra:
             direction = random.uniform(0, 2 * math.pi)
             state.direction_locked = False
             state.direction_lock_remaining = 0
+            # Don't zero commitment — let it decay naturally via *= 0.95
 
         return focus_x, focus_y, direction
 
