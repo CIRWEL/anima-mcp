@@ -131,12 +131,12 @@ def estimate_complexity(
     Returns:
         Complexity estimate in [0, 1] range
     """
-    # Base complexity from anima state (unchanged from original formula)
+    # Base complexity from anima state
+    # Clarity: uncertainty increases complexity. Stability: entropy (= 1-stability) increases complexity.
     clarity_complexity = (1.0 - anima.clarity) * 0.4
-    stability_complexity = (1.0 - anima.stability) * 0.4
-    entropy_complexity = (1.0 - anima.stability) * 0.2  # Entropy = inverse stability
+    stability_complexity = (1.0 - anima.stability) * 0.6  # entropy = inverse stability
 
-    complexity = clarity_complexity + stability_complexity + entropy_complexity
+    complexity = clarity_complexity + stability_complexity
 
     # System load adds up to +0.15 on top (can push past 1.0, clamped below)
     if readings is not None:

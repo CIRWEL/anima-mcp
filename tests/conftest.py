@@ -159,7 +159,14 @@ def growth(tmp_path):
     """GrowthSystem backed by a temporary SQLite database."""
     from anima_mcp.growth import GrowthSystem
     db_path = str(tmp_path / "test_growth.db")
-    return GrowthSystem(db_path=db_path)
+    g = GrowthSystem(db_path=db_path)
+    try:
+        yield g
+    finally:
+        try:
+            g.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -182,7 +189,14 @@ def identity_store(tmp_path):
     """IdentityStore backed by a temporary SQLite database."""
     from anima_mcp.identity.store import IdentityStore
     db_path = str(tmp_path / "identity_test.db")
-    return IdentityStore(db_path=db_path)
+    store = IdentityStore(db_path=db_path)
+    try:
+        yield store
+    finally:
+        try:
+            store.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
