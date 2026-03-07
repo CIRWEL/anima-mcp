@@ -177,10 +177,16 @@ class InnerLife:
         for dim in DIMENSIONS:
             threshold = DRIVE_COMFORT[dim]
             temp_val = self._temperament[dim]
+            mood_val = mood[dim]
 
             if temp_val < threshold:
                 deficit = threshold - temp_val
                 rate = DRIVE_ACCUMULATION * (1.0 + deficit * 2.0)
+                # Mood relief: if current mood is already above comfort,
+                # dampen accumulation — conditions improved even if
+                # temperament hasn't caught up yet.
+                if mood_val > threshold:
+                    rate *= max(0.1, 1.0 - (mood_val - threshold) * 3.0)
                 self._drives[dim] = min(1.0, self._drives[dim] + rate)
             else:
                 surplus = temp_val - threshold
