@@ -1074,9 +1074,9 @@ class DrawingEngine:
             return
 
         if current_phase == "opening":
-            # Transition to developing once intentionality builds
-            # Threshold 0.3 allows gestural era (baseline I~0.28) to transition
-            # during normal multi-mark runs without requiring direction locks.
+            # Transition to developing once intentionality builds.
+            # Gestural era (baseline I=0.1) needs direction commitment to cross 0.3,
+            # so this naturally gates on lock engagement. Other eras cross easily.
             if state.i_momentum > 0.3 and marks > 10:
                 transition_to("developing")
 
