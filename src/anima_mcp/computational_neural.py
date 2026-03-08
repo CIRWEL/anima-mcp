@@ -47,6 +47,7 @@ class ComputationalNeuralSensor:
         self._temp_history = deque(maxlen=window_size)
         self._last_cpu_stats = None
         self._last_disk_io = None
+        self._last_net_io = None
         self._last_sample_time: Optional[float] = None
         self.drawing_phase: Optional[str] = None  # Set by screen renderer
         # Prime psutil cpu_percent so first real call returns meaningful data

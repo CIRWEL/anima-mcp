@@ -27,7 +27,7 @@ from .handlers import (
     handle_get_self_knowledge, handle_get_growth, handle_get_qa_insights,
     handle_get_trajectory, handle_get_eisv_trajectory_state, handle_query,
     # Display operations
-    handle_capture_screen, handle_show_face, handle_diagnostics,
+    handle_capture_screen, handle_diagnostics,
     handle_manage_display,
     # Communication
     handle_lumen_qa, handle_post_message, handle_say,

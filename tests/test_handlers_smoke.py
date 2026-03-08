@@ -492,7 +492,6 @@ class TestHandlersPackage:
             handle_query,
             # Display operations
             handle_capture_screen,
-            handle_show_face,
             handle_diagnostics,
             handle_manage_display,
             # Communication

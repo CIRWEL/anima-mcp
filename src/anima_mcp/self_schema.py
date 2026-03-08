@@ -613,8 +613,6 @@ def get_current_schema(
     readings=None,
     growth_system=None,
     include_preferences: bool = True,
-    force_refresh: bool = False,
-    preferences=None,  # Deprecated, ignored
     self_model=None,
 ) -> SelfSchema:
     """
@@ -629,8 +627,6 @@ def get_current_schema(
         readings: SensorReadings (optional)
         growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
-        force_refresh: Ignored (kept for API compat)
-        preferences: Deprecated, ignored
         self_model: SelfModel for learned self-beliefs (optional)
     """
     return extract_self_schema(
