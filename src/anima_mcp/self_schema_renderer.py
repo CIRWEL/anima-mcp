@@ -493,30 +493,6 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
     return pixels
 
 
-def render_to_canvas(schema: SelfSchema, canvas_state) -> int:
-    """
-    Render G_t directly to Lumen's canvas.
-
-    Args:
-        schema: The self-schema to render
-        canvas_state: CanvasState instance from screens.py
-
-    Returns:
-        Number of pixels drawn
-    """
-    pixels = render_schema_to_pixels(schema)
-
-    # Clear and draw
-    canvas_state.clear()
-    for (x, y), color in pixels.items():
-        canvas_state.draw_pixel(x, y, color)
-
-    # Mark as a structured render
-    canvas_state.drawing_phase = "schema_render"
-
-    return len(pixels)
-
-
 def save_render_to_file(
     schema: SelfSchema,
     output_dir: Optional[Path] = None,

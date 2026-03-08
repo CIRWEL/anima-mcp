@@ -507,25 +507,3 @@ def get_cognitive_inference() -> CognitiveInference:
     if _cognitive is None:
         _cognitive = CognitiveInference()
     return _cognitive
-
-
-# Convenience functions
-
-async def synthesize(thesis: str, antithesis: Optional[str] = None, context: Optional[str] = None) -> Optional[Dict]:
-    """Convenience: dialectic synthesis."""
-    return await get_cognitive_inference().dialectic_synthesis(thesis, antithesis, context)
-
-
-async def extract_kg(text: str, domain: Optional[str] = None) -> Optional[Dict]:
-    """Convenience: knowledge extraction."""
-    return await get_cognitive_inference().extract_knowledge(text, domain)
-
-
-async def query_kg(query: str, context: List[str]) -> Optional[Dict]:
-    """Convenience: query with knowledge context."""
-    return await get_cognitive_inference().query_with_context(query, context)
-
-
-async def merge(insights: List[str]) -> Optional[Dict]:
-    """Convenience: merge insights."""
-    return await get_cognitive_inference().merge_insights(insights)

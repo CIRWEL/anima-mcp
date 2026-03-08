@@ -83,7 +83,7 @@ try:
     from .preferences import get_preference_system
     from .self_model import get_self_model
     from .agency import get_action_selector, get_exploration_manager, ActionType
-    from .memory_retrieval import get_memory_retriever, retrieve_relevant_memories, MemoryContext
+    from .memory_retrieval import get_memory_retriever, retrieve_relevant_memories
     ENHANCED_LEARNING_AVAILABLE = True
 except ImportError as e:
     ENHANCED_LEARNING_AVAILABLE = False

@@ -267,26 +267,6 @@ class LEDDisplay:
             } if self._last_state else None,
         }
 
-    def test_sequence(self):
-        if not self._dots:
-            print("[LEDs] Cannot test - not available", file=sys.stderr, flush=True)
-            return False
-        print("[LEDs] Running test sequence...", file=sys.stderr, flush=True)
-        colors = [
-            ((255, 0, 0), (0, 0, 0), (0, 0, 0)),
-            ((0, 0, 0), (0, 255, 0), (0, 0, 0)),
-            ((0, 0, 0), (0, 0, 0), (0, 0, 255)),
-            ((255, 255, 255),) * 3,
-        ]
-        for c0, c1, c2 in colors:
-            self._dots[0], self._dots[1], self._dots[2] = c2, c1, c0
-            self._dots.brightness = 0.3
-            self._dots.show()
-            time.sleep(0.5)
-        self.clear()
-        print("[LEDs] Test complete", file=sys.stderr, flush=True)
-        return True
-
     def update_from_anima(
         self,
         warmth: float,

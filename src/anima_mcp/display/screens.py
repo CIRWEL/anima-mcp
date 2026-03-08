@@ -21,7 +21,7 @@ import math
 import random
 
 from .face import FaceState
-from .design import COLORS, SPACING, Timing, ease_smooth
+from .design import COLORS, Timing, ease_smooth
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity

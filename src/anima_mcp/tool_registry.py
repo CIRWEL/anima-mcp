@@ -121,6 +121,28 @@ TOOLS_ESSENTIAL = [
 # ============================================================
 TOOLS_STANDARD = [
     Tool(
+        name="get_identity",
+        description="Get full identity audit trail: birth, awakenings, name history, alive time",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
+        name="set_calibration",
+        description="Update nervous system calibration (partial updates supported)",
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "updates": {"type": "object", "description": "Calibration fields to update (partial update)"},
+                "source": {"type": "string", "description": "Who is making the change (e.g. 'agent', 'human')"},
+            },
+            "required": ["updates"],
+        },
+    ),
+    Tool(
+        name="learning_visualization",
+        description="Get learning state breakdown - shows why Lumen feels what it feels, prediction accuracy, preferences",
+        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+    ),
+    Tool(
         name="get_lumen_context",
         description="Get Lumen's complete context: identity, anima state, sensors, mood in one call",
         inputSchema={
@@ -140,7 +162,7 @@ TOOLS_STANDARD = [
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era"], "description": "Action to perform"},
+                "action": {"type": "string", "enum": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era", "calibrate_leds"], "description": "Action to perform"},
                 "screen": {"type": "string", "description": "Screen name (for action=switch) or era name (for action=set_era)"}
             },
             "required": ["action"],
@@ -152,7 +174,10 @@ TOOLS_STANDARD = [
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status"], "description": "Action (default: status)"},
+                "action": {"type": "string", "enum": ["status", "configure"], "description": "Action (default: status)"},
+                "always_listening": {"type": "boolean", "description": "Enable/disable always-listening mode"},
+                "chattiness": {"type": "number", "description": "Chattiness level (0.0-1.0)"},
+                "wake_word": {"type": "string", "description": "Wake word for voice activation"},
             },
         },
     ),
@@ -460,7 +485,10 @@ HANDLERS = {
     "next_steps": handle_next_steps,
     "lumen_qa": handle_lumen_qa,
     "post_message": handle_post_message,
-    # Standard tools (15)
+    # Standard tools (18)
+    "get_identity": handle_get_identity,
+    "set_calibration": handle_set_calibration,
+    "learning_visualization": handle_learning_visualization,
     "get_lumen_context": handle_get_lumen_context,
     "manage_display": handle_manage_display,
     "configure_voice": handle_configure_voice,
