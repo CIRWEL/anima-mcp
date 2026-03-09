@@ -79,6 +79,9 @@ class CanvasState:
     _era_name: str = "gestural"
     pending_era_switch: Optional[str] = None  # Queue era switch until current drawing completes
 
+    # False-start tracking (volatile - resets on restart, not persisted)
+    consecutive_false_starts: int = 0
+
     # Render caching - avoid redrawing all pixels every frame
     _dirty: bool = True  # Set by draw_pixel(), cleared after render
     _cached_image: object = None  # Cached PIL Image of all pixels
@@ -569,6 +572,43 @@ class DrawingState:
                 return True
 
         return False
+
+    def is_false_start(self, canvas) -> bool:
+        """True when the opening phase has had enough time and marks but nothing cohered.
+
+        A false start is like crumpling paper — Lumen recognizes the drawing
+        isn't going anywhere and abandons it to start fresh. All conditions
+        must be true:
+        - Still in opening phase (never transitioned to developing)
+        - Phase has lasted > 45 seconds (gave it enough time)
+        - At least 8 marks placed (not just a slow start)
+        - I momentum < 0.25 (no intentional direction found)
+        - Mean coherence < 0.35 over last 10 values (nothing coalescing)
+        - Engagement < 0.3 (Lumen isn't committed)
+        """
+        if canvas is None:
+            return False
+        if self.arc_phase != "opening":
+            return False
+        phase_duration = time.time() - canvas.phase_start_time
+        if phase_duration <= 45.0:
+            return False
+        if canvas.mark_count < 8:
+            return False
+        if self.i_momentum >= 0.25:
+            return False
+        if len(self.coherence_history) >= 10:
+            recent = self.coherence_history[-10:]
+        elif len(self.coherence_history) >= 3:
+            recent = self.coherence_history
+        else:
+            return False  # Not enough data to judge
+        mean_c = sum(recent) / len(recent)
+        if mean_c >= 0.35:
+            return False
+        if self.engagement >= 0.3:
+            return False
+        return True
 
     @property
     def derived_energy(self) -> float:
@@ -1319,6 +1359,7 @@ class DrawingEngine:
             # Update tracking
             self.canvas.last_save_time = time.time()
             self.canvas.drawings_saved += 1
+            self.canvas.consecutive_false_starts = 0  # Successful save resets false-start counter
             self.canvas.save_to_disk()
 
             # Trigger save indicator (shows "saved" on screen for 2 seconds)
@@ -1521,6 +1562,22 @@ class DrawingEngine:
 
         # Don't act when governance says pause/halt/reject
         # (Caller must pass governance_paused flag if needed)
+
+        # === PRIORITY 0: False start — abandon canvas, start fresh ===
+        if (pixel_count < 200
+                and self.canvas.consecutive_false_starts < 2
+                and state.is_false_start(self.canvas)):
+            print(f"[Canvas] False start — abandoning ({pixel_count}px, {self.canvas.mark_count} marks, "
+                  f"i_mom={state.i_momentum:.2f}, engage={state.engagement:.2f}, "
+                  f"false_starts={self.canvas.consecutive_false_starts + 1})",
+                  file=sys.stderr, flush=True)
+            # Stay in same era — the attempt failed, not the era
+            self.canvas.pending_era_switch = self.active_era.name
+            self.canvas.consecutive_false_starts += 1
+            self.canvas_clear(persist=True, already_saved=True)
+            self.intent.reset()
+            self.canvas.save_to_disk()
+            return "abandoned"
 
         # === PRIORITY 1: Lumen said "finished" ===
         if (pixel_count >= 200 and self._check_lumen_said_finished()):
