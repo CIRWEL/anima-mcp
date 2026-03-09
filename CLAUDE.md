@@ -14,7 +14,7 @@ anima-broker.service        anima.service
 
 | Service | Command | Role |
 |---------|---------|------|
-| `anima-broker.service` | `stable_creature.py` | Hardware broker - owns I2C, runs learning |
+| `anima-broker.service` | `anima-creature` | Hardware broker - owns I2C, runs learning |
 | `anima.service` | `anima --http` | MCP server - serves tools, reads shared memory |
 
 **Both must run for full functionality.** The broker writes sensor data and learning state to shared memory; the server reads it.
@@ -28,12 +28,13 @@ anima-broker.service        anima.service
 
 ### MCP Server Structure
 
-`server.py` is the orchestrator (~3,950 lines). Handlers and tool definitions are extracted:
+`server.py` is the orchestrator (~3,300 lines). Handlers, REST endpoints, and tool definitions are extracted:
 
 | Module | Purpose |
 |--------|---------|
-| `server.py` | Main loop, wake/sleep lifecycle, REST endpoints, global state |
-| `tool_registry.py` | Tool definitions (TOOLS lists), HANDLERS dict, FastMCP setup |
+| `server.py` | Main loop, wake/sleep lifecycle, global state |
+| `rest_api.py` | REST endpoint functions (health, dashboard, state, QA, gallery, etc.) |
+| `tool_registry.py` | Tool definitions (TOOLS list), HANDLERS dict, FastMCP setup |
 | `handlers/system_ops.py` | git_pull, system_service, power, deploy, tailscale, ssh_port |
 | `handlers/state_queries.py` | get_state, get_identity, read_sensors, get_health, get_calibration |
 | `handlers/knowledge.py` | get_self_knowledge, get_growth, get_qa_insights, get_trajectory |
@@ -76,7 +77,7 @@ These modules also run in `server.py` (not broker-only):
 
 | Module | Purpose |
 |--------|---------|
-| `growth.py` | Preferences, goals, memories, autobiography |
+| `growth/` | Preferences, goals, memories, autobiography (package with mixins) |
 | `self_reflection.py` | Insight discovery from preferences, beliefs, drawing patterns |
 | `llm_gateway.py` | LLM reflections, self-answers, questions (Groq/Llama) |
 | `knowledge.py` | Q&A-derived insights from answered questions |
@@ -112,7 +113,7 @@ All consumers use raw lux directly: clarity, activity state, growth preferences,
 
 ### Goal System
 
-Goals live in `growth.py` and are wired into `server.py`'s main loop:
+Goals live in `growth/goals.py` and are wired into `server.py`'s main loop:
 
 | Interval | Action |
 |----------|--------|
