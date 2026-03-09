@@ -1571,6 +1571,26 @@ class DrawingEngine:
                   f"i_mom={state.i_momentum:.2f}, engage={state.engagement:.2f}, "
                   f"false_starts={self.canvas.consecutive_false_starts + 1})",
                   file=sys.stderr, flush=True)
+            # Learn from abandonment
+            try:
+                from ..growth import get_growth_system
+                anima = self.last_anima
+                if anima:
+                    phase_duration = time.time() - self.canvas.phase_start_time
+                    growth = get_growth_system()
+                    growth.observe_abandonment(
+                        mark_count=self.canvas.mark_count,
+                        era=self.active_era.name,
+                        phase_duration=phase_duration,
+                        anima_state={
+                            "warmth": anima.warmth,
+                            "clarity": anima.clarity,
+                            "stability": anima.stability,
+                            "presence": anima.presence,
+                        },
+                    )
+            except Exception:
+                pass  # Non-fatal
             # Stay in same era — the attempt failed, not the era
             self.canvas.pending_era_switch = self.active_era.name
             self.canvas.consecutive_false_starts += 1

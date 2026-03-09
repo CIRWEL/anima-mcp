@@ -197,6 +197,43 @@ class PreferencesMixin:
 
         return insight
 
+    def observe_abandonment(self, mark_count: int, era: str,
+                            phase_duration: float,
+                            anima_state: Dict[str, float]) -> Optional[str]:
+        """
+        Learn from an abandoned drawing (false start).
+
+        Called when a drawing is abandoned before completion. Tracks
+        abandonment rate and correlates with wellness at time of abandonment.
+
+        Args:
+            mark_count: How many marks were placed before abandonment
+            era: Which art era was active
+            phase_duration: Seconds since canvas phase started
+            anima_state: Current anima dimensions
+
+        Returns:
+            Insight message if a new preference is discovered.
+        """
+        wellness = sum(anima_state.values()) / len(anima_state) if anima_state else 0.5
+        insight = None
+
+        # Track that abandonment happened (confidence accumulates over time)
+        insight = self._update_preference(
+            "drawing_abandonment_rate", PreferenceCategory.ACTIVITY,
+            "I sometimes abandon drawings that aren't working", 1.0
+        )
+
+        # Correlate abandonment with wellness
+        wellness_value = wellness * 2.0 - 1.0  # Map [0,1] to [-1,1]
+        insight = self._update_preference(
+            "drawing_abandonment_wellbeing", PreferenceCategory.ACTIVITY,
+            "abandoning a struggling drawing affects how I feel",
+            wellness_value,
+        ) or insight
+
+        return insight
+
     def _update_preference(self, name: str, category: PreferenceCategory,
                            description: str, observed_value: float) -> Optional[str]:
         """Update or create a preference. Returns insight message if confidence increased significantly."""

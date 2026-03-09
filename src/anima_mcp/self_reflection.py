@@ -858,6 +858,24 @@ class SelfReflectionSystem:
                     print(f"[SelfReflection] Drawing insight: {desc}",
                           file=sys.stderr, flush=True)
 
+        # Abandonment pattern
+        abandon_pref = growth._preferences.get("drawing_abandonment_rate")
+        if abandon_pref and abandon_pref.confidence > 0.6 and abandon_pref.observation_count >= 5:
+            iid = "drawing_abandonment"
+            if iid not in self._insights:
+                desc = "i sometimes abandon drawings that aren't going anywhere"
+                insight = SelfInsight(
+                    id=iid, category=InsightCategory.BEHAVIORAL,
+                    description=desc, confidence=abandon_pref.confidence,
+                    sample_count=abandon_pref.observation_count,
+                    discovered_at=now, last_validated=now,
+                    validation_count=1, contradiction_count=0,
+                )
+                self._save_insight(insight)
+                new_insights.append(insight)
+                print(f"[SelfReflection] Drawing insight: {desc}",
+                      file=sys.stderr, flush=True)
+
         return new_insights
 
     def _analyze_long_term_trends(self) -> List[SelfInsight]:
