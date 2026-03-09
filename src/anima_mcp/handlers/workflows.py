@@ -111,21 +111,19 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
     # BrainCraft HAT hardware (display + LEDs + sensors) is available if display is available
     # Note: No physical EEG hardware exists - neural signals come from computational proprioception
     brain_hat_hardware_available = display_available  # BrainCraft HAT = display hardware (not EEG)
-    # Check UNITARES (try to import bridge)
+    # Check UNITARES (use shared server bridge)
     unitares_connected = False
     unitares_status = "not_configured"
     try:
-        import os
-        from ..unitares_bridge import UnitaresBridge
-        unitares_url = os.environ.get("UNITARES_URL")
-        if unitares_url:
-            bridge = UnitaresBridge(unitares_url=unitares_url)
+        from ..server import _get_server_bridge
+        bridge = _get_server_bridge()
+        if bridge is not None:
             unitares_connected = await bridge.check_availability()
             unitares_status = "connected" if unitares_connected else "unavailable"
             if unitares_connected:
-                print(f"[Diagnostics] UNITARES connected: {unitares_url}", file=sys.stderr, flush=True)
+                print(f"[Diagnostics] UNITARES connected via shared bridge", file=sys.stderr, flush=True)
             else:
-                print(f"[Diagnostics] UNITARES URL set but unavailable: {unitares_url}", file=sys.stderr, flush=True)
+                print(f"[Diagnostics] UNITARES URL set but unavailable", file=sys.stderr, flush=True)
         else:
             unitares_status = "not_configured"
             print("[Diagnostics] UNITARES_URL not set", file=sys.stderr, flush=True)

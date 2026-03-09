@@ -101,23 +101,11 @@ def _resolve_caller_name(arguments: dict) -> str:
     return "agent"
 
 
-_comm_bridge = None  # Module-level lazy bridge for identity resolution
-
 def _get_unitares_bridge():
-    """Get or create a UnitaresBridge for identity resolution (lazy singleton)."""
-    global _comm_bridge
-    if _comm_bridge is not None:
-        return _comm_bridge
-
-    import os
-    unitares_url = os.environ.get("UNITARES_URL")
-    if not unitares_url:
-        return None
-
+    """Get shared server bridge for identity resolution (late import to avoid circular deps)."""
     try:
-        from ..unitares_bridge import UnitaresBridge
-        _comm_bridge = UnitaresBridge(unitares_url=unitares_url)
-        return _comm_bridge
+        from ..server import _get_server_bridge
+        return _get_server_bridge()
     except Exception:
         return None
 

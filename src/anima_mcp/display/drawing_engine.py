@@ -25,21 +25,11 @@ from ..anima import Anima
 from ..expression_moods import ExpressionMoodTracker
 
 
-_drawing_bridge = None  # Lazy bridge for outcome reporting
-
 def _get_drawing_bridge():
-    """Get or create a UnitaresBridge for drawing outcome reporting."""
-    global _drawing_bridge
-    if _drawing_bridge is not None:
-        return _drawing_bridge
-    import os
-    unitares_url = os.environ.get("UNITARES_URL")
-    if not unitares_url:
-        return None
+    """Get shared server bridge for drawing outcome reporting (late import to avoid circular deps)."""
     try:
-        from ..unitares_bridge import UnitaresBridge
-        _drawing_bridge = UnitaresBridge(unitares_url=unitares_url)
-        return _drawing_bridge
+        from ..server import _get_server_bridge
+        return _get_server_bridge()
     except Exception:
         return None
 

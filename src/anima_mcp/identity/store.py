@@ -419,18 +419,13 @@ class IdentityStore:
         # Name changes are rare - this ensures UNITARES knows Lumen's name
         if sync_to_unitares:
             try:
-                import os
-                unitares_url = os.environ.get("UNITARES_URL")
-                if unitares_url:
-                    import asyncio
-                    from ..unitares_bridge import UnitaresBridge
-                    
+                import asyncio
+                from ..server import _get_server_bridge
+                bridge = _get_server_bridge()
+                if bridge is not None:
                     async def sync_name():
-                        bridge = UnitaresBridge(unitares_url=unitares_url)
-                        bridge.set_agent_id(self._identity.creature_id)
-                        bridge.set_session_id(f"anima-{self._identity.creature_id[:8]}")
                         return await bridge.sync_name(name)
-                    
+
                     # Run async sync (non-blocking, best effort)
                     # Most important for initial naming - ensures UNITARES knows Lumen's name
                     try:
