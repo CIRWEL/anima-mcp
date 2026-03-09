@@ -119,7 +119,7 @@ class TestSelfAnswerPromptEnrichment:
         conn.close()
 
         rs = SelfReflectionSystem(db_path=db_path)
-        from anima_mcp.self_reflection import Insight as SRInsight, InsightCategory
+        from anima_mcp.self_reflection import SelfInsight as SRInsight, InsightCategory
         from datetime import datetime
 
         test_insight = SRInsight(

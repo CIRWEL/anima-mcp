@@ -8,7 +8,7 @@ from anima_mcp.growth import (
     Goal,
     GoalStatus,
     MemorableEvent,
-    Preference,
+    GrowthPreference,
     PreferenceCategory,
 )
 
@@ -156,13 +156,13 @@ class TestMemorableEventToDict:
 
 
 # ---------------------------------------------------------------------------
-# Preference.to_dict
+# GrowthPreference.to_dict
 # ---------------------------------------------------------------------------
 
-class TestPreferenceToDict:
+class TestGrowthPreferenceToDict:
     @pytest.fixture
     def pref(self):
-        return Preference(
+        return GrowthPreference(
             category=PreferenceCategory.ENVIRONMENT,
             name="dim_light",
             description="I feel calmer when it's dim",

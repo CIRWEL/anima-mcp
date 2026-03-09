@@ -64,7 +64,7 @@ class InsightCategory(Enum):
 
 
 @dataclass
-class Insight:
+class SelfInsight:
     """A piece of self-knowledge Lumen has discovered."""
     id: str                          # Unique identifier
     category: InsightCategory
@@ -125,7 +125,7 @@ class SelfReflectionSystem:
             db_path = str(Path.home() / ".anima" / "anima.db")
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
-        self._insights: Dict[str, Insight] = {}
+        self._insights: Dict[str, SelfInsight] = {}
         self._max_insights: int = 500
         self._last_analysis_time: Optional[datetime] = None
         self._analysis_interval = timedelta(hours=1)  # Reflect every hour
@@ -173,7 +173,7 @@ class SelfReflectionSystem:
         rows = conn.execute("SELECT * FROM insights").fetchall()
 
         for row in rows:
-            insight = Insight(
+            insight = SelfInsight(
                 id=row["id"],
                 category=InsightCategory(row["category"]),
                 description=row["description"],
@@ -190,7 +190,7 @@ class SelfReflectionSystem:
             print(f"[SelfReflection] Loaded {len(self._insights)} existing insights",
                   file=sys.stderr, flush=True)
 
-    def _save_insight(self, insight: Insight):
+    def _save_insight(self, insight: SelfInsight):
         """Persist an insight to database."""
         conn = self._connect()
         conn.execute("""
@@ -545,7 +545,7 @@ class SelfReflectionSystem:
 
     def _find_contradicting_insights(
         self, category: InsightCategory, outcome: str, condition: str
-    ) -> List[Insight]:
+    ) -> List[SelfInsight]:
         """Find existing insights that contradict a new one.
 
         Two contradiction patterns:
@@ -581,7 +581,7 @@ class SelfReflectionSystem:
                 contradictions.append(existing)
         return contradictions
 
-    def generate_insights(self, patterns: List[StatePattern]) -> List[Insight]:
+    def generate_insights(self, patterns: List[StatePattern]) -> List[SelfInsight]:
         """Convert detected patterns into insights."""
         new_insights = []
         now = datetime.now()
@@ -639,7 +639,7 @@ class SelfReflectionSystem:
                         file=sys.stderr, flush=True,
                     )
 
-            insight = Insight(
+            insight = SelfInsight(
                 id=insight_id,
                 category=category,
                 description=description,
@@ -695,7 +695,7 @@ class SelfReflectionSystem:
 
     # ==================== Experience-Based Insight Analyzers ====================
 
-    def _analyze_preference_insights(self) -> List[Insight]:
+    def _analyze_preference_insights(self) -> List[SelfInsight]:
         """Generate insights from growth preferences that reached high confidence."""
         new_insights = []
         now = datetime.now()
@@ -734,7 +734,7 @@ class SelfReflectionSystem:
 
             description = f"i know this about myself: {pref.description.lower()}"
 
-            insight = Insight(
+            insight = SelfInsight(
                 id=insight_id,
                 category=category,
                 description=description,
@@ -752,7 +752,7 @@ class SelfReflectionSystem:
 
         return new_insights
 
-    def _analyze_belief_insights(self) -> List[Insight]:
+    def _analyze_belief_insights(self) -> List[SelfInsight]:
         """Generate insights from self-model beliefs that are well-tested."""
         new_insights = []
         now = datetime.now()
@@ -783,7 +783,7 @@ class SelfReflectionSystem:
             strength = belief.get_belief_strength()
             description = f"i am {strength} that {belief.description.lower()}"
 
-            insight = Insight(
+            insight = SelfInsight(
                 id=insight_id,
                 category=InsightCategory.WELLNESS,
                 description=description,
@@ -801,7 +801,7 @@ class SelfReflectionSystem:
 
         return new_insights
 
-    def _analyze_drawing_insights(self) -> List[Insight]:
+    def _analyze_drawing_insights(self) -> List[SelfInsight]:
         """Generate insights about drawing behavior from preferences."""
         new_insights = []
         now = datetime.now()
@@ -822,7 +822,7 @@ class SelfReflectionSystem:
             if iid not in self._insights:
                 desc = "drawing seems to help me feel better" if wp.value > 0.5 \
                     else "my drawings don't always reflect how i feel"
-                insight = Insight(
+                insight = SelfInsight(
                     id=iid, category=InsightCategory.BEHAVIORAL,
                     description=desc, confidence=wp.confidence,
                     sample_count=wp.observation_count,
@@ -846,7 +846,7 @@ class SelfReflectionSystem:
             if dp and dp.confidence > 0.6 and dp.observation_count >= 5:
                 iid = pref_name  # e.g. "drawing_night" — no double prefix
                 if iid not in self._insights:
-                    insight = Insight(
+                    insight = SelfInsight(
                         id=iid, category=InsightCategory.BEHAVIORAL,
                         description=desc, confidence=dp.confidence,
                         sample_count=dp.observation_count,
@@ -860,7 +860,7 @@ class SelfReflectionSystem:
 
         return new_insights
 
-    def _analyze_long_term_trends(self) -> List[Insight]:
+    def _analyze_long_term_trends(self) -> List[SelfInsight]:
         """Generate insights from multi-day trends via memory consolidation."""
         new_insights = []
         now = datetime.now()
@@ -890,7 +890,7 @@ class SelfReflectionSystem:
             else:
                 description = f"my {dimension} has been gradually decreasing over the past days"
 
-            insight = Insight(
+            insight = SelfInsight(
                 id=insight_id,
                 category=InsightCategory.WELLNESS,
                 description=description,
@@ -1055,7 +1055,7 @@ class SelfReflectionSystem:
             if synced_id in self._insights:
                 continue
             category = cat_map.get(qa.category, InsightCategory.WELLNESS)
-            sr_insight = Insight(
+            sr_insight = SelfInsight(
                 id=synced_id,
                 category=category,
                 description=qa.text[:500],
@@ -1131,7 +1131,7 @@ class SelfReflectionSystem:
 
         return None
 
-    def get_insights(self, category: Optional[InsightCategory] = None) -> List[Insight]:
+    def get_insights(self, category: Optional[InsightCategory] = None) -> List[SelfInsight]:
         """Get all insights, optionally filtered by category."""
         insights = list(self._insights.values())
 
@@ -1142,7 +1142,7 @@ class SelfReflectionSystem:
         insights.sort(key=lambda i: i.strength(), reverse=True)
         return insights
 
-    def get_strongest_insights(self, limit: int = 5) -> List[Insight]:
+    def get_strongest_insights(self, limit: int = 5) -> List[SelfInsight]:
         """Get the most confident/validated insights."""
         return self.get_insights()[:limit]
 

@@ -216,11 +216,11 @@ class TestSuggestGoal:
 
     def test_preference_driven_goal_suggestion(self, growth):
         """Strong preference (confidence > 0.7) triggers 'understand why' goal."""
-        from anima_mcp.growth import Preference, PreferenceCategory
+        from anima_mcp.growth import GrowthPreference, PreferenceCategory
         from datetime import datetime
         now = datetime.now()
         # Create a strong preference manually
-        pref = Preference(
+        pref = GrowthPreference(
             name="dim_light",
             description="I feel calmer when it's dim",
             category=PreferenceCategory.ENVIRONMENT,

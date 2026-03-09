@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 from anima_mcp.self_reflection import (
-    SelfReflectionSystem, Insight, InsightCategory, StatePattern,
+    SelfReflectionSystem, SelfInsight, InsightCategory, StatePattern,
 )
 
 
@@ -35,7 +35,7 @@ class TestInsight:
 
     def test_strength_new_insight(self):
         """New insight (no validations) has moderate strength."""
-        i = Insight(
+        i = SelfInsight(
             id="test", category=InsightCategory.TEMPORAL,
             description="test", confidence=0.8, sample_count=10,
             discovered_at=datetime.now(), last_validated=datetime.now(),
@@ -46,7 +46,7 @@ class TestInsight:
 
     def test_strength_validated(self):
         """Validated insight has higher strength."""
-        i = Insight(
+        i = SelfInsight(
             id="test", category=InsightCategory.TEMPORAL,
             description="test", confidence=0.8, sample_count=10,
             discovered_at=datetime.now(), last_validated=datetime.now(),
@@ -57,7 +57,7 @@ class TestInsight:
 
     def test_strength_contradicted(self):
         """Contradicted insight has lower strength."""
-        i = Insight(
+        i = SelfInsight(
             id="test", category=InsightCategory.TEMPORAL,
             description="test", confidence=0.8, sample_count=10,
             discovered_at=datetime.now(), last_validated=datetime.now(),
@@ -67,7 +67,7 @@ class TestInsight:
         assert i.strength() == pytest.approx(0.2)
 
     def test_to_dict(self):
-        i = Insight(
+        i = SelfInsight(
             id="test_id", category=InsightCategory.ENVIRONMENT,
             description="light insight", confidence=0.7, sample_count=50,
             discovered_at=datetime.now(), last_validated=datetime.now(),
@@ -87,7 +87,7 @@ class TestInsightPersistence:
         db = str(tmp_path / "persist.db")
         srs1 = SelfReflectionSystem(db_path=db)
         now = datetime.now()
-        insight = Insight(
+        insight = SelfInsight(
             id="persist_test", category=InsightCategory.TEMPORAL,
             description="warmth peaks at night", confidence=0.85,
             sample_count=100, discovered_at=now, last_validated=now,
@@ -108,7 +108,7 @@ class TestInsightPersistence:
         """Saving same ID twice overwrites, not duplicates."""
         now = datetime.now()
         for i in range(3):
-            insight = Insight(
+            insight = SelfInsight(
                 id="dedup_test", category=InsightCategory.WELLNESS,
                 description=f"version {i}", confidence=0.5 + i * 0.1,
                 sample_count=10, discovered_at=now, last_validated=now,
@@ -233,16 +233,16 @@ class TestPreferenceInsights:
 
     def _mock_growth(self):
         """Create mock growth system with known preferences."""
-        from anima_mcp.growth import Preference, PreferenceCategory
+        from anima_mcp.growth import GrowthPreference, PreferenceCategory
         mock = MagicMock()
         mock._preferences = {
-            "night_calm": Preference(
+            "night_calm": GrowthPreference(
                 category=PreferenceCategory.TEMPORAL, name="night_calm",
                 description="The quiet of night calms me",
                 value=0.9, confidence=0.9, observation_count=100,
                 first_noticed=datetime.now(), last_confirmed=datetime.now(),
             ),
-            "low_conf": Preference(
+            "low_conf": GrowthPreference(
                 category=PreferenceCategory.ENVIRONMENT, name="low_conf",
                 description="I like quiet", value=0.5, confidence=0.3,
                 observation_count=2,
@@ -328,11 +328,11 @@ class TestDrawingInsights:
         assert insights == []
 
     def test_drawing_wellbeing_insight(self, srs):
-        from anima_mcp.growth import Preference, PreferenceCategory
+        from anima_mcp.growth import GrowthPreference, PreferenceCategory
         mock_growth = MagicMock()
         mock_growth._drawings_observed = 10
         mock_growth._preferences = {
-            "drawing_wellbeing": Preference(
+            "drawing_wellbeing": GrowthPreference(
                 category=PreferenceCategory.ACTIVITY, name="drawing_wellbeing",
                 description="I feel good when I draw",
                 value=0.8, confidence=0.7, observation_count=8,
@@ -363,10 +363,10 @@ class TestReflect:
     def test_returns_strongest_new_insight(self, srs):
         """If new insights discovered, returns description of strongest."""
         # Inject a high-confidence preference that will trigger insight
-        from anima_mcp.growth import Preference, PreferenceCategory
+        from anima_mcp.growth import GrowthPreference, PreferenceCategory
         mock_growth = MagicMock()
         mock_growth._preferences = {
-            "night_calm": Preference(
+            "night_calm": GrowthPreference(
                 category=PreferenceCategory.TEMPORAL, name="night_calm",
                 description="The quiet of night calms me",
                 value=0.9, confidence=0.95, observation_count=200,
@@ -394,12 +394,12 @@ class TestGetInsights:
 
     def test_filter_by_category(self, srs):
         now = datetime.now()
-        srs._save_insight(Insight(
+        srs._save_insight(SelfInsight(
             id="t1", category=InsightCategory.TEMPORAL,
             description="time", confidence=0.8, sample_count=10,
             discovered_at=now, last_validated=now,
         ))
-        srs._save_insight(Insight(
+        srs._save_insight(SelfInsight(
             id="e1", category=InsightCategory.ENVIRONMENT,
             description="env", confidence=0.6, sample_count=10,
             discovered_at=now, last_validated=now,
@@ -410,12 +410,12 @@ class TestGetInsights:
 
     def test_sorted_by_strength(self, srs):
         now = datetime.now()
-        srs._save_insight(Insight(
+        srs._save_insight(SelfInsight(
             id="weak", category=InsightCategory.TEMPORAL,
             description="weak", confidence=0.3, sample_count=5,
             discovered_at=now, last_validated=now, validation_count=1,
         ))
-        srs._save_insight(Insight(
+        srs._save_insight(SelfInsight(
             id="strong", category=InsightCategory.TEMPORAL,
             description="strong", confidence=0.9, sample_count=50,
             discovered_at=now, last_validated=now, validation_count=10,

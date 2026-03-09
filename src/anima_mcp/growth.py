@@ -78,7 +78,7 @@ BondStrength = VisitorFrequency
 
 
 @dataclass
-class Preference:
+class GrowthPreference:
     """A learned preference."""
     category: PreferenceCategory
     name: str                    # e.g., "dim_light", "morning_calm"
@@ -257,7 +257,7 @@ class GrowthSystem:
     def __init__(self, db_path: str = "anima.db"):
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
-        self._preferences: Dict[str, Preference] = {}
+        self._preferences: Dict[str, GrowthPreference] = {}
         self._relationships: Dict[str, Relationship] = {}
         self._goals: Dict[str, Goal] = {}
         self._memories: List[MemorableEvent] = []
@@ -499,7 +499,7 @@ class GrowthSystem:
                 cat = PreferenceCategory(row["category"])
             except ValueError:
                 continue  # Skip system/sentinel rows with non-enum categories
-            self._preferences[row["name"]] = Preference(
+            self._preferences[row["name"]] = GrowthPreference(
                 category=cat,
                 name=row["name"],
                 description=row["description"] or "",
@@ -951,7 +951,7 @@ class GrowthSystem:
                 insight = f"I know this about myself: {description}"
         else:
             # New preference discovered
-            pref = Preference(
+            pref = GrowthPreference(
                 category=category,
                 name=name,
                 description=description,

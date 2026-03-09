@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 from anima_mcp.self_reflection import (
-    SelfReflectionSystem, Insight, InsightCategory, VerificationResult,
+    SelfReflectionSystem, SelfInsight, InsightCategory, VerificationResult,
 )
 
 
