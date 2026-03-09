@@ -557,7 +557,7 @@ class DrawingState:
                 return True
 
         # Path 4: Emergency exit - too fatigued to continue
-        if self.fatigue > 0.85:
+        if self.fatigue > 0.92:
             return True
 
         # Path 5: Stalled -- energy is near-zero (no marks being placed) and
@@ -565,7 +565,7 @@ class DrawingState:
         # attention signals stall because no marks are placed to evolve them.
         if canvas is not None and self.derived_energy < 0.05:
             phase_duration = time.time() - canvas.phase_start_time
-            if phase_duration > 120 and len(canvas.pixels) >= 50:
+            if phase_duration > 120 and len(canvas.pixels) >= 200:
                 return True
 
         return False
@@ -1233,7 +1233,7 @@ class DrawingEngine:
 
         # Save before clearing if there's actual drawing (50+ pixels, not just noise)
         # Skip if caller already saved (prevents double growth observation)
-        if not already_saved and len(self.canvas.pixels) >= 50:
+        if not already_saved and len(self.canvas.pixels) >= 200:
             saved_path = self.canvas_save(announce=False)
             if saved_path:
                 print(f"[Canvas] Saved before clear: {saved_path}", file=sys.stderr, flush=True)
@@ -1309,7 +1309,8 @@ class DrawingEngine:
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             suffix = "_manual" if manual else ""
-            filename = f"lumen_drawing_{timestamp}{suffix}.png"
+            era_tag = f"_{self.active_era.name}" if self.active_era else ""
+            filename = f"lumen_drawing_{timestamp}{era_tag}{suffix}.png"
             filepath = drawings_dir / filename
 
             # Save the image
@@ -1522,7 +1523,7 @@ class DrawingEngine:
         # (Caller must pass governance_paused flag if needed)
 
         # === PRIORITY 1: Lumen said "finished" ===
-        if (pixel_count > 50 and self._check_lumen_said_finished()):
+        if (pixel_count >= 200 and self._check_lumen_said_finished()):
             C = state.coherence()
             print(f"[Canvas] Lumen said finished - saving ({pixel_count}px, {self.intent.mark_count} marks, C={C:.2f})", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=False)
@@ -1533,7 +1534,7 @@ class DrawingEngine:
                 return "saved_and_cleared"
 
         # === PRIORITY 2: Narrative complete (multiple paths: coherence+attention, composition+curiosity, or fatigue) ===
-        if state.narrative_complete(self.canvas) and pixel_count >= 50:
+        if state.narrative_complete(self.canvas) and pixel_count >= 200 and self.intent.mark_count >= 5:
             C = state.coherence()
             satisfaction = self.canvas.compositional_satisfaction()
             print(f"[Canvas] Narrative complete -- saving ({pixel_count}px, {self.intent.mark_count} marks, C={C:.2f}, sat={satisfaction:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f}, fatigue={state.fatigue:.2f})", file=sys.stderr, flush=True)

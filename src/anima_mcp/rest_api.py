@@ -437,23 +437,17 @@ async def rest_gallery(request):
 
         files = list(drawings_dir.glob("lumen_drawing*.png"))
 
-        # Eras -- chronological periods in Lumen's drawing history
-        # Each entry: (cutoff_timestamp, era_name)
-        # Drawings BEFORE the cutoff belong to that era
-        _ERAS = [
-            ("20260207_190000", "geometric"),
-        ]
-        _CURRENT_ERA = "gestural"
-
         def get_era(filename):
             """Determine which era a drawing belongs to."""
-            m = re.search(r"(\d{8}_\d{6})", filename)
+            # New format: lumen_drawing_YYYYMMDD_HHMMSS_eraname[_manual].png
+            m = re.match(r"lumen_drawing_\d{8}_\d{6}_([a-z]+)(?:_manual)?\.png", filename)
             if m:
-                ts_str = m.group(1)
-                for cutoff, name in _ERAS:
-                    if ts_str < cutoff:
-                        return name
-            return _CURRENT_ERA
+                return m.group(1)
+            # Legacy: timestamp-based for pre-era-tag drawings
+            ts_m = re.search(r"(\d{8}_\d{6})", filename)
+            if ts_m and ts_m.group(1) < "20260207_190000":
+                return "geometric"
+            return "gestural"  # legacy default for untagged gestural-era drawings
 
         def parse_ts(f):
             m = re.search(r"(\d{8})_(\d{6})", f.name)
