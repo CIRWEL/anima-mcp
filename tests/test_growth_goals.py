@@ -386,7 +386,7 @@ class TestObserveDrawing:
         anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
         env = {"light_lux": 150.0, "temp_c": 22.0}
 
-        with patch("anima_mcp.growth.datetime", FakeDatetime):
+        with patch("anima_mcp.growth.preferences.datetime", FakeDatetime):
             growth.observe_drawing(5000, "resting", anima, env)
 
         assert "drawing_night" in growth._preferences
