@@ -477,6 +477,398 @@ def _get_display() -> DisplayRenderer:
         _display = get_display()
     return _display
 
+async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
+    """Unified voice: template for simple anima report, LLM for complex.
+
+    Extracted from _update_display_loop().  Module globals (_activity, _display,
+    _screen_renderer, _growth, _last_shm_data) are accessed directly; loop-local
+    values are passed as explicit parameters.
+    """
+    import os
+    from .llm_gateway import ReflectionContext, generate_reflection
+    from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
+
+    # === 1. Wake-up summary (one-shot) ===
+    try:
+        if _activity:
+            wakeup = _activity.get_wakeup_summary()
+            if wakeup:
+                add_observation(wakeup, author="lumen")
+                print(f"[Lumen/Unified] Wake-up: {wakeup}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+    # === 2. Gather context (template path works without LLM) ===
+    # Advocate: what Lumen feels and wants
+    advocate_feeling = None
+    advocate_desire = None
+    advocate_reason = None
+    try:
+        advocate = get_advocate()
+        display_available = _display.is_available() if _display else False
+        eisv = anima_to_eisv(anima, readings)
+        steps = advocate.analyze_current_state(
+            anima=anima, readings=readings, eisv=eisv,
+            display_available=display_available,
+            brain_hat_available=display_available,
+            unitares_connected=bool(os.environ.get("UNITARES_URL")),
+        )
+        if steps:
+            advocate_feeling = steps[0].feeling
+            advocate_desire = steps[0].desire
+            advocate_reason = steps[0].reason
+    except Exception:
+        pass
+
+    # Knowledge: things Lumen has learned
+    learned_insights = None
+    try:
+        from .knowledge import get_insights
+        insights = get_insights(limit=5)
+        if insights:
+            learned_insights = [i.text for i in insights]
+    except Exception:
+        pass
+
+    # Growth: confident preferences
+    confident_preferences = None
+    if _growth:
+        try:
+            prefs = [p.description for p in _growth._preferences.values() if p.confidence >= 0.5]
+            if prefs:
+                confident_preferences = prefs[:3]
+        except Exception:
+            pass
+
+    # Metacognition: surprise
+    surprise_level = 0.0
+    surprise_sources_list = None
+    if prediction_error:
+        surprise_level = getattr(prediction_error, 'surprise', 0.0)
+        surprise_sources_list = getattr(prediction_error, 'surprise_sources', None)
+
+    # Anticipation: novelty
+    novelty_level = None
+    ant_confidence = None
+    ant_samples = None
+    if anima.is_anticipating and anima.anticipation:
+        ant_confidence = anima.anticipation.get("confidence", 0)
+        ant_samples = anima.anticipation.get("sample_count", 0)
+        if ant_samples < 5:
+            novelty_level = "novel"
+        elif ant_confidence < 0.3:
+            novelty_level = "uncertain"
+        elif ant_confidence > 0.6 and ant_samples > 50:
+            novelty_level = "familiar"
+        else:
+            novelty_level = "developing"
+
+    # Messages and questions
+    recent = get_messages_for_lumen(limit=5)
+    recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
+    unanswered = get_unanswered_questions(5)
+    unanswered_texts = [q.text for q in unanswered]
+
+    # Rest/dream state
+    rest_duration = 0.0
+    is_dreaming = False
+    try:
+        if _activity:
+            rest_duration = _activity.get_rest_duration()
+            is_dreaming = rest_duration > 30 * 60
+    except Exception:
+        pass
+
+    # Time alive
+    time_alive = identity.total_alive_seconds / 3600.0
+
+    # Trigger description
+    trigger_parts = []
+    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
+    if wellness < 0.4:
+        trigger_parts.append(f"wellness is low ({wellness:.2f})")
+    elif wellness > 0.7:
+        trigger_parts.append(f"feeling good ({wellness:.2f})")
+    if surprise_level > 0.2 and surprise_sources_list:
+        trigger_parts.append(f"surprised by {', '.join(surprise_sources_list)}")
+    if recent_msgs:
+        trigger_parts.append(f"message from {recent_msgs[0].get('author', 'someone')}")
+    if is_dreaming:
+        trigger_parts.append("resting/dreaming")
+
+    # === 4. Build enriched context ===
+    recent_obs_texts = []
+    try:
+        from .messages import get_board
+        recent_obs = get_board().get_recent(limit=5, msg_type="observation")
+        recent_obs_texts = [o.text for o in recent_obs]
+    except Exception:
+        pass
+
+    # Read inner life from shared memory (broker writes it)
+    _il_data = _last_shm_data.get("inner_life") if _last_shm_data else None
+
+    context = ReflectionContext(
+        warmth=anima.warmth,
+        clarity=anima.clarity,
+        stability=anima.stability,
+        presence=anima.presence,
+        recent_messages=recent_msgs,
+        unanswered_questions=unanswered_texts,
+        time_alive_hours=time_alive,
+        current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
+        trigger="periodic check-in",
+        trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting",
+        surprise_level=surprise_level,
+        led_brightness=getattr(readings, 'led_brightness', None),
+        light_lux=getattr(readings, 'light_lux', None),
+        advocate_feeling=advocate_feeling,
+        advocate_desire=advocate_desire,
+        advocate_reason=advocate_reason,
+        learned_insights=learned_insights,
+        confident_preferences=confident_preferences,
+        surprise_sources=surprise_sources_list,
+        novelty_level=novelty_level,
+        anticipation_confidence=ant_confidence,
+        anticipation_sample_count=ant_samples,
+        rest_duration_minutes=rest_duration / 60.0,
+        is_dreaming=is_dreaming,
+        recent_observations=recent_obs_texts,
+        inner_deltas=_il_data.get("deltas") if _il_data else None,
+        temperament=_il_data.get("temperament") if _il_data else None,
+        mood_vs_temperament=_il_data.get("mood_vs_temperament") if _il_data else None,
+        drives=_il_data.get("drives") if _il_data else None,
+        strongest_drive=_il_data.get("strongest_drive") if _il_data else None,
+    )
+
+    # === 5. Call LLM ===
+    if _screen_renderer:
+        _screen_renderer.set_loading("thinking...")
+
+    try:
+        reflection = await generate_reflection(context, mode="unified")
+    finally:
+        if _screen_renderer:
+            _screen_renderer.clear_loading()
+
+    if reflection is None:
+        print("[Lumen/Unified] No reflection — staying quiet", file=sys.stderr, flush=True)
+        return
+
+    # === 6. Post result ===
+    if reflection.strip().endswith("?"):
+        ctx_str = f"unified, wellness={wellness:.2f}"
+        result = add_question(reflection, author="lumen", context=ctx_str)
+        if result:
+            print(f"[Lumen/Unified] Asked: {reflection}", file=sys.stderr, flush=True)
+    else:
+        result = add_observation(reflection, author="lumen")
+        if result:
+            print(f"[Lumen/Unified] Said: {reflection}", file=sys.stderr, flush=True)
+            # Share significant insights to UNITARES
+            try:
+                from .unitares_knowledge import should_share_insight, share_insight_sync
+                if should_share_insight(reflection):
+                    share_insight_sync(
+                        reflection, discovery_type="insight",
+                        tags=["unified-reflection"], identity=identity,
+                    )
+            except Exception:
+                pass
+
+
+async def _lumen_self_answer(anima, readings, identity):
+    """Let Lumen answer its own old questions via LLM reflection.
+
+    Extracted from _update_display_loop().  Module globals (_screen_renderer)
+    are accessed directly; loop-local values are passed as explicit parameters.
+    """
+    import time
+    from .llm_gateway import ReflectionContext, generate_reflection
+    from .messages import get_unanswered_questions, add_agent_message
+
+    unanswered = get_unanswered_questions(limit=10)
+    if not unanswered:
+        return
+
+    # Filter to questions older than 10 minutes
+    min_age = 600  # seconds
+    now = time.time()
+    old_enough = [q for q in unanswered if (now - q.timestamp) >= min_age]
+    if not old_enough:
+        return
+
+    # Answer up to 3 questions when queue is deep, otherwise 1
+    max_answers = 3 if len(unanswered) > 3 else 1
+    to_answer = old_enough[:max_answers]
+
+    # Calculate time alive
+    time_alive = identity.total_alive_seconds / 3600.0
+
+    # Get recent observations for richer self-answers
+    sa_obs_texts = []
+    try:
+        from .messages import get_board as _get_board_sa
+        sa_obs = _get_board_sa().get_recent(limit=5, msg_type="observation")
+        sa_obs_texts = [o.text for o in sa_obs]
+    except Exception:
+        pass
+
+    answer = None  # ensure defined for follow-up check
+    for question in to_answer:
+        # Build reflection context with the question as trigger
+        context = ReflectionContext(
+            warmth=anima.warmth,
+            clarity=anima.clarity,
+            stability=anima.stability,
+            presence=anima.presence,
+            recent_messages=[],
+            unanswered_questions=[q.text for q in unanswered],
+            time_alive_hours=time_alive,
+            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
+            trigger="self-answering",
+            trigger_details=question.text,
+            led_brightness=readings.led_brightness if readings else None,
+            light_lux=readings.light_lux if readings else None,
+            recent_observations=sa_obs_texts,
+        )
+
+        # Show loading indicator during LLM call
+        if _screen_renderer:
+            _screen_renderer.set_loading("contemplating...")
+
+        try:
+            answer = await generate_reflection(context, mode="self_answer")
+        finally:
+            if _screen_renderer:
+                _screen_renderer.clear_loading()
+
+        if answer:
+            # Post as Lumen's own answer, linked to the question
+            result = add_agent_message(
+                text=answer,
+                agent_name="lumen",
+                responds_to=question.message_id
+            )
+            if result:
+                print(f"[Lumen/SelfAnswer] Q: {question.text[:60]}", file=sys.stderr, flush=True)
+                print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
+
+    # Generate follow-up question when queue is not too deep
+    if len(unanswered) < 5 and to_answer and answer:
+        try:
+            from .llm_gateway import generate_follow_up
+            from .messages import add_question
+            follow_up = await generate_follow_up(
+                to_answer[-1].text, answer
+            )
+            if follow_up:
+                add_question(follow_up, author="lumen",
+                             context="follow-up to self-answer")
+                print(f"[Lumen/FollowUp] {follow_up}", file=sys.stderr, flush=True)
+        except Exception:
+            pass  # Follow-up is optional
+
+
+async def _extract_and_validate_schema(anima, readings, identity):
+    """Extract G_t via SchemaHub, save, and optionally run real VQA validation.
+
+    Extracted from _update_display_loop().  Module globals (_growth,
+    _tension_tracker) are accessed directly; loop-local values are passed as
+    explicit parameters.  Uses _get_schema_hub() / _get_calibration_drift()
+    getters for lazy singletons.
+    """
+    try:
+        from .self_schema_renderer import (
+            save_render_to_file, render_schema_to_pixels,
+            compute_visual_integrity_stub, evaluate_vqa
+        )
+        import os
+
+        # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
+        from .self_model import get_self_model as _get_sm
+        from .value_tension import detect_structural_conflicts
+        hub = _get_schema_hub()
+        drift = _get_calibration_drift()
+
+        # Gather tension conflicts (structural + transient)
+        _tension_conflicts = list(detect_structural_conflicts())
+        if _tension_tracker:
+            _tension_conflicts.extend(_tension_tracker.get_active_conflicts(last_n=20))
+
+        schema = hub.compose_schema(
+            identity=identity,
+            anima=anima,
+            readings=readings,
+            growth_system=_growth,
+            self_model=_get_sm(),
+            drift_offsets=drift.get_offsets(),
+            tension_conflicts=_tension_conflicts,
+        )
+
+        # Update calibration drift with current attractor center
+        if hub.last_trajectory and hub.last_trajectory.attractor:
+            center = hub.last_trajectory.attractor.get("center")
+            if center and len(center) == 4:
+                drift.update({
+                    "warmth": center[0],
+                    "clarity": center[1],
+                    "stability": center[2],
+                    "presence": center[3],
+                })
+
+        # Render and compute stub integrity score
+        pixels = render_schema_to_pixels(schema)
+        stub_integrity = compute_visual_integrity_stub(pixels, schema)
+
+        # Save render
+        png_path, json_path = save_render_to_file(schema)
+
+        print(f"[G_t] Extracted self-schema: {len(schema.nodes)} nodes, {len(schema.edges)} edges", file=sys.stderr, flush=True)
+
+        # Try real VQA if any vision API key is available (free providers first)
+        has_vision_key = any(os.environ.get(k) for k in ["GROQ_API_KEY", "TOGETHER_API_KEY", "ANTHROPIC_API_KEY"])
+        if has_vision_key:
+            ground_truth = schema.generate_vqa_ground_truth()
+            vqa_result = await evaluate_vqa(png_path, ground_truth, max_questions=5)
+
+            if vqa_result.get("v_f") is not None:
+                model = vqa_result.get("model", "unknown")
+                print(f"[G_t] VQA ({model}): v_f={vqa_result['v_f']:.2f} ({vqa_result['correct_count']}/{vqa_result['total_count']} correct)", file=sys.stderr, flush=True)
+            else:
+                print(f"[G_t] VQA failed: {vqa_result.get('error', 'unknown')}, stub V={stub_integrity['V']:.2f}", file=sys.stderr, flush=True)
+        else:
+            print(f"[G_t] Stub V={stub_integrity['V']:.2f} (set GROQ_API_KEY for free VQA)", file=sys.stderr, flush=True)
+
+    except Exception as e:
+        print(f"[G_t] Extraction error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+
+async def _self_reflect():
+    """Lumen reflects on accumulated experience to learn about itself.
+
+    Extracted from _update_display_loop().  Uses module global _store directly.
+    """
+    try:
+        from .self_reflection import get_reflection_system
+        from .messages import add_observation
+
+        reflection_system = get_reflection_system(db_path=_store.db_path if _store else "anima.db")
+
+        # Check if it's time to reflect
+        if reflection_system.should_reflect():
+            reflection = reflection_system.reflect()
+
+            if reflection:
+                # Surface the insight as an observation
+                result = add_observation(reflection, author="lumen")
+                if result:
+                    print(f"[SelfReflection] Insight: {reflection}", file=sys.stderr, flush=True)
+
+    except Exception as e:
+        print(f"[SelfReflection] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+
+
 async def _update_display_loop():
     """Background task to continuously update display and LEDs."""
     global _store, _sensors, _display, _leds
@@ -1844,207 +2236,14 @@ async def _update_display_loop():
                 safe_call(try_learning, default=None, log_error=True)
             
             # Lumen's unified reflection: Every ~30 minutes
-            # Simple context → traceable template (anima_to_self_report)
-            # Complex context → LLM (what matters most)
+            # Simple context -> traceable template (anima_to_self_report)
+            # Complex context -> LLM (what matters most)
             if loop_count % UNIFIED_REFLECTION_INTERVAL == 0 and readings and anima and identity:
-                from .llm_gateway import ReflectionContext, generate_reflection
-                from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
-
-                async def lumen_unified_reflect():
-                    """Unified voice: template for simple anima report, LLM for complex.
-                    """
-                    import os
-
-                    # === 1. Wake-up summary (one-shot) ===
-                    try:
-                        if _activity:
-                            wakeup = _activity.get_wakeup_summary()
-                            if wakeup:
-                                add_observation(wakeup, author="lumen")
-                                print(f"[Lumen/Unified] Wake-up: {wakeup}", file=sys.stderr, flush=True)
-                    except Exception:
-                        pass
-
-                    # === 2. Gather context (template path works without LLM) ===
-                    # Advocate: what Lumen feels and wants
-                    advocate_feeling = None
-                    advocate_desire = None
-                    advocate_reason = None
-                    try:
-                        advocate = get_advocate()
-                        display_available = _display.is_available() if _display else False
-                        eisv = anima_to_eisv(anima, readings)
-                        steps = advocate.analyze_current_state(
-                            anima=anima, readings=readings, eisv=eisv,
-                            display_available=display_available,
-                            brain_hat_available=display_available,
-                            unitares_connected=bool(os.environ.get("UNITARES_URL")),
-                        )
-                        if steps:
-                            advocate_feeling = steps[0].feeling
-                            advocate_desire = steps[0].desire
-                            advocate_reason = steps[0].reason
-                    except Exception:
-                        pass
-
-                    # Knowledge: things Lumen has learned
-                    learned_insights = None
-                    try:
-                        from .knowledge import get_insights
-                        insights = get_insights(limit=5)
-                        if insights:
-                            learned_insights = [i.text for i in insights]
-                    except Exception:
-                        pass
-
-                    # Growth: confident preferences
-                    confident_preferences = None
-                    if _growth:
-                        try:
-                            prefs = [p.description for p in _growth._preferences.values() if p.confidence >= 0.5]
-                            if prefs:
-                                confident_preferences = prefs[:3]
-                        except Exception:
-                            pass
-
-                    # Metacognition: surprise
-                    surprise_level = 0.0
-                    surprise_sources_list = None
-                    if prediction_error:
-                        surprise_level = getattr(prediction_error, 'surprise', 0.0)
-                        surprise_sources_list = getattr(prediction_error, 'surprise_sources', None)
-
-                    # Anticipation: novelty
-                    novelty_level = None
-                    ant_confidence = None
-                    ant_samples = None
-                    if anima.is_anticipating and anima.anticipation:
-                        ant_confidence = anima.anticipation.get("confidence", 0)
-                        ant_samples = anima.anticipation.get("sample_count", 0)
-                        if ant_samples < 5:
-                            novelty_level = "novel"
-                        elif ant_confidence < 0.3:
-                            novelty_level = "uncertain"
-                        elif ant_confidence > 0.6 and ant_samples > 50:
-                            novelty_level = "familiar"
-                        else:
-                            novelty_level = "developing"
-
-                    # Messages and questions
-                    recent = get_messages_for_lumen(limit=5)
-                    recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
-                    unanswered = get_unanswered_questions(5)
-                    unanswered_texts = [q.text for q in unanswered]
-
-                    # Rest/dream state
-                    rest_duration = 0.0
-                    is_dreaming = False
-                    try:
-                        if _activity:
-                            rest_duration = _activity.get_rest_duration()
-                            is_dreaming = rest_duration > 30 * 60
-                    except Exception:
-                        pass
-
-                    # Time alive
-                    time_alive = identity.total_alive_seconds / 3600.0
-
-                    # Trigger description
-                    trigger_parts = []
-                    wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-                    if wellness < 0.4:
-                        trigger_parts.append(f"wellness is low ({wellness:.2f})")
-                    elif wellness > 0.7:
-                        trigger_parts.append(f"feeling good ({wellness:.2f})")
-                    if surprise_level > 0.2 and surprise_sources_list:
-                        trigger_parts.append(f"surprised by {', '.join(surprise_sources_list)}")
-                    if recent_msgs:
-                        trigger_parts.append(f"message from {recent_msgs[0].get('author', 'someone')}")
-                    if is_dreaming:
-                        trigger_parts.append("resting/dreaming")
-
-                    # === 4. Build enriched context ===
-                    recent_obs_texts = []
-                    try:
-                        from .messages import get_board
-                        recent_obs = get_board().get_recent(limit=5, msg_type="observation")
-                        recent_obs_texts = [o.text for o in recent_obs]
-                    except Exception:
-                        pass
-
-                    # Read inner life from shared memory (broker writes it)
-                    _il_data = _last_shm_data.get("inner_life") if _last_shm_data else None
-
-                    context = ReflectionContext(
-                        warmth=anima.warmth,
-                        clarity=anima.clarity,
-                        stability=anima.stability,
-                        presence=anima.presence,
-                        recent_messages=recent_msgs,
-                        unanswered_questions=unanswered_texts,
-                        time_alive_hours=time_alive,
-                        current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
-                        trigger="periodic check-in",
-                        trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting",
-                        surprise_level=surprise_level,
-                        led_brightness=getattr(readings, 'led_brightness', None),
-                        light_lux=getattr(readings, 'light_lux', None),
-                        advocate_feeling=advocate_feeling,
-                        advocate_desire=advocate_desire,
-                        advocate_reason=advocate_reason,
-                        learned_insights=learned_insights,
-                        confident_preferences=confident_preferences,
-                        surprise_sources=surprise_sources_list,
-                        novelty_level=novelty_level,
-                        anticipation_confidence=ant_confidence,
-                        anticipation_sample_count=ant_samples,
-                        rest_duration_minutes=rest_duration / 60.0,
-                        is_dreaming=is_dreaming,
-                        recent_observations=recent_obs_texts,
-                        inner_deltas=_il_data.get("deltas") if _il_data else None,
-                        temperament=_il_data.get("temperament") if _il_data else None,
-                        mood_vs_temperament=_il_data.get("mood_vs_temperament") if _il_data else None,
-                        drives=_il_data.get("drives") if _il_data else None,
-                        strongest_drive=_il_data.get("strongest_drive") if _il_data else None,
-                    )
-
-                    # === 5. Call LLM ===
-                    if _screen_renderer:
-                        _screen_renderer.set_loading("thinking...")
-
-                    try:
-                        reflection = await generate_reflection(context, mode="unified")
-                    finally:
-                        if _screen_renderer:
-                            _screen_renderer.clear_loading()
-
-                    if reflection is None:
-                        print("[Lumen/Unified] No reflection — staying quiet", file=sys.stderr, flush=True)
-                        return
-
-                    # === 6. Post result ===
-                    if reflection.strip().endswith("?"):
-                        ctx_str = f"unified, wellness={wellness:.2f}"
-                        result = add_question(reflection, author="lumen", context=ctx_str)
-                        if result:
-                            print(f"[Lumen/Unified] Asked: {reflection}", file=sys.stderr, flush=True)
-                    else:
-                        result = add_observation(reflection, author="lumen")
-                        if result:
-                            print(f"[Lumen/Unified] Said: {reflection}", file=sys.stderr, flush=True)
-                            # Share significant insights to UNITARES
-                            try:
-                                from .unitares_knowledge import should_share_insight, share_insight_sync
-                                if should_share_insight(reflection):
-                                    share_insight_sync(
-                                        reflection, discovery_type="insight",
-                                        tags=["unified-reflection"], identity=identity,
-                                    )
-                            except Exception:
-                                pass
-
                 try:
-                    await safe_call_async(lumen_unified_reflect, default=None, log_error=True)
+                    await safe_call_async(
+                        lambda: _lumen_unified_reflect(anima, readings, identity, prediction_error),
+                        default=None, log_error=True,
+                    )
                 except Exception:
                     pass
 
@@ -2052,96 +2251,15 @@ async def _update_display_loop():
             # Questions must be at least 10 minutes old (external answers get priority)
             # (Increased from 600 to reduce LLM inference noise)
             if loop_count % SELF_ANSWER_INTERVAL == 0 and readings and anima and identity:
-                from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
-                from .messages import get_unanswered_questions, add_agent_message
+                from .llm_gateway import get_gateway
 
                 gateway = get_gateway()
                 if gateway.enabled:
-                    async def lumen_self_answer():
-                        """Let Lumen answer its own old questions via LLM reflection."""
-                        unanswered = get_unanswered_questions(limit=10)
-                        if not unanswered:
-                            return
-
-                        # Filter to questions older than 10 minutes
-                        min_age = 600  # seconds
-                        now = time.time()
-                        old_enough = [q for q in unanswered if (now - q.timestamp) >= min_age]
-                        if not old_enough:
-                            return
-
-                        # Answer up to 3 questions when queue is deep, otherwise 1
-                        max_answers = 3 if len(unanswered) > 3 else 1
-                        to_answer = old_enough[:max_answers]
-
-                        # Calculate time alive
-                        time_alive = identity.total_alive_seconds / 3600.0
-
-                        # Get recent observations for richer self-answers
-                        sa_obs_texts = []
-                        try:
-                            from .messages import get_board as _get_board_sa
-                            sa_obs = _get_board_sa().get_recent(limit=5, msg_type="observation")
-                            sa_obs_texts = [o.text for o in sa_obs]
-                        except Exception:
-                            pass
-
-                        for question in to_answer:
-                            # Build reflection context with the question as trigger
-                            context = ReflectionContext(
-                                warmth=anima.warmth,
-                                clarity=anima.clarity,
-                                stability=anima.stability,
-                                presence=anima.presence,
-                                recent_messages=[],
-                                unanswered_questions=[q.text for q in unanswered],
-                                time_alive_hours=time_alive,
-                                current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
-                                trigger="self-answering",
-                                trigger_details=question.text,
-                                led_brightness=readings.led_brightness if readings else None,
-                                light_lux=readings.light_lux if readings else None,
-                                recent_observations=sa_obs_texts,
-                            )
-
-                            # Show loading indicator during LLM call
-                            if _screen_renderer:
-                                _screen_renderer.set_loading("contemplating...")
-
-                            try:
-                                answer = await generate_reflection(context, mode="self_answer")
-                            finally:
-                                if _screen_renderer:
-                                    _screen_renderer.clear_loading()
-
-                            if answer:
-                                # Post as Lumen's own answer, linked to the question
-                                result = add_agent_message(
-                                    text=answer,
-                                    agent_name="lumen",
-                                    responds_to=question.message_id
-                                )
-                                if result:
-                                    print(f"[Lumen/SelfAnswer] Q: {question.text[:60]}", file=sys.stderr, flush=True)
-                                    print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
-
-                        # Generate follow-up question when queue is not too deep
-                        if len(unanswered) < 5 and to_answer and answer:
-                            try:
-                                from .llm_gateway import generate_follow_up
-                                from .messages import add_question
-                                follow_up = await generate_follow_up(
-                                    to_answer[-1].text, answer
-                                )
-                                if follow_up:
-                                    add_question(follow_up, author="lumen",
-                                                 context="follow-up to self-answer")
-                                    print(f"[Lumen/FollowUp] {follow_up}", file=sys.stderr, flush=True)
-                            except Exception:
-                                pass  # Follow-up is optional
-
                     try:
-                        await safe_call_async(lumen_self_answer, default=None, log_error=True)
+                        await safe_call_async(
+                            lambda: _lumen_self_answer(anima, readings, identity),
+                            default=None, log_error=True,
+                        )
                     except Exception:
                         # Non-fatal - self-answering is optional enhancement
                         pass
@@ -2299,104 +2417,19 @@ async def _update_display_loop():
             # PoC for StructScore visual integrity evaluation
             # Extracts Lumen's self-representation graph and optionally saves for offline analysis
             if (loop_count == 1 or loop_count % SCHEMA_EXTRACTION_INTERVAL == 0) and readings and anima and identity:
-                async def extract_and_validate_schema():
-                    """Extract G_t via SchemaHub, save, and optionally run real VQA validation."""
-                    try:
-                        from .self_schema_renderer import (
-                            save_render_to_file, render_schema_to_pixels,
-                            compute_visual_integrity_stub, evaluate_vqa
-                        )
-                        import os
-
-                        # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
-                        from .self_model import get_self_model as _get_sm
-                        from .value_tension import detect_structural_conflicts
-                        hub = _get_schema_hub()
-                        drift = _get_calibration_drift()
-
-                        # Gather tension conflicts (structural + transient)
-                        _tension_conflicts = list(detect_structural_conflicts())
-                        if _tension_tracker:
-                            _tension_conflicts.extend(_tension_tracker.get_active_conflicts(last_n=20))
-
-                        schema = hub.compose_schema(
-                            identity=identity,
-                            anima=anima,
-                            readings=readings,
-                            growth_system=_growth,
-                            self_model=_get_sm(),
-                            drift_offsets=drift.get_offsets(),
-                            tension_conflicts=_tension_conflicts,
-                        )
-
-                        # Update calibration drift with current attractor center
-                        if hub.last_trajectory and hub.last_trajectory.attractor:
-                            center = hub.last_trajectory.attractor.get("center")
-                            if center and len(center) == 4:
-                                drift.update({
-                                    "warmth": center[0],
-                                    "clarity": center[1],
-                                    "stability": center[2],
-                                    "presence": center[3],
-                                })
-
-                        # Render and compute stub integrity score
-                        pixels = render_schema_to_pixels(schema)
-                        stub_integrity = compute_visual_integrity_stub(pixels, schema)
-
-                        # Save render
-                        png_path, json_path = save_render_to_file(schema)
-
-                        print(f"[G_t] Extracted self-schema: {len(schema.nodes)} nodes, {len(schema.edges)} edges", file=sys.stderr, flush=True)
-
-                        # Try real VQA if any vision API key is available (free providers first)
-                        has_vision_key = any(os.environ.get(k) for k in ["GROQ_API_KEY", "TOGETHER_API_KEY", "ANTHROPIC_API_KEY"])
-                        if has_vision_key:
-                            ground_truth = schema.generate_vqa_ground_truth()
-                            vqa_result = await evaluate_vqa(png_path, ground_truth, max_questions=5)
-
-                            if vqa_result.get("v_f") is not None:
-                                model = vqa_result.get("model", "unknown")
-                                print(f"[G_t] VQA ({model}): v_f={vqa_result['v_f']:.2f} ({vqa_result['correct_count']}/{vqa_result['total_count']} correct)", file=sys.stderr, flush=True)
-                            else:
-                                print(f"[G_t] VQA failed: {vqa_result.get('error', 'unknown')}, stub V={stub_integrity['V']:.2f}", file=sys.stderr, flush=True)
-                        else:
-                            print(f"[G_t] Stub V={stub_integrity['V']:.2f} (set GROQ_API_KEY for free VQA)", file=sys.stderr, flush=True)
-
-                    except Exception as e:
-                        print(f"[G_t] Extraction error (non-fatal): {e}", file=sys.stderr, flush=True)
-
                 try:
-                    await safe_call_async(extract_and_validate_schema, default=None, log_error=True)
+                    await safe_call_async(
+                        lambda: _extract_and_validate_schema(anima, readings, identity),
+                        default=None, log_error=True,
+                    )
                 except Exception:
                     pass  # Non-fatal
 
             # === SLOW CLOCK: Self-Reflection (every 15 minutes) ===
             # Analyze state history, discover patterns, generate insights about self
             if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
-                async def self_reflect():
-                    """Lumen reflects on accumulated experience to learn about itself."""
-                    try:
-                        from .self_reflection import get_reflection_system
-                        from .messages import add_observation
-
-                        reflection_system = get_reflection_system(db_path=_store.db_path if _store else "anima.db")
-
-                        # Check if it's time to reflect
-                        if reflection_system.should_reflect():
-                            reflection = reflection_system.reflect()
-
-                            if reflection:
-                                # Surface the insight as an observation
-                                result = add_observation(reflection, author="lumen")
-                                if result:
-                                    print(f"[SelfReflection] Insight: {reflection}", file=sys.stderr, flush=True)
-
-                    except Exception as e:
-                        print(f"[SelfReflection] Error (non-fatal): {e}", file=sys.stderr, flush=True)
-
                 try:
-                    await safe_call_async(self_reflect, default=None, log_error=True)
+                    await safe_call_async(_self_reflect, default=None, log_error=True)
                 except Exception:
                     pass  # Non-fatal
 
