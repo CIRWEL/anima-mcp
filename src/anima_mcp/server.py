@@ -20,6 +20,7 @@ Agent Coordination:
 import argparse
 import asyncio
 import json
+import logging
 import os
 import signal
 import subprocess
@@ -29,6 +30,8 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict
+
+logger = logging.getLogger("anima.server")
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
@@ -188,7 +191,8 @@ def _get_server_bridge():
             _server_bridge.set_agent_id(_store.identity.creature_id)
             _server_bridge.set_session_id(f"anima-server-{_store.identity.creature_id[:8]}")
         return _server_bridge
-    except Exception:
+    except Exception as e:
+        logger.debug("[Governance] Bridge init failed: %s", e)
         return None
 
 
@@ -199,17 +203,17 @@ async def _server_governance_fallback(anima, readings):
     """
     bridge = _get_server_bridge()
     if bridge is None:
-        print("[Server] Governance fallback: no bridge (UNITARES_URL not set?)", file=sys.stderr, flush=True)
+        logger.warning("[Governance] Fallback: no bridge (UNITARES_URL not set?)")
         return None
     try:
         identity = _store.identity if _store else None
         drawing_eisv = _screen_renderer.get_drawing_eisv() if _screen_renderer else None
         decision = await bridge.check_in(anima, readings, identity=identity, drawing_eisv=drawing_eisv)
         source = decision.get("source", "?") if decision else "None"
-        print(f"[Server] Governance fallback: source={source}", file=sys.stderr, flush=True)
+        logger.debug("[Governance] Fallback: source=%s", source)
         return decision
     except Exception as e:
-        print(f"[Server] Governance fallback error: {e}", file=sys.stderr, flush=True)
+        logger.warning("[Governance] Fallback error: %s", e)
         return None
 
 
@@ -264,8 +268,8 @@ def _get_selfhood_context() -> Dict[str, Any] | None:
                 d: p.influence_weight for d, p in pref._preferences.items()
                 if d in ("warmth", "clarity", "stability", "presence")
             }
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Selfhood] Preference weight read error: %s", e)
 
     return context if context else None
 
@@ -392,7 +396,7 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
                     # No timestamp - assume fresh if data exists
                     shm_valid = True
         except Exception as e:
-            print(f"[Server] Error checking shared memory timestamp: {e}", file=sys.stderr, flush=True)
+            logger.debug("[Server] Error checking shared memory timestamp: %s", e)
             # If timestamp check fails but data exists, try to use it anyway
             if shm_data and "readings" in shm_data and "anima" in shm_data:
                 shm_valid = True
@@ -417,7 +421,7 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
 
             return readings, anima
         except Exception as e:
-            print(f"[Server] Error reading from shared memory: {e}", file=sys.stderr, flush=True)
+            logger.debug("[Server] Error reading from shared memory: %s", e)
             import traceback
             traceback.print_exc(file=sys.stderr)
             # Fall through to sensor fallback
@@ -437,19 +441,19 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
         if _now - _get_readings_and_anima._last_fallback_log > 30.0:
             _get_readings_and_anima._last_fallback_log = _now
             if broker_running and not shm_valid:
-                print(f"[Server] Broker running but shared memory {'stale' if shm_stale else 'invalid/empty'} - using direct sensor fallback", file=sys.stderr, flush=True)
+                logger.debug("[Server] Broker running but shared memory %s - using direct sensor fallback", 'stale' if shm_stale else 'invalid/empty')
             elif not broker_running:
-                print("[Server] Broker not running - using direct sensor access", file=sys.stderr, flush=True)
+                logger.debug("[Server] Broker not running - using direct sensor access")
         
         try:
             sensors = _get_sensors()
             if sensors is None:
-                print("[Server] Sensors not initialized - cannot read", file=sys.stderr, flush=True)
+                logger.warning("[Server] Sensors not initialized - cannot read")
                 return None, None
             
             readings = sensors.read()
             if readings is None:
-                print("[Server] Sensor read returned None", file=sys.stderr, flush=True)
+                logger.debug("[Server] Sensor read returned None")
                 return None, None
             
             calibration = get_calibration()
@@ -460,12 +464,12 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             drift = _get_calibration_drift()
             anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
             if anima is None:
-                print("[Server] Failed to create anima from readings", file=sys.stderr, flush=True)
+                logger.warning("[Server] Failed to create anima from readings")
                 return None, None
 
             return readings, anima
         except Exception as e:
-            print(f"[Server] Error reading sensors directly: {e}", file=sys.stderr, flush=True)
+            logger.warning("[Server] Error reading sensors directly: %s", e)
             import traceback
             traceback.print_exc(file=sys.stderr)
     
@@ -494,9 +498,9 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
             wakeup = _activity.get_wakeup_summary()
             if wakeup:
                 add_observation(wakeup, author="lumen")
-                print(f"[Lumen/Unified] Wake-up: {wakeup}", file=sys.stderr, flush=True)
-    except Exception:
-        pass
+                logger.debug("[Lumen/Unified] Wake-up: %s", wakeup)
+    except Exception as e:
+        logger.debug("[Lumen/Unified] Wake-up summary error: %s", e)
 
     # === 2. Gather context (template path works without LLM) ===
     # Advocate: what Lumen feels and wants
@@ -517,8 +521,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
             advocate_feeling = steps[0].feeling
             advocate_desire = steps[0].desire
             advocate_reason = steps[0].reason
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Lumen/Unified] Advocate error: %s", e)
 
     # Knowledge: things Lumen has learned
     learned_insights = None
@@ -527,8 +531,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
         insights = get_insights(limit=5)
         if insights:
             learned_insights = [i.text for i in insights]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Lumen/Unified] Knowledge error: %s", e)
 
     # Growth: confident preferences
     confident_preferences = None
@@ -537,8 +541,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
             prefs = [p.description for p in _growth._preferences.values() if p.confidence >= 0.5]
             if prefs:
                 confident_preferences = prefs[:3]
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[Lumen/Unified] Growth preferences error: %s", e)
 
     # Metacognition: surprise
     surprise_level = 0.0
@@ -576,8 +580,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
         if _activity:
             rest_duration = _activity.get_rest_duration()
             is_dreaming = rest_duration > 30 * 60
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Lumen/Unified] Activity state error: %s", e)
 
     # Time alive
     time_alive = identity.total_alive_seconds / 3600.0
@@ -602,8 +606,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
         from .messages import get_board
         recent_obs = get_board().get_recent(limit=5, msg_type="observation")
         recent_obs_texts = [o.text for o in recent_obs]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Lumen/Unified] Recent observations error: %s", e)
 
     # Read inner life from shared memory (broker writes it)
     _il_data = _last_shm_data.get("inner_life") if _last_shm_data else None
@@ -652,7 +656,7 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
             _screen_renderer.clear_loading()
 
     if reflection is None:
-        print("[Lumen/Unified] No reflection — staying quiet", file=sys.stderr, flush=True)
+        logger.debug("[Lumen/Unified] No reflection — staying quiet")
         return
 
     # === 6. Post result ===
@@ -660,11 +664,11 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
         ctx_str = f"unified, wellness={wellness:.2f}"
         result = add_question(reflection, author="lumen", context=ctx_str)
         if result:
-            print(f"[Lumen/Unified] Asked: {reflection}", file=sys.stderr, flush=True)
+            logger.debug("[Lumen/Unified] Asked: %s", reflection)
     else:
         result = add_observation(reflection, author="lumen")
         if result:
-            print(f"[Lumen/Unified] Said: {reflection}", file=sys.stderr, flush=True)
+            logger.debug("[Lumen/Unified] Said: %s", reflection)
             # Share significant insights to UNITARES
             try:
                 from .unitares_knowledge import should_share_insight, share_insight_sync
@@ -673,8 +677,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
                         reflection, discovery_type="insight",
                         tags=["unified-reflection"], identity=identity,
                     )
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[Lumen/Unified] Insight share error: %s", e)
 
 
 async def _lumen_self_answer(anima, readings, identity):
@@ -711,8 +715,8 @@ async def _lumen_self_answer(anima, readings, identity):
         from .messages import get_board as _get_board_sa
         sa_obs = _get_board_sa().get_recent(limit=5, msg_type="observation")
         sa_obs_texts = [o.text for o in sa_obs]
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Lumen/SelfAnswer] Recent observations error: %s", e)
 
     answer = None  # ensure defined for follow-up check
     for question in to_answer:
@@ -751,8 +755,8 @@ async def _lumen_self_answer(anima, readings, identity):
                 responds_to=question.message_id
             )
             if result:
-                print(f"[Lumen/SelfAnswer] Q: {question.text[:60]}", file=sys.stderr, flush=True)
-                print(f"[Lumen/SelfAnswer] A: {answer}", file=sys.stderr, flush=True)
+                logger.debug("[Lumen/SelfAnswer] Q: %s", question.text[:60])
+                logger.debug("[Lumen/SelfAnswer] A: %s", answer)
 
     # Generate follow-up question when queue is not too deep
     if len(unanswered) < 5 and to_answer and answer:
@@ -765,9 +769,9 @@ async def _lumen_self_answer(anima, readings, identity):
             if follow_up:
                 add_question(follow_up, author="lumen",
                              context="follow-up to self-answer")
-                print(f"[Lumen/FollowUp] {follow_up}", file=sys.stderr, flush=True)
-        except Exception:
-            pass  # Follow-up is optional
+                logger.debug("[Lumen/FollowUp] %s", follow_up)
+        except Exception as e:
+            logger.debug("[Lumen/FollowUp] Follow-up generation error: %s", e)
 
 
 async def _extract_and_validate_schema(anima, readings, identity):
@@ -824,7 +828,7 @@ async def _extract_and_validate_schema(anima, readings, identity):
         # Save render
         png_path, json_path = save_render_to_file(schema)
 
-        print(f"[G_t] Extracted self-schema: {len(schema.nodes)} nodes, {len(schema.edges)} edges", file=sys.stderr, flush=True)
+        logger.debug("[G_t] Extracted self-schema: %d nodes, %d edges", len(schema.nodes), len(schema.edges))
 
         # Try real VQA if any vision API key is available (free providers first)
         has_vision_key = any(os.environ.get(k) for k in ["GROQ_API_KEY", "TOGETHER_API_KEY", "ANTHROPIC_API_KEY"])
@@ -834,14 +838,14 @@ async def _extract_and_validate_schema(anima, readings, identity):
 
             if vqa_result.get("v_f") is not None:
                 model = vqa_result.get("model", "unknown")
-                print(f"[G_t] VQA ({model}): v_f={vqa_result['v_f']:.2f} ({vqa_result['correct_count']}/{vqa_result['total_count']} correct)", file=sys.stderr, flush=True)
+                logger.debug("[G_t] VQA (%s): v_f=%.2f (%d/%d correct)", model, vqa_result['v_f'], vqa_result['correct_count'], vqa_result['total_count'])
             else:
-                print(f"[G_t] VQA failed: {vqa_result.get('error', 'unknown')}, stub V={stub_integrity['V']:.2f}", file=sys.stderr, flush=True)
+                logger.debug("[G_t] VQA failed: %s, stub V=%.2f", vqa_result.get('error', 'unknown'), stub_integrity['V'])
         else:
-            print(f"[G_t] Stub V={stub_integrity['V']:.2f} (set GROQ_API_KEY for free VQA)", file=sys.stderr, flush=True)
+            logger.debug("[G_t] Stub V=%.2f (set GROQ_API_KEY for free VQA)", stub_integrity['V'])
 
     except Exception as e:
-        print(f"[G_t] Extraction error (non-fatal): {e}", file=sys.stderr, flush=True)
+        logger.warning("[G_t] Extraction error (non-fatal): %s", e)
 
 
 async def _self_reflect():
@@ -863,10 +867,10 @@ async def _self_reflect():
                 # Surface the insight as an observation
                 result = add_observation(reflection, author="lumen")
                 if result:
-                    print(f"[SelfReflection] Insight: {reflection}", file=sys.stderr, flush=True)
+                    logger.debug("[SelfReflection] Insight: %s", reflection)
 
     except Exception as e:
-        print(f"[SelfReflection] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+        logger.warning("[SelfReflection] Error (non-fatal): %s", e)
 
 
 async def _update_display_loop():
@@ -1315,9 +1319,9 @@ async def _update_display_loop():
                 consecutive_errors += 1
                 if consecutive_errors == 1:
                     # Log on first error to help diagnose
-                    print(f"[Loop] Failed to get readings/anima - broker={is_broker_running}, store={_store is not None}", file=sys.stderr, flush=True)
+                    logger.debug("[Loop] Failed to get readings/anima - broker=%s, store=%s", is_broker_running, _store is not None)
                 if consecutive_errors >= max_consecutive_errors:
-                    print(f"[Loop] Too many consecutive errors ({consecutive_errors}), backing off", file=sys.stderr, flush=True)
+                    logger.warning("[Loop] Too many consecutive errors (%d), backing off", consecutive_errors)
                     await asyncio.sleep(min(base_delay * (2 ** min(consecutive_errors // 5, 4)), max_delay))
                 else:
                     await asyncio.sleep(base_delay)
@@ -1341,7 +1345,8 @@ async def _update_display_loop():
                 _health = get_health_registry()
                 _health.heartbeat("sensors")
                 _health.heartbeat("anima")
-            except Exception:
+            except Exception as e:
+                logger.debug("[Health] Registry init error: %s", e)
                 _health = None
 
             # Consume drive events from broker (via SHM) → message board observations
@@ -1359,16 +1364,16 @@ async def _update_display_loop():
                     elif _consumed_drive_events:
                         # Broker cleared events — reset our dedup set
                         _consumed_drive_events.clear()
-            except Exception:
-                pass  # Drive observations are advisory, never block main loop
+            except Exception as e:
+                logger.debug("[Drive] Event consumption error: %s", e)
 
             # Identity heartbeat: accumulate alive_seconds incrementally
             # Prevents losing session time on crashes/restarts
             try:
                 if _store:
                     _store.heartbeat(min_interval_seconds=30.0)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[Identity] Heartbeat error: %s", e)
 
             # Feed EISV trajectory awareness buffer
             try:
@@ -1381,7 +1386,7 @@ async def _update_display_loop():
                 )
                 if _health: _health.heartbeat("trajectory")
             except Exception as e:
-                if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryAwareness] Error: {e}", file=sys.stderr, flush=True)
+                if loop_count % ERROR_LOG_THROTTLE == 1: logger.debug("[TrajectoryAwareness] Error: %s", e)
 
             # Feed value tension tracker with RAW (pre-drift) anima values.
             # Design principle: tension detection operates on raw dimension values
@@ -1399,8 +1404,8 @@ async def _update_display_loop():
                     }
                     last_action_key = _last_action.action_type.value if _last_action else None
                     _tension_tracker.observe(raw_anima, last_action_key)
-                except Exception:
-                    pass  # Tension tracking is advisory, never block main loop
+                except Exception as e:
+                    logger.debug("[Tension] Tracking error: %s", e)
 
             # Record satisfaction for meta-learning (lightweight — runs every cycle)
             if anima and loop_count % AGENCY_INTERVAL == 0:
@@ -1418,8 +1423,8 @@ async def _update_display_loop():
                         _satisfaction_per_dim[_dim].append(
                             _ml_pref._preferences[_dim].current_satisfaction(_ml_state[_dim])
                         )
-                except Exception:
-                    pass  # Meta-learning tracking is advisory
+                except Exception as e:
+                    logger.debug("[MetaLearning] Satisfaction tracking error: %s", e)
 
             # === HEAVY SUBSYSTEMS: skip on quick_render (user pressed joystick) ===
             # Metacognition, agency, self-model, primitive language are enhancement layers.
@@ -1438,7 +1443,7 @@ async def _update_display_loop():
 
                     # Log surprise level periodically (every 60 loops = ~2 min)
                     if prediction_error and loop_count % WARN_LOG_THROTTLE == 0:
-                        print(f"[Metacog] Surprise level: {prediction_error.surprise:.3f} (threshold: {METACOG_SURPRISE_THRESHOLD})", file=sys.stderr, flush=True)
+                        logger.debug("[Metacog] Surprise level: %.3f (threshold: %s)", prediction_error.surprise, METACOG_SURPRISE_THRESHOLD)
 
                     # Check if surprise warrants reflection
                     if prediction_error and prediction_error.surprise > METACOG_SURPRISE_THRESHOLD:
@@ -1460,7 +1465,7 @@ async def _update_display_loop():
                                 context = f"surprise={prediction_error.surprise:.2f}: {', '.join(context_parts[:2])}" if context_parts else f"surprise={prediction_error.surprise:.2f}"
                                 result = add_question(curiosity_question, author="lumen", context=context)
                                 if result:
-                                    print(f"[Metacog] Surprised! Asked: {curiosity_question} (surprise={prediction_error.surprise:.2f})", file=sys.stderr, flush=True)
+                                    logger.debug("[Metacog] Surprised! Asked: %s (surprise=%.2f)", curiosity_question, prediction_error.surprise)
                                     # Record curiosity for internal learning loop:
                                     # later, check if prediction improved in these domains
                                     metacog.record_curiosity(prediction_error.surprise_sources, prediction_error)
@@ -1468,18 +1473,18 @@ async def _update_display_loop():
                                 try:
                                     from .self_model import get_self_model
                                     get_self_model().observe_question_asked(prediction_error.surprise)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug("[SelfModel] observe_question_asked error: %s", e)
                             else:
                                 # Surprised but no question generated — contradicting evidence
                                 try:
                                     from .self_model import get_self_model
                                     get_self_model().observe_surprise_no_question(prediction_error.surprise)
-                                except Exception:
-                                    pass
+                                except Exception as e:
+                                    logger.debug("[SelfModel] observe_surprise_no_question error: %s", e)
 
                             if reflection.observation:
-                                print(f"[Metacog] Reflection: {reflection.observation}", file=sys.stderr, flush=True)
+                                logger.debug("[Metacog] Reflection: %s", reflection.observation)
 
                     # Make prediction for NEXT iteration
                     # Pass LED brightness for proprioceptive light prediction:
@@ -1491,7 +1496,7 @@ async def _update_display_loop():
 
                 except Exception as e:
                     if loop_count % STATUS_LOG_THROTTLE == 1:
-                        print(f"[Metacog] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+                        logger.debug("[Metacog] Error (non-fatal): %s", e)
 
             # === AGENCY: Action selection and learning ===
             # Throttled: runs every 5th iteration (enhancement, not critical path)
@@ -1909,7 +1914,7 @@ async def _update_display_loop():
                                 delay_seconds=_delay,
                             )
                             if _impl_result:
-                                print(f"[PrimitiveLang] Implicit feedback: response in {_delay:.0f}s, score={_impl_result['score']:.2f}", file=sys.stderr, flush=True)
+                                logger.debug("[PrimitiveLang] Implicit feedback: response in %.0fs, score=%.2f", _delay, _impl_result['score'])
                             _last_primitive_utterance = None  # Done — recorded response
                         else:
                             # No response within window — record absence if enough time passed
@@ -1925,11 +1930,11 @@ async def _update_display_loop():
                     if loop_count % SELF_MODEL_SAVE_INTERVAL == 0:
                         stats = lang.get_stats()
                         if stats.get("total_utterances", 0) > 0:
-                            print(f"[PrimitiveLang] Stats: {stats.get('total_utterances')} utterances, avg_score={stats.get('average_score')}, interval={stats.get('current_interval_minutes'):.1f}m", file=sys.stderr, flush=True)
+                            logger.debug("[PrimitiveLang] Stats: %s utterances, avg_score=%s, interval=%.1fm", stats.get('total_utterances'), stats.get('average_score'), stats.get('current_interval_minutes'))
 
                 except Exception as e:
                     if loop_count % STATUS_LOG_THROTTLE == 1:
-                        print(f"[PrimitiveLang] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+                        logger.debug("[PrimitiveLang] Error (non-fatal): %s", e)
 
             # Identity is fundamental - should always be available if wake() succeeded
             # If _store is None, that means wake() failed - log warning but continue
@@ -1998,8 +2003,8 @@ async def _update_display_loop():
                             _screen_renderer.update_connection_status(governance=is_unitares_fb)
                         if _health:
                             _health.heartbeat("governance")
-                except Exception:
-                    pass  # Non-fatal, broker may recover
+                except Exception as e:
+                    logger.warning("[Governance] Server fallback error: %s", e)
             
             # Initialize screen renderer if display is available
             if _display and _display.is_available():
@@ -2011,8 +2016,8 @@ async def _update_display_loop():
                     # Wire schema hub so LCD shows same enriched schema as dashboard
                     try:
                         _screen_renderer.schema_hub = _get_schema_hub()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.warning("[Schema] SchemaHub wiring to renderer failed: %s", e)
                     print("[Display] Screen renderer initialized", file=sys.stderr, flush=True)
                     # Pre-warm learning cache in background (avoids 9+ second delay on first visit)
                     _screen_renderer.warm_learning_cache()
@@ -2034,7 +2039,7 @@ async def _update_display_loop():
                                 try:
                                     _screen_renderer._display.show_default()
                                 except Exception as e:
-                                    print(f"[Error] show_default failed: {e}", file=sys.stderr, flush=True)
+                                    logger.debug("[Display] show_default failed: %s", e)
                             return False
                         face_state = derive_face_state(anima)
 
@@ -2075,7 +2080,7 @@ async def _update_display_loop():
                     except asyncio.TimeoutError:
                         display_result = False
                         if loop_count % DISPLAY_LOG_THROTTLE == 0:
-                            print("[Loop] Display update timed out (2s)", file=sys.stderr, flush=True)
+                            logger.debug("[Loop] Display update timed out (2s)")
                     display_updated = display_result is True
                     if display_updated:
                         if _health: _health.heartbeat("display")
@@ -2207,7 +2212,7 @@ async def _update_display_loop():
                             )
                 except Exception as e:
                     if loop_count % STATUS_LOG_THROTTLE == 0:
-                        print(f"[Voice] State update error: {e}", file=sys.stderr, flush=True)
+                        logger.debug("[Voice] State update error: %s", e)
 
             # Log update status every 20th iteration
             if loop_count % DISPLAY_LOG_THROTTLE == 1 and (display_updated or led_updated):
@@ -2217,7 +2222,7 @@ async def _update_display_loop():
                     update_status.append("display")
                 if led_updated:
                     update_status.append("LEDs")
-                print(f"[Loop] Display/LED updates ({', '.join(update_status)}): {update_duration*1000:.1f}ms", file=sys.stderr, flush=True)
+                logger.debug("[Loop] Display/LED updates (%s): %.1fms", ', '.join(update_status), update_duration*1000)
             
             # Log every 5th iteration with LED status and key metrics
             if loop_count % TRAJECTORY_INTERVAL == 1:
@@ -2230,8 +2235,8 @@ async def _update_display_loop():
                     learner = get_learner(str(_store.db_path))
                     adapted, new_cal = learner.adapt_calibration(respect_cooldown=True)
                     if adapted:
-                        print(f"[Learning] Calibration adapted after {loop_count} observations", file=sys.stderr, flush=True)
-                        print(f"[Learning] Pressure: {new_cal.pressure_ideal:.1f} hPa, Ambient: {new_cal.ambient_temp_min:.1f}-{new_cal.ambient_temp_max:.1f}°C", file=sys.stderr, flush=True)
+                        logger.debug("[Learning] Calibration adapted after %d observations", loop_count)
+                        logger.debug("[Learning] Pressure: %.1f hPa, Ambient: %.1f-%.1f C", new_cal.pressure_ideal, new_cal.ambient_temp_min, new_cal.ambient_temp_max)
                 
                 safe_call(try_learning, default=None, log_error=True)
             
@@ -2244,8 +2249,8 @@ async def _update_display_loop():
                         lambda: _lumen_unified_reflect(anima, readings, identity, prediction_error),
                         default=None, log_error=True,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("[Lumen/Unified] Reflection error: %s", e)
 
             # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions via LLM
             # Questions must be at least 10 minutes old (external answers get priority)
@@ -2260,9 +2265,8 @@ async def _update_display_loop():
                             lambda: _lumen_self_answer(anima, readings, identity),
                             default=None, log_error=True,
                         )
-                    except Exception:
-                        # Non-fatal - self-answering is optional enhancement
-                        pass
+                    except Exception as e:
+                        logger.debug("[Lumen/SelfAnswer] Self-answer error: %s", e)
 
 
             # Growth system: Observe state for preference learning and check milestones
@@ -2288,7 +2292,7 @@ async def _update_display_loop():
                     # Observe for preference learning
                     insight = _growth.observe_state_preference(anima_state, environment)
                     if insight:
-                        print(f"[Growth] {insight}", file=sys.stderr, flush=True)
+                        logger.debug("[Growth] %s", insight)
                         # Add insight as an observation from Lumen
                         from .messages import add_observation
                         add_observation(insight, author="lumen")
@@ -2296,7 +2300,7 @@ async def _update_display_loop():
                     # Check for age/awakening milestones
                     milestone = _growth.check_for_milestones(identity, anima)
                     if milestone:
-                        print(f"[Growth] Milestone: {milestone}", file=sys.stderr, flush=True)
+                        logger.debug("[Growth] Milestone: %s", milestone)
                         from .messages import add_observation
                         add_observation(milestone, author="lumen")
 
@@ -2314,7 +2318,8 @@ async def _update_display_loop():
                     try:
                         from .self_model import get_self_model
                         sm = get_self_model()
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("[Growth] SelfModel init for goal suggest: %s", e)
                         sm = None
                     goal = _growth.suggest_goal(anima_state, self_model=sm)
                     if goal:
@@ -2334,7 +2339,8 @@ async def _update_display_loop():
                     try:
                         from .self_model import get_self_model
                         sm = get_self_model()
-                    except Exception:
+                    except Exception as e:
+                        logger.debug("[Growth] SelfModel init for goal check: %s", e)
                         sm = None
                     msg = _growth.check_goal_progress(anima_state, self_model=sm)
                     if msg:
@@ -2361,8 +2367,8 @@ async def _update_display_loop():
                         if not stats.get("insufficient_data") and "overall_mean_error" in stats:
                             err = stats["overall_mean_error"]
                             pred_trend = max(-0.5, min(0.5, (1.0 - min(1.0, err)) * 2.0 - 1.0))
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("[MetaLearning] Prediction accuracy stats error: %s", e)
 
                     health = compute_trajectory_health(
                         satisfaction_history=list(_satisfaction_history)[-100:],
@@ -2391,11 +2397,10 @@ async def _update_display_loop():
                             if d in pref_system._preferences:
                                 pref_system._preferences[d].influence_weight = w
                         pref_system._save()
-                        print(f"[MetaLearning] Updated preference weights: "
-                              f"{', '.join(f'{d}={w:.3f}' for d, w in new_weights.items())} "
-                              f"health={health:.3f}", file=sys.stderr, flush=True)
+                        logger.debug("[MetaLearning] Updated preference weights: %s health=%.3f",
+                                    ', '.join(f'{d}={w:.3f}' for d, w in new_weights.items()), health)
                 except Exception as e:
-                    print(f"[MetaLearning] Error (non-fatal): {e}", file=sys.stderr, flush=True)
+                    logger.warning("[MetaLearning] Error (non-fatal): %s", e)
 
             # Trajectory: Record anima history for trajectory signature computation
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
@@ -2422,16 +2427,16 @@ async def _update_display_loop():
                         lambda: _extract_and_validate_schema(anima, readings, identity),
                         default=None, log_error=True,
                     )
-                except Exception:
-                    pass  # Non-fatal
+                except Exception as e:
+                    logger.warning("[Schema] Extraction error: %s", e)
 
             # === SLOW CLOCK: Self-Reflection (every 15 minutes) ===
             # Analyze state history, discover patterns, generate insights about self
             if loop_count % EXPRESSION_INTERVAL == 0 and readings and anima and identity:
                 try:
                     await safe_call_async(_self_reflect, default=None, log_error=True)
-                except Exception:
-                    pass  # Non-fatal
+                except Exception as e:
+                    logger.debug("[SelfReflection] Reflection error: %s", e)
 
             # Delay until next render — screen-specific for performance
             # Heavy screens (notepad, learning) get slower refresh to save CPU
@@ -2469,7 +2474,7 @@ async def _update_display_loop():
             # Don't crash on display errors, just log and continue with exponential backoff
             consecutive_errors += 1
             error_type = type(e).__name__
-            print(f"[Loop] Error ({error_type}): {e}", file=sys.stderr, flush=True)
+            logger.error("[Loop] Error (%s): %s", error_type, e)
             
             # Exponential backoff on errors
             delay = min(base_delay * (2 ** min(consecutive_errors // 3, 4)), max_delay)
@@ -2712,8 +2717,8 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                     _sm_init = None
                     try:
                         _sm_init = _gsm_init()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("[SchemaHub] SelfModel init for seed: %s", e)
                     readings_init, anima_init = _get_readings_and_anima()
                     init_schema = hub.compose_schema(
                         identity=identity,
@@ -2760,8 +2765,8 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 if _store and _store._conn:
                     try:
                         _store._conn.close()
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        logger.debug("[Wake] Connection close error: %s", e)
                 _store = None
                 _time.sleep(wait)
             else:
@@ -2837,15 +2842,15 @@ def sleep():
                 loop.create_task(_server_bridge.close())
             else:
                 loop.run_until_complete(_server_bridge.close())
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[Sleep] Bridge close error: %s", e)
 
     # Close SelfReflection SQLite connection
     try:
         from .self_reflection import get_reflection_system
         get_reflection_system().close()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("[Sleep] SelfReflection close error: %s", e)
 
     # Stop voice system if running
     if _voice_instance:
@@ -2870,8 +2875,8 @@ def sleep():
             try:
                 if _store._conn:
                     _store._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-            except Exception:
-                pass  # Best-effort on shutdown
+            except Exception as e:
+                logger.debug("[Sleep] WAL checkpoint error: %s", e)
             _store.close()
         except Exception as e:
             # Don't crash on shutdown errors
@@ -2898,8 +2903,8 @@ async def run_stdio_server():
         try:
             stop_display_loop()
             sleep()
-        except Exception:
-            pass  # Don't crash on shutdown errors
+        except Exception as e:
+            logger.debug("[Shutdown] Cleanup error: %s", e)
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, shutdown_handler)
@@ -3186,8 +3191,8 @@ def run_http_server(host: str, port: int):
         try:
             stop_display_loop()
             sleep()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[Shutdown] Cleanup error: %s", e)
         raise SystemExit(0)
 
     signal.signal(signal.SIGINT, shutdown_handler)
@@ -3221,15 +3226,15 @@ def main():
                     print(f"[Server] Another instance already running (PID {old_pid}) and port appears in use. Exiting.", file=sys.stderr)
                     print(f"[Server] To force restart: kill {old_pid} && rm {pidfile}", file=sys.stderr)
                     sys.exit(1)
-            except Exception:
-                pass  # Port check failed, assume ok to continue
+            except Exception as e:
+                logger.debug("[Server] Port check error: %s", e)
         except (ProcessLookupError, ValueError):
             # Process not running or invalid pid - remove stale pidfile
             try:
                 pidfile.unlink()
                 print(f"[Server] Removed stale pidfile", file=sys.stderr, flush=True)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[Server] Stale pidfile removal error: %s", e)
         except PermissionError:
             # Process running as different user - try to continue anyway
             print(f"[Server] Warning: PID file exists but can't check process (different user). Continuing...", file=sys.stderr, flush=True)
@@ -3238,8 +3243,8 @@ def main():
             print(f"[Server] Error checking pidfile: {e}. Removing and continuing...", file=sys.stderr, flush=True)
             try:
                 pidfile.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("[Server] Pidfile removal error: %s", e)
 
     # Write our PID
     try:
@@ -3262,8 +3267,8 @@ def main():
                 current_pid = pidfile.read_text().strip()
                 if current_pid == str(os.getpid()):
                     pidfile.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[Server] Cleanup pidfile error: %s", e)
     atexit.register(cleanup_pidfile)
 
     # Determine DB persistence path (User Home > Project Root)
@@ -3301,13 +3306,13 @@ def main():
     finally:
         try:
             sleep()
-        except Exception:
-            pass  # Don't crash on shutdown
+        except Exception as e:
+            logger.debug("[Shutdown] Sleep error: %s", e)
         # Clean up pidfile
         try:
             pidfile.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("[Shutdown] Pidfile cleanup error: %s", e)
 
 if __name__ == "__main__":
     main()
