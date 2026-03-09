@@ -13,16 +13,10 @@ def _optional_inner(t):
     return args[0] if args else None
 
 
-def test_get_active_tools_minimal_vs_lite(monkeypatch):
+def test_tools_list_populated():
     import anima_mcp.tool_registry as tr
 
-    monkeypatch.setattr(tr, "ANIMA_TOOL_MODE", "minimal")
-    tools = tr.get_active_tools()
-    assert tools == tr.TOOLS_ESSENTIAL
-
-    monkeypatch.setattr(tr, "ANIMA_TOOL_MODE", "lite")
-    tools = tr.get_active_tools()
-    assert tools == tr.TOOLS_ESSENTIAL + tr.TOOLS_STANDARD
+    assert len(tr.TOOLS) >= 19
 
 
 def test_json_type_to_python_handles_null_union_and_unknown():

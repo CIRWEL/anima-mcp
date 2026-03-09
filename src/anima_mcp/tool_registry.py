@@ -1,9 +1,8 @@
 """MCP Tool Registry — tool definitions, handler mapping, and server factory.
 
 This module contains:
-- TOOLS_ESSENTIAL / TOOLS_STANDARD: Tool schema definitions (tiered)
+- TOOLS: Tool schema definitions
 - HANDLERS: Maps tool names → handler functions
-- get_active_tools(): Returns tools based on ANIMA_TOOL_MODE env var
 - get_fastmcp() / create_server(): Server factory functions
 """
 
@@ -39,20 +38,9 @@ from .handlers import (
 
 
 # ============================================================
-# Tool Registry - Tiered System
+# Tool Definitions
 # ============================================================
-# ANIMA_TOOL_MODE environment variable controls exposure:
-#   - "minimal": Only essential tools (5 tools)
-#   - "lite": Essential + standard (default, ~12 tools)
-#   - "full": All tools including deprecated (~27 tools)
-
-ANIMA_TOOL_MODE = os.environ.get("ANIMA_TOOL_MODE", "lite").lower()
-
-# ============================================================
-# ESSENTIAL TOOLS - Always visible (5 tools)
-# The minimum needed to interact with Lumen
-# ============================================================
-TOOLS_ESSENTIAL = [
+TOOLS = [
     Tool(
         name="get_state",
         description="Get current anima (warmth, clarity, stability, presence), mood, and identity",
@@ -113,13 +101,6 @@ TOOLS_ESSENTIAL = [
             "required": ["message"],
         },
     ),
-]
-
-# ============================================================
-# STANDARD TOOLS - Visible in lite mode
-# Consolidated tools that replace multiple deprecated ones
-# ============================================================
-TOOLS_STANDARD = [
     Tool(
         name="get_identity",
         description="Get full identity audit trail: birth, awakenings, name history, alive time",
@@ -446,32 +427,7 @@ TOOLS_STANDARD = [
 # ============================================================
 # Tool Selection by Mode
 # ============================================================
-def get_active_tools():
-    """Get tools based on ANIMA_TOOL_MODE environment variable.
-
-    Modes:
-        minimal: 5 essential tools only
-        lite/full/default: 19 tools (essential + standard)
-
-    Note: Deprecated tools removed 2026-02-04. Use consolidated tools:
-        - get_identity → get_lumen_context
-        - switch_screen, show_face → manage_display
-        - leave_message, leave_agent_note → post_message
-        - get_questions → lumen_qa
-        - voice_status, set_voice_mode → configure_voice
-        - query_knowledge, query_memory, cognitive tools → removed
-    """
-    if ANIMA_TOOL_MODE == "minimal":
-        return TOOLS_ESSENTIAL
-    else:  # lite, full, or default - all get the same toolset now
-        return TOOLS_ESSENTIAL + TOOLS_STANDARD
-
-
-# Active tools list
-TOOLS = get_active_tools()
-
-# Log tool mode on import
-print(f"[Server] Tool mode: {ANIMA_TOOL_MODE} ({len(TOOLS)} tools)", file=sys.stderr, flush=True)
+print(f"[Server] {len(TOOLS)} tools registered", file=sys.stderr, flush=True)
 
 
 # ============================================================
