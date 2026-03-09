@@ -16,6 +16,15 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOGFILE"
 }
 
+# Boot grace period — don't run aggressive recovery within 3 minutes of boot.
+# The brcmfmac driver and NetworkManager need time to initialize after a reboot.
+# Without this, we can boot-loop: reboot → driver slow → watchdog reboots again.
+UPTIME_SECONDS=$(awk '{print int($1)}' /proc/uptime)
+if [ "$UPTIME_SECONDS" -lt 180 ]; then
+    log "Boot grace period (uptime ${UPTIME_SECONDS}s < 180s) — skipping"
+    exit 0
+fi
+
 # Read consecutive fail count
 FAIL_COUNT=0
 if [ -f "$FAIL_COUNT_FILE" ]; then
@@ -29,9 +38,19 @@ if ! ip link show wlan0 > /dev/null 2>&1; then
     echo "$FAIL_COUNT" > "$FAIL_COUNT_FILE"
     # Try to reload the driver
     modprobe -r brcmfmac 2>/dev/null
-    sleep 2
+    sleep 3
     modprobe brcmfmac 2>/dev/null
-    log "Attempted brcmfmac driver reload"
+    sleep 5
+    # If interface is still missing after driver reload, reboot (but only once —
+    # fail count persists across reboots via /tmp which is tmpfs, cleared on reboot,
+    # so this won't loop)
+    if ! ip link show wlan0 > /dev/null 2>&1; then
+        log "CRITICAL: wlan0 still missing after driver reload. REBOOTING."
+        sync
+        sleep 1
+        reboot
+    fi
+    log "brcmfmac driver reload restored wlan0"
     exit 1
 fi
 

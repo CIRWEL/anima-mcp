@@ -325,7 +325,7 @@ Or manually:
 ssh unitares-anima@100.79.215.83 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
 ```
 
-**After restart, wait 30-60 seconds.** The Pi is slow to boot the service. You will see "SSE server unavailable" errors from the STDIO proxy during this window — this is normal. Do not panic, do not retry rapidly, just wait and try again.
+**After restart, wait 2 minutes.** The Pi is slow to boot the service. You will see "SSE server unavailable" or "fetch failed" errors during this window — this is normal and expected. Do NOT panic, do NOT retry rapidly, and do NOT fall back to SSH. Hammering the Pi during restart can crash WiFi and require a reflash. Just wait 2 minutes and try again.
 
 ## UNITARES Integration
 
@@ -356,7 +356,7 @@ Things agents keep re-discovering. Read this so you don't waste time.
 | **Transport** | Streamable HTTP only at `/mcp/`. SSE was removed. No `/sse` endpoint exists. OAuth 2.1 required via ngrok (`lumen-anima.ngrok.io`); LAN/Tailscale/localhost are open. |
 | **OAuth env vars** | `ANIMA_OAUTH_ISSUER_URL`, `ANIMA_OAUTH_AUTO_APPROVE`, `ANIMA_OAUTH_SECRET` (optional). Tokens in-memory, reset on restart. See `docs/operations/SECRETS_AND_ENV.md`. |
 | **Ports** | anima-mcp = **8766**, UNITARES governance = **8767**. Never guess. |
-| **Pi restart time** | 30-60 seconds after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. |
+| **Pi restart time** | **2 minutes** after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. Do NOT SSH or retry MCP during this window — it can crash WiFi. |
 | **Tailscale IPs** | Pi: `100.79.215.83`, Mac: `100.96.201.46`. These are stable. |
 | **SSH to Pi** | Port 22 standard. If SSH times out/refused, try port 2222: `ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83` (see `docs/operations/PI_ACCESS.md`). |
 | **alive_ratio** | `total_alive_seconds / age_seconds`. Lumen is ~15% alive (Pi sleeps/reboots often). This is normal. |

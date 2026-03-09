@@ -3128,6 +3128,15 @@ def run_http_server(host: str, port: int):
         async def server_warmup_task():
             global SERVER_READY, SERVER_STARTUP_TIME
             SERVER_STARTUP_TIME = datetime.now()
+            # Clear restart lockfile — we're back up
+            try:
+                from pathlib import Path
+                lockfile = Path("/tmp/anima-restarting")
+                if lockfile.exists():
+                    lockfile.unlink()
+                    print("[Server] Cleared restart lockfile", file=sys.stderr, flush=True)
+            except Exception:
+                pass
             await asyncio.sleep(2.0)
             SERVER_READY = True
             print("[Server] Warmup complete - server ready", file=sys.stderr, flush=True)

@@ -12,8 +12,15 @@ from pathlib import Path
 from mcp.types import TextContent
 
 
+RESTART_LOCKFILE = Path("/tmp/anima-restarting")
+RESTART_WAIT_SECONDS = 120  # Callers must wait this long before retrying
+
+
 async def _delayed_restart():
-    """Restart both anima services after a brief delay.
+    """Restart both anima services after a delay that lets the response complete.
+
+    Writes a lockfile BEFORE dispatching, so any caller that reconnects early
+    can detect that a restart is in progress and back off.
 
     Dispatches 'systemctl restart anima' to systemd via Popen.
     This is an explicit restart, so PartOf=anima.service on the broker's
@@ -21,8 +28,18 @@ async def _delayed_restart():
     the D-Bus command before it kills our cgroup, so the restart proceeds
     even after our process dies.
     """
-    await asyncio.sleep(1)
-    # Dispatch restart — same pattern as handle_system_power reboot
+    # Write lockfile before restart — survives the process dying
+    try:
+        import time
+        RESTART_LOCKFILE.write_text(json.dumps({
+            "restart_at": time.time(),
+            "wait_seconds": RESTART_WAIT_SECONDS,
+        }))
+    except Exception:
+        pass  # Best-effort — don't block restart if this fails
+
+    # 5-second delay ensures the MCP response is fully sent before we die
+    await asyncio.sleep(5)
     subprocess.Popen(
         ["sudo", "systemctl", "restart", "anima"],
         stdout=subprocess.DEVNULL,
@@ -114,7 +131,13 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
             if synced_services:
                 output["synced_services"] = synced_services
             if restart:
-                output["restart"] = "Restarting server..."
+                output["restart"] = "Restarting in ~5 seconds."
+                output["wait_seconds"] = RESTART_WAIT_SECONDS
+                output["warning"] = (
+                    f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
+                    "This response confirms the restart was scheduled successfully. "
+                    "Any 'fetch failed' or timeout after this is expected — the server is restarting."
+                )
                 asyncio.create_task(_delayed_restart())
             return [TextContent(type="text", text=json.dumps(output, indent=2))]
         except Exception as e:
@@ -185,7 +208,13 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 output["synced_services"] = synced_services
 
             if restart:
-                output["restart"] = "Restarting server..."
+                output["restart"] = "Restarting in ~5 seconds."
+                output["wait_seconds"] = RESTART_WAIT_SECONDS
+                output["warning"] = (
+                    f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
+                    "This response confirms the restart was scheduled successfully. "
+                    "Any 'fetch failed' or timeout after this is expected — the server is restarting."
+                )
                 asyncio.create_task(_delayed_restart())
             else:
                 output["note"] = "Changes pulled. Use restart=true to apply, or manually restart."
@@ -441,7 +470,13 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
 
         output = {"success": True, "message": "Deployed from GitHub", "repo": str(repo_root)}
         if restart:
-            output["restart"] = "Restarting server..."
+            output["restart"] = "Restarting in ~5 seconds."
+            output["wait_seconds"] = RESTART_WAIT_SECONDS
+            output["warning"] = (
+                f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
+                "This response confirms the restart was scheduled successfully. "
+                "Any 'fetch failed' or timeout after this is expected — the server is restarting."
+            )
             asyncio.create_task(_delayed_restart())
         return [TextContent(type="text", text=json.dumps(output, indent=2))]
     except Exception as e:
@@ -575,7 +610,12 @@ async def handle_system_power(arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "action": "reboot",
-                "message": "Rebooting now. Pi will be back in ~60 seconds."
+                "message": "Rebooting now. Pi will be back in ~2 minutes.",
+                "wait_seconds": RESTART_WAIT_SECONDS,
+                "warning": (
+                    f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
+                    "Any connection attempt during reboot can destabilize WiFi."
+                ),
             }, indent=2))]
 
         elif action == "shutdown":
