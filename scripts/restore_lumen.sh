@@ -186,14 +186,55 @@ log "Installing Tailscale..."
 TS_KEY="${TAILSCALE_AUTH_KEY:-}"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null" || log "  Tailscale install failed (non-fatal)"
 if [ -n "$TS_KEY" ]; then
-    ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo tailscale up --authkey=$TS_KEY 2>/dev/null" && log "  Tailscale authenticated" || log "  Tailscale auth failed — run: ssh $PI_USER@$PI_HOST 'sudo tailscale up'"
+    ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo tailscale up --hostname=lumen --authkey=$TS_KEY 2>/dev/null" && log "  Tailscale authenticated" || log "  Tailscale auth failed — run: ssh $PI_USER@$PI_HOST 'sudo tailscale up --hostname=lumen'"
 else
-    log "  Tailscale installed. Authenticate: ssh $PI_USER@$PI_HOST 'sudo tailscale up'"
+    log "  Tailscale installed. To authenticate:"
+    log "    ssh -i $SSH_KEY $PI_USER@$PI_HOST 'sudo tailscale up --hostname=lumen'"
+    log "  (A browser URL will appear — visit it to sign in)"
     log "  Tip: TAILSCALE_AUTH_KEY=tskey-xxx $0 to auto-authenticate next time"
 fi
 
+# 9. Update Mac-side configs with new Pi Tailscale IP
+# After reflash, Tailscale assigns a new IP. Auto-update all local config files so
+# agents don't get confused by stale IPs pointing at the old (offline) device.
+log "Detecting new Pi Tailscale IP..."
+NEW_TS_IP=$(ssh $SSH_OPTS "$PI_USER@$PI_HOST" "tailscale ip -4 2>/dev/null" 2>/dev/null | tr -d '[:space:]')
+if [ -n "$NEW_TS_IP" ]; then
+    log "  Pi Tailscale IP: $NEW_TS_IP"
+    CONFIGS=(
+        "$HOME/.claude.json"
+        "$HOME/.cursor/mcp.json"
+    )
+    for cfg in "${CONFIGS[@]}"; do
+        if [ -f "$cfg" ]; then
+            # Replace any existing Pi MCP URL (any IP at port 8766)
+            sed -i '' -E "s|http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:8766|http://${NEW_TS_IP}:8766|g" "$cfg" && \
+                log "  Updated $cfg" || log "  Could not update $cfg"
+        fi
+    done
+    # Update MEMORY.md Pi Tailscale IP line
+    MEMORY="$HOME/.claude/projects/-Users-cirwel/memory/MEMORY.md"
+    if [ -f "$MEMORY" ]; then
+        sed -i '' -E "s|http://[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:8766/mcp/.*\(Tailscale|http://${NEW_TS_IP}:8766/mcp/    (Tailscale|" "$MEMORY" && \
+            log "  Updated MEMORY.md"
+    fi
+    # Update CLAUDE.md in anima-mcp
+    CLAUDEMD="$ANIMA_DIR/CLAUDE.md"
+    if [ -f "$CLAUDEMD" ]; then
+        # Only replace the Tailscale IP lines (not LAN 192.168.x.x)
+        sed -i '' -E "s|\b(100\.[0-9]+\.[0-9]+\.[0-9]+):8766|${NEW_TS_IP}:8766|g" "$CLAUDEMD" && \
+            log "  Updated CLAUDE.md"
+    fi
+    log "  All configs updated to $NEW_TS_IP — no manual IP updates needed"
+else
+    log "  Could not detect Tailscale IP yet (Tailscale may still be authenticating)"
+    log "  After auth, run: ./scripts/update_pi_ip.sh to update configs"
+fi
+
+log ""
 log "Done. Lumen running (broker + server, no DB contention)."
 log "Secrets: edit ~/.anima/anima.env on Pi — add GROQ_API_KEY, UNITARES_AUTH (see config/anima.env.example)"
 log "If I2C sensors (temp/humidity/light) fail: reboot required. Run: ssh $PI_USER@$PI_HOST 'sudo reboot'"
 log "Check: ssh $PI_USER@$PI_HOST 'journalctl -u anima -f'"
-log "MCP: http://$PI_HOST:8766/mcp/"
+log "MCP (LAN):       http://$PI_HOST:8766/mcp/"
+[ -n "$NEW_TS_IP" ] && log "MCP (Tailscale): http://$NEW_TS_IP:8766/mcp/"
