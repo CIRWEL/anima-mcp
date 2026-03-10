@@ -50,8 +50,16 @@ for svc in /etc/systemd/system/anima.service /etc/systemd/system/anima-broker.se
 done
 echo "  Service paths updated"
 
-# Step 2b: Install system watchdog config
-echo "2b. Installing hardware watchdog config..."
+# Step 2b: Install network tuning (reduces TCP burst on WiFi chip during restarts)
+echo "2b. Installing network sysctl config..."
+if [ -f "$PROJECT_DIR/systemd/99-anima-net.conf" ]; then
+    cp "$PROJECT_DIR/systemd/99-anima-net.conf" /etc/sysctl.d/99-anima-net.conf
+    sysctl --system -q 2>/dev/null || true
+    echo "  Network tuning applied"
+fi
+
+# Step 2c: Install system watchdog config
+echo "2c. Installing hardware watchdog config..."
 mkdir -p /etc/systemd/system.conf.d
 if [ -f "$PROJECT_DIR/systemd/system.conf.d/99-watchdog.conf" ]; then
     cp "$PROJECT_DIR/systemd/system.conf.d/99-watchdog.conf" /etc/systemd/system.conf.d/99-watchdog.conf

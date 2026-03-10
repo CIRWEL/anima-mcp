@@ -21,6 +21,10 @@ Environment="ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io"
 Environment="ANIMA_OAUTH_AUTO_APPROVE=true"
 Environment="PYTHONUNBUFFERED=1"
 
+# Quiet period after stop: let existing connections drain before restart begins.
+# Prevents the connection burst that crashes brcmfmac WiFi firmware on Pi.
+ExecStopPost=/bin/sleep 3
+
 # Kill any zombie process holding the port before starting
 ExecStartPre=/bin/sh -c 'fuser -k 8766/tcp 2>/dev/null || true; sleep 2'
 
