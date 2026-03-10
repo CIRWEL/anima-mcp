@@ -50,6 +50,27 @@ for svc in /etc/systemd/system/anima.service /etc/systemd/system/anima-broker.se
 done
 echo "  Service paths updated"
 
+# Step 2b: Install system watchdog config
+echo "2b. Installing hardware watchdog config..."
+mkdir -p /etc/systemd/system.conf.d
+if [ -f "$PROJECT_DIR/systemd/system.conf.d/99-watchdog.conf" ]; then
+    cp "$PROJECT_DIR/systemd/system.conf.d/99-watchdog.conf" /etc/systemd/system.conf.d/99-watchdog.conf
+    echo "  Copied 99-watchdog.conf"
+fi
+# Enable hardware watchdog in Pi firmware (requires reboot to take effect)
+CONFIG_TXT=""
+for f in /boot/firmware/config.txt /boot/config.txt; do
+    [ -f "$f" ] && CONFIG_TXT="$f" && break
+done
+if [ -n "$CONFIG_TXT" ]; then
+    if ! grep -q "dtparam=watchdog=on" "$CONFIG_TXT"; then
+        echo "dtparam=watchdog=on" >> "$CONFIG_TXT"
+        echo "  Enabled hardware watchdog in $CONFIG_TXT (reboot required)"
+    else
+        echo "  Hardware watchdog already enabled in $CONFIG_TXT"
+    fi
+fi
+
 # Step 3: Reload systemd
 echo "3. Reloading systemd..."
 systemctl daemon-reload
@@ -78,11 +99,13 @@ echo ""
 echo "=== Setup Complete ==="
 echo ""
 echo "Services: anima.service (MCP server), anima-broker.service (hardware broker)"
+echo "WiFi:     wifi-pm-disable.service (power save off), wifi-watchdog.timer (2min checks)"
+echo "Watchdog: system hardware watchdog via /etc/systemd/system.conf.d/99-watchdog.conf"
 echo "Health monitor: $HEALTH_SCRIPT"
 echo ""
 echo "Next steps:"
-echo "  1. Start services: sudo systemctl start anima-broker anima"
-echo "  2. Check status: sudo systemctl status anima-broker anima"
-echo "  3. View logs: sudo journalctl -u anima -f"
-echo "  4. Test health: sudo -u unitares-anima $HEALTH_SCRIPT --once"
+echo "  1. Reboot for watchdog firmware change to take effect: sudo reboot"
+echo "  2. Start services: sudo systemctl start anima-broker anima"
+echo "  3. Check status: sudo systemctl status anima-broker anima wifi-watchdog.timer"
+echo "  4. View logs: sudo journalctl -u anima -f"
 echo ""
