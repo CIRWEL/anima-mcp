@@ -78,8 +78,8 @@ class MindMixin:
             draw.text((150, 32), f"{dominant_value:.0%}", fill=dominant_color, font=font_small)
 
             # ---- Vertical bar chart ----
-            bar_area_top    = 58
-            bar_area_bottom = 186
+            bar_area_top    = 52
+            bar_area_bottom = 178
             bar_area_height = bar_area_bottom - bar_area_top
             bar_width       = 28
             bar_gap         = 12
@@ -92,12 +92,13 @@ class MindMixin:
                 is_dominant = (i == dominant_idx)
                 x = bar_start_x + i * (bar_width + bar_gap)
 
-                # Dim non-dominant bands — dominant reads clearly at a glance
-                draw_color = color if is_dominant else dim_color(color, 0.35)
+                # Dominant at full brightness; others dimmed but still readable
+                draw_color   = color if is_dominant else dim_color(color, 0.55)
+                label_color  = color if is_dominant else dim_color(color, 0.65)
 
-                # Bar track (slightly visible for non-dominant)
-                track_fill = (15, 15, 22) if is_dominant else (12, 12, 18)
-                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom], fill=track_fill)
+                # Bar track
+                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
+                               fill=(15, 15, 22))
 
                 # Filled bar (bottom-up)
                 fill_height = int(value * bar_area_height)
@@ -108,17 +109,18 @@ class MindMixin:
                         bright = lighten_color(color, 60)
                         draw.rectangle([x, bar_top, x + bar_width, bar_top + 2], fill=bright)
 
-                # Greek letter below bar — full color for dominant, dim for others
+                # Greek letter + % value below bar
                 letter = greek.get(name, name[0])
-                letter_color = color if is_dominant else dim_color(color, 0.45)
-                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 5), letter,
-                          fill=letter_color, font=font_medium)
+                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 3),
+                          letter, fill=label_color, font=font_medium)
+                draw.text((x + bar_width // 2 - 7, bar_area_bottom + 16),
+                          f"{value:.0%}", fill=label_color, font=font_tiny)
 
             # ---- Bottom: description of dominant band ----
-            y_desc = 206
-            draw.line([(10, y_desc - 4), (230, y_desc - 4)], fill=(30, 30, 40), width=1)
-            draw.text((10, y_desc), f"{dominant_name} · {dominant_desc}", fill=dominant_color, font=font_small)
-            draw.text((10, y_desc + 14), bands[dominant_idx][3], fill=DIM, font=font_tiny)
+            y_desc = 208
+            draw.line([(10, y_desc - 3), (230, y_desc - 3)], fill=(30, 30, 40), width=1)
+            draw.text((10, y_desc), f"{dominant_name} · {dominant_desc}  {bands[dominant_idx][3]}",
+                      fill=dominant_color, font=font_small)
 
             self._draw_status_bar(draw)
 
