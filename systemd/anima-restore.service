@@ -1,0 +1,25 @@
+[Unit]
+Description=Anima Auto-Restore - Pull data from Mac backup if missing
+After=network-online.target
+Wants=network-online.target
+Before=anima-broker.service anima.service
+
+# Only attempt restore once per boot
+ConditionPathExists=!/home/unitares-anima/.anima/.restore-attempted
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+
+ExecStart=/home/unitares-anima/anima-mcp/scripts/auto_restore.sh
+ExecStartPost=/bin/touch /home/unitares-anima/.anima/.restore-attempted
+
+TimeoutStartSec=120
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=anima-restore
+
+[Install]
+WantedBy=multi-user.target

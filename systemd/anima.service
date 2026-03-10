@@ -1,6 +1,6 @@
 [Unit]
 Description=Anima MCP Server - Lumen's Mind (MCP Interface)
-After=network.target anima-broker.service
+After=network.target anima-broker.service anima-restore.service
 Requires=anima-broker.service
 Wants=network-online.target
 # Broker owns sensors, writes to shared memory; server owns DB (no contention)

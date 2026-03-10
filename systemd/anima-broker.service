@@ -1,6 +1,6 @@
 [Unit]
 Description=Anima Hardware Broker - Lumen's Body (Sensors & Display)
-After=network.target redis.service
+After=network.target redis.service anima-restore.service
 Wants=network-online.target
 # Broker must start before MCP server (mind)
 Before=anima.service

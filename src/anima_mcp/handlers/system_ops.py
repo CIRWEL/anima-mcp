@@ -48,30 +48,49 @@ async def _delayed_restart():
 
 
 def _sync_systemd_services(repo_root: Path) -> list[str]:
-    """Sync systemd service files from repo to /etc/systemd/system/ if changed."""
+    """Sync systemd service/timer/mount files from repo to /etc/systemd/system/ if changed."""
     synced = []
     systemd_dir = repo_root / "systemd"
     target_dir = Path("/etc/systemd/system")
     if not systemd_dir.exists():
         return synced
 
-    for service_file in systemd_dir.glob("*.service"):
-        target = target_dir / service_file.name
-        # Only sync if target exists (don't install new services automatically)
-        if not target.exists():
-            continue
-        try:
-            repo_content = service_file.read_text()
-            target_content = target.read_text()
-            if repo_content != target_content:
-                result = subprocess.run(
-                    ["sudo", "cp", str(service_file), str(target)],
-                    capture_output=True, text=True, timeout=10
-                )
-                if result.returncode == 0:
-                    synced.append(service_file.name)
-        except Exception:
-            continue
+    # Units in this set are auto-installed even if they don't exist yet in /etc/systemd/system/
+    AUTO_INSTALL = {"anima-restore.service"}
+
+    for pattern in ("*.service", "*.timer", "*.mount"):
+        for unit_file in systemd_dir.glob(pattern):
+            target = target_dir / unit_file.name
+            try:
+                repo_content = unit_file.read_text()
+
+                if not target.exists():
+                    # Only auto-install whitelisted units
+                    if unit_file.name not in AUTO_INSTALL:
+                        continue
+                    result = subprocess.run(
+                        ["sudo", "cp", str(unit_file), str(target)],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if result.returncode == 0:
+                        # Enable the new unit
+                        subprocess.run(
+                            ["sudo", "systemctl", "enable", unit_file.name],
+                            capture_output=True, text=True, timeout=10
+                        )
+                        synced.append(f"{unit_file.name} (installed)")
+                    continue
+
+                target_content = target.read_text()
+                if repo_content != target_content:
+                    result = subprocess.run(
+                        ["sudo", "cp", str(unit_file), str(target)],
+                        capture_output=True, text=True, timeout=10
+                    )
+                    if result.returncode == 0:
+                        synced.append(unit_file.name)
+            except Exception:
+                continue
 
     if synced:
         subprocess.run(
