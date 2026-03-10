@@ -312,9 +312,9 @@ class InfoMixin:
             f_tiny  = fonts['tiny']
 
             # ── Palette ────────────────────────────────────────────────────
-            TITLE = (100, 200, 240)
-            MUTED = ( 88, 105, 125)
-            DIV   = ( 30,  42,  62)
+            TITLE    = (100, 200, 240)
+            MUTED    = ( 88, 105, 125)
+            DIV      = ( 30,  42,  62)
             C_CYAN   = COLORS.SOFT_CYAN
             C_BLUE   = COLORS.SOFT_BLUE
             C_YELLOW = COLORS.SOFT_YELLOW
@@ -322,15 +322,17 @@ class InfoMixin:
             C_PURPLE = COLORS.SOFT_PURPLE
             C_GREEN  = COLORS.SOFT_GREEN
 
-            LINE = 13
+            LINE = 15  # row height
 
             # ── Title ──────────────────────────────────────────────────────
             draw.text((10, 5), f"i am {name}", fill=TITLE, font=f_title)
-            y = 23
-            draw.line([(10, y), (230, y)], fill=DIV, width=1)
-            y += 5
+            draw.line([(10, 22), (230, 22)], fill=DIV, width=1)
 
-            # ── Age ────────────────────────────────────────────────────────
+            # ── Stats (left column, x=13–130) ──────────────────────────────
+            # Ring on right: cx=190, r=44 → x=146–234, y=68–156. No overlap.
+            y = 28
+
+            # Age
             if age_days < 1:
                 age_str, age_color = f"{age_days * 24:.1f} hours old", C_PURPLE
             elif age_days < 7:
@@ -339,61 +341,79 @@ class InfoMixin:
                 age_str, age_color = f"{age_days:.0f} days old", C_CYAN
             draw.rectangle([6, y, 9, y + LINE], fill=age_color)
             draw.text((13, y), age_str, fill=age_color, font=f_med)
-            y += LINE + 3
+            y += LINE + 2
 
-            # ── Awake time ─────────────────────────────────────────────────
+            # Awakenings
+            if identity.total_awakenings == 1:
+                wake_str, wake_color = "first awakening", C_ORANGE
+            else:
+                wake_str, wake_color = f"awakened {identity.total_awakenings}\u00d7", C_PURPLE
+            draw.rectangle([6, y, 9, y + LINE], fill=wake_color)
+            draw.text((13, y), wake_str, fill=wake_color, font=f_med)
+            y += LINE + 2
+
+            # Awake time
             awake_str = f"awake {alive_hours:.1f}h" if alive_hours < 24 else f"awake {alive_hours/24:.1f}d"
             draw.rectangle([6, y, 9, y + LINE], fill=C_YELLOW)
             draw.text((13, y), awake_str, fill=C_YELLOW, font=f_med)
-            y += LINE + 3
+            y += LINE + 2
 
-            # ── Presence descriptor ────────────────────────────────────────
+            # Presence descriptor (no bar, lighter register)
             if alive_pct > 80:
                 pres_str, pres_color = "mostly here",    C_GREEN
             elif alive_pct > 50:
                 pres_str, pres_color = "sometimes here", C_YELLOW
             else:
                 pres_str, pres_color = "often away",     COLORS.TEXT_SECONDARY
-            draw.text((13, y), f"({pres_str})", fill=pres_color, font=f_small)
-            y += LINE + 5
+            draw.text((16, y), f"({pres_str})", fill=pres_color, font=f_small)
 
-            # ── Awakenings ─────────────────────────────────────────────────
-            if identity.total_awakenings == 1:
-                wake_str, wake_color = "first awakening", C_ORANGE
-            else:
-                wake_str, wake_color = f"awakened {identity.total_awakenings}x", C_PURPLE
-            draw.rectangle([6, y, 9, y + LINE], fill=wake_color)
-            draw.text((13, y), wake_str, fill=wake_color, font=f_med)
-            y += LINE + 3
-
-            # ── IDs ────────────────────────────────────────────────────────
-            short_id = identity.creature_id[:8] if identity.creature_id else "unknown"
-            draw.text((13, y), f"id: {short_id}", fill=MUTED, font=f_small)
-            if self._unitares_agent_id:
-                draw.text((130, y), f"gov: {self._unitares_agent_id[:8]}", fill=C_GREEN, font=f_small)
-            y += LINE + 2
-
-            # ── Alive ratio ring (right side) ──────────────────────────────
+            # ── Alive ratio ring (right side, hero element) ─────────────────
+            # Large ring — alive ratio is the defining stat of this screen.
+            # Position: cx=190, cy=112, r=44 → entirely right of x=146.
             try:
                 from .design import wellness_to_color
                 alive_ratio = identity.alive_ratio()
-                ring_cx, ring_cy, ring_r = 195, 80, 30
-                draw.arc([ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r],
-                         0, 360, fill=(40, 40, 40), width=8)
+                ring_cx, ring_cy, ring_r = 190, 112, 44
+                ring_bbox = [ring_cx - ring_r, ring_cy - ring_r,
+                             ring_cx + ring_r, ring_cy + ring_r]
+
+                # Track (background)
+                draw.arc(ring_bbox, 0, 360, fill=(28, 34, 48), width=10)
+                # Fill arc (clockwise from top)
+                ring_color = wellness_to_color(alive_ratio) if alive_ratio > 0.01 else MUTED
                 if alive_ratio > 0.01:
-                    ring_color = wellness_to_color(alive_ratio)
-                    draw.arc([ring_cx - ring_r, ring_cy - ring_r, ring_cx + ring_r, ring_cy + ring_r],
-                             -90, -90 + int(alive_ratio * 360), fill=ring_color, width=8)
+                    draw.arc(ring_bbox, -90, -90 + int(alive_ratio * 360),
+                             fill=ring_color, width=10)
+
+                # Percentage inside ring (f_title for prominence)
                 pct_text = f"{alive_pct:.0f}%"
                 try:
-                    bbox = fonts['small'].getbbox(pct_text)
+                    bbox = f_title.getbbox(pct_text)
                     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
                 except Exception:
-                    tw, th = len(pct_text) * 6, 10
-                draw.text((ring_cx - tw // 2, ring_cy - th // 2),
-                          pct_text, fill=COLORS.TEXT_PRIMARY, font=fonts['small'])
+                    tw, th = len(pct_text) * 7, 13
+                draw.text((ring_cx - tw // 2, ring_cy - th // 2 - 1),
+                          pct_text, fill=COLORS.TEXT_PRIMARY, font=f_title)
+
+                # "present" label below the % (f_tiny, muted)
+                try:
+                    sub_bbox = f_tiny.getbbox("present")
+                    sw = sub_bbox[2] - sub_bbox[0]
+                except Exception:
+                    sw = 34
+                draw.text((ring_cx - sw // 2, ring_cy + th // 2 + 3),
+                          "present", fill=MUTED, font=f_tiny)
+
             except Exception:
                 pass
+
+            # ── IDs (below ring) ───────────────────────────────────────────
+            y_ids = 164
+            draw.line([(10, y_ids - 4), (230, y_ids - 4)], fill=DIV, width=1)
+            short_id = identity.creature_id[:8] if identity.creature_id else "unknown"
+            draw.text((13, y_ids), f"id: {short_id}", fill=MUTED, font=f_small)
+            if self._unitares_agent_id:
+                draw.text((130, y_ids), f"gov: {self._unitares_agent_id[:8]}", fill=C_GREEN, font=f_small)
 
             self._draw_status_bar(draw)
             self._store_screen_cache("identity", id_key, image)
@@ -479,7 +499,7 @@ class InfoMixin:
             BAR_H  = 7
             PAD    = 3
             LIST_X = 13
-            BAR_W  = 130
+            BAR_W  = 162   # wider — fills the display properly
 
             # ── Title ──────────────────────────────────────────────────────
             draw.text((10, 5), "diagnostics", fill=TITLE, font=f_title)
@@ -499,33 +519,42 @@ class InfoMixin:
                  "here" if anima.presence > 0.7 else "distant" if anima.presence < 0.5 else "near"),
             ]
 
+            from .design import lighten_color
             for label, value, color, desc in dims:
                 row_h = LINE + BAR_H + PAD
                 draw.rectangle([6, y, 9, y + row_h], fill=_dim(color, 0.55))
 
-                # Label + percent + descriptor
-                draw.text((LIST_X, y), label, fill=MUTED,              font=f_small)
-                draw.text((   73,  y), f"{value:.0%}", fill=color,     font=f_small)
-                draw.text((  110,  y), desc,           fill=_dim(color, 0.65), font=f_small)
+                # Label + descriptor (bar + right-side value convey the number)
+                draw.text((LIST_X, y), label, fill=MUTED, font=f_small)
+                draw.text((73, y), desc, fill=_dim(color, 0.7), font=f_small)
                 y += LINE
 
-                # Bar
+                # Bar with value label right of end
                 draw.rectangle([LIST_X, y, LIST_X + BAR_W, y + BAR_H], fill=BG)
                 fw = int(value * BAR_W)
                 if fw > 0:
                     draw.rectangle([LIST_X, y, LIST_X + fw, y + BAR_H], fill=color)
+                    if fw > 4:
+                        draw.rectangle([LIST_X + fw - 2, y, LIST_X + fw, y + BAR_H],
+                                       fill=lighten_color(color, 50))
+                draw.text((LIST_X + BAR_W + 4, y - 1), f"{value:.0%}", fill=color, font=f_tiny)
                 y += BAR_H + PAD
 
             # ── Mood ───────────────────────────────────────────────────────
             y += 2
             feeling = anima.feeling()
             mood = feeling.get('mood', 'unknown')
-            if "content" in mood.lower() or "happy" in mood.lower():
+            mood_low = mood.lower()
+            if "content" in mood_low or "happy" in mood_low or "calm" in mood_low:
                 mood_color = C_OK
-            elif "neutral" in mood.lower():
-                mood_color = C_WARN
+            elif "stressed" in mood_low or "anxious" in mood_low:
+                mood_color = C_HOT
+            elif "neutral" in mood_low:
+                mood_color = MUTED
+            elif "alert" in mood_low or "focused" in mood_low:
+                mood_color = C_WARM
             else:
-                mood_color = COLORS.SOFT_CYAN
+                mood_color = COLORS.TEXT_SECONDARY
             draw.text((LIST_X, y), f"mood  {mood}", fill=mood_color, font=f_med)
             y += 20
 
@@ -537,6 +566,7 @@ class InfoMixin:
                 action = governance.get("action", "unknown")
                 margin = governance.get("margin", "")
                 source = governance.get("source", "")
+                eisv   = governance.get("eisv")
 
                 action_colors = {
                     "proceed": C_OK,
@@ -545,43 +575,67 @@ class InfoMixin:
                     "halt":    C_HOT,
                     "reject":  C_HOT,
                 }
-                a_color = action_colors.get(action, MUTED)
+                a_color     = action_colors.get(action, MUTED)
+                is_unitares = "unitares" in (source or "").lower()
+                src_color   = C_OK if is_unitares else C_WARN
+                src_label   = "UNITARES" if is_unitares else "local"
 
-                # Left-edge bar for governance
+                # Left-edge bar spanning action row
                 draw.rectangle([6, y, 9, y + LINE], fill=_dim(a_color, 0.6))
+
+                # Verdict word (large)
                 draw.text((LIST_X, y), action, fill=a_color, font=f_med)
 
+                # Margin (center, small)
                 if margin:
-                    margin_colors = {"comfortable": C_OK, "tight": C_WARN, "warning": (200, 130, 60), "critical": C_HOT}
-                    draw.text((95, y), margin.lower(), fill=margin_colors.get(margin.lower(), MUTED), font=f_small)
+                    margin_colors = {
+                        "comfortable": C_OK,
+                        "tight":       C_WARN,
+                        "warning":     (200, 130, 60),
+                        "critical":    C_HOT,
+                    }
+                    m_color = margin_colors.get(margin.lower(), MUTED)
+                    draw.text((83, y + 2), margin.lower(), fill=m_color, font=f_tiny)
 
-                if source:
-                    src_text  = "unitares" if "unitares" in source.lower() else "local" if "local" in source.lower() else source[:10]
-                    src_color = C_OK if "unitares" in source.lower() else C_WARN
-                    draw.text((183, y), f"via {src_text}", fill=src_color, font=f_tiny)
+                # Source connection — right side, fits within 230px
+                draw.text((175, y + 2), src_label, fill=src_color, font=f_tiny)
                 y += LINE + 2
 
-                # EISV mini-bars
-                eisv = governance.get("eisv")
+                # EISV 2×2 grid — correct ranges, V with sign-based color
                 if eisv and y < 210:
-                    eisv_data = [
-                        ("E", eisv.get("E", 0.0), C_OK),
-                        ("I", eisv.get("I", 0.0), C_STAB),
-                        ("S", eisv.get("S", 0.0), C_WARN),
-                        ("V", eisv.get("V", 0.0), C_PRES),
+                    v_raw   = eisv.get("V", 0.0)
+                    v_color = C_WARM if v_raw > 0.05 else C_STAB if v_raw < -0.05 else MUTED
+                    sign_ch = "+" if v_raw > 0.05 else "\u2212" if v_raw < -0.05 else "~"
+
+                    # [label, bar_frac (0-1), color, val_str]
+                    eisv_rows = [
+                        [("E", min(1.0, max(0.0, eisv.get("E", 0.0))), C_OK,
+                          f"{eisv.get('E', 0.0):.0%}"),
+                         ("I", min(1.0, max(0.0, eisv.get("I", 0.0))), C_STAB,
+                          f"{eisv.get('I', 0.0):.0%}")],
+                        [("S", min(1.0, max(0.0, eisv.get("S", 0.0) / 2.0)), C_WARN,
+                          f"{eisv.get('S', 0.0):.2f}"),
+                         ("V", min(1.0, abs(v_raw) / 2.0), v_color,
+                          f"{sign_ch}{abs(v_raw):.2f}")],
                     ]
-                    mb_w, mb_h, mb_gap = 40, 6, 8
-                    for i, (lbl, val, color) in enumerate(eisv_data):
-                        x_pos = LIST_X + i * (mb_w + mb_gap)
-                        draw.text((x_pos, y), lbl, fill=color, font=f_tiny)
-                        bar_y = y + LINE - 2
-                        draw.rectangle([x_pos, bar_y, x_pos + mb_w, bar_y + mb_h], fill=BG)
-                        fw = int(abs(val) * mb_w)
-                        if fw > 0:
-                            draw.rectangle([x_pos, bar_y, x_pos + fw, bar_y + mb_h], fill=_dim(color, 0.8))
-                    y += LINE + mb_h + 2
+                    mb_w, mb_h = 52, 6
+                    COL_W = 112
+                    for row_items in eisv_rows:
+                        for ci, (lbl, frac, color, val_str) in enumerate(row_items):
+                            x0 = LIST_X + ci * COL_W
+                            draw.text((x0, y), lbl, fill=color, font=f_small)
+                            bx = x0 + 13
+                            draw.rectangle([bx, y + 3, bx + mb_w, y + 3 + mb_h], fill=BG)
+                            fw = int(frac * mb_w)
+                            if fw > 0:
+                                draw.rectangle([bx, y + 3, bx + fw, y + 3 + mb_h],
+                                               fill=_dim(color, 0.8))
+                            draw.text((bx + mb_w + 3, y + 2), val_str,
+                                      fill=_dim(color, 0.85), font=f_tiny)
+                        y += 11
+                    y += 2
             else:
-                draw.text((LIST_X, y), "governance: waiting…", fill=MUTED, font=f_small)
+                draw.text((LIST_X, y), "gov: waiting…", fill=MUTED, font=f_small)
                 y += LINE + 2
 
             # ── Trajectory ─────────────────────────────────────────────────

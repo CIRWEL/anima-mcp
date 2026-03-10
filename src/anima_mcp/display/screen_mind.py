@@ -49,89 +49,76 @@ class MindMixin:
             font_tiny = fonts['tiny']
             font_micro = fonts['micro']
 
+            from .design import lighten_color, dim_color
+
             DIM = COLORS.TEXT_DIM
             SECONDARY = COLORS.TEXT_SECONDARY
 
+            # Band colors from design system — each band has a distinct identity
             bands = [
-                ("delta",  raw.get("eeg_delta_power") or 0, (100, 100, 240),  "0.5-4 Hz"),
-                ("theta",  raw.get("eeg_theta_power") or 0, (140, 92, 246),   "4-8 Hz"),
-                ("alpha",  raw.get("eeg_alpha_power") or 0, (6, 182, 212),    "8-13 Hz"),
-                ("beta",   raw.get("eeg_beta_power") or 0,  (34, 197, 94),    "13-30 Hz"),
-                ("gamma",  raw.get("eeg_gamma_power") or 0, (245, 158, 11),   "30+ Hz"),
+                ("delta",  raw.get("eeg_delta_power") or 0, COLORS.SOFT_BLUE,   "0.5–4 Hz",  "deep rest"),
+                ("theta",  raw.get("eeg_theta_power") or 0, COLORS.SOFT_PURPLE, "4–8 Hz",    "meditation"),
+                ("alpha",  raw.get("eeg_alpha_power") or 0, COLORS.SOFT_CYAN,   "8–13 Hz",   "awareness"),
+                ("beta",   raw.get("eeg_beta_power") or 0,  COLORS.SOFT_GREEN,  "13–30 Hz",  "focus"),
+                ("gamma",  raw.get("eeg_gamma_power") or 0, COLORS.SOFT_ORANGE, "30+ Hz",    "cognition"),
             ]
 
-            # Title
+            # Dominant band
+            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
+            dominant_name  = bands[dominant_idx][0]
+            dominant_value = bands[dominant_idx][1]
+            dominant_color = bands[dominant_idx][2]
+            dominant_desc  = bands[dominant_idx][4]
+
+            # Title + dominant info on one header row
             draw.text((10, 6), "neural activity", fill=COLORS.SOFT_CYAN, font=font_title)
             draw.line([(10, 28), (230, 28)], fill=(30, 30, 40), width=1)
-
-            # Dominant band indicator
-            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
-            dominant_name = bands[dominant_idx][0]
-            dominant_color = bands[dominant_idx][2]
-            draw.text((10, 32), f"dominant: {dominant_name}", fill=dominant_color, font=font_small)
+            draw.text((10, 32), "dominant:", fill=DIM, font=font_small)
+            draw.text((82, 32), dominant_name, fill=dominant_color, font=font_small)
+            draw.text((150, 32), f"{dominant_value:.0%}", fill=dominant_color, font=font_small)
 
             # ---- Vertical bar chart ----
-            bar_area_top = 58
-            bar_area_bottom = 184
+            bar_area_top    = 58
+            bar_area_bottom = 186
             bar_area_height = bar_area_bottom - bar_area_top
-            bar_width = 28
-            bar_gap = 12
+            bar_width       = 28
+            bar_gap         = 12
             total_bars_width = len(bands) * bar_width + (len(bands) - 1) * bar_gap
-            bar_start_x = (240 - total_bars_width) // 2
+            bar_start_x     = (240 - total_bars_width) // 2
 
-            # Background area
-            draw.rectangle([bar_start_x - 6, bar_area_top - 4, bar_start_x + total_bars_width + 6, bar_area_bottom + 4],
-                          fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
+            greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
 
-            from .design import lighten_color
-            for i, (name, value, color, freq) in enumerate(bands):
+            for i, (name, value, color, freq, desc) in enumerate(bands):
+                is_dominant = (i == dominant_idx)
                 x = bar_start_x + i * (bar_width + bar_gap)
 
-                # Bar track
-                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
-                              fill=(15, 15, 22))
+                # Dim non-dominant bands — dominant reads clearly at a glance
+                draw_color = color if is_dominant else dim_color(color, 0.35)
+
+                # Bar track (slightly visible for non-dominant)
+                track_fill = (15, 15, 22) if is_dominant else (12, 12, 18)
+                draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom], fill=track_fill)
 
                 # Filled bar (bottom-up)
                 fill_height = int(value * bar_area_height)
                 if fill_height > 0:
                     bar_top = bar_area_bottom - fill_height
-                    draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom],
-                                  fill=color)
-                    if fill_height > 3:
+                    draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom], fill=draw_color)
+                    if is_dominant and fill_height > 3:
                         bright = lighten_color(color, 60)
-                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2],
-                                      fill=bright)
+                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2], fill=bright)
 
-                # Value text above bar
-                pct_text = f"{value * 100:.0f}%"
-                draw.text((x + 2, bar_area_top - 14), pct_text, fill=color, font=font_micro)
-
-                # Greek letter label below bar
-                greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
+                # Greek letter below bar — full color for dominant, dim for others
                 letter = greek.get(name, name[0])
-                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 6), letter, fill=SECONDARY, font=font_medium)
+                letter_color = color if is_dominant else dim_color(color, 0.45)
+                draw.text((x + bar_width // 2 - 4, bar_area_bottom + 5), letter,
+                          fill=letter_color, font=font_medium)
 
-            # ---- Band descriptions at bottom ----
-            y_desc = 202
-            desc_map = {
-                "delta": "deep rest",
-                "theta": "meditation",
-                "alpha": "awareness",
-                "beta": "focus",
-                "gamma": "cognition",
-            }
-            freq_map = {
-                "delta": "0.5-4 Hz",
-                "theta": "4-8 Hz",
-                "alpha": "8-13 Hz",
-                "beta": "13-30 Hz",
-                "gamma": "30+ Hz",
-            }
-            dominant_desc = desc_map.get(dominant_name, "")
-            draw.text((10, y_desc), f"{dominant_name}: {dominant_desc}", fill=dominant_color, font=font_small)
-            freq_range = freq_map.get(dominant_name, "")
-            if freq_range:
-                draw.text((10, y_desc + 14), freq_range, fill=DIM, font=font_tiny)
+            # ---- Bottom: description of dominant band ----
+            y_desc = 206
+            draw.line([(10, y_desc - 4), (230, y_desc - 4)], fill=(30, 30, 40), width=1)
+            draw.text((10, y_desc), f"{dominant_name} · {dominant_desc}", fill=dominant_color, font=font_small)
+            draw.text((10, y_desc + 14), bands[dominant_idx][3], fill=DIM, font=font_tiny)
 
             self._draw_status_bar(draw)
 
@@ -262,77 +249,65 @@ class MindMixin:
 
                 y += 18
 
-            # -- Drives section --
+            # -- Drives section: horizontal bars, same language as hero signals above --
             y = 122
             draw.text((10, y), "drives", fill=DIM, font=f_tiny)
             draw.line([(50, y + 6), (230, y + 6)], fill=(30, 30, 40), width=1)
+            y += 14
 
-            # Four vertical bars (like the old neural screen)
             drive_data = [
-                ("wrm", d_warmth,    COLORS.SOFT_ORANGE),
-                ("clr", d_clarity,   COLORS.SOFT_CYAN),
-                ("stb", d_stability, COLORS.SOFT_GREEN),
-                ("prs", d_presence,  COLORS.SOFT_PURPLE),
+                ("warmth",    d_warmth,    COLORS.SOFT_ORANGE),
+                ("clarity",   d_clarity,   COLORS.SOFT_CYAN),
+                ("stability", d_stability, COLORS.SOFT_GREEN),
+                ("presence",  d_presence,  COLORS.SOFT_PURPLE),
             ]
 
-            vbar_width = 28
-            vbar_gap = 20
-            total_vbars = len(drive_data) * vbar_width + (len(drive_data) - 1) * vbar_gap
-            vbar_start_x = (240 - total_vbars) // 2
-            vbar_top = 140
-            vbar_bottom = 190
-            vbar_height = vbar_bottom - vbar_top
+            DRIVE_BAR_X = BAR_X
+            DRIVE_BAR_W = 90   # narrower than hero bars — clearly a different register
 
-            # Background panel
-            draw.rectangle([vbar_start_x - 6, vbar_top - 4, vbar_start_x + total_vbars + 6, vbar_bottom + 4],
-                          fill=COLORS.BG_SUBTLE, outline=(30, 30, 40))
+            for label, drive_val, color in drive_data:
+                is_strongest = (strongest_drive == label)
 
-            for i, (short_label, drive_val, color) in enumerate(drive_data):
-                x = vbar_start_x + i * (vbar_width + vbar_gap)
+                # Strongest drive: small dot on left as indicator
+                if is_strongest:
+                    draw.ellipse([DRIVE_BAR_X - 7, y + 1, DRIVE_BAR_X - 3, y + 5],
+                                 fill=COLORS.TEXT_PRIMARY)
 
                 # Bar track
-                draw.rectangle([x, vbar_top, x + vbar_width, vbar_bottom], fill=(15, 15, 22))
+                draw.rectangle([DRIVE_BAR_X, y, DRIVE_BAR_X + DRIVE_BAR_W, y + 7], fill=(15, 15, 22))
 
-                # Filled bar (bottom-up)
-                fill_h = int(drive_val * vbar_height)
-                if fill_h > 0:
-                    bar_top_y = vbar_bottom - fill_h
-                    draw.rectangle([x, bar_top_y, x + vbar_width, vbar_bottom], fill=color)
-                    if fill_h > 3:
-                        bright = lighten_color(color, 60)
-                        draw.rectangle([x, bar_top_y, x + vbar_width, bar_top_y + 2], fill=bright)
+                # Bar fill
+                fill_w = int(drive_val * DRIVE_BAR_W)
+                if fill_w > 0:
+                    draw.rectangle([DRIVE_BAR_X, y, DRIVE_BAR_X + fill_w, y + 7], fill=color)
+                    if fill_w > 3:
+                        bright = lighten_color(color, 50)
+                        draw.rectangle([DRIVE_BAR_X + fill_w - 2, y, DRIVE_BAR_X + fill_w, y + 7], fill=bright)
 
-                # Strongest drive indicator (triangle above)
-                dim_name = {"wrm": "warmth", "clr": "clarity", "stb": "stability", "prs": "presence"}
-                if strongest_drive and dim_name.get(short_label) == strongest_drive:
-                    cx = x + vbar_width // 2
-                    draw.polygon([(cx, vbar_top - 8), (cx - 4, vbar_top - 3), (cx + 4, vbar_top - 3)],
-                                fill=COLORS.TEXT_PRIMARY)
+                # Label + value (right of bar)
+                label_color = color if is_strongest else SECONDARY
+                draw.text((DRIVE_BAR_X + DRIVE_BAR_W + 6, y - 1), label[:4], fill=label_color, font=f_tiny)
+                draw.text((DRIVE_BAR_X + DRIVE_BAR_W + 38, y - 1), f"{drive_val:.0%}", fill=color, font=f_tiny)
+                y += 14
 
-                # Label below
-                draw.text((x + 4, vbar_bottom + 5), short_label, fill=SECONDARY, font=f_tiny)
+            # -- Footer (one compact line) --
+            y = max(y + 4, 208)
+            draw.line([(10, y), (230, y)], fill=(30, 30, 40), width=1)
+            y += 4
 
-            # -- Context footer --
-            draw.line([(10, 208), (230, 208)], fill=(30, 30, 40), width=1)
-
-            # Activity level
             level_colors = {"active": COLORS.SOFT_GREEN, "drowsy": COLORS.SOFT_YELLOW, "resting": COLORS.SOFT_PURPLE}
-            draw.text((10, 212), activity_level, fill=level_colors.get(activity_level, DIM), font=f_tiny)
+            draw.text((10, y), activity_level, fill=level_colors.get(activity_level, DIM), font=f_tiny)
 
-            # Strongest drive or "content"
+            if total_patterns:
+                draw.text((68, y), f"{total_patterns} patterns", fill=DIM, font=f_tiny)
+
             if strongest_drive:
                 drive_colors = {"warmth": COLORS.SOFT_ORANGE, "clarity": COLORS.SOFT_CYAN,
                                "stability": COLORS.SOFT_GREEN, "presence": COLORS.SOFT_PURPLE}
-                draw.text((80, 212), f"wanting: {strongest_drive}",
+                draw.text((155, y), f"→ {strongest_drive[:4]}",
                          fill=drive_colors.get(strongest_drive, SECONDARY), font=f_tiny)
             else:
-                draw.text((80, 212), "content", fill=COLORS.SOFT_GREEN, font=f_tiny)
-
-            # Patterns learned
-            if total_patterns:
-                draw.text((10, 226), f"{total_patterns} patterns learned", fill=DIM, font=f_micro)
-            else:
-                draw.text((10, 226), "learning...", fill=DIM, font=f_micro)
+                draw.text((155, y), "content", fill=COLORS.SOFT_GREEN, font=f_tiny)
 
             self._draw_status_bar(draw)
 
@@ -600,12 +575,17 @@ class MindMixin:
                 insights = summary.get("why_feels_cold", [])
                 if insights:
                     text = insights[0].get("title", "")
-                    # Wrap long titles across 2 lines
-                    if len(text) > 28:
-                        insight_lines.append(text[:28])
-                        insight_lines.append(text[28:56])
-                    else:
-                        insight_lines.append(text)
+                    # Word-wrap at boundaries (not mid-word)
+                    words = text.split()
+                    line, max_chars = "", 28
+                    for word in words:
+                        if len(line) + len(word) + (1 if line else 0) <= max_chars:
+                            line = (line + " " + word) if line else word
+                        else:
+                            insight_lines.append(line)
+                            line = word
+                    if line:
+                        insight_lines.append(line)
                 else:
                     insight_lines.append("learning from environment...")
 
