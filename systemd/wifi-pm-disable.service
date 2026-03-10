@@ -1,0 +1,14 @@
+[Unit]
+Description=Disable WiFi Power Management
+# Run early, before network stack fully initializes
+After=sys-subsystem-net-devices-wlan0.device
+Before=network.target NetworkManager.service
+
+[Service]
+Type=oneshot
+# iw is preferred; fall back to iwconfig if not available
+ExecStart=/bin/sh -c '/usr/bin/iw dev wlan0 set power_save off 2>/dev/null || /sbin/iwconfig wlan0 power off 2>/dev/null || true'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+[Unit]
+Description=WiFi Watchdog - Auto-recover if WiFi drops
+After=network.target
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/home/unitares-anima/anima-mcp/scripts/wifi_watchdog.sh

@@ -27,13 +27,12 @@ fi
 
 # Step 1: Copy service files
 echo "1. Installing systemd services..."
-for svc in anima.service anima-broker.service; do
+for svc in anima.service anima-broker.service wifi-pm-disable.service wifi-watchdog.service wifi-watchdog.timer; do
     if [ -f "$PROJECT_DIR/systemd/$svc" ]; then
         cp "$PROJECT_DIR/systemd/$svc" "/etc/systemd/system/$svc"
         echo "  Copied $svc"
     else
-        echo "  Service file not found: $PROJECT_DIR/systemd/$svc"
-        exit 1
+        echo "  Service file not found: $PROJECT_DIR/systemd/$svc (skipping)"
     fi
 done
 
@@ -70,6 +69,8 @@ fi
 # Step 5: Enable services
 echo "5. Enabling services (auto-start on boot)..."
 systemctl enable anima-broker anima
+systemctl enable wifi-pm-disable
+systemctl enable wifi-watchdog.timer
 echo "  Services enabled"
 
 # Step 6: Summary

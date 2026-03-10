@@ -1,0 +1,12 @@
+[Unit]
+Description=Run WiFi Watchdog every 2 minutes
+After=network.target
+
+[Timer]
+# Start 3 minutes after boot (matches watchdog's own 180s grace period)
+OnBootSec=3min
+OnUnitActiveSec=2min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
