@@ -12,6 +12,15 @@ FAIL_COUNT_FILE="/tmp/wifi_watchdog_fails"
 MAX_SOFT_RETRIES=3  # After 3 soft fails (6 min), escalate to hardware reset
 MAX_HARD_RETRIES=5  # After 5 total fails (10 min), reboot
 
+# Load WiFi credentials from env file (never hardcode)
+ENV_FILE="/home/unitares-anima/.anima/anima.env"
+WIFI_SSID=""
+WIFI_PASSWORD=""
+if [ -f "$ENV_FILE" ]; then
+    WIFI_SSID=$(grep -E '^WIFI_SSID=' "$ENV_FILE" | cut -d= -f2- | tr -d '"'"'" | head -1)
+    WIFI_PASSWORD=$(grep -E '^WIFI_PASSWORD=' "$ENV_FILE" | cut -d= -f2- | tr -d '"'"'" | head -1)
+fi
+
 log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" >> "$LOGFILE"
 }
@@ -103,8 +112,13 @@ if [ "$FAIL_COUNT" -le "$MAX_SOFT_RETRIES" ]; then
     log "WARN: WiFi down (attempt $FAIL_COUNT/$MAX_SOFT_RETRIES) - soft reconnect"
     nmcli device wifi rescan 2>/dev/null
     sleep 3
-    nmcli device wifi connect "Verizon_NJ7CC3" password "forty5fitch2jug" 2>> "$LOGFILE" || \
+    if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PASSWORD" ]; then
+        nmcli device wifi connect "$WIFI_SSID" password "$WIFI_PASSWORD" 2>> "$LOGFILE" || \
+            wpa_cli -i wlan0 reconfigure 2>> "$LOGFILE"
+    else
+        log "WARN: WIFI_SSID/WIFI_PASSWORD not set in $ENV_FILE — trying wpa_cli reconfigure only"
         wpa_cli -i wlan0 reconfigure 2>> "$LOGFILE"
+    fi
 
 elif [ "$FAIL_COUNT" -le "$MAX_HARD_RETRIES" ]; then
     # Level 2: Hardware reset - rfkill cycle + driver reload
@@ -133,7 +147,11 @@ elif [ "$FAIL_COUNT" -le "$MAX_HARD_RETRIES" ]; then
     sleep 5
 
     # Try to connect
-    nmcli device wifi connect "Verizon_NJ7CC3" password "forty5fitch2jug" 2>> "$LOGFILE"
+    if [ -n "$WIFI_SSID" ] && [ -n "$WIFI_PASSWORD" ]; then
+        nmcli device wifi connect "$WIFI_SSID" password "$WIFI_PASSWORD" 2>> "$LOGFILE"
+    else
+        wpa_cli -i wlan0 reconfigure 2>> "$LOGFILE"
+    fi
     log "Hardware reset complete, reconnect attempted"
 
 else
