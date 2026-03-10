@@ -509,14 +509,12 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
             self.set_mode(ScreenMode.FACE)
             return
         group_name = group_info[0]
-        group_order = ["home", "info", "mind", "messages", "questions", "visitors", "art"]
+        group_order = ["home", "info", "mind", "msgs", "art"]
         group_default = {
             "home": ScreenMode.FACE,
             "info": ScreenMode.IDENTITY,
             "mind": ScreenMode.NEURAL,
-            "messages": ScreenMode.MESSAGES,
-            "questions": ScreenMode.QUESTIONS,
-            "visitors": ScreenMode.VISITORS,
+            "msgs": ScreenMode.MESSAGES,
             "art": ScreenMode.NOTEPAD,
         }
         if group_name not in group_order:
@@ -533,14 +531,12 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
             self.set_mode(ScreenMode.FACE)
             return
         group_name = group_info[0]
-        group_order = ["home", "info", "mind", "messages", "questions", "visitors", "art"]
+        group_order = ["home", "info", "mind", "msgs", "art"]
         group_default = {
             "home": ScreenMode.FACE,
             "info": ScreenMode.IDENTITY,
             "mind": ScreenMode.NEURAL,
-            "messages": ScreenMode.MESSAGES,
-            "questions": ScreenMode.QUESTIONS,
-            "visitors": ScreenMode.VISITORS,
+            "msgs": ScreenMode.MESSAGES,
             "art": ScreenMode.NOTEPAD,
         }
         if group_name not in group_order:
@@ -583,9 +579,9 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
         ScreenMode.INNER_LIFE: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
         ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
         ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.MESSAGES: ("messages", [ScreenMode.MESSAGES]),
-        ScreenMode.QUESTIONS: ("questions", [ScreenMode.QUESTIONS]),
-        ScreenMode.VISITORS: ("visitors", [ScreenMode.VISITORS]),
+        ScreenMode.MESSAGES: ("msgs", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
+        ScreenMode.QUESTIONS: ("msgs", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
+        ScreenMode.VISITORS: ("msgs", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
         ScreenMode.NOTEPAD: ("art", [ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]),
         ScreenMode.ART_ERAS: ("art", [ScreenMode.NOTEPAD, ScreenMode.ART_ERAS]),
     }
@@ -797,7 +793,9 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
         if mode in (ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH):
             return "L/R groups  U/D pages"
         if mode in (ScreenMode.MESSAGES, ScreenMode.VISITORS):
-            return "U/D scroll  btn expand"
+            if self._state.message_expanded_id is not None:
+                return "\u2191\u2193 scroll text   btn: back"
+            return "\u2191\u2193 scroll   btn: read   \u25ce next"
         if mode == ScreenMode.QUESTIONS:
             if self._state.qa_full_view:
                 return "U/D text  btn back"

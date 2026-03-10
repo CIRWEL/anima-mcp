@@ -15,289 +15,242 @@ class MessagesMixin:
     """Mixin for message-group screens (messages, questions, visitors) and interaction methods."""
 
     def _render_messages(self):
-        """Render message board - Lumen's voice and observations. Interactive scrolling and expansion."""
+        """Render message board. List view with type bars + context-aware reading view."""
         try:
             from ..messages import get_recent_messages, MESSAGE_TYPE_USER, MESSAGE_TYPE_OBSERVATION, MESSAGE_TYPE_AGENT, MESSAGE_TYPE_QUESTION
 
-            # Get messages for cache check and rendering
             all_messages = get_recent_messages(50)
             scroll_idx = self._state.message_scroll_index
             expanded_id = self._state.message_expanded_id
 
-            # Check image cache - text rendering is expensive (~500ms)
+            # Cache check — text rendering is expensive (~500ms)
             cache_hash = self._get_messages_cache_hash(all_messages, scroll_idx, expanded_id)
             if self._messages_cache_image is not None and self._messages_cache_hash == cache_hash:
-                # Cache hit - use cached image directly (saves ~500ms)
                 if hasattr(self._display, '_image'):
                     self._display._image = self._messages_cache_image.copy()
                 if hasattr(self._display, '_show'):
                     self._display._show()
                 return
 
-            # Cache miss - log why (for debugging slow renders)
-            if self._messages_cache_image is None:
-                print("[Messages] Cache miss: no cached image", file=sys.stderr, flush=True)
-            else:
-                print(f"[Messages] Cache miss: hash changed", file=sys.stderr, flush=True)
-
-            if hasattr(self._display, '_create_canvas'):
-                image, draw = self._display._create_canvas((0, 0, 0))
-            else:
-                # Text fallback
-                messages = get_recent_messages(6)
+            if not hasattr(self._display, '_create_canvas'):
+                # Text-only fallback
+                msgs = get_recent_messages(6)
                 lines = ["MESSAGES", ""]
-                for msg in messages:
-                    if msg.msg_type == MESSAGE_TYPE_OBSERVATION:
-                        prefix = "\u25b8 "
-                        text = msg.text
-                    elif msg.msg_type == MESSAGE_TYPE_AGENT:
-                        prefix = "\u25c6 "
-                        author = getattr(msg, 'author', 'agent')
-                        text = f"{author}: {msg.text}"
-                    else:
-                        prefix = "\u25cf "
-                        text = f"you: {msg.text}"
-                    lines.append(f"{prefix}{text[:20]}")
+                for m in msgs:
+                    pfx = "\u25b8 " if m.msg_type == MESSAGE_TYPE_OBSERVATION else ("\u25c6 " if m.msg_type == MESSAGE_TYPE_AGENT else "\u25cf ")
+                    lines.append(pfx + m.text[:22])
                 self._display.render_text("\n".join(lines), (10, 10))
                 return
 
-            # Color definitions - BOLD and HIGH CONTRAST for readability
-            CYAN = (0, 255, 255)        # Pure cyan for title
-            AMBER = (255, 200, 60)      # Brighter amber for agent messages
-            LIME = (100, 255, 100)      # Vivid lime for user messages
-            VIOLET = (200, 150, 255)    # Brighter violet for Lumen prefixes
-            SOFT_GOLD = (255, 245, 150) # Brighter gold for Lumen's observations
-            CORAL = (255, 150, 130)     # Brighter coral for feelings
-            PEACH = (255, 220, 180)     # Brighter peach for reflections
-            SKY = (140, 220, 255)       # Brighter sky blue for questions
-            SAGE = (160, 255, 160)      # Brighter sage green for growth
-            MUTED = (160, 180, 200)     # Brighter muted for timestamps
-            DARK_BG = (12, 16, 24)      # Deeper background for contrast
-            SELECTED_BG = (30, 50, 80)  # Selection highlight
-            BORDER = (100, 180, 220)    # Bold border
+            image, draw = self._display._create_canvas((0, 0, 0))
 
-            # Use cached fonts (loading from disk is slow)
-            # Larger fonts for readability - user reported text was hard to read
-            fonts = self._get_fonts()
-            font = fonts['medium']  # 13px for general text (was 11px)
-            font_small = fonts['small']  # 11px for message text (was 9px micro - too small!)
-            font_title = fonts['default']  # 14px title (was 12px)
+            # ── Palette ──────────────────────────────────────────────────────
+            # Type accent colors: bar, label (full saturation for visual anchors)
+            C_OBS   = (140,  90, 210)   # soft violet  — Lumen observations
+            C_USER  = ( 75, 200,  85)   # lime green   — you
+            C_AGENT = (215, 160,  45)   # warm amber   — agents
+            C_QA    = ( 55, 185, 225)   # sky cyan     — questions
+            # Content text (softer — readable in bulk without overwhelming)
+            T_OBS   = (210, 190, 130)   # warm gold
+            T_USER  = (185, 230, 185)   # soft lime
+            T_AGENT = (228, 200, 160)   # soft cream
+            T_QA    = (160, 218, 228)   # soft cyan
+            # UI chrome
+            SEL_BG  = ( 22,  36,  58)
+            SEL_BR  = ( 55,  90, 145)
+            MUTED   = ( 88, 105, 125)   # timestamps, hints — clearly secondary
+            DIV     = ( 30,  42,  62)   # divider lines
+            TITLE   = (100, 200, 240)   # screen title
 
-            y_offset = 6
+            def _type_colors(msg_type):
+                if msg_type == MESSAGE_TYPE_USER:     return C_USER,  T_USER
+                if msg_type == MESSAGE_TYPE_AGENT:    return C_AGENT, T_AGENT
+                if msg_type == MESSAGE_TYPE_QUESTION: return C_QA,    T_QA
+                return C_OBS, T_OBS
 
-            # Minimal title
-            draw.text((10, y_offset), "messages", fill=CYAN, font=font_title)
-            y_offset += 18
+            def _dim(color, f):
+                return tuple(int(c * f) for c in color)
 
-            # all_messages already fetched at start for cache check
+            def _short_author(msg):
+                if msg.msg_type == MESSAGE_TYPE_OBSERVATION: return "lumen"
+                if msg.msg_type == MESSAGE_TYPE_USER:        return "you"
+                if msg.msg_type == MESSAGE_TYPE_QUESTION:
+                    return "\u2713 lumen" if getattr(msg, 'answered', False) else "? lumen"
+                a = getattr(msg, 'author', None) or 'agent'
+                return a[:14]
+
+            # ── Fonts ─────────────────────────────────────────────────────────
+            fonts  = self._get_fonts()
+            f_titl = fonts['default']   # 14px  — screen title
+            f_meta = fonts['small']     # 11px  — author, age, hints
+            f_body = fonts['small']     # 11px  — message body
+
+            # ── Layout ────────────────────────────────────────────────────────
+            LINE      = 13    # line height  (11px font + 2px leading)
+            PAD       = 4     # inner padding top + bottom per row
+            GAP       = 3     # gap between rows in list view
+            LIST_X    = 13    # text left margin (right of the 3px bar)
+            MAX_Y     = 213   # bottom content boundary
+            COMPACT_H = PAD + LINE + LINE + PAD   # 30px — author + 1 body line
+            SEL_H     = PAD + LINE + LINE + LINE + PAD  # 43px — author + 2 body lines
+            STRIP_H   = LINE + 7   # 20px — context strip in reading view
+
+            # ── Title ─────────────────────────────────────────────────────────
+            draw.text((10, 5), "messages", fill=TITLE, font=f_titl)
+
             if not all_messages:
-                # Empty state - centered, honest
-                draw.text((60, 100), "nothing yet", fill=MUTED, font=font)
-                draw.text((70, 118), "be patient", fill=MUTED, font=font_small)
+                draw.text((68, 108), "nothing yet",    fill=MUTED, font=f_meta)
+                draw.text((72, 122), "be patient",     fill=_dim(MUTED, 0.55), font=f_meta)
             else:
-                # Clamp scroll index (scroll_idx already from cache check)
                 scroll_idx = max(0, min(scroll_idx, len(all_messages) - 1))
                 self._state.message_scroll_index = scroll_idx
-
-                # Check if any message is expanded
+                n = len(all_messages)
                 has_expanded = self._state.message_expanded_id is not None
 
-                # Show fewer messages when one is expanded to make room for more lines
                 if has_expanded:
-                    # When expanded, show only the selected message (full focus)
-                    start_idx = scroll_idx
-                    end_idx = scroll_idx + 1
-                    visible_messages = all_messages[start_idx:end_idx]
-                    selected_in_visible = 0
+                    # ── READING VIEW ─────────────────────────────────────────
+                    # Show the selected message in full, with thin context strips
+                    # above (previous) and below (next) to preserve orientation.
+                    msg = all_messages[scroll_idx]
+                    bar_c, text_c = _type_colors(msg.msg_type)
+                    author = _short_author(msg)
+                    age    = msg.age_str()
+
+                    prev_msg = all_messages[scroll_idx - 1] if scroll_idx > 0      else None
+                    next_msg = all_messages[scroll_idx + 1] if scroll_idx + 1 < n  else None
+
+                    y = 22
+
+                    # Previous context strip (dim, just for orientation)
+                    if prev_msg:
+                        pb, _ = _type_colors(prev_msg.msg_type)
+                        draw.rectangle([6, y, 9, y + STRIP_H], fill=_dim(pb, 0.32))
+                        draw.rectangle([9, y, 234, y + STRIP_H], fill=(11, 14, 22))
+                        draw.text((LIST_X, y + 4),         _short_author(prev_msg), fill=_dim(pb, 0.45),  font=f_meta)
+                        draw.text((183,    y + 4),          prev_msg.age_str(),      fill=_dim(MUTED, 0.5), font=f_meta)
+                        trunc = prev_msg.text[:36] + "\u2026" if len(prev_msg.text) > 36 else prev_msg.text
+                        draw.text((LIST_X, y + 4 + LINE),  trunc,                   fill=_dim(MUTED, 0.4), font=f_meta)
+                        y += STRIP_H
+                        draw.line([(6, y), (234, y)], fill=DIV)
+                        y += 2
+
+                    # Reading header (who/when/position — always visible context)
+                    hdr_top = y
+                    hdr_h   = LINE + 7
+                    draw.rectangle([6,  y, 234, y + hdr_h], fill=(16, 22, 36))
+                    draw.rectangle([6,  y,   9, y + hdr_h], fill=bar_c)
+                    pos_str = f"{scroll_idx + 1}\u2009/\u2009{n}"
+                    draw.text((LIST_X, y + 3), author,  fill=bar_c, font=f_meta)
+                    draw.text((105,    y + 3), pos_str, fill=MUTED, font=f_meta)
+                    draw.text((183,    y + 3), age,     fill=MUTED, font=f_meta)
+                    y += hdr_h
+                    draw.line([(6, y), (234, y)], fill=DIV)
+                    y += 4
+
+                    # How much room until next strip (or bottom)
+                    next_strip_top = MAX_Y - (STRIP_H + 2) if next_msg else MAX_Y
+                    text_area_h    = next_strip_top - y
+                    max_lines      = max(1, (text_area_h - 2) // LINE)
+
+                    wrapped   = self._wrap_text(msg.text, f_body, 218)
+                    ts        = self._state.message_text_scroll
+                    max_scroll= max(0, len(wrapped) - max_lines)
+                    ts        = min(ts, max_scroll)
+                    self._state.message_text_scroll = ts
+
+                    ty = y
+                    for line in wrapped[ts: ts + max_lines]:
+                        if ty + LINE > next_strip_top - 2:
+                            break
+                        draw.text((LIST_X, ty), line, fill=text_c, font=f_body)
+                        ty += LINE
+
+                    # Scroll arrows — right margin, bracketing the text area
+                    if len(wrapped) > max_lines:
+                        if ts > 0:
+                            draw.text((226, hdr_top + hdr_h + 5), "\u25b2", fill=MUTED, font=f_meta)
+                        if ts < max_scroll:
+                            draw.text((226, next_strip_top - LINE - 2), "\u25bc", fill=MUTED, font=f_meta)
+
+                    # Next context strip (dim)
+                    if next_msg:
+                        ny = next_strip_top
+                        nb, _ = _type_colors(next_msg.msg_type)
+                        draw.line([(6, ny - 2), (234, ny - 2)], fill=DIV)
+                        draw.rectangle([6,  ny, 9,   ny + STRIP_H], fill=_dim(nb, 0.32))
+                        draw.rectangle([9,  ny, 234, ny + STRIP_H], fill=(11, 14, 22))
+                        draw.text((LIST_X, ny + 4),        _short_author(next_msg), fill=_dim(nb, 0.45),   font=f_meta)
+                        draw.text((183,    ny + 4),         next_msg.age_str(),      fill=_dim(MUTED, 0.5), font=f_meta)
+                        trunc_n = next_msg.text[:36] + "\u2026" if len(next_msg.text) > 36 else next_msg.text
+                        draw.text((LIST_X, ny + 4 + LINE), trunc_n,                 fill=_dim(MUTED, 0.4), font=f_meta)
+
                 else:
-                    # Normal view: 5 visible (tighter spacing)
+                    # ── LIST VIEW ────────────────────────────────────────────
                     start_idx = max(0, scroll_idx - 2)
-                    end_idx = min(len(all_messages), start_idx + 5)
-                    visible_messages = all_messages[start_idx:end_idx]
-                    selected_in_visible = scroll_idx - start_idx
+                    end_idx   = min(n, start_idx + 5)
+                    if end_idx - start_idx < 5:
+                        start_idx = max(0, end_idx - 5)
+                    sel_in_vis = scroll_idx - start_idx
 
-                max_y = 210
-                msg_padding = 4
-                content_width = 200  # Width for text wrapping
+                    y = 22
+                    for i, msg in enumerate(all_messages[start_idx:end_idx]):
+                        if y > MAX_Y - COMPACT_H:
+                            break
 
-                for i, msg in enumerate(visible_messages):
-                    if y_offset > max_y:
-                        break
+                        is_sel  = (i == sel_in_vis)
+                        bar_c, text_c = _type_colors(msg.msg_type)
+                        author = _short_author(msg)
+                        age    = msg.age_str()
+                        row_h  = SEL_H if is_sel else COMPACT_H
 
-                    is_selected = (i == selected_in_visible)
-                    is_expanded = (self._state.message_expanded_id == msg.message_id)
-                    answer_msg = None  # For Q&A threading
+                        # Row background
+                        if is_sel:
+                            draw.rectangle([6, y, 234, y + row_h], fill=SEL_BG, outline=SEL_BR, width=1)
+                        else:
+                            draw.rectangle([6, y, 234, y + row_h], fill=(11, 14, 22))
 
-                    # Style by message type - vibrant colors for visibility
-                    if msg.msg_type == MESSAGE_TYPE_USER:
-                        prefix = "\u25cf"
-                        text_color = LIME        # Bright lime for user
-                        prefix_color = LIME
-                        display_text = msg.text
-                        author_text = "you"
-                    elif msg.msg_type == MESSAGE_TYPE_AGENT:
-                        prefix = "\u25c6"
-                        text_color = AMBER       # Warm amber for agents
-                        prefix_color = AMBER
-                        author = getattr(msg, 'author', 'agent')
-                        # Truncate long author names
-                        author_text = author[:12] if len(author) > 12 else author
-                        display_text = msg.text
-                    elif msg.msg_type == MESSAGE_TYPE_QUESTION:
-                        # Lumen's questions - reaching out for understanding
-                        prefix = "?"
-                        prefix_color = CYAN      # Bright cyan for questions
-                        text_color = CYAN        # Questions stand out
-                        display_text = msg.text
-                        # Show if answered
-                        answered = getattr(msg, 'answered', False)
-                        author_text = "answered" if answered else "wondering"
-                        # Find the answer if it exists (for threading)
-                        answer_msg = None
-                        if answered:
-                            for m in all_messages:
-                                if getattr(m, 'responds_to', None) == msg.message_id:
-                                    answer_msg = m
+                        # Left-edge type bar (3px) — immediate visual type cue
+                        draw.rectangle([6, y, 9, y + row_h], fill=bar_c if is_sel else _dim(bar_c, 0.5))
+
+                        inner = y + PAD
+
+                        # Author + age — always on the same line, age right-aligned
+                        label_c = bar_c if is_sel else _dim(bar_c, 0.65)
+                        draw.text((LIST_X, inner), author, fill=label_c, font=f_meta)
+                        draw.text((183,    inner), age,    fill=MUTED,   font=f_meta)
+                        inner += LINE
+
+                        # Text
+                        if is_sel:
+                            # 2-line wrapped preview — shows enough to decide whether to read
+                            for line in self._wrap_text(msg.text, f_body, 215)[:2]:
+                                if inner + LINE > y + row_h:
                                     break
-                    else:  # MESSAGE_TYPE_OBSERVATION (Lumen)
-                        prefix = "\u25b8"
-                        prefix_color = VIOLET    # Soft violet prefix
-                        display_text = msg.text
-                        author_text = None  # Lumen's own words, no author needed
-                        # Color Lumen's observations by mood/content (using pre-compiled sets)
-                        text_words = set(display_text.lower().split())
-                        if text_words & self._FEELING_WORDS:
-                            text_color = CORAL      # Warm coral for feelings
-                        elif text_words & self._CURIOSITY_WORDS:
-                            text_color = SKY        # Sky blue for curiosity
-                        elif text_words & self._GROWTH_WORDS:
-                            text_color = SAGE       # Sage green for growth
-                        elif text_words & self._CALM_WORDS:
-                            text_color = PEACH      # Soft peach for calm
+                                draw.text((LIST_X, inner), line, fill=text_c, font=f_body)
+                                inner += LINE
                         else:
-                            text_color = SOFT_GOLD  # Default warm gold
+                            # 1 truncated line — dimmer, just for scanning
+                            trunc = msg.text[:34] + "\u2026" if len(msg.text) > 34 else msg.text
+                            draw.text((LIST_X, inner), trunc, fill=_dim(text_c, 0.55), font=f_body)
 
-                    # Only wrap text when expanded (optimization: _wrap_text is slow)
-                    line_height = 14
-                    msg_padding = 4
-                    if is_expanded:
-                        wrapped_lines = self._wrap_text(display_text, font_small, content_width)
-                        # Calculate how many lines can fit on screen
-                        # Use y_offset + padding + author line height as starting point
-                        start_y = y_offset + msg_padding + (12 if author_text else 0)
-                        available_height = max_y - start_y
-                        max_visible_lines = max(1, available_height // line_height)
-                        # Use text scroll offset for this expanded message
-                        text_scroll = self._state.message_text_scroll
-                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
-                        text_scroll = min(text_scroll, max_scroll)
-                        self._state.message_text_scroll = text_scroll
-                        num_lines = min(len(wrapped_lines), max_visible_lines)
-                    else:
-                        wrapped_lines = None  # Don't wrap - just truncate
-                        num_lines = 1
-                        text_scroll = 0
+                        y += row_h + GAP
 
-                    msg_height = (num_lines * line_height) + (msg_padding * 2) + (12 if author_text else 0)
+                    # Scrollbar (right edge, 3px wide)
+                    if n > 5:
+                        sb_top, sb_h = 22, 185
+                        thumb_h   = max(14, sb_h * 5 // n)
+                        thumb_top = sb_top + int((scroll_idx / max(1, n - 1)) * (sb_h - thumb_h))
+                        draw.rectangle([234, sb_top, 237, sb_top + sb_h], fill=(16, 20, 30))
+                        draw.rectangle([234, thumb_top, 237, thumb_top + thumb_h], fill=(60, 85, 130))
 
-                    # Draw message container
-                    if is_selected:
-                        draw.rectangle([6, y_offset, 234, y_offset + msg_height],
-                                      fill=SELECTED_BG, outline=BORDER, width=1)
-                    else:
-                        draw.rectangle([6, y_offset, 234, y_offset + msg_height],
-                                      fill=DARK_BG)
+                    # Position counter (bottom-left, very dim)
+                    draw.text((10, 216), f"{scroll_idx + 1}\u2009/\u2009{n}", fill=MUTED, font=f_meta)
 
-                    inner_y = y_offset + msg_padding
-
-                    # Author line (timestamp only in expanded view)
-                    if author_text:
-                        draw.text((12, inner_y), f"{prefix} {author_text}", fill=prefix_color, font=font_small)
-                        if is_expanded:
-                            age = msg.age_str()
-                            draw.text((200, inner_y), age, fill=MUTED, font=font_small)
-                        inner_y += 12
-
-                    # Message text
-                    if is_expanded and wrapped_lines:
-                        # Show multiple wrapped lines with scrolling support
-                        available_height = max_y - inner_y
-                        max_visible_lines = max(1, available_height // line_height)
-                        text_scroll = self._state.message_text_scroll
-                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
-                        text_scroll = min(text_scroll, max_scroll)
-                        self._state.message_text_scroll = text_scroll
-
-                        # Show visible lines starting from scroll offset
-                        visible_lines = wrapped_lines[text_scroll:text_scroll + max_visible_lines]
-                        for line in visible_lines:
-                            if inner_y > max_y:
-                                break
-                            draw.text((12, inner_y), line, fill=text_color, font=font_small)
-                            inner_y += line_height
-
-                        # Show scroll indicators if there's more content
-                        if len(wrapped_lines) > max_visible_lines:
-                            if text_scroll > 0:
-                                draw.text((220, inner_y - max_visible_lines * line_height + 2), "\u25b2", fill=MUTED, font=font_small)
-                            if text_scroll < max_scroll:
-                                draw.text((220, inner_y - line_height), "\u25bc", fill=MUTED, font=font_small)
-                            # Show scroll position indicator
-                            scroll_info = f"{text_scroll + 1}-{min(text_scroll + max_visible_lines, len(wrapped_lines))}/{len(wrapped_lines)}"
-                            draw.text((140, max_y - 10), scroll_info, fill=MUTED, font=font_small)
-                    else:
-                        # Single line, truncated directly (no _wrap_text call - faster)
-                        first_line = display_text[:34] + "..." if len(display_text) > 34 else display_text
-                        # For Lumen's observations, show prefix inline
-                        if not author_text:
-                            draw.text((12, inner_y), f"{prefix} {first_line}", fill=text_color, font=font_small)
-                        else:
-                            draw.text((12, inner_y), first_line, fill=text_color, font=font_small)
-                        inner_y += line_height
-
-                    y_offset += msg_height + 3  # Gap between messages
-
-                    # Q&A Threading: Show answer inline after question
-                    if msg.msg_type == MESSAGE_TYPE_QUESTION and answer_msg is not None:
-                        if y_offset < max_y - 30:  # Room for answer
-                            # Draw connector line
-                            draw.line([(18, y_offset - 2), (18, y_offset + 8)], fill=AMBER, width=1)
-                            draw.line([(18, y_offset + 8), (24, y_offset + 8)], fill=AMBER, width=1)
-
-                            # Answer text (indented)
-                            ans_author = getattr(answer_msg, 'author', 'agent')[:8]
-                            ans_text = answer_msg.text[:35] + "..." if len(answer_msg.text) > 35 else answer_msg.text
-                            draw.text((26, y_offset + 2), f"\u21b3 {ans_author}:", fill=AMBER, font=font_small)
-                            draw.text((26, y_offset + 14), ans_text, fill=(220, 200, 160), font=font_small)
-                            y_offset += 30
-                        answer_msg = None  # Reset for next message
-
-                # Scroll indicator - visual bar on right edge
-                if len(all_messages) > 5:
-                    bar_height = 180
-                    bar_top = 30
-                    thumb_size = max(20, bar_height // len(all_messages) * 5)
-                    thumb_pos = bar_top + int((scroll_idx / max(1, len(all_messages) - 1)) * (bar_height - thumb_size))
-
-                    # Track
-                    draw.rectangle([234, bar_top, 238, bar_top + bar_height], fill=DARK_BG)
-                    # Thumb
-                    draw.rectangle([234, thumb_pos, 238, thumb_pos + thumb_size], fill=MUTED)
-
-                # Bottom status (y=218 to avoid dot overlap)
-                draw.text((10, 218), f"{scroll_idx + 1}/{len(all_messages)}", fill=MUTED, font=font_small)
-                hint = "\u25bc expand" if not self._state.message_expanded_id else "\u25bc collapse"
-                draw.text((100, 218), hint, fill=MUTED, font=font_small)
-
-            # Status bar + screen indicator
             self._draw_status_bar(draw)
 
-
-            # Cache the rendered image for fast subsequent renders
+            # Cache
             self._messages_cache_image = image.copy()
-            self._messages_cache_hash = cache_hash
-
-            # Update display
+            self._messages_cache_hash  = cache_hash
             if hasattr(self._display, '_image'):
                 self._display._image = image
             if hasattr(self._display, '_show'):
@@ -330,200 +283,208 @@ class MessagesMixin:
         self._render_filtered_messages("visitors", ["agent", "user"], include_answers=False)
 
     def _render_filtered_messages(self, title: str, filter_types: list, include_answers: bool):
-        """Render a filtered message screen."""
+        """Render a filtered message screen (visitors). Same design language as messages screen."""
         try:
             from ..messages import get_board, MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT, MESSAGE_TYPE_QUESTION
 
-            # Cache: check message state + scroll before expensive rendering
             board = get_board()
             board._load()
             all_messages = board._messages
-            scroll_idx = getattr(self._state, 'message_scroll_index', 0)
+            scroll_idx  = getattr(self._state, 'message_scroll_index', 0)
             expanded_id = getattr(self._state, 'message_expanded_id', None)
-            msg_ids = "|".join(f"{m.message_id}" for m in all_messages[-15:]) if all_messages else ""
-            cache_key = f"{title}|{msg_ids}|{scroll_idx}|{expanded_id or ''}"
+            msg_ids     = "|".join(m.message_id for m in all_messages[-15:]) if all_messages else ""
+            cache_key   = f"{title}|{msg_ids}|{scroll_idx}|{expanded_id or ''}"
             if self._check_screen_cache(title, cache_key):
                 return
 
-            if hasattr(self._display, '_create_canvas'):
-                image, draw = self._display._create_canvas((0, 0, 0))
-            else:
+            if not hasattr(self._display, '_create_canvas'):
                 self._display.render_text(f"{title.upper()}\n\nNo display", (10, 10))
                 return
 
-            # Colors
-            CYAN = (80, 220, 255)
-            AMBER = (255, 180, 60)
-            GREEN = (100, 220, 140)
-            MUTED = (140, 160, 180)
-            SOFT_WHITE = (220, 220, 230)
+            image, draw = self._display._create_canvas((0, 0, 0))
 
-            fonts = self._get_fonts()
-            font = fonts['medium']
-            font_small = fonts['small']
-            font_title = fonts['default']
+            # ── Palette (shared with messages screen) ────────────────────────
+            C_USER  = ( 75, 200,  85)
+            C_AGENT = (215, 160,  45)
+            T_USER  = (185, 230, 185)
+            T_AGENT = (228, 200, 160)
+            SEL_BG  = ( 22,  36,  58)
+            SEL_BR  = ( 55,  90, 145)
+            MUTED   = ( 88, 105, 125)
+            DIV     = ( 30,  42,  62)
+            TITLE_C = (100, 200, 240)
 
-            # Filter by type - map string types to message type constants
-            type_map = {
-                "question": MESSAGE_TYPE_QUESTION,
-                "agent": MESSAGE_TYPE_AGENT,
-                "user": MESSAGE_TYPE_USER
-            }
-            filter_type_constants = [type_map.get(t, t) for t in filter_types]
+            def _dim(color, f):
+                return tuple(int(c * f) for c in color)
 
-            # Filter by type
-            # If include_answers, also include agent messages with responds_to (those are answers to questions)
+            def _type_colors(msg):
+                if msg.msg_type == MESSAGE_TYPE_USER:  return C_USER,  T_USER
+                return C_AGENT, T_AGENT  # AGENT (and any other type shown here)
+
+            def _short_author(msg):
+                if msg.msg_type == MESSAGE_TYPE_USER: return "you"
+                a = getattr(msg, 'author', None) or 'agent'
+                return a[:14]
+
+            fonts  = self._get_fonts()
+            f_titl = fonts['default']
+            f_meta = fonts['small']
+            f_body = fonts['small']
+
+            LINE      = 13
+            PAD       = 4
+            GAP       = 3
+            LIST_X    = 13
+            MAX_Y     = 213
+            COMPACT_H = PAD + LINE + LINE + PAD
+            SEL_H     = PAD + LINE + LINE + LINE + PAD
+            STRIP_H   = LINE + 7
+
+            # Filter
+            type_map = {"question": MESSAGE_TYPE_QUESTION, "agent": MESSAGE_TYPE_AGENT, "user": MESSAGE_TYPE_USER}
+            filter_consts = [type_map.get(t, t) for t in filter_types]
             if include_answers:
                 filtered = [m for m in all_messages
-                           if m.msg_type in filter_type_constants
-                           or (m.msg_type == MESSAGE_TYPE_AGENT and getattr(m, 'responds_to', None))]
+                            if m.msg_type in filter_consts
+                            or (m.msg_type == MESSAGE_TYPE_AGENT and getattr(m, 'responds_to', None))]
             else:
-                filtered = [m for m in all_messages if m.msg_type in filter_type_constants]
-            filtered = list(reversed(filtered))  # Newest first
+                filtered = [m for m in all_messages if m.msg_type in filter_consts]
+            filtered = list(reversed(filtered))
 
-            y_offset = 6
-
-            # Title with count
-            draw.text((10, y_offset), f"{title} ({len(filtered)})", fill=CYAN, font=font_title)
-            y_offset += 22
-
-            # Determine mode for later use
-            from .screens import ScreenMode
-            mode = ScreenMode.QUESTIONS if "question" in filter_types else ScreenMode.VISITORS
+            # Title
+            count_str = f" ({len(filtered)})" if filtered else ""
+            draw.text((10, 5), f"{title}{count_str}", fill=TITLE_C, font=f_titl)
 
             if not filtered:
-                draw.text((60, 100), f"no {title} yet", fill=MUTED, font=font)
+                draw.text((55, 108), f"no {title} yet", fill=MUTED, font=f_meta)
             else:
-                # Show messages with scroll support
-                # Use message_scroll_index for visitors screen too
-                scroll_idx = getattr(self._state, 'message_scroll_index', 0)
                 scroll_idx = max(0, min(scroll_idx, len(filtered) - 1))
                 self._state.message_scroll_index = scroll_idx
+                n           = len(filtered)
+                has_expanded= expanded_id is not None
 
-                # Check if any message is expanded
-                expanded_id = getattr(self._state, 'message_expanded_id', None)
-                has_expanded = expanded_id is not None
-
-                # Calculate visible window - selected message should always be visible
                 if has_expanded:
-                    # When expanded, only show the expanded message
-                    visible_count = 1
-                    start_idx = scroll_idx
+                    # ── READING VIEW ─────────────────────────────────────────
+                    msg = filtered[scroll_idx]
+                    bar_c, text_c = _type_colors(msg)
+                    author = _short_author(msg)
+                    age    = msg.age_str()
+
+                    prev_msg = filtered[scroll_idx - 1] if scroll_idx > 0    else None
+                    next_msg = filtered[scroll_idx + 1] if scroll_idx + 1 < n else None
+
+                    y = 22
+
+                    if prev_msg:
+                        pb, _ = _type_colors(prev_msg)
+                        draw.rectangle([6, y, 9, y + STRIP_H], fill=_dim(pb, 0.32))
+                        draw.rectangle([9, y, 234, y + STRIP_H], fill=(11, 14, 22))
+                        draw.text((LIST_X, y + 4),        _short_author(prev_msg), fill=_dim(pb, 0.45),   font=f_meta)
+                        draw.text((183,    y + 4),         prev_msg.age_str(),      fill=_dim(MUTED, 0.5), font=f_meta)
+                        tp = prev_msg.text[:36] + "\u2026" if len(prev_msg.text) > 36 else prev_msg.text
+                        draw.text((LIST_X, y + 4 + LINE), tp,                       fill=_dim(MUTED, 0.4), font=f_meta)
+                        y += STRIP_H
+                        draw.line([(6, y), (234, y)], fill=DIV)
+                        y += 2
+
+                    hdr_top = y
+                    hdr_h   = LINE + 7
+                    draw.rectangle([6, y, 234, y + hdr_h], fill=(16, 22, 36))
+                    draw.rectangle([6, y,   9, y + hdr_h], fill=bar_c)
+                    draw.text((LIST_X, y + 3), author,                           fill=bar_c, font=f_meta)
+                    draw.text((105,    y + 3), f"{scroll_idx + 1}\u2009/\u2009{n}", fill=MUTED, font=f_meta)
+                    draw.text((183,    y + 3), age,                              fill=MUTED, font=f_meta)
+                    y += hdr_h
+                    draw.line([(6, y), (234, y)], fill=DIV)
+                    y += 4
+
+                    next_strip_top = MAX_Y - (STRIP_H + 2) if next_msg else MAX_Y
+                    max_lines      = max(1, (next_strip_top - y - 2) // LINE)
+                    wrapped        = self._wrap_text(msg.text, f_body, 218)
+                    ts             = getattr(self._state, 'message_text_scroll', 0)
+                    max_scroll     = max(0, len(wrapped) - max_lines)
+                    ts             = min(ts, max_scroll)
+                    self._state.message_text_scroll = ts
+
+                    ty = y
+                    for line in wrapped[ts: ts + max_lines]:
+                        if ty + LINE > next_strip_top - 2:
+                            break
+                        draw.text((LIST_X, ty), line, fill=text_c, font=f_body)
+                        ty += LINE
+
+                    if len(wrapped) > max_lines:
+                        if ts > 0:
+                            draw.text((226, hdr_top + hdr_h + 5), "\u25b2", fill=MUTED, font=f_meta)
+                        if ts < max_scroll:
+                            draw.text((226, next_strip_top - LINE - 2), "\u25bc", fill=MUTED, font=f_meta)
+
+                    if next_msg:
+                        ny = next_strip_top
+                        nb, _ = _type_colors(next_msg)
+                        draw.line([(6, ny - 2), (234, ny - 2)], fill=DIV)
+                        draw.rectangle([6,  ny, 9,   ny + STRIP_H], fill=_dim(nb, 0.32))
+                        draw.rectangle([9,  ny, 234, ny + STRIP_H], fill=(11, 14, 22))
+                        draw.text((LIST_X, ny + 4),        _short_author(next_msg), fill=_dim(nb, 0.45),   font=f_meta)
+                        draw.text((183,    ny + 4),         next_msg.age_str(),      fill=_dim(MUTED, 0.5), font=f_meta)
+                        tn = next_msg.text[:36] + "\u2026" if len(next_msg.text) > 36 else next_msg.text
+                        draw.text((LIST_X, ny + 4 + LINE), tn,                       fill=_dim(MUTED, 0.4), font=f_meta)
+
                 else:
-                    # Normal view: show 4 messages with selected in view
-                    visible_count = 4
-                    # Keep selected message visible by centering it when possible
-                    start_idx = max(0, min(scroll_idx, len(filtered) - visible_count))
+                    # ── LIST VIEW ────────────────────────────────────────────
+                    start_idx = max(0, scroll_idx - 2)
+                    end_idx   = min(n, start_idx + 5)
+                    if end_idx - start_idx < 5:
+                        start_idx = max(0, end_idx - 5)
+                    sel_in_vis = scroll_idx - start_idx
 
-                for i, msg in enumerate(filtered[start_idx:start_idx + visible_count]):
-                    # Message at scroll_idx is selected
-                    is_selected = (start_idx + i == scroll_idx)
-                    is_expanded = (expanded_id == msg.message_id)
+                    y = 22
+                    for i, msg in enumerate(filtered[start_idx:end_idx]):
+                        if y > MAX_Y - COMPACT_H:
+                            break
 
-                    # Type indicator color
-                    if msg.msg_type == MESSAGE_TYPE_QUESTION:
-                        type_color = CYAN
-                    elif msg.msg_type == MESSAGE_TYPE_AGENT and getattr(msg, 'responds_to', None):
-                        # Agent message that answers a question
-                        type_color = AMBER
-                    elif msg.msg_type in [MESSAGE_TYPE_AGENT, MESSAGE_TYPE_USER]:
-                        type_color = GREEN
-                    else:
-                        type_color = MUTED
+                        is_sel  = (i == sel_in_vis)
+                        bar_c, text_c = _type_colors(msg)
+                        author = _short_author(msg)
+                        age    = msg.age_str()
+                        row_h  = SEL_H if is_sel else COMPACT_H
 
-                    # Author/type
-                    author = getattr(msg, 'author', msg.msg_type)
+                        if is_sel:
+                            draw.rectangle([6, y, 234, y + row_h], fill=SEL_BG, outline=SEL_BR, width=1)
+                        else:
+                            draw.rectangle([6, y, 234, y + row_h], fill=(11, 14, 22))
 
-                    if is_expanded:
-                        # EXPANDED VIEW for selected message - show full text with scrolling
-                        max_y = 210
-                        content_width = 200
-                        wrapped_lines = self._wrap_text(msg.text, font_small, content_width)
+                        draw.rectangle([6, y, 9, y + row_h], fill=bar_c if is_sel else _dim(bar_c, 0.5))
 
-                        # Calculate how many lines can fit
-                        available_height = max_y - y_offset - 20  # Leave room for author/timestamp
-                        max_visible_lines = max(1, available_height // 12)
+                        inner  = y + PAD
+                        label_c = bar_c if is_sel else _dim(bar_c, 0.65)
+                        draw.text((LIST_X, inner), author, fill=label_c, font=f_meta)
+                        draw.text((183,    inner), age,    fill=MUTED,   font=f_meta)
+                        inner += LINE
 
-                        # Use text scroll offset
-                        text_scroll = getattr(self._state, 'message_text_scroll', 0)
-                        max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
-                        text_scroll = min(text_scroll, max_scroll)
-                        self._state.message_text_scroll = text_scroll
+                        if is_sel:
+                            for line in self._wrap_text(msg.text, f_body, 215)[:2]:
+                                if inner + LINE > y + row_h:
+                                    break
+                                draw.text((LIST_X, inner), line, fill=text_c, font=f_body)
+                                inner += LINE
+                        else:
+                            trunc = msg.text[:34] + "\u2026" if len(msg.text) > 34 else msg.text
+                            draw.text((LIST_X, inner), trunc, fill=_dim(text_c, 0.55), font=f_body)
 
-                        # Calculate box height
-                        visible_lines = min(len(wrapped_lines), max_visible_lines)
-                        box_height = 18 + visible_lines * 12 + 8
+                        y += row_h + GAP
 
-                        # Background
-                        draw.rectangle([5, y_offset - 2, 235, y_offset + box_height], fill=(35, 55, 85))
+                    if n > 5:
+                        sb_top, sb_h = 22, 185
+                        thumb_h   = max(14, sb_h * 5 // n)
+                        thumb_top = sb_top + int((scroll_idx / max(1, n - 1)) * (sb_h - thumb_h))
+                        draw.rectangle([234, sb_top, 237, sb_top + sb_h], fill=(16, 20, 30))
+                        draw.rectangle([234, thumb_top, 237, thumb_top + thumb_h], fill=(60, 85, 130))
 
-                        # Author + timestamp (expanded view has room)
-                        draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
-                        if hasattr(msg, 'timestamp'):
-                            from datetime import datetime
-                            if isinstance(msg.timestamp, (int, float)):
-                                ts = datetime.fromtimestamp(msg.timestamp).strftime("%H:%M")
-                            else:
-                                ts = str(msg.timestamp)[11:16]
-                            draw.text((180, y_offset), ts, fill=MUTED, font=font_small)
+                    draw.text((10, 216), f"{scroll_idx + 1}\u2009/\u2009{n}", fill=MUTED, font=f_meta)
 
-                        y_offset += 14
-
-                        # Show visible lines with scroll
-                        visible_lines_list = wrapped_lines[text_scroll:text_scroll + max_visible_lines]
-                        for line in visible_lines_list:
-                            if y_offset > max_y - 10:
-                                break
-                            draw.text((10, y_offset), line, fill=SOFT_WHITE, font=font_small)
-                            y_offset += 12
-
-                        # Show scroll indicators if there's more content
-                        if len(wrapped_lines) > max_visible_lines:
-                            if text_scroll > 0:
-                                draw.text((220, y_offset - max_visible_lines * 12 + 2), "\u25b2", fill=MUTED, font=font_small)
-                            if text_scroll < max_scroll:
-                                draw.text((220, y_offset - 12), "\u25bc", fill=MUTED, font=font_small)
-                            # Show scroll position
-                            scroll_info = f"{text_scroll + 1}-{min(text_scroll + max_visible_lines, len(wrapped_lines))}/{len(wrapped_lines)}"
-                            draw.text((140, max_y - 10), scroll_info, fill=MUTED, font=font_small)
-
-                        y_offset += 8
-                    elif is_selected:
-                        # SELECTED but not expanded - show preview with highlight
-                        # Selection background
-                        draw.rectangle([5, y_offset - 2, 235, y_offset + 32], fill=(30, 50, 80), outline=(80, 140, 200), width=1)
-
-                        draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
-                        y_offset += 14
-
-                        # Truncated text preview
-                        text = msg.text[:50] + "..." if len(msg.text) > 50 else msg.text
-                        draw.text((10, y_offset), text, fill=(220, 220, 230), font=font_small)
-                        y_offset += 22
-                    else:
-                        # COMPACT VIEW for non-selected messages
-                        draw.text((10, y_offset), f"{author}:", fill=type_color, font=font_small)
-                        y_offset += 12
-
-                        # Truncated text
-                        text = msg.text[:50] + "..." if len(msg.text) > 50 else msg.text
-                        draw.text((10, y_offset), text, fill=MUTED, font=font_small)
-                        y_offset += 18
-
-                # Scroll indicator
-                if len(filtered) > visible_count:
-                    draw.text((200, 220), f"{scroll_idx + 1}/{len(filtered)}", fill=MUTED, font=font_small)
-
-                # Expansion hint - show appropriate action
-                expanded_id = getattr(self._state, 'message_expanded_id', None)
-                hint = "\u25bc expand" if not expanded_id else "\u25bc collapse"
-                draw.text((100, 220), hint, fill=MUTED, font=font_small)
-
-            # Status bar + screen indicator
             self._draw_status_bar(draw)
 
-
-            # Always update display - ensure image is set and shown
             self._store_screen_cache(title, cache_key, image)
             if hasattr(self._display, '_image'):
                 self._display._image = image
@@ -531,8 +492,6 @@ class MessagesMixin:
                 self._display._show()
             elif hasattr(self._display, 'render_image'):
                 self._display.render_image(image)
-            else:
-                print(f"[ScreenRenderer] Display has no _show or render_image method for {title}", file=sys.stderr, flush=True)
 
         except Exception as e:
             import traceback
@@ -540,8 +499,7 @@ class MessagesMixin:
             traceback.print_exc(file=sys.stderr)
             try:
                 self._display.render_text(f"{title.upper()}\n\nError", (10, 10))
-            except Exception as e2:
-                print(f"[ScreenRenderer] Even error fallback failed for {title}: {e2}", file=sys.stderr, flush=True)
+            except Exception:
                 try:
                     self._display.show_default()
                 except Exception:
@@ -980,12 +938,12 @@ class MessagesMixin:
             if not messages:
                 return
 
-            # If a message is expanded, scroll within its text
+            # If a message is expanded, scroll within its text (stop at limit)
             if self._state.message_expanded_id is not None:
                 if self._state.message_text_scroll > 0:
                     self._state.message_text_scroll -= 1
                     self._state.last_user_action_time = time.time()
-                    return
+                return  # U/D in reading view never changes selection
 
             # Otherwise, change selected message
             current_idx = self._state.message_scroll_index
@@ -1027,21 +985,11 @@ class MessagesMixin:
             if not messages:
                 return
 
-            # If a message is expanded, scroll within its text
+            # If a message is expanded, scroll within its text (stop at limit)
             if self._state.message_expanded_id is not None:
-                # Calculate max scroll (will be clamped in render, but check here too)
-                scroll_idx = self._state.message_scroll_index
-                if scroll_idx < len(messages):
-                    selected_msg = messages[scroll_idx]
-                    display_text = selected_msg.text
-                    wrapped_lines = self._wrap_text(display_text, self._get_fonts()['small'], 200)
-                    available_height = 210 - 30  # Approximate available space
-                    max_visible_lines = max(1, available_height // 14)
-                    max_scroll = max(0, len(wrapped_lines) - max_visible_lines)
-                    if self._state.message_text_scroll < max_scroll:
-                        self._state.message_text_scroll += 1
-                        self._state.last_user_action_time = time.time()
-                        return
+                self._state.message_text_scroll += 1  # render will clamp to max
+                self._state.last_user_action_time = time.time()
+                return  # U/D in reading view never changes selection
 
             # Otherwise, change selected message
             current_idx = self._state.message_scroll_index
