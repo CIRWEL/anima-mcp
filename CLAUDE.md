@@ -1,5 +1,19 @@
 # Anima MCP - Agent Instructions
 
+## CRITICAL: Read Before Acting
+
+| Situation | Action |
+|-----------|--------|
+| **Pi reflashed / Lumen down** | `cd ~/projects/anima-mcp && ./scripts/restore_lumen.sh` — one command, do NOT do it manually |
+| **Looking for backups** | `ls -lt ~/backups/lumen/anima_*.db \| head -5` — real backups are here. `~/lumen-backups/` is OLD/STALE |
+| **After `git_pull(restart=true)`** | Wait **2 minutes**. Do NOT SSH or retry. "fetch failed" = normal, Pi is rebooting |
+| **WiFi crash (wlan0 disappears)** | Reboot Pi — WiFi watchdog will recover. Do NOT hammer with SSH during reboot |
+| **Data appears lost** | Check `~/backups/lumen/` FIRST. Backups run hourly. Do not declare data lost without checking |
+
+Full backup/restore details: `docs/operations/BACKUP_AND_RESTORE.md`
+
+---
+
 ## Architecture
 
 Two systemd services run on the Pi:
@@ -363,6 +377,9 @@ Things agents keep re-discovering. Read this so you don't waste time.
 | **Neural waves** | Computational proprioception from CPU/memory/IO — not real EEG. High delta = stable system, not sleep. |
 | **No client uses /sse** | Claude Code, Claude Desktop, Cursor all connect to `/mcp/`. |
 | **docs/ folder** | Developer reference only. Agents read CLAUDE.md, not docs/. Don't expect docs/ to reach other agents. |
+| **Backups** | `~/backups/lumen/` — real automated backups (hourly snapshots + rsync mirror). `~/lumen-backups/` is OLD/STALE — ignore it. |
+| **Restore after reflash** | One command: `cd ~/projects/anima-mcp && ./scripts/restore_lumen.sh`. Do NOT do it manually. See `RESTORE_LUMEN.md`. |
+| **Before declaring data lost** | Run `ls -lt ~/backups/lumen/anima_*.db | head -5` first. Backups run twice daily minimum. |
 
 ## Shared Memory Schema
 

@@ -132,7 +132,11 @@ fi
 log "Installing systemd services (broker + anima)..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo cp ~/anima-mcp/systemd/anima-broker.service /etc/systemd/system/ && sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/ && sudo systemctl daemon-reload && sudo systemctl enable anima-broker anima && sudo systemctl start anima-broker && sudo systemctl start anima"
 
-# 5b. Install watchdog timer (restarts failed services)
+# 5b. Install WiFi resilience stack (power management, watchdog, TCP tuning, hardware watchdog)
+log "Installing WiFi resilience services..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo bash ~/anima-mcp/scripts/setup_pi_service.sh" || log "  WiFi resilience install failed (non-fatal)"
+
+# 5c. Install watchdog timer (restarts failed services)
 log "Installing watchdog timer..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/anima-watchdog.sh && \
     sudo cp ~/anima-mcp/systemd/anima-watchdog.service /etc/systemd/system/ && \
@@ -177,18 +181,15 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-broker anima" || lo
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-watchdog.timer" 2>/dev/null && log "  watchdog timer active" || log "  watchdog timer not running"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "crontab -l 2>/dev/null | grep -c 'anima-mcp/scripts'" | xargs -I{} log "  {} cron jobs installed"
 
-# 8. Tailscale (optional — for remote access when not on same WiFi)
-if [ -n "${RESTORE_TAILSCALE:-}" ]; then
-    log "Installing Tailscale..."
-    TS_KEY="${TAILSCALE_AUTH_KEY:-}"
-    if [ -n "$TS_KEY" ]; then
-        ssh $SSH_OPTS "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null; sudo tailscale up --authkey=$TS_KEY 2>/dev/null" || log "  Tailscale sign-in failed"
-    else
-        ssh $SSH_OPTS "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null" || true
-        log "  Tailscale installed. Run: ssh $PI_USER@$PI_HOST 'sudo tailscale up' to sign in"
-    fi
+# 8. Tailscale (always installed — required for remote access)
+log "Installing Tailscale..."
+TS_KEY="${TAILSCALE_AUTH_KEY:-}"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "curl -fsSL https://tailscale.com/install.sh | sh 2>/dev/null" || log "  Tailscale install failed (non-fatal)"
+if [ -n "$TS_KEY" ]; then
+    ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo tailscale up --authkey=$TS_KEY 2>/dev/null" && log "  Tailscale authenticated" || log "  Tailscale auth failed — run: ssh $PI_USER@$PI_HOST 'sudo tailscale up'"
 else
-    log "Tip: RESTORE_TAILSCALE=1 (or + TAILSCALE_AUTH_KEY=tskey-xxx) $0 to add Tailscale"
+    log "  Tailscale installed. Authenticate: ssh $PI_USER@$PI_HOST 'sudo tailscale up'"
+    log "  Tip: TAILSCALE_AUTH_KEY=tskey-xxx $0 to auto-authenticate next time"
 fi
 
 log "Done. Lumen running (broker + server, no DB contention)."
