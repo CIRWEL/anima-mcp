@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.unitares.lumen-backup</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/cirwel/projects/anima-mcp/scripts/mac_backup_lumen.sh</string>
+    </array>
+
+    <!-- Run every 4 hours -->
+    <key>StartInterval</key>
+    <integer>14400</integer>
+
+    <!-- Also run once at login in case machine was off during scheduled time -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/cirwel/lumen-backups/backup.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/cirwel/lumen-backups/backup.log</string>
+</dict>
+</plist>
