@@ -11,6 +11,14 @@ from typing import Optional
 from .design import COLORS
 from ..anima import Anima
 
+# Per-era accent colors for the art eras selector
+_ERA_ACCENT = {
+    "gestural":    COLORS.SOFT_ORANGE,
+    "pointillist": COLORS.SOFT_PURPLE,
+    "field":       COLORS.SOFT_CYAN,
+    "geometric":   COLORS.SOFT_BLUE,
+}
+
 
 class ArtMixin:
     """Mixin for art-related screens (notepad, art eras)."""
@@ -35,7 +43,7 @@ class ArtMixin:
                 font = fonts['giant']
 
                 text = f"Canvas Cleared\n\nResuming in {remaining}s..."
-                draw.text((40, 90), text, fill=(100, 200, 100), font=font)
+                draw.text((40, 90), text, fill=COLORS.SOFT_GREEN, font=font)
 
                 # Update display and return (don't draw new pixels)
                 if hasattr(self._display, '_image'):
@@ -49,8 +57,8 @@ class ArtMixin:
                 image, draw = self._display._create_canvas((0, 0, 0))
                 fonts = self._get_fonts()
                 font = fonts['giant']
-                draw.text((20, 80), "Governance\nPaused", fill=(200, 150, 50), font=font)
-                draw.text((20, 160), "Waiting for\nproceed", fill=(120, 120, 120), font=fonts.get('small', font))
+                draw.text((20, 80), "Governance\nPaused", fill=COLORS.SOFT_ORANGE, font=font)
+                draw.text((20, 160), "Waiting for\nproceed", fill=COLORS.TEXT_DIM, font=fonts.get('small', font))
                 if hasattr(self._display, '_image'):
                     self._display._image = image
                 if hasattr(self._display, '_show'):
@@ -136,8 +144,8 @@ class ArtMixin:
                 # Draw "saved" badge at top-center
                 text = "\u2713 saved"
                 # Semi-transparent background for readability
-                draw.rectangle([85, 5, 155, 25], fill=(20, 60, 20))
-                draw.text((90, 7), text, fill=(100, 255, 100), font=font)
+                draw.rectangle([85, 5, 155, 25], fill=(15, 40, 15))
+                draw.text((90, 7), text, fill=COLORS.SOFT_GREEN, font=font)
 
             # CRITICAL: Always update display - ensure image is shown
             try:
@@ -236,15 +244,22 @@ class ArtMixin:
                     is_current = (name == current_name)
                     is_cursor = (i == cursor)
 
+                    # Per-era accent color (left-edge identity bar)
+                    era_color = _ERA_ACCENT.get(name, SECONDARY)
+
                     # Cursor era: name line + marquee description line
                     if is_cursor:
-                        draw.rectangle([4, y - 2, 236, y + 28], fill=(25, 35, 50))
+                        row_h = 30
+                        draw.rectangle([4, y - 2, 236, y + row_h - 2], fill=(25, 35, 50))
+                        # Left-edge accent bar (full brightness when cursor is here)
+                        draw.rectangle([4, y - 2, 7, y + row_h - 2], fill=era_color)
                         arrow = "\u25b6 "
                         name_color = YELLOW if is_current else SECONDARY
                         label = f"{arrow}{name}"
                         draw.text((10, y), label, fill=name_color, font=fonts['small'])
+                        # Current era marker: small filled square in era color
                         if is_current:
-                            draw.text((210, y + 1), "now", fill=(120, 120, 60), font=fonts['micro'])
+                            draw.rectangle([228, y + 2, 233, y + 9], fill=era_color)
                         y += 14
 
                         # Marquee description: scroll if text wider than available area
@@ -269,13 +284,16 @@ class ArtMixin:
                             draw.text((20, y), desc, fill=DIM, font=fonts['micro'])
                         y += 16
                     else:
-                        # Non-cursor era: compact single line
+                        # Non-cursor era: compact single line with dimmed accent bar
+                        era_dim = tuple(int(c * 0.45) for c in era_color)
+                        draw.rectangle([4, y, 7, y + 14], fill=era_dim)
                         arrow = "  "
                         name_color = YELLOW if is_current else SECONDARY
                         label = f"{arrow}{name}"
                         draw.text((10, y), label, fill=name_color, font=fonts['small'])
+                        # Current era marker: small filled square in era color
                         if is_current:
-                            draw.text((210, y + 1), "now", fill=(120, 120, 60), font=fonts['micro'])
+                            draw.rectangle([228, y + 2, 233, y + 9], fill=era_color)
                         y += 16
 
                 # --- Auto-rotate toggle (last cursor item) ---
@@ -296,9 +314,11 @@ class ArtMixin:
                 y += 20
 
                 # --- Drawing stats ---
-                # Energy bar
+                era_accent = _ERA_ACCENT.get(current_name, SECONDARY)
                 bar_x, bar_w, bar_h = 150, 60, 8
                 draw.text((10, y), f"drawing #{drawings}", fill=DIM, font=fonts['small'])
+                # Current era name in its accent color
+                draw.text((95, y), current_name, fill=era_accent, font=fonts['small'])
                 draw.rectangle([bar_x, y + 2, bar_x + bar_w, y + 2 + bar_h],
                               fill=(30, 30, 40), outline=(50, 50, 60))
                 fill_w = int(bar_w * energy)

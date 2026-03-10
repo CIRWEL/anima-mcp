@@ -366,7 +366,7 @@ class MindMixin:
         self._display.render_text("\n".join(lines), (10, 10))
 
     def _render_learning(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
-        """Render learning visualization screen - visual comfort zones and why Lumen feels what it feels."""
+        """Render learning visualization screen - comfort zones and why Lumen feels what it feels."""
         if not anima or not readings:
             self._display.render_text("learning\n\nno data", (10, 10))
             return
@@ -421,33 +421,33 @@ class MindMixin:
 
             # Create canvas for visual rendering
             if hasattr(self._display, '_create_canvas'):
-                image, draw = self._display._create_canvas((0, 0, 0))
+                image, draw = self._display._create_canvas(COLORS.BG_DARK)
             else:
                 # Fallback to text-only if no canvas support
                 self._render_learning_text_fallback(summary, readings, anima)
                 return
 
-            # Color definitions - BOLD and VIBRANT for readability
-            CYAN = (0, 255, 255)           # Pure cyan
-            BLUE = (80, 180, 255)          # Brighter blue
-            YELLOW = (255, 240, 80)        # Bold yellow
-            ORANGE = (255, 160, 40)        # Vivid orange
-            RED = (255, 100, 100)          # Warm red
-            GREEN = (80, 255, 120)         # Vibrant green
-            PURPLE = (220, 120, 255)       # Bold purple
-            WHITE = (255, 255, 255)
-            LIGHT_CYAN = (200, 255, 255)   # Brighter labels
-            DARK_GRAY = (30, 35, 45)       # Slightly blue-tinted
+            # Design system palette
+            DIM      = COLORS.TEXT_DIM
+            SECOND   = COLORS.TEXT_SECONDARY
+            C_OK     = COLORS.SOFT_GREEN
+            C_WARN   = COLORS.SOFT_YELLOW
+            C_BAD    = COLORS.SOFT_CORAL
+            C_ORANGE = COLORS.SOFT_ORANGE
+            C_CYAN   = COLORS.SOFT_CYAN
+            C_PURPLE = COLORS.SOFT_PURPLE
+            BG_BAR   = (18, 22, 32)        # bar track background
+            ZONE_FG  = (20, 45, 20)        # comfort zone tint
 
-            # Use cached fonts (loading from disk is slow)
+            # Use cached fonts
             fonts = self._get_fonts()
-            font_small = fonts['tiny']
-            font_title = fonts['default']
+            f_label = fonts['tiny']     # sensor section labels + insight text
+            f_title = fonts['default']  # mood state title (prominent standalone)
 
             y_offset = 6
-            bar_x = 10
-            bar_width = 180
-            bar_height = 12  # Compact bars
+            bar_x = 13
+            bar_width = 175
+            bar_height = 10
 
             # Get comfort zones from summary
             comfort_zones = summary.get("comfort_zones", [])
@@ -457,60 +457,56 @@ class MindMixin:
             humidity_zone = next((z for z in comfort_zones if z["sensor"] == "humidity"), None)
             temp_zone = next((z for z in comfort_zones if z["sensor"] == "ambient_temp"), None)
 
-            # Determine overall status from actual mood (synced with anima.feeling())
+            # === Title: mood state ===
             actual_mood = anima.feeling().get("mood", "neutral")
             if actual_mood == "stressed":
-                title = "stressed"
-                title_color = RED
+                title, title_color = "stressed", C_BAD
             elif actual_mood == "overheated":
-                title = "overheated"
-                title_color = ORANGE
+                title, title_color = "overheated", C_ORANGE
             elif actual_mood in ("content", "alert"):
-                title = "comfortable"
-                title_color = GREEN
+                title, title_color = "comfortable", C_OK
             else:
                 # Check comfort zones as fallback
                 statuses = [z["status"] for z in comfort_zones]
                 if "extreme" in statuses:
-                    title = "stressed"
-                    title_color = RED
+                    title, title_color = "stressed", C_BAD
                 elif "uncomfortable" in statuses:
-                    title = "adjusting"
-                    title_color = YELLOW
+                    title, title_color = "adjusting", C_WARN
                 else:
-                    title = "comfortable"
-                    title_color = GREEN
+                    title, title_color = "comfortable", C_OK
 
-            draw.text((10, y_offset), title, fill=title_color, font=font_title)
+            draw.text((10, y_offset), title, fill=title_color, font=f_title)
             if showing_stale or self._learning_cache_refreshing:
-                draw.text((180, y_offset), "\u21bb", fill=LIGHT_CYAN, font=font_title)
-            y_offset += 20
+                draw.text((180, y_offset), "\u21bb", fill=C_CYAN, font=f_title)
+            y_offset += 22
+
+            draw.line([(10, y_offset), (230, y_offset)], fill=(30, 42, 62), width=1)
+            y_offset += 8
 
             # === HUMIDITY BAR ===
             if humidity_zone:
                 humidity_current = humidity_zone["current"] or 0
                 humidity_ideal = humidity_zone["ideal"]
                 h_status = humidity_zone["status"]
+                h_color = C_OK if h_status == "comfortable" else C_WARN if h_status == "uncomfortable" else C_BAD
 
-                draw.text((bar_x, y_offset), f"humidity {humidity_current:.0f}%", fill=LIGHT_CYAN, font=font_small)
+                # Left-edge accent + section label
+                draw.rectangle([6, y_offset, 9, y_offset + 9], fill=C_CYAN)
+                draw.text((bar_x, y_offset), f"humidity  {humidity_current:.0f}%", fill=SECOND, font=f_label)
                 y_offset += 12
 
-                # Background + comfort zone
                 draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
-                              fill=DARK_GRAY, outline=(60, 60, 70))
+                              fill=BG_BAR, outline=(40, 52, 72))
                 c_min, c_max = humidity_zone["comfortable_range"]
                 comfort_x1 = bar_x + int(c_min / 100.0 * bar_width)
                 comfort_x2 = bar_x + int(c_max / 100.0 * bar_width)
-                draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
-                              fill=(25, 50, 25))
+                draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1], fill=ZONE_FG)
 
-                # Ideal line + current marker
                 ideal_x = bar_x + int(humidity_ideal / 100.0 * bar_width)
-                draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
+                draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=C_OK, width=1)
                 current_x = bar_x + int(min(100, humidity_current) / 100.0 * bar_width)
-                h_color = GREEN if h_status == "comfortable" else YELLOW if h_status == "uncomfortable" else RED
                 draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=h_color)
-                y_offset += bar_height + 6
+                y_offset += bar_height + 8
 
             # === TEMPERATURE BAR ===
             if temp_zone:
@@ -518,8 +514,10 @@ class MindMixin:
                 temp_ideal = temp_zone["ideal"]
                 t_status = temp_zone["status"]
                 t_range = temp_zone["comfortable_range"]
+                t_color = C_OK if t_status == "comfortable" else C_WARN if t_status == "uncomfortable" else C_BAD
 
-                draw.text((bar_x, y_offset), f"temp {temp_current:.1f}\u00b0C", fill=LIGHT_CYAN, font=font_small)
+                draw.rectangle([6, y_offset, 9, y_offset + 9], fill=C_ORANGE)
+                draw.text((bar_x, y_offset), f"temp  {temp_current:.1f}\u00b0C", fill=SECOND, font=f_label)
                 y_offset += 12
 
                 # Normalize temp to 10-35 deg C range for display
@@ -528,67 +526,58 @@ class MindMixin:
                     return bar_x + int((t - t_min_display) / (t_max_display - t_min_display) * bar_width)
 
                 draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
-                              fill=DARK_GRAY, outline=(60, 60, 70))
+                              fill=BG_BAR, outline=(40, 52, 72))
                 comfort_x1 = max(bar_x, temp_to_x(t_range[0]))
                 comfort_x2 = min(bar_x + bar_width, temp_to_x(t_range[1]))
-                draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
-                              fill=(25, 50, 25))
+                draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1], fill=ZONE_FG)
 
                 ideal_x = temp_to_x(temp_ideal)
-                draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
+                draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=C_OK, width=1)
                 current_x = max(bar_x, min(bar_x + bar_width, temp_to_x(temp_current)))
-                t_color = GREEN if t_status == "comfortable" else YELLOW if t_status == "uncomfortable" else RED
                 draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=t_color)
-                y_offset += bar_height + 6
+                y_offset += bar_height + 8
 
             # === WARMTH (Internal State) ===
-            # Uses same visual style as sensor bars: comfort zone + ideal + marker
             warmth = anima.warmth
-            warmth_color = ORANGE if warmth > 0.6 else CYAN if warmth < 0.3 else YELLOW
-            draw.text((bar_x, y_offset), f"warmth {warmth:.0%}", fill=LIGHT_CYAN, font=font_small)
+            warmth_color = C_ORANGE if warmth > 0.6 else C_CYAN if warmth < 0.3 else C_WARN
+
+            draw.rectangle([6, y_offset, 9, y_offset + 9], fill=C_ORANGE)
+            draw.text((bar_x, y_offset), f"warmth  {warmth:.0%}", fill=SECOND, font=f_label)
             y_offset += 12
 
-            # Background
             draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
-                          fill=DARK_GRAY, outline=(60, 60, 70))
-            # Comfort zone (0.3 - 0.7 is comfortable for internal states)
+                          fill=BG_BAR, outline=(40, 52, 72))
+            # Comfort zone: 0.3 - 0.7 is comfortable for internal states
             comfort_x1 = bar_x + int(0.3 * bar_width)
             comfort_x2 = bar_x + int(0.7 * bar_width)
-            draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
-                          fill=(25, 50, 25))
-            # Ideal line at 0.5
+            draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1], fill=ZONE_FG)
             ideal_x = bar_x + int(0.5 * bar_width)
-            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
-            # Current marker
+            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=C_OK, width=1)
             current_x = bar_x + int(warmth * bar_width)
             draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=warmth_color)
-            y_offset += bar_height + 6
-
-            # === STABILITY (Internal State) ===
-            # Uses same visual style as sensor bars: comfort zone + ideal + marker
-            stability = anima.stability
-            stab_color = GREEN if stability > 0.6 else YELLOW if stability > 0.3 else RED
-            draw.text((bar_x, y_offset), f"stability {stability:.0%}", fill=LIGHT_CYAN, font=font_small)
-            y_offset += 12
-
-            # Background
-            draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
-                          fill=DARK_GRAY, outline=(60, 60, 70))
-            # Comfort zone (0.5 - 1.0 is comfortable for stability - higher is better)
-            comfort_x1 = bar_x + int(0.5 * bar_width)
-            comfort_x2 = bar_x + int(1.0 * bar_width)
-            draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1],
-                          fill=(25, 50, 25))
-            # Ideal line at 0.8 (high stability is ideal)
-            ideal_x = bar_x + int(0.8 * bar_width)
-            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=GREEN, width=1)
-            # Current marker
-            current_x = bar_x + int(stability * bar_width)
-            draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=stab_color)
             y_offset += bar_height + 8
 
+            # === STABILITY (Internal State) ===
+            stability = anima.stability
+            stab_color = C_OK if stability > 0.6 else C_WARN if stability > 0.3 else C_BAD
+
+            draw.rectangle([6, y_offset, 9, y_offset + 9], fill=C_OK)
+            draw.text((bar_x, y_offset), f"stability  {stability:.0%}", fill=SECOND, font=f_label)
+            y_offset += 12
+
+            draw.rectangle([bar_x, y_offset, bar_x + bar_width, y_offset + bar_height],
+                          fill=BG_BAR, outline=(40, 52, 72))
+            # Comfort zone: 0.5 - 1.0 is comfortable for stability (higher is better)
+            comfort_x1 = bar_x + int(0.5 * bar_width)
+            comfort_x2 = bar_x + int(1.0 * bar_width)
+            draw.rectangle([comfort_x1, y_offset + 1, comfort_x2, y_offset + bar_height - 1], fill=ZONE_FG)
+            ideal_x = bar_x + int(0.8 * bar_width)
+            draw.line([ideal_x, y_offset, ideal_x, y_offset + bar_height], fill=C_OK, width=1)
+            current_x = bar_x + int(stability * bar_width)
+            draw.rectangle([current_x - 2, y_offset - 1, current_x + 2, y_offset + bar_height + 1], fill=stab_color)
+            y_offset += bar_height + 10
+
             # === INSIGHT TEXT ===
-            # Show contextual message based on actual conditions
             mood = anima.feeling().get("mood", "neutral")
             insight_lines = []
 
@@ -610,24 +599,23 @@ class MindMixin:
                 # Show learning insights if available
                 insights = summary.get("why_feels_cold", [])
                 if insights:
-                    title = insights[0].get("title", "")
+                    text = insights[0].get("title", "")
                     # Wrap long titles across 2 lines
-                    if len(title) > 28:
-                        insight_lines.append(title[:28])
-                        insight_lines.append(title[28:56])
+                    if len(text) > 28:
+                        insight_lines.append(text[:28])
+                        insight_lines.append(text[28:56])
                     else:
-                        insight_lines.append(title)
+                        insight_lines.append(text)
                 else:
                     insight_lines.append("learning from environment...")
 
             # Draw insight lines
             for i, line in enumerate(insight_lines[:3]):
-                color = PURPLE if mood not in ("stressed", "overheated") else ORANGE
-                draw.text((bar_x, y_offset + i * 12), line, fill=color, font=font_small)
+                color = C_PURPLE if mood not in ("stressed", "overheated") else C_ORANGE
+                draw.text((bar_x, y_offset + i * 12), line, fill=color, font=f_label)
 
-            # Status bar + screen indicator
+            # Status bar
             self._draw_status_bar(draw)
-
 
             # Update display
             if hasattr(self._display, '_image'):
@@ -713,10 +701,10 @@ class MindMixin:
                 if 0 <= x < WIDTH and 0 <= y < HEIGHT:
                     image.putpixel((x, y), color)
 
-            draw.text((5, 2), "self-schema G_t", fill=(0, 255, 255), font=font_small)
+            draw.text((5, 2), "self-schema G_t", fill=COLORS.SOFT_CYAN, font=font_small)
 
             count_str = f"{len(schema.nodes)} nodes, {len(schema.edges)} edges"
-            draw.text((5, 225), count_str, fill=(120, 120, 120), font=font_small)
+            draw.text((5, 225), count_str, fill=COLORS.TEXT_DIM, font=font_small)
 
             # Compact legend -- colored dots with labels
             font_micro = fonts['micro']
@@ -733,12 +721,12 @@ class MindMixin:
             lx = 5
             for color, label in legend:
                 draw.rectangle([lx, 209, lx + 4, 213], fill=color)
-                draw.text((lx + 6, 208), label, fill=(120, 120, 120), font=font_micro)
+                draw.text((lx + 6, 208), label, fill=COLORS.TEXT_DIM, font=font_micro)
                 lx += 6 + len(label) * 6 + 4
             lx = 5
             for color, label in legend2:
                 draw.rectangle([lx, 218, lx + 4, 222], fill=color)
-                draw.text((lx + 6, 217), label, fill=(120, 120, 120), font=font_micro)
+                draw.text((lx + 6, 217), label, fill=COLORS.TEXT_DIM, font=font_micro)
                 lx += 6 + len(label) * 6 + 4
 
             self._draw_status_bar(draw)
