@@ -546,14 +546,16 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
         prev_group = group_order[(idx - 1) % len(group_order)]
         self.set_mode(group_default[prev_group])
 
+    _CYCLE_GROUPS = {"msgs"}  # Groups where left/right cycles within before jumping
+
     def navigate_right(self):
-        """Navigate right: next screen in group, or next group if at last screen."""
+        """Navigate right: next screen in group (msgs only), or next group."""
         group_info = self._SCREEN_GROUPS.get(self._state.mode)
         if not group_info:
             self.set_mode(ScreenMode.FACE)
             return
-        _, group_screens = group_info
-        if len(group_screens) <= 1:
+        group_name, group_screens = group_info
+        if group_name not in self._CYCLE_GROUPS or len(group_screens) <= 1:
             self.next_group()
         else:
             idx = group_screens.index(self._state.mode)
@@ -563,13 +565,13 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
                 self.set_mode(group_screens[idx + 1])
 
     def navigate_left(self):
-        """Navigate left: previous screen in group, or previous group if at first screen."""
+        """Navigate left: previous screen in group (msgs only), or previous group."""
         group_info = self._SCREEN_GROUPS.get(self._state.mode)
         if not group_info:
             self.set_mode(ScreenMode.FACE)
             return
-        _, group_screens = group_info
-        if len(group_screens) <= 1:
+        group_name, group_screens = group_info
+        if group_name not in self._CYCLE_GROUPS or len(group_screens) <= 1:
             self.previous_group()
         else:
             idx = group_screens.index(self._state.mode)
