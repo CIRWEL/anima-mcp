@@ -1091,7 +1091,7 @@ async def _update_display_loop():
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
-                                    renderer.previous_group()
+                                    renderer.navigate_left()
                                     new_mode = renderer.get_mode()
                                     renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()
@@ -1101,7 +1101,7 @@ async def _update_display_loop():
                                     if _leds and _leds.is_available():
                                         _leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
-                                    renderer.next_group()
+                                    renderer.navigate_right()
                                     new_mode = renderer.get_mode()
                                     renderer._state.last_user_action_time = time.time()
                                     mode_change_event.set()

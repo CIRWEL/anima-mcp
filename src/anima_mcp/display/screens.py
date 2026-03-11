@@ -546,6 +546,38 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
         prev_group = group_order[(idx - 1) % len(group_order)]
         self.set_mode(group_default[prev_group])
 
+    def navigate_right(self):
+        """Navigate right: next screen in group, or next group if at last screen."""
+        group_info = self._SCREEN_GROUPS.get(self._state.mode)
+        if not group_info:
+            self.set_mode(ScreenMode.FACE)
+            return
+        _, group_screens = group_info
+        if len(group_screens) <= 1:
+            self.next_group()
+        else:
+            idx = group_screens.index(self._state.mode)
+            if idx == len(group_screens) - 1:
+                self.next_group()
+            else:
+                self.set_mode(group_screens[idx + 1])
+
+    def navigate_left(self):
+        """Navigate left: previous screen in group, or previous group if at first screen."""
+        group_info = self._SCREEN_GROUPS.get(self._state.mode)
+        if not group_info:
+            self.set_mode(ScreenMode.FACE)
+            return
+        _, group_screens = group_info
+        if len(group_screens) <= 1:
+            self.previous_group()
+        else:
+            idx = group_screens.index(self._state.mode)
+            if idx == 0:
+                self.previous_group()
+            else:
+                self.set_mode(group_screens[idx - 1])
+
     def next_in_group(self):
         """Switch to next screen within current group."""
         group_info = self._SCREEN_GROUPS.get(self._state.mode)
