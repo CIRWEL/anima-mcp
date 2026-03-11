@@ -1071,11 +1071,14 @@ async def _update_display_loop():
                                 hold_time = time.time() - _joy_btn_press_start
                                 if hold_time < 0.8 and not _joy_btn_help_shown:
                                     # Short joystick button press: cycle to next screen in group
-                                    renderer.trigger_input_feedback("button")
-                                    renderer.next_in_group()
-                                    mode_change_event.set()
+                                    # (msgs group uses left/right for within-group cycling instead)
                                     current_mode = renderer.get_mode()
-                                    print(f"[Input] btn -> {current_mode.value} (group cycle)", file=sys.stderr, flush=True)
+                                    if current_mode not in (ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS):
+                                        renderer.trigger_input_feedback("button")
+                                        renderer.next_in_group()
+                                        mode_change_event.set()
+                                        current_mode = renderer.get_mode()
+                                        print(f"[Input] btn -> {current_mode.value} (group cycle)", file=sys.stderr, flush=True)
                             _joy_btn_press_start = None
                             _joy_btn_help_shown = False
 

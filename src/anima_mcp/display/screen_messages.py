@@ -245,6 +245,7 @@ class MessagesMixin:
 
                     # Position counter (bottom-left, very dim)
                     draw.text((10, 216), f"{scroll_idx + 1}\u2009/\u2009{n}", fill=MUTED, font=f_meta)
+                    draw.text((80, 216), "\u25c0\u25b6 q&a/visitors  btn:read", fill=MUTED, font=f_meta)
 
             self._draw_status_bar(draw)
 
@@ -482,6 +483,7 @@ class MessagesMixin:
                         draw.rectangle([234, thumb_top, 237, thumb_top + thumb_h], fill=(60, 85, 130))
 
                     draw.text((10, 216), f"{scroll_idx + 1}\u2009/\u2009{n}", fill=MUTED, font=f_meta)
+                    draw.text((80, 216), "\u25c0\u25b6 msgs/q&a  btn:read", fill=MUTED, font=f_meta)
 
             self._draw_status_bar(draw)
 
@@ -802,7 +804,7 @@ class MessagesMixin:
                     else:
                         hint = "\u25b2\u25bc scroll  \u25c0\u25b6 A  press:expand"
                 else:
-                    hint = "press:expand  \u25b2\u25bc:select"
+                    hint = "\u25c0\u25b6 msgs/visitors  btn:expand"
                 draw.text((80, 218), hint, fill=MUTED, font=font_small)
 
             # Status bar + screen indicator
