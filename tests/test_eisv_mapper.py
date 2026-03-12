@@ -157,7 +157,7 @@ def test_estimate_complexity():
     # High complexity: low clarity, low stability
     anima_high = create_test_anima(clarity=0.2, stability=0.2)
     complexity_high = estimate_complexity(anima_high)
-    assert complexity_high > 0.7
+    assert complexity_high > 0.4
     
     # Complexity should be in [0, 1]
     assert 0.0 <= complexity_low <= 1.0

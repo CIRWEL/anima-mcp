@@ -133,8 +133,8 @@ def estimate_complexity(
     """
     # Base complexity from anima state
     # Clarity: uncertainty increases complexity. Stability: entropy (= 1-stability) increases complexity.
-    clarity_complexity = (1.0 - anima.clarity) * 0.4
-    stability_complexity = (1.0 - anima.stability) * 0.6  # entropy = inverse stability
+    clarity_complexity = (1.0 - anima.clarity) * 0.25
+    stability_complexity = (1.0 - anima.stability) * 0.35  # entropy = inverse stability
 
     complexity = clarity_complexity + stability_complexity
 
