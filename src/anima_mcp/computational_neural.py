@@ -50,6 +50,9 @@ class ComputationalNeuralSensor:
         self._last_net_io = None
         self._last_sample_time: Optional[float] = None
         self.drawing_phase: Optional[str] = None  # Set by screen renderer
+        # EMA smoothing for theta and gamma (other bands are inherently smooth)
+        self._ema_theta: Optional[float] = None  # alpha=0.3, half-life ~4s at 2s interval
+        self._ema_gamma: Optional[float] = None  # alpha=0.2, slightly smoother
         # Prime psutil cpu_percent so first real call returns meaningful data
         psutil.cpu_percent(interval=None)
 
@@ -129,14 +132,16 @@ class ComputationalNeuralSensor:
                 # Pi Zero: ~0.05 idle writes, ~0.2 moderate, ~0.5 heavy
                 if hasattr(disk_io, 'busy_time') and hasattr(self._last_disk_io, 'busy_time'):
                     busy_delta = disk_io.busy_time - self._last_disk_io.busy_time
-                    disk_signal = min(1.0, busy_delta / (dt * 1000))
+                    # Pi Zero SD card saturates easily; double headroom so
+                    # 50% wall-time busy ≈ theta 0.5 instead of 1.0
+                    disk_signal = min(1.0, busy_delta / (dt * 2000))
                 else:
                     # Fallback: throughput-based estimate
                     read_delta = disk_io.read_bytes - self._last_disk_io.read_bytes
                     write_delta = disk_io.write_bytes - self._last_disk_io.write_bytes
                     bytes_per_sec = (read_delta + write_delta) / dt
                     # Pi Zero: ~1.5 MB/s normal, ~5 MB/s heavy
-                    disk_signal = min(1.0, bytes_per_sec / (5 * 1024 * 1024))
+                    disk_signal = min(1.0, bytes_per_sec / (10 * 1024 * 1024))
             if disk_io:
                 self._last_disk_io = disk_io
 
@@ -154,7 +159,8 @@ class ComputationalNeuralSensor:
             except (OSError, AttributeError):
                 pass
 
-            theta = max(disk_signal, net_signal)  # Whichever I/O source is busier
+            # Weighted blend: dominant source leads but doesn't ignore the other
+            theta = 0.7 * max(disk_signal, net_signal) + 0.3 * min(disk_signal, net_signal)
         except (OSError, AttributeError):
             theta = 0.0
 
@@ -168,6 +174,19 @@ class ComputationalNeuralSensor:
             temp_stability = max(0.0, 1.0 - (temp_variation / 10.0))
 
         delta = (cpu_stability * 0.7 + temp_stability * 0.3)
+
+        # EMA smoothing on theta and gamma — dampens transient spikes
+        if self._ema_theta is None:
+            self._ema_theta = theta
+        else:
+            self._ema_theta = 0.3 * theta + 0.7 * self._ema_theta
+        theta = self._ema_theta
+
+        if self._ema_gamma is None:
+            self._ema_gamma = gamma
+        else:
+            self._ema_gamma = 0.2 * gamma + 0.8 * self._ema_gamma
+        gamma = self._ema_gamma
 
         # Drawing phase modulation — creative activity is real neural activity
         if self.drawing_phase:

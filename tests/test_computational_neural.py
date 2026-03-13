@@ -102,20 +102,22 @@ class TestGammaBand:
         assert state.gamma == 0.0
 
     def test_high_ctx_switches_high_gamma(self, sensor):
-        """High context switch rate → high gamma."""
+        """High context switch rate → high gamma (with EMA smoothing)."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            # First sample: baseline
+            # First sample: baseline (gamma=0, EMA initialized to 0)
             _mock_psutil(mock_ps, cpu_stats=CpuStats(100000, 50000, 0, 0))
             sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-            # Second sample: 20000 ctx switches in ~1 second = max ctx_norm
-            sensor._last_sample_time = time.time() - 1.0  # pretend 1 second ago
-            _mock_psutil(mock_ps, cpu_stats=CpuStats(120000, 50000, 0, 0))
-            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+            # Sustained high ctx switches over several samples to let EMA converge
+            for i in range(5):
+                sensor._last_sample_time = time.time() - 1.0
+                _mock_psutil(mock_ps, cpu_stats=CpuStats(100000 + 20000 * (i + 1), 50000, 0, 0))
+                state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-        # ctx_rate = 20000/1.0, ctx_norm = 1.0, int_norm = 0.0
-        # gamma = 1.0 * 0.6 + 0.0 * 0.4 = 0.6
-        assert state.gamma == pytest.approx(0.6, abs=0.05)
+        # Raw gamma = 0.6 each step. After 5 EMA steps (alpha=0.2):
+        # converges toward 0.6, should be above 0.3
+        assert state.gamma > 0.3
+        assert state.gamma < 0.6  # EMA hasn't fully converged
 
     def test_gamma_independent_of_cpu(self, sensor):
         """Gamma should NOT track CPU percent — it tracks switching rate."""
@@ -124,19 +126,21 @@ class TestGammaBand:
             _mock_psutil(mock_ps, cpu_stats=CpuStats(100000, 50000, 0, 0))
             sensor.get_neural_state(cpu_percent=10.0, memory_percent=50.0)
 
-            # Second sample: same switching rate, different CPU
-            sensor._last_sample_time = time.time() - 1.0
-            _mock_psutil(mock_ps, cpu_stats=CpuStats(105000, 55000, 0, 0))
-            state_low_cpu = sensor.get_neural_state(cpu_percent=10.0, memory_percent=50.0)
+            # Multiple samples with same switching rate to let EMA converge
+            for i in range(3):
+                sensor._last_sample_time = time.time() - 1.0
+                _mock_psutil(mock_ps, cpu_stats=CpuStats(100000 + 5000 * (i + 1), 50000 + 5000 * (i + 1), 0, 0))
+                state_low_cpu = sensor.get_neural_state(cpu_percent=10.0, memory_percent=50.0)
 
         sensor2 = ComputationalNeuralSensor()
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             _mock_psutil(mock_ps, cpu_stats=CpuStats(100000, 50000, 0, 0))
             sensor2.get_neural_state(cpu_percent=90.0, memory_percent=50.0)
 
-            sensor2._last_sample_time = time.time() - 1.0
-            _mock_psutil(mock_ps, cpu_stats=CpuStats(105000, 55000, 0, 0))
-            state_high_cpu = sensor2.get_neural_state(cpu_percent=90.0, memory_percent=50.0)
+            for i in range(3):
+                sensor2._last_sample_time = time.time() - 1.0
+                _mock_psutil(mock_ps, cpu_stats=CpuStats(100000 + 5000 * (i + 1), 50000 + 5000 * (i + 1), 0, 0))
+                state_high_cpu = sensor2.get_neural_state(cpu_percent=90.0, memory_percent=50.0)
 
         # Same switching rate → same gamma, regardless of CPU
         assert state_low_cpu.gamma == pytest.approx(state_high_cpu.gamma, abs=0.01)
@@ -159,7 +163,7 @@ class TestThetaBand:
         assert state.theta == 0.0
 
     def test_disk_busy_raises_theta(self, sensor):
-        """Disk busy_time ratio should raise theta."""
+        """Disk busy_time ratio should raise theta (with doubled ceiling and EMA)."""
         DiskIOBusy = namedtuple("sdiskio", ["read_count", "write_count", "read_bytes", "write_bytes", "read_time", "write_time", "busy_time"])
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             # First sample: baseline disk counters
@@ -167,30 +171,75 @@ class TestThetaBand:
             _mock_psutil(mock_ps, disk_io=disk1)
             sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-            # Second sample: 500ms of busy_time in 1 second = 0.5 ratio
+            # Second sample: 500ms of busy_time in 1 second
+            # raw disk_signal = 500 / (1.0 * 2000) = 0.25 (doubled ceiling)
+            # theta blend = 0.7 * 0.25 + 0.3 * 0 = 0.175 (net=0)
+            # EMA first real value: initialized to 0 on first call, so
+            # ema = 0.3 * 0.175 + 0.7 * 0.0 = 0.0525
+            # Need a second identical sample to converge closer
             sensor._last_sample_time = time.time() - 1.0
             disk2 = DiskIOBusy(0, 0, 0, 0, 0, 0, busy_time=500)
             _mock_psutil(mock_ps, disk_io=disk2)
+            sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+
+            # Third sample: same delta to let EMA converge
+            sensor._last_sample_time = time.time() - 1.0
+            disk3 = DiskIOBusy(0, 0, 0, 0, 0, 0, busy_time=1000)
+            _mock_psutil(mock_ps, disk_io=disk3)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-        assert state.theta == pytest.approx(0.5, abs=0.05)
+        # After 2 EMA steps the value should be meaningfully above zero
+        assert state.theta > 0.05
+        assert state.theta < 0.25  # well below old 0.5 — ceiling + EMA dampen it
 
     def test_network_io_raises_theta(self, sensor):
-        """Network throughput should raise theta."""
+        """Network throughput should raise theta (with weighted blend and EMA)."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             # First sample: baseline net counters
             _mock_psutil(mock_ps)
             mock_ps.net_io_counters.return_value = NetIO(0, 0, 0, 0, 0, 0, 0, 0)
             sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-            # Second sample: 250KB in 1 second = 250/500 = 0.5
+            # Second sample: 250KB in 1 second
+            # net_signal = 256KB / 512KB = 0.5
+            # theta blend = 0.7*0.5 + 0.3*0 = 0.35 (disk=0)
+            # EMA: 0.3*0.35 + 0.7*0 = 0.105
             sensor._last_sample_time = time.time() - 1.0
             _mock_psutil(mock_ps)
             mock_ps.net_io_counters.return_value = NetIO(128*1024, 128*1024, 0, 0, 0, 0, 0, 0)
+            sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+
+            # Third sample: same throughput to let EMA converge
+            sensor._last_sample_time = time.time() - 1.0
+            _mock_psutil(mock_ps)
+            mock_ps.net_io_counters.return_value = NetIO(256*1024, 256*1024, 0, 0, 0, 0, 0, 0)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
 
-        # net_bytes = 256KB/s, net_signal = 256/512 = 0.5
-        assert state.theta == pytest.approx(0.5, abs=0.1)
+        assert state.theta > 0.1
+        assert state.theta < 0.4  # EMA dampens below raw 0.5
+
+    def test_ema_dampens_spike(self, sensor):
+        """A single I/O spike should be dampened by EMA smoothing."""
+        DiskIOBusy = namedtuple("sdiskio", ["read_count", "write_count", "read_bytes", "write_bytes", "read_time", "write_time", "busy_time"])
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            # Baseline: zero I/O for several samples to set EMA near 0
+            for i in range(3):
+                disk = DiskIOBusy(0, 0, 0, 0, 0, 0, busy_time=0)
+                _mock_psutil(mock_ps, disk_io=disk)
+                if i > 0:
+                    sensor._last_sample_time = time.time() - 1.0
+                sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+
+            # Now spike: 2000ms busy in 1 second = raw disk_signal 1.0
+            sensor._last_sample_time = time.time() - 1.0
+            disk_spike = DiskIOBusy(0, 0, 0, 0, 0, 0, busy_time=2000)
+            _mock_psutil(mock_ps, disk_io=disk_spike)
+            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+
+        # Raw theta would be 0.7*1.0 + 0.3*0 = 0.7, but EMA dampens heavily
+        # EMA was near 0, so: 0.3*0.7 + 0.7*~0 ≈ 0.21
+        assert state.theta < 0.35  # well below raw 0.7
+        assert state.theta > 0.0   # but not zero
 
 
 class TestDeltaBand:
