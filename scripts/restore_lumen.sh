@@ -136,6 +136,48 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo cp ~/anima-mcp/systemd/anima-broker.serv
 log "Installing WiFi resilience services..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo bash ~/anima-mcp/scripts/setup_pi_service.sh" || log "  WiFi resilience install failed (non-fatal)"
 
+# 5b2. brcmfmac driver fixes (prevents firmware crashes — #1 cause of WiFi death)
+log "Deploying brcmfmac WiFi fixes..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" bash -s <<'WIFI_EOF'
+# Disable roaming + WPA3/SAE auth offloading (causes firmware hangs)
+echo "options brcmfmac roamoff=1 feature_disable=0x82000" | sudo tee /etc/modprobe.d/brcmfmac.conf >/dev/null
+
+# NetworkManager-level power save disable (belt & suspenders with iw)
+printf "[connection]\nwifi.powersave = 2\n" | sudo tee /etc/NetworkManager/conf.d/99-wifi-powersave-off.conf >/dev/null
+
+# Never stop retrying WiFi connection
+sudo nmcli connection modify "preconfigured" connection.autoconnect-retries 0 2>/dev/null || true
+
+# Disable IPv6 (reduces WiFi stack load)
+printf "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n" | sudo tee /etc/sysctl.d/90-disable-ipv6.conf >/dev/null
+sudo sysctl --system >/dev/null 2>&1
+WIFI_EOF
+log "  brcmfmac, NM power save, IPv6 fixes deployed"
+
+# 5b3. Enable USB gadget mode (fallback access when WiFi dies)
+log "Enabling USB gadget mode..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" bash -s <<'GADGET_EOF'
+# Load dwc2 overlay for USB gadget support
+BOOT_CONFIG="/boot/firmware/config.txt"
+if ! grep -q "dtoverlay=dwc2" "$BOOT_CONFIG" 2>/dev/null; then
+    echo "dtoverlay=dwc2" | sudo tee -a "$BOOT_CONFIG" >/dev/null
+fi
+
+# Load modules at boot
+if ! grep -q "dwc2" /etc/modules 2>/dev/null; then
+    echo "dwc2" | sudo tee -a /etc/modules >/dev/null
+fi
+if ! grep -q "g_ether" /etc/modules 2>/dev/null; then
+    echo "g_ether" | sudo tee -a /etc/modules >/dev/null
+fi
+
+# Configure static IP for USB gadget interface (usb0)
+sudo nmcli connection add type ethernet con-name usb-gadget ifname usb0 \
+    ipv4.method manual ipv4.addresses 10.55.0.1/24 \
+    connection.autoconnect yes 2>/dev/null || true
+GADGET_EOF
+log "  USB gadget mode enabled (10.55.0.1 over USB-C after reboot)"
+
 # 5c. Install watchdog timer (restarts failed services)
 log "Installing watchdog timer..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/anima-watchdog.sh && \
