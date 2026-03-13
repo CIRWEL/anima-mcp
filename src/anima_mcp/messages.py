@@ -43,6 +43,7 @@ class Message:
     responds_to: Optional[str] = None  # message_id this responds to (for answers)
     answered: bool = False  # For questions: has this been answered?
     context: Optional[str] = None  # For questions: what triggered this question
+    state_snapshot: Optional[Dict[str, Any]] = None  # Anima state when question was asked
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -61,6 +62,8 @@ class Message:
             d["answered"] = False
         if "context" not in d:
             d["context"] = None
+        if "state_snapshot" not in d:
+            d["state_snapshot"] = None
         return cls(**d)
 
     def is_question(self) -> bool:
@@ -430,10 +433,32 @@ class MessageBoard:
                     return None  # Skip similar question
 
         msg = self.add_message(text, MESSAGE_TYPE_QUESTION, author=author)
-        if msg and context:
-            msg.context = context
+        if msg:
+            if context:
+                msg.context = context
+            # Capture anima state at time of asking — gives answerers temporal context
+            msg.state_snapshot = self._capture_anima_snapshot()
             self._save()
         return msg
+
+    def _capture_anima_snapshot(self) -> Optional[Dict[str, Any]]:
+        """Capture current anima state from shared memory for temporal context."""
+        try:
+            shm_path = Path("/dev/shm/anima_state.json")
+            if shm_path.exists():
+                import json as _json
+                data = _json.loads(shm_path.read_text())
+                anima = data.get("data", {}).get("anima")
+                if anima:
+                    return {
+                        "warmth": round(anima.get("warmth", 0), 3),
+                        "clarity": round(anima.get("clarity", 0), 3),
+                        "stability": round(anima.get("stability", 0), 3),
+                        "presence": round(anima.get("presence", 0), 3),
+                    }
+        except Exception:
+            pass
+        return None
 
     def _questions_similar(self, q1: str, q2: str) -> bool:
         """Check if two questions are similar (fuzzy matching).

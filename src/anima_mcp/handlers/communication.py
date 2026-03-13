@@ -263,22 +263,26 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
 
     questions = truly_unanswered[-limit:] if truly_unanswered else []
 
+    question_list = []
+    for q in questions:
+        entry = {
+            "id": q.message_id,
+            "text": q.text,
+            "context": q.context,
+            "age": q.age_str(),
+            "expired": q.answered,  # True if auto-expired but never answered
+        }
+        if q.state_snapshot:
+            entry["state_when_asked"] = q.state_snapshot
+        question_list.append(entry)
+
     return [TextContent(type="text", text=json.dumps({
         "action": "list",
-        "questions": [
-            {
-                "id": q.message_id,
-                "text": q.text,
-                "context": q.context,
-                "age": q.age_str(),
-                "expired": q.answered,  # True if auto-expired but never answered
-            }
-            for q in questions
-        ],
+        "questions": question_list,
         "unanswered_count": len(truly_unanswered),
         "total_questions": len(all_questions),
         "usage": "To answer: lumen_qa(question_id='<id>', answer='your answer')",
-        "note": "Questions marked 'expired: true' auto-expired but were never answered - you can still answer them!"
+        "note": "Questions marked 'expired: true' auto-expired but were never answered - you can still answer them! state_when_asked shows Lumen's feelings at the time of asking — answer in that context, not the current state."
     }))]
 
 
