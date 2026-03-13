@@ -538,7 +538,7 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - Disk headroom
     - Memory headroom
     - CPU headroom
-    - Gamma EEG power (high cognitive presence, awareness)
+    - Gamma EEG power (high gamma = contention = scattered)
     """
     void = 0.0
     count = 0
@@ -558,7 +558,7 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         void += (r.cpu_percent / 100) * weight
         count += weight
 
-    # Neural void: Low gamma = scattered attention = less presence
+    # Neural void: High gamma = high ctx switching = scattered = less presence
     if r.eeg_gamma_power is not None:
         # Use real EEG data
         neural_gamma = r.eeg_gamma_power
@@ -571,9 +571,9 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         )
         neural_gamma = neural.gamma
 
-    # Invert: low gamma = high void (absence)
+    # High gamma = high context switching = task contention = scattered
     weight = cal.presence_weights.get("neural", 0.2)
-    void += (1.0 - neural_gamma) * weight
+    void += neural_gamma * weight
     count += weight
 
     if count == 0:

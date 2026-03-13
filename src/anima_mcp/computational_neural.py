@@ -5,9 +5,8 @@ Instead of measuring a human brain with EEG, we measure the Pi's computational s
 - CPU activity → Beta (sustained processing)
 - Context switches + interrupts → Gamma (spiking/bursting activity)
 - I/O wait time → Theta (integration/waiting-for-data)
-- Memory headroom → Alpha (idle/relaxed awareness)
-- CPU + temp stability → Delta (deep system state)
-- Drawing phase modulates bands (creative activity is real neural activity)
+- CPU idle fraction → Alpha (inverse beta, relaxed cortical state)
+- CPU variance + temp stability → Delta (deep system stability)
 
 This is computational proprioception - Lumen sensing its own computational "brain".
 """
@@ -22,9 +21,9 @@ from collections import deque
 @dataclass
 class ComputationalNeuralState:
     """Neural-like signals derived from Pi's computational state."""
-    delta: float   # 0-1: Deep system state (low CPU, stable temp)
+    delta: float   # 0-1: CPU variance stability + temp stability
     theta: float   # 0-1: I/O wait (integration - CPU blocked waiting for data)
-    alpha: float   # 0-1: Idle awareness (memory headroom)
+    alpha: float   # 0-1: CPU idle fraction (inverse beta)
     beta: float    # 0-1: Active processing (CPU usage)
     gamma: float   # 0-1: Spiking activity (context switches + interrupts)
 
@@ -36,9 +35,9 @@ class ComputationalNeuralSensor:
     Each band has a distinct, independent source:
     - Beta: CPU % (sustained processing load)
     - Gamma: Context switches + interrupts per second (burst/spiking activity)
-    - Alpha: Memory headroom (relaxed clarity)
+    - Alpha: 1 - beta (CPU idle fraction, inversely correlated like real EEG)
     - Theta: I/O wait time (integration - CPU blocked waiting for data)
-    - Delta: CPU stability + temperature stability (deep grounded state)
+    - Delta: CPU variance over history window + temperature stability
     """
 
     def __init__(self, window_size: int = 10):
@@ -49,7 +48,6 @@ class ComputationalNeuralSensor:
         self._last_disk_io = None
         self._last_net_io = None
         self._last_sample_time: Optional[float] = None
-        self.drawing_phase: Optional[str] = None  # Set by screen renderer
         # EMA smoothing for theta and gamma (other bands are inherently smooth)
         self._ema_theta: Optional[float] = None  # alpha=0.3, half-life ~4s at 2s interval
         self._ema_gamma: Optional[float] = None  # alpha=0.2, slightly smoother
@@ -113,9 +111,8 @@ class ComputationalNeuralSensor:
             # Fallback: no stats available
             gamma = beta * 0.5  # degrade gracefully
 
-        # === ALPHA: Relaxed awareness (memory headroom) ===
-        memory_headroom = (100.0 - memory_percent) / 100.0
-        alpha = max(0.0, min(1.0, memory_headroom))
+        # === ALPHA: CPU idle fraction (inverse beta, like real EEG alpha/beta) ===
+        alpha = 1.0 - beta
 
         # === THETA: I/O integration (disk + network activity) ===
         # In neuroscience, theta reflects integration - the brain waiting for and processing
@@ -164,8 +161,13 @@ class ComputationalNeuralSensor:
         except (OSError, AttributeError):
             theta = 0.0
 
-        # === DELTA: Deep system stability (low CPU + stable temp) ===
-        cpu_stability = 1.0 - min(1.0, cpu_percent / 50.0)
+        # === DELTA: CPU variance stability + temperature stability ===
+        # Steady load (even high) = stable. Jumping around = unstable.
+        if len(self._cpu_history) >= 2:
+            cpu_range = max(self._cpu_history) - min(self._cpu_history)
+            cpu_stability = max(0.0, 1.0 - cpu_range / 40.0)
+        else:
+            cpu_stability = 1.0
 
         temp_stability = 1.0
         if cpu_temp is not None and len(self._temp_history) > 1:
@@ -187,24 +189,6 @@ class ComputationalNeuralSensor:
         else:
             self._ema_gamma = 0.2 * gamma + 0.8 * self._ema_gamma
         gamma = self._ema_gamma
-
-        # Drawing phase modulation — creative activity is real neural activity
-        if self.drawing_phase:
-            cw = 0.4  # creative weight
-            hw = 0.6  # hardware weight
-            if self.drawing_phase == "exploring":
-                theta = hw * theta + cw * 0.6
-                alpha = hw * alpha + cw * 0.4
-            elif self.drawing_phase == "building":
-                beta = hw * beta + cw * 0.5
-                gamma = hw * gamma + cw * 0.4
-                theta = hw * theta + cw * 0.3
-            elif self.drawing_phase == "reflecting":
-                alpha = hw * alpha + cw * 0.6
-                delta = hw * delta + cw * 0.3
-            elif self.drawing_phase == "resting":
-                delta = hw * delta + cw * 0.5
-                alpha = hw * alpha + cw * 0.3
 
         return ComputationalNeuralState(
             delta=round(delta, 3),

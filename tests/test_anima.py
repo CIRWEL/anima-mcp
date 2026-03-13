@@ -204,7 +204,7 @@ class TestNeuralContribution:
         assert 0.5 < stability < 0.95, f"stability={stability} - neural contribution may be wrong"
 
     def test_neural_adds_to_void_when_low(self, now, default_calibration):
-        """Low neural gamma should increase void, not decrease it."""
+        """High neural gamma (ctx switching) should increase void (scattered)."""
         # This test would have caught the presence bug
         readings = SensorReadings(
             timestamp=now,

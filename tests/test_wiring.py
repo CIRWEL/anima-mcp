@@ -151,8 +151,8 @@ class TestSHMToNeuralWiring:
         assert 0 <= state.alpha <= 1
         assert 0 <= state.beta <= 1
         assert 0 <= state.gamma <= 1
-        # Alpha should reflect memory headroom (60% free → 0.6)
-        assert state.alpha == pytest.approx(0.6, abs=0.01)
+        # Alpha = 1 - beta (CPU idle fraction). 25% CPU → beta=0.25 → alpha=0.75
+        assert state.alpha == pytest.approx(0.75, abs=0.01)
         # Beta should reflect CPU usage (25% → 0.25)
         assert state.beta == pytest.approx(0.25, abs=0.01)
 

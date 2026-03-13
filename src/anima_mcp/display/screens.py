@@ -463,13 +463,6 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
 
         if mode == ScreenMode.NOTEPAD:
             print(f"[ScreenRenderer] Switched to NOTEPAD from {old_mode.value}, pixels={len(self._canvas.pixels)}", file=sys.stderr, flush=True)
-        else:
-            # Not on notepad — clear drawing phase from neural sensor
-            try:
-                from ..computational_neural import get_computational_neural_sensor
-                get_computational_neural_sensor().drawing_phase = None
-            except Exception:
-                pass
     
     def next_mode(self):
         """Cycle to next screen mode (including notepad)."""

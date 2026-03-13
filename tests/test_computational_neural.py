@@ -76,19 +76,36 @@ class TestBetaBand:
 
 
 class TestAlphaBand:
-    """Test Alpha band: memory headroom → relaxed awareness."""
+    """Test Alpha band: CPU idle fraction (1 - beta)."""
 
-    def test_low_memory_use_gives_high_alpha(self, sensor):
+    def test_idle_cpu_gives_high_alpha(self, sensor):
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             _mock_psutil(mock_ps)
-            state = sensor.get_neural_state(cpu_percent=10.0, memory_percent=20.0)
-        assert state.alpha == 0.8
+            state = sensor.get_neural_state(cpu_percent=0.0, memory_percent=50.0)
+        assert state.alpha == 1.0
 
-    def test_high_memory_use_gives_low_alpha(self, sensor):
+    def test_full_cpu_gives_zero_alpha(self, sensor):
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             _mock_psutil(mock_ps)
-            state = sensor.get_neural_state(cpu_percent=10.0, memory_percent=90.0)
-        assert state.alpha == 0.1
+            state = sensor.get_neural_state(cpu_percent=100.0, memory_percent=50.0)
+        assert state.alpha == 0.0
+
+    def test_alpha_is_inverse_beta(self, sensor):
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            _mock_psutil(mock_ps)
+            state = sensor.get_neural_state(cpu_percent=30.0, memory_percent=50.0)
+        assert state.alpha == pytest.approx(1.0 - state.beta)
+
+    def test_alpha_independent_of_memory(self, sensor):
+        """Alpha no longer uses memory — same CPU should give same alpha."""
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            _mock_psutil(mock_ps)
+            state_low_mem = sensor.get_neural_state(cpu_percent=50.0, memory_percent=20.0)
+        sensor2 = ComputationalNeuralSensor()
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            _mock_psutil(mock_ps)
+            state_high_mem = sensor2.get_neural_state(cpu_percent=50.0, memory_percent=90.0)
+        assert state_low_mem.alpha == state_high_mem.alpha
 
 
 class TestGammaBand:
@@ -243,64 +260,55 @@ class TestThetaBand:
 
 
 class TestDeltaBand:
-    """Test Delta band: system stability (low CPU + stable temp)."""
+    """Test Delta band: CPU variance stability + temp stability."""
 
-    def test_idle_system_high_delta(self, sensor):
+    def test_steady_cpu_high_delta(self, sensor):
+        """Steady CPU (even high) = stable = high delta."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             _mock_psutil(mock_ps)
-            state = sensor.get_neural_state(cpu_percent=0.0, memory_percent=50.0)
+            # Feed several samples at steady 90% CPU
+            for _ in range(5):
+                sensor.get_neural_state(cpu_percent=90.0, memory_percent=50.0)
+            state = sensor.get_neural_state(cpu_percent=90.0, memory_percent=50.0)
+        # All samples at 90% → range=0 → cpu_stability=1.0
+        assert state.delta == pytest.approx(1.0, abs=0.01)
+
+    def test_jumping_cpu_low_delta(self, sensor):
+        """Jumping between 10% and 90% CPU = unstable = low delta."""
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            _mock_psutil(mock_ps)
+            for cpu in [10.0, 90.0, 10.0, 90.0, 10.0]:
+                sensor.get_neural_state(cpu_percent=cpu, memory_percent=50.0)
+            state = sensor.get_neural_state(cpu_percent=90.0, memory_percent=50.0)
+        # Range = 80 → cpu_stability = max(0, 1 - 80/40) = 0.0
+        assert state.delta == pytest.approx(0.3, abs=0.01)  # 0.0 * 0.7 + 1.0 * 0.3
+
+    def test_single_sample_full_delta(self, sensor):
+        """First sample with no history → stable by default."""
+        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
+            _mock_psutil(mock_ps)
+            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+        # Only 1 sample → cpu_stability=1.0
         assert state.delta == 1.0
 
-    def test_busy_system_low_delta(self, sensor):
+    def test_moderate_swing_moderate_delta(self, sensor):
+        """20-point CPU swing → partial stability."""
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             _mock_psutil(mock_ps)
-            state = sensor.get_neural_state(cpu_percent=80.0, memory_percent=50.0)
-        assert state.delta == pytest.approx(0.3, abs=0.01)
+            for cpu in [40.0, 60.0, 40.0, 60.0]:
+                sensor.get_neural_state(cpu_percent=cpu, memory_percent=50.0)
+            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
+        # Range = 20 → cpu_stability = 1 - 20/40 = 0.5
+        # delta = 0.5 * 0.7 + 1.0 * 0.3 = 0.65
+        assert state.delta == pytest.approx(0.65, abs=0.05)
 
     def test_temp_variation_reduces_delta(self, sensor):
         with patch("anima_mcp.computational_neural.psutil") as mock_ps:
             _mock_psutil(mock_ps)
             for _ in range(5):
-                sensor.get_neural_state(cpu_percent=0.0, memory_percent=50.0, cpu_temp=45.0)
-            state = sensor.get_neural_state(cpu_percent=0.0, memory_percent=50.0, cpu_temp=55.0)
+                sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0, cpu_temp=45.0)
+            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0, cpu_temp=55.0)
         assert state.delta < 1.0
-
-
-class TestDrawingPhaseModulation:
-    """Test that drawing phases modulate neural bands."""
-
-    def _get_state(self, sensor, phase):
-        sensor.drawing_phase = phase
-        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            _mock_psutil(mock_ps)
-            return sensor.get_neural_state(cpu_percent=30.0, memory_percent=50.0)
-
-    def test_exploring_boosts_theta(self, sensor):
-        baseline = self._get_state(ComputationalNeuralSensor(), None)
-        exploring = self._get_state(sensor, "exploring")
-        assert exploring.theta > baseline.theta
-
-    def test_building_boosts_beta_gamma(self, sensor):
-        baseline = self._get_state(ComputationalNeuralSensor(), None)
-        building = self._get_state(sensor, "building")
-        assert building.beta > baseline.beta
-        assert building.gamma > baseline.gamma
-
-    def test_reflecting_boosts_alpha(self, sensor):
-        baseline = self._get_state(ComputationalNeuralSensor(), None)
-        reflecting = self._get_state(sensor, "reflecting")
-        assert reflecting.alpha > baseline.alpha
-
-    def test_resting_has_high_delta(self, sensor):
-        resting = self._get_state(sensor, "resting")
-        assert resting.delta > 0.4
-
-    def test_no_phase_no_modulation(self, sensor):
-        sensor.drawing_phase = None
-        with patch("anima_mcp.computational_neural.psutil") as mock_ps:
-            _mock_psutil(mock_ps)
-            state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
-        assert state.beta == 0.5
 
 
 class TestOutputRanges:

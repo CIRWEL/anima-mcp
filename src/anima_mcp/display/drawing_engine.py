@@ -1082,21 +1082,7 @@ class DrawingEngine:
                 # Also update canvas drawing_phase for neural modulation
                 self.canvas.drawing_phase = new_phase
                 self.canvas.phase_start_time = time.time()
-                try:
-                    from ..computational_neural import get_computational_neural_sensor
-                    sensor = get_computational_neural_sensor()
-                    # Map narrative phases to drawing phases for neural modulation
-                    neural_phase = {
-                        "opening": "exploring",
-                        "developing": "building",
-                        "resolving": "reflecting",
-                        "closing": "resting",
-                    }.get(new_phase, "exploring")
-                    sensor.drawing_phase = neural_phase
-                    n = sensor.get_neural_state()
-                    print(f"[Canvas] Arc: {old_phase} -> {new_phase} (C={C:.2f}, I_mom={state.i_momentum:.2f}, curio={state.curiosity:.2f}, engage={state.engagement:.2f})", file=sys.stderr, flush=True)
-                except Exception:
-                    print(f"[Canvas] Arc: {old_phase} -> {new_phase}", file=sys.stderr, flush=True)
+                print(f"[Canvas] Arc: {old_phase} -> {new_phase} (C={C:.2f}, I_mom={state.i_momentum:.2f}, curio={state.curiosity:.2f}, engage={state.engagement:.2f})", file=sys.stderr, flush=True)
 
         # Fresh canvas = opening
         if len(self.canvas.pixels) < 10:
