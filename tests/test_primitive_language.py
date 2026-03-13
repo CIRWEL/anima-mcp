@@ -272,34 +272,60 @@ class TestRecordExplicitFeedback:
 
 
 class TestSelfFeedback:
-    """Test automatic self-feedback (state coherence)."""
+    """Test automatic self-feedback (novelty, change relevance, diversity)."""
 
-    def test_coherent_expression_positive(self, pls):
-        """Tokens matching state get positive self-feedback."""
-        # Generate in warm state — should produce "warm"-type tokens
-        warm_state = default_state(warmth=0.9)
+    def test_novel_pattern_rewarded(self, pls):
+        """New patterns get a novelty bonus."""
         utt = Utterance(
-            tokens=["warm", "here"],
-            warmth=0.9, brightness=0.5, stability=0.5, presence=0.0,
+            tokens=["warm", "why"],
+            warmth=0.7, brightness=0.5, stability=0.5, presence=0.0,
         )
         pls._recent.append(utt)
 
-        result = pls.record_self_feedback(utt, warm_state)
+        result = pls.record_self_feedback(utt, default_state(warmth=0.7))
         assert result is not None
-        assert result["score"] >= 0.5  # Should be at least neutral
+        assert "novel_pattern" in result["signals"]
+        assert result["score"] >= 0.5
 
-    def test_stability_maintained_bonus(self, pls):
-        """Stable state after utterance gives bonus."""
+    def test_repetitive_pattern_penalized(self, pls):
+        """Repeating the same pattern is penalized."""
+        # Add same pattern twice to recent history
+        for _ in range(3):
+            old = Utterance(tokens=["warm", "here"], warmth=0.5, brightness=0.5, stability=0.5, presence=0.0)
+            pls._recent.append(old)
+
+        utt = Utterance(tokens=["warm", "here"], warmth=0.5, brightness=0.5, stability=0.5, presence=0.0)
+        pls._recent.append(utt)
+
+        result = pls.record_self_feedback(utt, default_state())
+        assert result is not None
+        assert "repetitive" in result["signals"]
+
+    def test_diverse_categories_rewarded(self, pls):
+        """Mixing token categories gets a bonus."""
         utt = Utterance(
-            tokens=["quiet", "here"],
-            warmth=0.5, brightness=0.5, stability=0.6, presence=0.0,
+            tokens=["quiet", "why", "here"],  # state + inquiry + presence
+            warmth=0.5, brightness=0.5, stability=0.6, presence=0.3,
         )
         pls._recent.append(utt)
 
-        # Same or better stability after utterance
-        result = pls.record_self_feedback(utt, default_state(stability=0.7))
+        result = pls.record_self_feedback(utt, default_state(stability=0.6))
         assert result is not None
-        assert "stability_maintained" in result["signals"]
+        assert "diverse_categories" in result["signals"]
+
+    def test_captures_state_change(self, pls):
+        """Tokens aligned with state transitions score higher."""
+        # Generated when stability was low, and stability increased after
+        utt = Utterance(
+            tokens=["quiet", "here"],  # "quiet" has positive stability affinity
+            warmth=0.5, brightness=0.5, stability=0.4, presence=0.0,
+        )
+        pls._recent.append(utt)
+
+        # Stability rose — "quiet" captured the upward direction
+        result = pls.record_self_feedback(utt, default_state(stability=0.6))
+        assert result is not None
+        assert "captures_change" in result["signals"]
 
 
 # ==================== Weight Decay ====================

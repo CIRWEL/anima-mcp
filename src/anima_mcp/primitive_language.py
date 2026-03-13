@@ -557,57 +557,70 @@ class PrimitiveLanguageSystem:
         """
         Record automatic self-feedback when no human is around.
 
-        1. State coherence: did my expression match my experience at generation time?
-           - Tokens like "warm" when warmth was high = aligned
-           - Tokens like "cold" when warmth was high = misaligned
-
-        2. Stability: did saying it make things worse?
-           - If stability/clarity/presence stayed same or improved since generation = soft positive
-           - If they dropped significantly = soft negative
+        Signals that matter (non-circular):
+        1. Novelty: did this pattern differ from recent utterances?
+        2. State-change relevance: did tokens capture a transition, not just static state?
+        3. Category diversity: reward mixing categories over repeating same type.
         """
         signals = []
         score = 0.5  # Neutral baseline
 
-        # 1. State coherence (at generation time - we have it in utterance)
+        # 1. Novelty — reward patterns not used in last 5 utterances
+        pattern = utterance.category_pattern()
+        recent_patterns = [u.category_pattern() for u in self._recent[-6:-1]]  # exclude current
+        if pattern not in recent_patterns:
+            score += 0.10
+            signals.append("novel_pattern")
+        elif recent_patterns.count(pattern) >= 2:
+            score -= 0.08
+            signals.append("repetitive")
+
+        # 2. State-change relevance — reward tokens that capture transitions
+        # Compare state at generation to current state: tokens aligned with
+        # the direction of change are more expressive than static confirmation
         gen_state = {
             "warmth": utterance.warmth,
             "brightness": utterance.brightness,
             "stability": utterance.stability,
             "presence": utterance.presence,
         }
-        coherence_scores = []
+        deltas = {
+            "warmth": current_state.get("warmth", 0.5) - gen_state["warmth"],
+            "clarity": current_state.get("clarity", gen_state["brightness"]) - gen_state["brightness"],
+            "stability": current_state.get("stability", 0.5) - gen_state["stability"],
+        }
+        # Map tokens to the dimension they're about
+        token_dimensions = {
+            "warm": ("warmth", 1), "cold": ("warmth", -1),
+            "new": ("clarity", 1), "soft": ("clarity", -1),
+            "quiet": ("stability", 1), "busy": ("stability", -1),
+            "more": None, "less": None,  # directional but not dimension-specific
+        }
+        change_hits = 0
+        change_checks = 0
         for token_name in utterance.tokens:
-            if token_name not in PRIMITIVES:
+            mapping = token_dimensions.get(token_name)
+            if mapping is None:
                 continue
-            token = PRIMITIVES[token_name]
-            aligned = 0.5  # Neutral for tokens without strong affinity
-            if token.warmth_affinity != 0:
-                warmth_norm = (gen_state["warmth"] - 0.5) * 2  # -1 to 1
-                aligned = 1.0 if (token.warmth_affinity * warmth_norm > 0) else 0.0
-            elif token.brightness_affinity != 0:
-                bright_norm = (gen_state["brightness"] - 0.5) * 2
-                aligned = 1.0 if (token.brightness_affinity * bright_norm > 0) else 0.0
-            elif token.stability_affinity != 0:
-                stab_norm = (gen_state["stability"] - 0.5) * 2
-                aligned = 1.0 if (token.stability_affinity * stab_norm > 0) else 0.0
-            elif token.presence_affinity != 0:
-                aligned = 1.0 if (token.presence_affinity * gen_state["presence"] > 0) else 0.0
-            coherence_scores.append(aligned)
-        if coherence_scores:
-            coherence = sum(coherence_scores) / len(coherence_scores)
-            score += 0.12 * (coherence - 0.5) * 2  # Map 0-1 to roughly -0.12 to +0.12
-            signals.append("state_coherence")
+            dim, direction = mapping
+            delta = deltas.get(dim, 0)
+            change_checks += 1
+            # Token aligns with direction of change (not just current level)
+            if abs(delta) > 0.02 and (delta * direction > 0):
+                change_hits += 1
+        if change_checks > 0 and change_hits > 0:
+            score += 0.08 * (change_hits / change_checks)
+            signals.append("captures_change")
 
-        # 2. Stability: did state stay same or improve?
-        stab_delta = current_state.get("stability", 0.5) - gen_state["stability"]
-        clarity_delta = current_state.get("clarity", gen_state["brightness"]) - gen_state["brightness"]
-        presence_delta = current_state.get("presence", 0.0) - gen_state["presence"]
-        if stab_delta >= -0.05 and clarity_delta >= -0.05:
-            score += 0.08
-            signals.append("stability_maintained")
-        if stab_delta >= 0 and clarity_delta >= 0 and presence_delta >= -0.05:
+        # 3. Category diversity — reward mixing vs all-same-category
+        cats = [PRIMITIVES[t].category.value for t in utterance.tokens if t in PRIMITIVES]
+        unique_cats = len(set(cats))
+        if unique_cats >= 2:
             score += 0.05
-            signals.append("state_improved")
+            signals.append("diverse_categories")
+        elif len(cats) >= 2 and unique_cats == 1:
+            score -= 0.05
+            signals.append("monotone")
 
         score = max(0.0, min(1.0, score))
         return self._record_direct_feedback(utterance, score, signals)
