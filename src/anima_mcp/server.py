@@ -2504,7 +2504,7 @@ def start_display_loop():
         traceback.print_exc(file=sys.stderr)
 
 def stop_display_loop():
-    """Stop continuous display update loop."""
+    """Stop continuous display update loop and blank the display for clean shutdown."""
     global _display_update_task
     try:
         if _display_update_task and not _display_update_task.done():
@@ -2512,14 +2512,18 @@ def stop_display_loop():
             try:
                 print("[Display] Stopped continuous update loop", file=sys.stderr, flush=True)
             except (ValueError, OSError):
-                # stdout/stderr might be closed - ignore
                 pass
     except Exception as e:
-        # Don't crash on shutdown errors
         try:
             print(f"[Display] Error stopping display loop: {e}", file=sys.stderr, flush=True)
         except (ValueError, OSError):
             pass
+    # Blank the display so shutdown/restart doesn't leave a stale or scrambled frame
+    try:
+        if _screen_renderer and _screen_renderer._display:
+            _screen_renderer._display.blank()
+    except Exception:
+        pass
 
 # ============================================================
 # Voice System

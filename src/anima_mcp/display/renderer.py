@@ -260,8 +260,10 @@ class PilRenderer(DisplayRenderer):
 
             print("BrainCraft HAT display initialized", file=sys.stderr, flush=True)
 
-            # Immediately show a waking face (removes grey screen) - safe, never crashes
+            # Immediately blank the display to clear any ST7789 framebuffer noise,
+            # then show the waking face. This prevents scrambled pixels on startup.
             try:
+                self.blank()
                 self._show_waking_face()
                 print("Display showing waking face", file=sys.stderr, flush=True)
             except Exception as e:
@@ -743,6 +745,17 @@ class PilRenderer(DisplayRenderer):
     def flush(self):
         """Push the current image to display. Call after deferred rendering is complete."""
         self._push_to_display()
+
+    def blank(self):
+        """Push a solid black frame to the display. Used for clean shutdown/startup."""
+        if not self._display:
+            return
+        try:
+            black = Image.new("RGB", (self.config.width, self.config.height), (0, 0, 0))
+            self._image = black
+            self._display.image(black)
+        except Exception as e:
+            print(f"[Display] Error blanking: {e}", file=sys.stderr, flush=True)
 
     def is_available(self) -> bool:
         """Check if display hardware is available."""
