@@ -75,15 +75,16 @@ echo ""
 # Step 0: Pull Pi's database before deploying (backup state)
 # Skip backup if Pi is unreachable - deployment can proceed without it
 echo -e "${BLUE}[0/3] Backing up Pi state...${NC}"
-if ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
+if [ "$RESTART" = false ]; then
+    echo -e "${BLUE}  Skipping (called from restore or --no-restart)${NC}"
+elif ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
     if python3 scripts/sync_state.py pull 2>/dev/null; then
         echo -e "${GREEN}  State backed up${NC}"
     else
         echo -e "${BLUE}  Could not pull state (Pi may be offline). Continuing...${NC}"
     fi
 else
-    echo -e "${BLUE}  Pi unreachable (WiFi down?) - skipping backup, deployment will proceed${NC}"
-    echo -e "${BLUE}  Note: Lumen operates autonomously without WiFi - code changes will apply when connection returns${NC}"
+    echo -e "${BLUE}  Pi unreachable (WiFi down?) - skipping backup${NC}"
 fi
 echo ""
 
@@ -97,6 +98,10 @@ if ! ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
     exit 1
 fi
 
+SSH_KEY="${SSH_KEY:-${HOME}/.ssh/id_ed25519_pi}"
+SSH_EXTRA=""
+[ -f "$SSH_KEY" ] && SSH_EXTRA="-i $SSH_KEY"
+
 rsync -avz \
     --exclude='.venv' \
     --exclude='*.db' \
@@ -107,7 +112,7 @@ rsync -avz \
     --exclude='.pytest_cache' \
     --exclude='.mypy_cache' \
     --exclude='htmlcov' \
-    -e "ssh -p $PI_PORT -o ConnectTimeout=5" \
+    -e "ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new" \
     ./ "$PI_USER@$PI_HOST:$PI_PATH/"
 
 if [ $? -eq 0 ]; then
@@ -124,9 +129,9 @@ if [ "$RESTART" = true ]; then
     echo -e "${BLUE}[2/3] Restarting anima service...${NC}"
     
     # Check if systemd service exists (system-level, not user)
-    if ssh -p $PI_PORT -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "systemctl is-enabled anima-broker.service" 2>/dev/null; then
+    if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" "systemctl is-enabled anima-broker.service" 2>/dev/null; then
         # Restart broker first (anima depends on it)
-        if ssh -p $PI_PORT -o ConnectTimeout=5 "$PI_USER@$PI_HOST" "sudo systemctl restart anima-broker && sudo systemctl restart anima" 2>/dev/null; then
+        if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" "sudo systemctl restart anima-broker && sudo systemctl restart anima" 2>/dev/null; then
             echo -e "${GREEN}✓ Services restarted (broker + mind)${NC}"
         else
             echo -e "${YELLOW}⚠ Service restart may have failed (connection issue?)${NC}"
