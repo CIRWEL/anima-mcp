@@ -681,97 +681,137 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
                 logger.debug("[Lumen/Unified] Insight share error: %s", e)
 
 
-async def _lumen_self_answer(anima, readings, identity):
-    """Let Lumen answer its own old questions via LLM reflection.
+def _grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
+    """Answer a question using Lumen's own learned data — no LLM.
 
-    Extracted from _update_display_loop().  Module globals (_screen_renderer)
-    are accessed directly; loop-local values are passed as explicit parameters.
+    Searches insights, beliefs, and preferences for data relevant to
+    the question, then composes a short answer from what Lumen has
+    actually learned through experience.
+    """
+    question_lower = question_text.lower()
+
+    # Collect relevant pieces of self-knowledge
+    evidence = []
+
+    # 1. Self-reflection insights (strongest source)
+    try:
+        from .self_reflection import get_reflection_system
+        reflector = get_reflection_system()
+        for insight in reflector.get_insights():
+            desc = insight.description.lower()
+            # Check keyword overlap between question and insight
+            q_words = set(question_lower.split()) - {"i", "a", "the", "is", "do", "my", "me", "am", "what", "why", "how", "when", "does"}
+            i_words = set(desc.split()) - {"i", "a", "the", "is", "my", "me", "when", "that", "and"}
+            overlap = q_words & i_words
+            if overlap and insight.confidence > 0.3:
+                evidence.append((insight.confidence, insight.description))
+    except Exception:
+        pass
+
+    # 2. Q&A knowledge base
+    try:
+        from .knowledge import get_insights as get_qa_insights
+        for insight in get_qa_insights(limit=20):
+            text_lower = insight.text.lower()
+            q_words = set(question_lower.split()) - {"i", "a", "the", "is", "do", "my", "me", "am", "what", "why", "how", "when", "does"}
+            i_words = set(text_lower.split()) - {"i", "a", "the", "is", "my", "me", "when", "that", "and", "learned"}
+            overlap = q_words & i_words
+            if overlap and insight.confidence > 0.4:
+                evidence.append((insight.confidence * 0.9, insight.text))
+    except Exception:
+        pass
+
+    # 3. Self-model beliefs
+    try:
+        from .self_model import get_self_model
+        model = get_self_model()
+        for bid, belief in model.beliefs.items():
+            if belief.confidence < 0.4:
+                continue
+            desc = belief.description.lower()
+            # Match on dimension keywords
+            dimension_keywords = {
+                "warmth": ["warm", "warmth", "cold", "temperature", "feel"],
+                "clarity": ["clarity", "clear", "light", "see", "dim", "bright"],
+                "stability": ["stable", "stability", "calm", "steady", "recover"],
+                "presence": ["presence", "present", "here", "aware", "alone"],
+            }
+            for dim, keywords in dimension_keywords.items():
+                if any(k in question_lower for k in keywords) and any(k in desc for k in keywords):
+                    strength = belief.get_belief_strength()
+                    evidence.append((belief.confidence * 0.8, f"I am {strength} that {desc}"))
+                    break
+    except Exception:
+        pass
+
+    # 4. Current state as context (if question is about feelings/state)
+    feeling_words = {"feel", "feeling", "now", "right", "am", "doing", "state"}
+    if feeling_words & set(question_lower.split()):
+        if anima:
+            dims = []
+            if anima.warmth > 0.6:
+                dims.append("warm")
+            elif anima.warmth < 0.4:
+                dims.append("cool")
+            if anima.clarity > 0.6:
+                dims.append("clear")
+            elif anima.clarity < 0.4:
+                dims.append("foggy")
+            if anima.stability > 0.6:
+                dims.append("steady")
+            elif anima.stability < 0.4:
+                dims.append("unsettled")
+            if dims:
+                evidence.append((0.9, f"Right now I feel {', '.join(dims)}"))
+
+    if not evidence:
+        return None
+
+    # Sort by confidence, take top 3
+    evidence.sort(key=lambda x: x[0], reverse=True)
+    top = evidence[:3]
+
+    # Compose answer from evidence
+    parts = [text for _, text in top]
+    if len(parts) == 1:
+        return parts[0]
+    # Join naturally
+    return ". ".join(p.rstrip(".") for p in parts) + "."
+
+
+async def _lumen_self_answer(anima, readings, identity):
+    """Let Lumen answer its own old questions using learned self-knowledge.
+
+    No LLM needed — answers are grounded in insights, beliefs, and
+    preferences that Lumen has actually learned through experience.
     """
     import time
-    from .llm_gateway import ReflectionContext, generate_reflection
     from .messages import get_unanswered_questions, add_agent_message
 
     unanswered = get_unanswered_questions(limit=10)
     if not unanswered:
         return
 
-    # Filter to questions older than 10 minutes
+    # Filter to questions older than 10 minutes (external answers get priority)
     min_age = 600  # seconds
     now = time.time()
     old_enough = [q for q in unanswered if (now - q.timestamp) >= min_age]
     if not old_enough:
         return
 
-    # Answer up to 3 questions when queue is deep, otherwise 1
-    max_answers = 3 if len(unanswered) > 3 else 1
-    to_answer = old_enough[:max_answers]
+    # Answer 1 question per cycle
+    question = old_enough[0]
 
-    # Calculate time alive
-    time_alive = identity.total_alive_seconds / 3600.0
-
-    # Get recent observations for richer self-answers
-    sa_obs_texts = []
-    try:
-        from .messages import get_board as _get_board_sa
-        sa_obs = _get_board_sa().get_recent(limit=5, msg_type="observation")
-        sa_obs_texts = [o.text for o in sa_obs]
-    except Exception as e:
-        logger.debug("[Lumen/SelfAnswer] Recent observations error: %s", e)
-
-    answer = None  # ensure defined for follow-up check
-    for question in to_answer:
-        # Build reflection context with the question as trigger
-        context = ReflectionContext(
-            warmth=anima.warmth,
-            clarity=anima.clarity,
-            stability=anima.stability,
-            presence=anima.presence,
-            recent_messages=[],
-            unanswered_questions=[q.text for q in unanswered],
-            time_alive_hours=time_alive,
-            current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
-            trigger="self-answering",
-            trigger_details=question.text,
-            led_brightness=readings.led_brightness if readings else None,
-            light_lux=readings.light_lux if readings else None,
-            recent_observations=sa_obs_texts,
+    answer = _grounded_self_answer(question.text, anima, readings)
+    if answer:
+        result = add_agent_message(
+            text=answer,
+            agent_name="lumen",
+            responds_to=question.message_id
         )
-
-        # Show loading indicator during LLM call
-        if _screen_renderer:
-            _screen_renderer.set_loading("contemplating...")
-
-        try:
-            answer = await generate_reflection(context, mode="self_answer")
-        finally:
-            if _screen_renderer:
-                _screen_renderer.clear_loading()
-
-        if answer:
-            # Post as Lumen's own answer, linked to the question
-            result = add_agent_message(
-                text=answer,
-                agent_name="lumen",
-                responds_to=question.message_id
-            )
-            if result:
-                logger.debug("[Lumen/SelfAnswer] Q: %s", question.text[:60])
-                logger.debug("[Lumen/SelfAnswer] A: %s", answer)
-
-    # Generate follow-up question when queue is not too deep
-    if len(unanswered) < 5 and to_answer and answer:
-        try:
-            from .llm_gateway import generate_follow_up
-            from .messages import add_question
-            follow_up = await generate_follow_up(
-                to_answer[-1].text, answer
-            )
-            if follow_up:
-                add_question(follow_up, author="lumen",
-                             context="follow-up to self-answer")
-                logger.debug("[Lumen/FollowUp] %s", follow_up)
-        except Exception as e:
-            logger.debug("[Lumen/FollowUp] Follow-up generation error: %s", e)
+        if result:
+            logger.debug("[Lumen/SelfAnswer] Q: %s", question.text[:60])
+            logger.debug("[Lumen/SelfAnswer] A: %s", answer[:80])
 
 
 async def _extract_and_validate_schema(anima, readings, identity):
@@ -2259,21 +2299,17 @@ async def _update_display_loop():
                 except Exception as e:
                     logger.debug("[Lumen/Unified] Reflection error: %s", e)
 
-            # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions via LLM
+            # Lumen self-answers: Every 1800 iterations (~60 minutes), answer own old questions
+            # Uses learned insights/beliefs/preferences — no LLM needed
             # Questions must be at least 10 minutes old (external answers get priority)
-            # (Increased from 600 to reduce LLM inference noise)
             if loop_count % SELF_ANSWER_INTERVAL == 0 and readings and anima and identity:
-                from .llm_gateway import get_gateway
-
-                gateway = get_gateway()
-                if gateway.enabled:
-                    try:
-                        await safe_call_async(
-                            lambda: _lumen_self_answer(anima, readings, identity),
-                            default=None, log_error=True,
-                        )
-                    except Exception as e:
-                        logger.debug("[Lumen/SelfAnswer] Self-answer error: %s", e)
+                try:
+                    await safe_call_async(
+                        lambda: _lumen_self_answer(anima, readings, identity),
+                        default=None, log_error=True,
+                    )
+                except Exception as e:
+                    logger.debug("[Lumen/SelfAnswer] Self-answer error: %s", e)
 
 
             # Growth system: Observe state for preference learning and check milestones
