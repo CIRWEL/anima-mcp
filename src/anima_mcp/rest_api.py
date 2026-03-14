@@ -435,7 +435,7 @@ async def rest_gallery(request):
         if not drawings_dir.exists():
             return JSONResponse({"drawings": [], "total": 0})
 
-        files = list(drawings_dir.glob("lumen_drawing*.png"))
+        files = [f for f in drawings_dir.glob("lumen_drawing*.png") if f.stat().st_size > 0]
 
         def get_era(filename):
             """Determine which era a drawing belongs to."""

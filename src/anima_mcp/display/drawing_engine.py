@@ -1339,8 +1339,10 @@ class DrawingEngine:
             filename = f"lumen_drawing_{timestamp}{era_tag}{suffix}.png"
             filepath = drawings_dir / filename
 
-            # Save the image
-            img.save(filepath)
+            # Atomic save: write to temp file, then rename to prevent 0-byte files on crash
+            tmp_path = filepath.with_suffix(".tmp")
+            img.save(tmp_path)
+            tmp_path.rename(filepath)
 
             # Update tracking
             self.canvas.last_save_time = time.time()
