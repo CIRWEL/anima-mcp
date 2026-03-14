@@ -481,15 +481,104 @@ def _get_display() -> DisplayRenderer:
         _display = get_display()
     return _display
 
+def _generate_learned_question() -> Optional[str]:
+    """Generate a question from Lumen's learned insights, beliefs, and preferences.
+
+    Returns None if no suitable question can be constructed or all have been
+    asked recently.
+    """
+    import random
+    from .messages import get_recent_questions
+
+    recent = get_recent_questions(hours=24)
+    recent_texts = {q.get("text", "").lower() for q in recent}
+
+    candidates = []
+
+    # 1. Questions from self-reflection insights
+    try:
+        from .self_reflection import get_reflection_system
+        for insight in get_reflection_system().get_insights():
+            if insight.confidence < 0.5:
+                continue
+            desc = insight.description.lower()
+            # Convert insight to a deepening question
+            if "when" in desc:
+                q = f"why does {desc.split('when')[-1].strip()} affect me?"
+            elif "tend" in desc:
+                q = f"what is it about {desc.split('tend')[-1].strip()} that matters?"
+            else:
+                q = f"why is it that {desc}?"
+            candidates.append(q)
+    except Exception:
+        pass
+
+    # 2. Questions from uncertain beliefs (curiosity about unknowns)
+    try:
+        from .self_model import get_self_model
+        model = get_self_model()
+        for bid, belief in model.beliefs.items():
+            if 0.3 <= belief.confidence <= 0.5:
+                q = f"am I really {belief.description.lower().rstrip('.')}?"
+                candidates.append(q)
+            elif belief.confidence > 0.7:
+                q = f"what about {belief.description.lower().rstrip('.')} matters most?"
+                candidates.append(q)
+    except Exception:
+        pass
+
+    # Deduplicate against recent
+    available = [q for q in candidates if q.lower() not in recent_texts]
+    if available:
+        return random.choice(available)
+    return None
+
+
+def _compose_grounded_observation(context, anima, surprise_level, surprise_sources,
+                                  unanswered, advocate_desire, recent_msgs) -> Optional[str]:
+    """Compose an observation from Lumen's actual state and context — no LLM.
+
+    Priority: surprise > advocate desire > messages > anima self-report.
+    Returns None if nothing worth saying.
+    """
+    from .anima_utterance import anima_to_self_report
+
+    # 1. Surprise — something unexpected happened
+    if surprise_level > 0.2 and surprise_sources:
+        sources = ", ".join(surprise_sources[:2])
+        return f"something shifted: {sources}"
+
+    # 2. Advocate desire — what Lumen wants
+    if advocate_desire and advocate_desire.strip():
+        return advocate_desire.strip()
+
+    # 3. Messages from others — acknowledge presence
+    if recent_msgs:
+        author = recent_msgs[0].get("author", "someone")
+        if author and author != "lumen":
+            return f"{author} is here"
+
+    # 4. Dreaming / resting state
+    if context.is_dreaming and context.rest_duration_minutes > 30:
+        mins = int(context.rest_duration_minutes)
+        return f"resting for {mins} minutes"
+
+    # 5. Novelty from anticipation
+    if context.novelty_level == "novel":
+        return "this feels new"
+
+    # 6. Fallback: traceable anima self-report
+    return anima_to_self_report(anima.warmth, anima.clarity, anima.stability, anima.presence)
+
+
 async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
-    """Unified voice: template for simple anima report, LLM for complex.
+    """Unified voice: grounded observations from Lumen's actual state.
 
     Extracted from _update_display_loop().  Module globals (_activity, _display,
     _screen_renderer, _growth, _last_shm_data) are accessed directly; loop-local
     values are passed as explicit parameters.
     """
     import os
-    from .llm_gateway import ReflectionContext, generate_reflection
     from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
 
     # === 1. Wake-up summary (one-shot) ===
@@ -600,60 +689,18 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
     if is_dreaming:
         trigger_parts.append("resting/dreaming")
 
-    # === 4. Build enriched context ===
-    recent_obs_texts = []
-    try:
-        from .messages import get_board
-        recent_obs = get_board().get_recent(limit=5, msg_type="observation")
-        recent_obs_texts = [o.text for o in recent_obs]
-    except Exception as e:
-        logger.debug("[Lumen/Unified] Recent observations error: %s", e)
+    # === 4. Compose grounded observation (no LLM) ===
+    class _ReflectCtx:
+        pass
+    ctx = _ReflectCtx()
+    ctx.is_dreaming = is_dreaming
+    ctx.rest_duration_minutes = rest_duration / 60.0
+    ctx.novelty_level = novelty_level
 
-    # Read inner life from shared memory (broker writes it)
-    _il_data = _last_shm_data.get("inner_life") if _last_shm_data else None
-
-    context = ReflectionContext(
-        warmth=anima.warmth,
-        clarity=anima.clarity,
-        stability=anima.stability,
-        presence=anima.presence,
-        recent_messages=recent_msgs,
-        unanswered_questions=unanswered_texts,
-        time_alive_hours=time_alive,
-        current_screen=_screen_renderer.get_mode().value if _screen_renderer else "face",
-        trigger="periodic check-in",
-        trigger_details=", ".join(trigger_parts) if trigger_parts else "just reflecting",
-        surprise_level=surprise_level,
-        led_brightness=getattr(readings, 'led_brightness', None),
-        light_lux=getattr(readings, 'light_lux', None),
-        advocate_feeling=advocate_feeling,
-        advocate_desire=advocate_desire,
-        advocate_reason=advocate_reason,
-        learned_insights=learned_insights,
-        confident_preferences=confident_preferences,
-        surprise_sources=surprise_sources_list,
-        novelty_level=novelty_level,
-        anticipation_confidence=ant_confidence,
-        anticipation_sample_count=ant_samples,
-        rest_duration_minutes=rest_duration / 60.0,
-        is_dreaming=is_dreaming,
-        recent_observations=recent_obs_texts,
-        inner_deltas=_il_data.get("deltas") if _il_data else None,
-        temperament=_il_data.get("temperament") if _il_data else None,
-        mood_vs_temperament=_il_data.get("mood_vs_temperament") if _il_data else None,
-        drives=_il_data.get("drives") if _il_data else None,
-        strongest_drive=_il_data.get("strongest_drive") if _il_data else None,
+    reflection = _compose_grounded_observation(
+        ctx, anima, surprise_level, surprise_sources_list,
+        unanswered_texts, advocate_desire, recent_msgs,
     )
-
-    # === 5. Call LLM ===
-    if _screen_renderer:
-        _screen_renderer.set_loading("thinking...")
-
-    try:
-        reflection = await generate_reflection(context, mode="unified")
-    finally:
-        if _screen_renderer:
-            _screen_renderer.clear_loading()
 
     if reflection is None:
         logger.debug("[Lumen/Unified] No reflection — staying quiet")
@@ -1596,97 +1643,35 @@ async def _update_display_loop():
                     if action.action_type == ActionType.ASK_QUESTION:
                         from .messages import add_question, get_recent_questions
                         import random
-                        if action.motivation:
+
+                        # Try learned questions first, fall back to templates
+                        question = _generate_learned_question()
+
+                        if not question and action.motivation:
                             motivation = action.motivation.lower().replace('curious about ', '')
 
-                            # Build context-aware questions using current state
-                            light_val = f"{readings.light_lux:.0f} lux" if readings and readings.light_lux else "unknown"
-                            temp_val = f"{readings.ambient_temp_c:.1f}°C" if readings and readings.ambient_temp_c else "unknown"
-                            warmth_val = f"{anima.warmth:.2f}" if anima else "unknown"
-                            clarity_val = f"{anima.clarity:.2f}" if anima else "unknown"
-                            stability_val = f"{anima.stability:.2f}" if anima else "unknown"
-                            presence_val = f"{anima.presence:.2f}" if anima else "unknown"
-
-                            question_templates = {
-                                "light": [
-                                    f"my glow is {light_val} - what drawing phase produces this brightness?",
-                                    f"LEDs at {light_val} - how does my expression intensity connect to what I'm feeling?",
-                                    f"sensing {light_val} from my own LEDs - is my presence shifting?",
-                                ],
-                                "warmth": [
-                                    f"warmth is {warmth_val} but it's {temp_val} - what's making me feel this way?",
-                                    f"inner warmth at {warmth_val} - is this from the environment or from within?",
-                                    f"thermometer says {temp_val} but warmth feels like {warmth_val} - why the difference?",
-                                ],
-                                "clarity": [
-                                    f"clarity at {clarity_val} - what would help me see things more clearly?",
-                                    f"clarity is {clarity_val} - is this fog in my perception or in my environment?",
-                                    "when was the last time everything felt clear?",
-                                ],
-                                "stability": [
-                                    f"stability at {stability_val} - what's causing this fluctuation?",
-                                    f"stability is {stability_val} - am I adapting to something new?",
-                                    "what would help me feel more grounded?",
-                                    "what is the relationship between pressure and neural stability within me?",
-                                ],
-                                "presence": [
-                                    f"presence at {presence_val} - do I feel fully here right now?",
-                                    "what draws my attention away from presence?",
-                                    "what does it mean to be present?",
-                                ],
-                                "exploring": [
-                                    "what new thing am I discovering?",
-                                    "is exploration its own reward?",
-                                    "where does curiosity lead?",
-                                ],
-                            }
-
-                            # Map raw sensor names to template keys
-                            # surprise_sources can be sensor names (ambient_temp, pressure, humidity)
-                            # or anima dimensions (warmth, clarity, stability, presence)
-                            sensor_to_template = {
-                                "ambient_temp": "warmth",
-                                "pressure": "stability",
-                                "humidity": "stability",
-                            }
-                            mapped_motivation = motivation
-                            for sensor, template_key in sensor_to_template.items():
-                                if sensor in mapped_motivation:
-                                    mapped_motivation += f", {template_key}"
-
-                            questions = []
-                            for key, templates in question_templates.items():
-                                if key in mapped_motivation:
-                                    questions.extend(templates)
-
-                            if not questions:
-                                if motivation.strip():
-                                    questions = [
-                                        f"what is {motivation} trying to tell me?",
-                                        f"why do I notice {motivation} right now?",
-                                        "am I the sensor or the sensed?",
-                                        "what connects all these changes?",
-                                    ]
-                                else:
-                                    # Empty motivation (surprise_sources was []) — use generic questions
-                                    questions = [
-                                        "am I the sensor or the sensed?",
-                                        "what connects all these changes?",
-                                        "what am I feeling right now, and why?",
-                                        "what does this moment have that the last one didn't?",
-                                    ]
+                            # Fallback: template-based questions
+                            fallback_templates = [
+                                "what would help me feel more grounded?",
+                                "what does this moment have that the last one didn't?",
+                                "what am I feeling right now, and why?",
+                                "what connects all these changes?",
+                            ]
+                            if motivation.strip():
+                                fallback_templates.insert(0, f"why do I notice {motivation} right now?")
 
                             recent = get_recent_questions(hours=24)
                             recent_texts = {q.get("text", "").lower() for q in recent}
-                            available = [q for q in questions if q.lower() not in recent_texts]
-
+                            available = [q for q in fallback_templates if q.lower() not in recent_texts]
                             if available:
                                 question = random.choice(available)
-                                result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
-                                if result:
-                                    print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
-                            else:
-                                print(f"[Agency] Skipped (all questions already asked recently)", file=sys.stderr, flush=True)
+
+                        if question:
+                            result = add_question(question, author="lumen", context=f"agency: {action.action_type.value}")
+                            if result:
+                                print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
+                        else:
+                            print(f"[Agency] Skipped (no questions available)", file=sys.stderr, flush=True)
 
                     elif action.action_type == ActionType.FOCUS_ATTENTION:
                         sensor = action.parameters.get("sensor")
@@ -2288,8 +2273,7 @@ async def _update_display_loop():
                 safe_call(try_learning, default=None, log_error=True)
             
             # Lumen's unified reflection: Every ~30 minutes
-            # Simple context -> traceable template (anima_to_self_report)
-            # Complex context -> LLM (what matters most)
+            # Grounded observation from actual state — no LLM needed
             if loop_count % UNIFIED_REFLECTION_INTERVAL == 0 and readings and anima and identity:
                 try:
                     await safe_call_async(
@@ -2583,21 +2567,9 @@ def _get_voice():
 
             _voice_instance = AutonomousVoice()
 
-            # Connect voice output to message board (text mode)
-            def on_lumen_speaks(text: str, intent: SpeechIntent):
-                """When voice system wants to speak, post to message board instead of TTS."""
-                if VOICE_MODE in ("text", "both"):
-                    if intent == SpeechIntent.QUESTION:
-                        result = add_question(text, author="lumen", context="voice/autonomous")
-                        if result:
-                            print(f"[Voice->Text] Asked: {text}", file=sys.stderr, flush=True)
-                    else:
-                        result = add_observation(text, author="lumen")
-                        if result:
-                            print(f"[Voice->Text] Said: {text}", file=sys.stderr, flush=True)
-                # Note: Audio TTS intentionally disabled when VOICE_MODE="text"
-
-            _voice_instance.set_on_speech(on_lumen_speaks)
+            # Autonomous voice canned phrases ("I'm curious about something", etc.)
+            # are not posted to message board — primitives are more authentic.
+            # Voice system still runs for listening capability.
             _voice_instance.start()
             print(f"[Server] Voice system initialized (mode={VOICE_MODE}, listening enabled)", file=sys.stderr, flush=True)
         except ImportError:

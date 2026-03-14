@@ -246,9 +246,13 @@ class PreferencesMixin:
             old_confidence = pref.confidence
 
             # Apply time-based decay before updating (allows genuine belief revision)
-            # 2% decay per day since last confirmation, floor at 50%
+            # 2% decay per day of alive time, floor at 50%
+            # Scale by alive_ratio: Lumen is only alive ~15% of the time,
+            # so wall-clock decay would erode preferences faster than they're reinforced
             days_since = (now - pref.last_confirmed).days
-            decay_factor = max(0.5, 1.0 - 0.02 * days_since)
+            alive_ratio = 0.15  # conservative estimate; Lumen sleeps/reboots often
+            effective_days = days_since * alive_ratio
+            decay_factor = max(0.5, 1.0 - 0.02 * effective_days)
             pref.confidence *= decay_factor
 
             # Update with exponential moving average
