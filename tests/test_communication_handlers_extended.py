@@ -1,6 +1,6 @@
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -12,6 +12,24 @@ def _parse(result):
 
 
 class TestCallerNameResolution:
+    def test_get_caller_session_id_prefers_mcp_header(self):
+        from anima_mcp.handlers.communication import _get_caller_session_id
+
+        with patch(
+            "anima_mcp.handlers.communication._get_request_headers",
+            return_value={"mcp-session-id": "mcp-1", "x-session-id": "x-1"},
+        ):
+            assert _get_caller_session_id() == "mcp-1"
+
+    def test_get_caller_session_id_falls_back_to_x_session(self):
+        from anima_mcp.handlers.communication import _get_caller_session_id
+
+        with patch(
+            "anima_mcp.handlers.communication._get_request_headers",
+            return_value={"x-session-id": "x-1"},
+        ):
+            assert _get_caller_session_id() == "x-1"
+
     def test_parse_caller_name_from_ua_variants(self):
         from anima_mcp.handlers.communication import _parse_caller_name_from_ua
 
@@ -36,6 +54,13 @@ class TestCallerNameResolution:
 
 @pytest.mark.asyncio
 class TestConfigureVoice:
+    async def test_voice_unavailable_returns_error(self):
+        from anima_mcp.handlers.communication import handle_configure_voice
+
+        with patch("anima_mcp.server._get_voice", return_value=None):
+            data = _parse(await handle_configure_voice({"action": "status"}))
+        assert "Voice system not available" in data["error"]
+
     async def test_status_returns_voice_state(self):
         from anima_mcp.handlers.communication import handle_configure_voice
 
@@ -134,6 +159,34 @@ class TestPrimitiveFeedback:
 
 @pytest.mark.asyncio
 class TestPostMessageRespondsToMatching:
+    async def test_empty_message_returns_error(self):
+        from anima_mcp.handlers.communication import handle_post_message
+
+        data = _parse(await handle_post_message({"message": "   "}))
+        assert data["error"] == "message parameter required"
+
+    async def test_human_message_tracks_interaction_and_social_boost(self):
+        from anima_mcp.handlers.communication import handle_post_message
+
+        growth = MagicMock()
+        activity = MagicMock()
+        store = SimpleNamespace()
+        anima = SimpleNamespace(clarity=0.77)
+        boost_flag = SimpleNamespace(touch=MagicMock())
+
+        with patch("anima_mcp.server._growth", growth), \
+             patch("anima_mcp.server._activity", activity), \
+             patch("anima_mcp.server._store", store), \
+             patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
+             patch("anima_mcp.messages.add_user_message", return_value="u1"), \
+             patch("anima_mcp.handlers.communication._SOCIAL_BOOST_PATH", boost_flag):
+            data = _parse(await handle_post_message({"message": "hello lumen", "source": "human"}))
+
+        assert data["success"] is True
+        assert data["source"] == "human"
+        growth.record_interaction.assert_called_once()
+        activity.record_interaction.assert_called_once()
+
     async def test_agent_message_matches_partial_question_id(self):
         from anima_mcp.handlers.communication import handle_post_message
 
@@ -178,3 +231,139 @@ class TestPostMessageRespondsToMatching:
 
         assert "error" in data
         assert "not found" in data["error"]
+
+
+@pytest.mark.asyncio
+class TestLumenQaExtended:
+    async def test_list_mode_returns_only_truly_unanswered(self):
+        from anima_mcp.handlers.communication import handle_lumen_qa
+
+        q1 = SimpleNamespace(
+            message_id="q1",
+            msg_type="question",
+            text="What is light?",
+            context=None,
+            answered=False,
+            state_snapshot={"mood": "curious"},
+            age_str=lambda: "5m",
+        )
+        q2 = SimpleNamespace(
+            message_id="q2",
+            msg_type="question",
+            text="Why am I calm at night?",
+            context=None,
+            answered=True,  # auto-expired but still unanswered
+            state_snapshot=None,
+            age_str=lambda: "15m",
+        )
+        q3 = SimpleNamespace(
+            message_id="q3",
+            msg_type="question",
+            text="Will anyone answer this?",
+            context=None,
+            answered=False,
+            state_snapshot=None,
+            age_str=lambda: "1m",
+        )
+        a3 = SimpleNamespace(msg_type="agent", responds_to="q3")
+        board = SimpleNamespace(_messages=[q1, q2, q3, a3], _load=MagicMock(), repair_orphaned_answered=lambda: 1)
+
+        with patch("anima_mcp.messages.get_board", return_value=board):
+            data = _parse(await handle_lumen_qa({"limit": "2"}))
+
+        assert data["action"] == "list"
+        assert data["unanswered_count"] == 2
+        ids = [q["id"] for q in data["questions"]]
+        assert "q3" not in ids
+        assert "q2" in ids
+
+    async def test_answer_mode_prefix_match_and_insight_enrichment(self):
+        from anima_mcp.handlers.communication import handle_lumen_qa
+
+        q = SimpleNamespace(message_id="q_abcdef123", msg_type="question", text="How does light affect you?")
+        board = SimpleNamespace(_messages=[q], _load=MagicMock())
+        msg = SimpleNamespace(message_id="m1")
+        bridge = SimpleNamespace(resolve_caller_identity=AsyncMock(return_value="Resolved Agent"))
+        insight = SimpleNamespace(text="Dim light helps calm", category="environment")
+        growth = SimpleNamespace(get_visitor_context=lambda name: {"name": name, "bond": "trusted"})
+
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.messages.add_agent_message", return_value=msg), \
+             patch("anima_mcp.handlers.communication._get_unitares_bridge", return_value=bridge), \
+             patch("anima_mcp.knowledge.extract_insight_from_answer", AsyncMock(return_value=insight)), \
+             patch("anima_mcp.knowledge.apply_insight", return_value={"shift": "positive"}), \
+             patch("anima_mcp.server._growth", growth):
+            data = _parse(await handle_lumen_qa({
+                "question_id": "q_abc",
+                "answer": "I feel calmer when the room is dim.",
+                "client_session_id": "sess-1",
+                "agent_name": "agent",
+            }))
+
+        assert data["success"] is True
+        assert data["question_id"] == "q_abcdef123"
+        assert data["matched_partial_id"] == "q_abc"
+        assert data["agent_name"] == "Resolved Agent"
+        assert data["insight"]["behavior_effects"]["shift"] == "positive"
+        assert data["visitor_context"]["bond"] == "trusted"
+
+    async def test_answer_mode_returns_helpful_error_when_question_missing(self):
+        from anima_mcp.handlers.communication import handle_lumen_qa
+
+        board = SimpleNamespace(_messages=[], _load=MagicMock())
+        with patch("anima_mcp.messages.get_board", return_value=board):
+            data = _parse(await handle_lumen_qa({"question_id": "missing", "answer": "test"}))
+
+        assert data["success"] is False
+        assert "not found" in data["error"]
+        assert "recent_question_ids" in data
+
+
+@pytest.mark.asyncio
+class TestSayAndPrimitiveFeedbackEdges:
+    async def test_say_requires_text(self):
+        from anima_mcp.handlers.communication import handle_say
+
+        data = _parse(await handle_say({"text": ""}))
+        assert data["error"] == "No text provided"
+
+    async def test_say_audio_mode_invokes_tts_and_returns_success(self):
+        from anima_mcp.handlers.communication import handle_say
+
+        voice_inner = SimpleNamespace(say=MagicMock())
+        voice = SimpleNamespace(_voice=voice_inner)
+        with patch("anima_mcp.messages.add_observation", return_value=SimpleNamespace(message_id="obs1")), \
+             patch("anima_mcp.server._store", SimpleNamespace(add_note=MagicMock())), \
+             patch("anima_mcp.server._get_voice", return_value=voice), \
+             patch("anima_mcp.server.VOICE_MODE", "audio"):
+            data = _parse(await handle_say({"text": "Hello world"}))
+
+        voice_inner.say.assert_called_once()
+        assert data["success"] is True
+        assert data["mode"] == "audio"
+
+    async def test_primitive_feedback_confused_and_no_recent_paths(self):
+        from anima_mcp.handlers.communication import handle_primitive_feedback
+
+        lang = MagicMock()
+        lang.record_explicit_feedback.side_effect = [None, {"score": -0.2, "token_updates": {"noise": -1}}]
+        with patch("anima_mcp.server._store", SimpleNamespace(db_path=":memory:")), \
+             patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
+            no_recent = _parse(await handle_primitive_feedback({"action": "resonate"}))
+            confused = _parse(await handle_primitive_feedback({"action": "confused"}))
+
+        assert "error" in no_recent
+        assert no_recent["error"] == "No recent utterance to give feedback on"
+        assert confused["success"] is True
+        assert confused["action"] == "confused"
+
+    async def test_primitive_feedback_handles_backend_exception(self):
+        from anima_mcp.handlers.communication import handle_primitive_feedback
+
+        with patch(
+            "anima_mcp.primitive_language.get_language_system",
+            side_effect=RuntimeError("db unavailable"),
+        ):
+            data = _parse(await handle_primitive_feedback({"action": "stats"}))
+
+        assert "Primitive language error" in data["error"]

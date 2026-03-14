@@ -6,6 +6,7 @@ Validates governance integration and fallback behavior.
 
 import pytest
 import asyncio
+import json
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
@@ -13,6 +14,17 @@ from anima_mcp.unitares_bridge import UnitaresBridge, check_governance
 from anima_mcp.anima import Anima
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.eisv_mapper import EISVMetrics
+
+
+def _mock_http_response(status=200, body='{"result": {}}', content_type="application/json"):
+    """Create async-context-manager response object for aiohttp mocks."""
+    resp = AsyncMock()
+    resp.status = status
+    resp.headers = {"Content-Type": content_type}
+    resp.text = AsyncMock(return_value=body)
+    resp.__aenter__ = AsyncMock(return_value=resp)
+    resp.__aexit__ = AsyncMock(return_value=False)
+    return resp
 
 
 def create_test_readings() -> SensorReadings:
@@ -314,6 +326,123 @@ async def test_check_availability_staleness_recheck():
     bridge._last_availability_check = time.time() - 360
     result = await bridge.check_availability()
     assert result is False
+
+
+@pytest.mark.asyncio
+async def test_check_availability_handles_401_and_opens_circuit():
+    """401 responses should mark unavailable and trip circuit logic."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    bridge._circuit_threshold = 1
+
+    mock_session = AsyncMock()
+    mock_session.get = MagicMock(return_value=_mock_http_response(status=401, body="unauthorized"))
+
+    with patch.object(bridge, "_get_session", return_value=mock_session):
+        available = await bridge.check_availability()
+
+    assert available is False
+    assert bridge._available is False
+    assert bridge._circuit_open_until > 0
+
+
+@pytest.mark.asyncio
+async def test_call_unitares_returns_parsed_governance_payload():
+    """_call_unitares should unwrap MCP tool content and map fields."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp", agent_id="agent-123")
+    bridge.set_session_id("sess-1")
+
+    governance_text = '{"action":"pause","margin":"tight","reason":"edge case","resolved_agent_id":"abc-123"}'
+    mcp_result = json.dumps(
+        {"result": {"content": [{"type": "text", "text": governance_text}]}}
+    )
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(return_value=_mock_http_response(body=mcp_result))
+
+    anima = create_test_anima()
+    readings = create_test_readings()
+    eisv = EISVMetrics(energy=0.4, integrity=0.5, entropy=0.3, void=0.2)
+
+    with patch.object(bridge, "_get_session", return_value=mock_session), patch(
+        "anima_mcp.unitares_bridge.estimate_complexity", return_value=0.2
+    ), patch(
+        "anima_mcp.unitares_bridge.generate_status_text", return_value="status"
+    ), patch(
+        "anima_mcp.unitares_bridge.compute_ethical_drift", return_value=0.01
+    ), patch(
+        "anima_mcp.unitares_bridge.compute_confidence", return_value=0.8
+    ):
+        decision = await bridge._call_unitares(anima, readings, eisv)
+
+    assert decision["source"] == "unitares"
+    assert decision["action"] == "pause"
+    assert decision["margin"] == "tight"
+    assert decision["unitares_agent_id"] == "abc-123"
+
+
+@pytest.mark.asyncio
+async def test_call_unitares_raises_on_http_error():
+    """_call_unitares wraps HTTP failures in a bridge exception."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp", agent_id="agent-123")
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(return_value=_mock_http_response(status=500, body="boom"))
+
+    anima = create_test_anima()
+    readings = create_test_readings()
+    eisv = EISVMetrics(energy=0.4, integrity=0.5, entropy=0.3, void=0.2)
+
+    with patch.object(bridge, "_get_session", return_value=mock_session), patch(
+        "anima_mcp.unitares_bridge.estimate_complexity", return_value=0.2
+    ), patch(
+        "anima_mcp.unitares_bridge.generate_status_text", return_value="status"
+    ), patch(
+        "anima_mcp.unitares_bridge.compute_ethical_drift", return_value=0.01
+    ), patch(
+        "anima_mcp.unitares_bridge.compute_confidence", return_value=0.8
+    ):
+        with pytest.raises(Exception, match="HTTP 500"):
+            await bridge._call_unitares(anima, readings, eisv)
+
+
+@pytest.mark.asyncio
+async def test_sync_identity_metadata_success():
+    """Identity metadata sync returns True for successful MCP result."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp", agent_id="agent-123")
+    bridge.set_session_id("sess-1")
+    identity = MagicMock()
+    identity.born_at = datetime.now()
+    identity.total_awakenings = 2
+    identity.total_alive_seconds = 1200.0
+    identity.alive_ratio.return_value = 0.3
+    identity.name_history = ["Anima", "Lumen"]
+    identity.current_awakening_at = datetime.now()
+    identity.name = "Lumen"
+    identity.creature_id = "creature-abcdef"
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(
+        return_value=_mock_http_response(body='{"result": {"content": [{"type":"text","text":"ok"}]}}')
+    )
+
+    with patch.object(bridge, "_get_session", return_value=mock_session):
+        ok = await bridge.sync_identity_metadata(identity)
+    assert ok is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_caller_identity_uses_label_fallback():
+    """resolve_caller_identity should return label when display_name absent."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    bridge._available = True
+    bridge.set_session_id("sess-1")
+
+    payload = {"result": {"content": [{"type": "text", "text": '{"label":"Visitor 7"}'}]}}
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(return_value=_mock_http_response(body=json.dumps(payload)))
+
+    with patch.object(bridge, "_get_session", return_value=mock_session):
+        name = await bridge.resolve_caller_identity()
+
+    assert name == "Visitor 7"
 
 
 def test_anima_snapshot_module_level():
