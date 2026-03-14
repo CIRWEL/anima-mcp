@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
 from datetime import datetime
+from types import SimpleNamespace
 
 from conftest import make_anima, make_readings
 
@@ -282,6 +283,13 @@ class TestExecuteAnimaStep:
         with pytest.raises(ValueError, match="Unknown anima tool"):
             await orchestrator._execute_anima_step(step)
 
+    async def test_get_calibration_returns_serialized_config(self, orchestrator):
+        calibration = SimpleNamespace(to_dict=lambda: {"warmth_bias": 0.1})
+        step = WorkflowStep(name="s", server="anima", tool="get_calibration", arguments={})
+        with patch("anima_mcp.config.get_calibration", return_value=calibration):
+            result = await orchestrator._execute_anima_step(step)
+        assert result["calibration"]["warmth_bias"] == 0.1
+
 
 # ---------------------------------------------------------------------------
 # _execute_unitares_step
@@ -363,3 +371,69 @@ class TestGetOrchestrator:
             assert o1 is o2
         finally:
             mod._orchestrator = old
+
+
+# ---------------------------------------------------------------------------
+# _get_readings_and_anima
+# ---------------------------------------------------------------------------
+
+class TestGetReadingsAndAnima:
+    def test_uses_shared_memory_when_present(self, orchestrator):
+        readings = make_readings()
+        anima = make_anima()
+        shm_data = {
+            "readings": {
+                "timestamp": datetime.now().isoformat(),
+                "cpu_temp_c": readings.cpu_temp_c,
+                "ambient_temp_c": readings.ambient_temp_c,
+                "humidity_pct": readings.humidity_pct,
+                "light_lux": readings.light_lux,
+                "cpu_percent": readings.cpu_percent,
+                "memory_percent": readings.memory_percent,
+                "disk_percent": readings.disk_percent,
+                "pressure_hpa": readings.pressure_hpa,
+            },
+            "anima": {"warmth": 0.5},
+        }
+        shm_client = MagicMock()
+        shm_client.read.return_value = shm_data
+
+        with patch("anima_mcp.workflow_orchestrator.SharedMemoryClient", return_value=shm_client), \
+             patch("anima_mcp.workflow_orchestrator.get_calibration", return_value=MagicMock()), \
+             patch("anima_mcp.workflow_orchestrator.sense_self", return_value=anima):
+            out_readings, out_anima = orchestrator._get_readings_and_anima()
+
+        assert out_readings is not None
+        assert out_anima is anima
+
+    def test_falls_back_to_direct_sensors_when_shm_missing(self, orchestrator):
+        readings = make_readings()
+        anima = make_anima()
+        sensors = MagicMock()
+        sensors.read.return_value = readings
+        orchestrator._anima_sensors = sensors
+
+        shm_client = MagicMock()
+        shm_client.read.return_value = None
+
+        with patch("anima_mcp.workflow_orchestrator.SharedMemoryClient", return_value=shm_client), \
+             patch("anima_mcp.workflow_orchestrator.get_calibration", return_value=MagicMock()), \
+             patch("anima_mcp.workflow_orchestrator.sense_self", return_value=anima):
+            out_readings, out_anima = orchestrator._get_readings_and_anima()
+
+        assert out_readings is readings
+        assert out_anima is anima
+
+    def test_returns_none_when_both_sources_fail(self, orchestrator):
+        orchestrator._anima_sensors = MagicMock()
+        orchestrator._anima_sensors.read.side_effect = RuntimeError("sensor down")
+        shm_client = MagicMock()
+        shm_client.read.return_value = {"readings": {"timestamp": "bad-ts"}, "anima": {}}
+
+        with patch("anima_mcp.workflow_orchestrator.SharedMemoryClient", return_value=shm_client), \
+             patch("anima_mcp.workflow_orchestrator.get_calibration", side_effect=RuntimeError("bad cal")), \
+             patch("anima_mcp.workflow_orchestrator.sense_self", side_effect=RuntimeError("bad")):
+            out_readings, out_anima = orchestrator._get_readings_and_anima()
+
+        assert out_readings is None
+        assert out_anima is None
