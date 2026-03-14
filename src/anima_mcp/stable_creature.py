@@ -989,6 +989,11 @@ def run_creature():
         except Exception:
             pass
 
+        # Persist store state before shutting down the event loop
+        if store:
+            store.sleep()
+            store.close()
+
         # Close UNITARES bridge session (connection pooling cleanup)
         if bridge:
             try:
@@ -998,9 +1003,6 @@ def run_creature():
 
         _bg_loop.call_soon_threadsafe(_bg_loop.stop)
         _bg_loop.close()
-        if store:
-            store.sleep()
-            store.close()
         shm_client.clear()  # Clean up shared memory
         print("[StableCreature] Stopped.")
 

@@ -188,8 +188,10 @@ def _get_server_bridge():
         _server_bridge = UnitaresBridge(unitares_url=unitares_url, timeout=8.0)
         # Set agent identity if store is available
         if _store:
-            _server_bridge.set_agent_id(_store.identity.creature_id)
-            _server_bridge.set_session_id(f"anima-server-{_store.identity.creature_id[:8]}")
+            _identity = _store.get_identity()
+            if _identity:
+                _server_bridge.set_agent_id(_identity.creature_id)
+                _server_bridge.set_session_id(f"anima-server-{_identity.creature_id[:8]}")
         return _server_bridge
     except Exception as e:
         logger.debug("[Governance] Bridge init failed: %s", e)
@@ -206,7 +208,7 @@ async def _server_governance_fallback(anima, readings):
         logger.warning("[Governance] Fallback: no bridge (UNITARES_URL not set?)")
         return None
     try:
-        identity = _store.identity if _store else None
+        identity = _store.get_identity() if _store else None
         drawing_eisv = _screen_renderer.get_drawing_eisv() if _screen_renderer else None
         decision = await bridge.check_in(anima, readings, identity=identity, drawing_eisv=drawing_eisv)
         source = decision.get("source", "?") if decision else "None"

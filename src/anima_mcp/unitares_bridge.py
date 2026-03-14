@@ -29,6 +29,13 @@ from .anima import Anima
 from .sensors.base import SensorReadings
 
 
+class _AnimaSnapshot:
+    """Lightweight snapshot of anima state for delta computation between check-ins."""
+    __slots__ = ('warmth', 'clarity', 'stability', 'presence')
+    def __init__(self, w, c, s, p):
+        self.warmth, self.clarity, self.stability, self.presence = w, c, s, p
+
+
 class UnitaresBridge:
     """
     Connect anima creature to UNITARES governance.
@@ -168,9 +175,11 @@ class UnitaresBridge:
         if self._available is False and self._circuit_open_until > 0:
             self._available = None
 
-        # If already available, return immediately (no need to recheck)
+        # If already available, return immediately unless stale (recheck every 5 min)
         if self._available is True:
-            return True
+            if self._last_availability_check and (current_time - self._last_availability_check < 300.0):
+                return True
+            # Fall through to recheck
 
         try:
             # Try to connect to UNITARES server using shared session
@@ -385,11 +394,6 @@ class UnitaresBridge:
             confidence = compute_confidence(anima, readings, self._prev_anima)
 
             # Store current state snapshot for next check-in's delta computation
-            # Use a simple namespace instead of Anima (which requires readings arg)
-            class _AnimaSnapshot:
-                __slots__ = ('warmth', 'clarity', 'stability', 'presence')
-                def __init__(self, w, c, s, p):
-                    self.warmth, self.clarity, self.stability, self.presence = w, c, s, p
             self._prev_anima = _AnimaSnapshot(anima.warmth, anima.clarity, anima.stability, anima.presence)
             self._prev_readings = readings
             self._prev_complexity = complexity
@@ -702,8 +706,10 @@ class UnitaresBridge:
             session = await self._get_session()
             async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
                 if response.status == 200:
-                    result = await response.json()
-                    return "result" in result and "error" not in result
+                    content_type = response.headers.get("Content-Type", "")
+                    text = await response.text()
+                    result = self._parse_mcp_response(text, content_type)
+                    return result is not None and "result" in result and "error" not in result
             return False
         except Exception:
             # Non-fatal - name sync is optional
@@ -849,8 +855,10 @@ class UnitaresBridge:
             session = await self._get_session()
             async with session.post(mcp_url, json=mcp_request, headers=headers) as response:
                 if response.status == 200:
-                    result = await response.json()
-                    if "result" in result and "error" not in result:
+                    content_type = response.headers.get("Content-Type", "")
+                    text = await response.text()
+                    result = self._parse_mcp_response(text, content_type)
+                    if result and "result" in result and "error" not in result:
                         logger.info("Outcome reported: %s score=%.2f", outcome_type, outcome_score or 0)
                         return True
             return False
