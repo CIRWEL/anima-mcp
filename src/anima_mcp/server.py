@@ -1459,7 +1459,7 @@ async def _update_display_loop():
                         from .messages import add_observation
                         for _de in _drive_evts:
                             # Deduplicate: dimension+event_type is unique per crossing
-                            _evt_key = (_de["dimension"], _de["event_type"], _de.get("drive_value"))
+                            _evt_key = (_de["dimension"], _de["event_type"])
                             if _evt_key not in _consumed_drive_events:
                                 _consumed_drive_events.add(_evt_key)
                                 add_observation(_de["text"], author="lumen")

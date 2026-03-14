@@ -980,7 +980,19 @@ def run_creature():
             except Exception:
                 pass
 
-        # Shut down background executor (wait up to 3s for in-flight tasks)
+        # Persist store state first (synchronous SQLite, no event loop needed)
+        if store:
+            store.sleep()
+            store.close()
+
+        # Close UNITARES bridge session while event loop is still running
+        if bridge:
+            try:
+                asyncio.run_coroutine_threadsafe(bridge.close(), _bg_loop).result(timeout=3)
+            except Exception:
+                pass
+
+        # Shut down background executor after bridge is closed (avoids deadlock)
         try:
             _bg_executor.shutdown(wait=True, cancel_futures=True)
         except TypeError:
@@ -988,18 +1000,6 @@ def run_creature():
             _bg_executor.shutdown(wait=False)
         except Exception:
             pass
-
-        # Persist store state before shutting down the event loop
-        if store:
-            store.sleep()
-            store.close()
-
-        # Close UNITARES bridge session (connection pooling cleanup)
-        if bridge:
-            try:
-                asyncio.run_coroutine_threadsafe(bridge.close(), _bg_loop).result(timeout=3)
-            except Exception:
-                pass
 
         _bg_loop.call_soon_threadsafe(_bg_loop.stop)
         _bg_loop.close()

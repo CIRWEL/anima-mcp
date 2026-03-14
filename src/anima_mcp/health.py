@@ -33,7 +33,7 @@ PROBE_INTERVAL_SECONDS = 60.0
 class SubsystemHealth:
     """Health state for a single subsystem."""
     name: str
-    last_heartbeat: float = 0.0
+    last_heartbeat: float = field(default_factory=time.time)
     probe_fn: Optional[Callable[[], bool]] = None
     last_probe_time: float = 0.0
     last_probe_ok: bool = True

@@ -1447,22 +1447,27 @@ class DrawingEngine:
                         self.canvas.coherence_history[-1]
                         if self.canvas.coherence_history else 0.5
                     )
-                    asyncio.get_event_loop().call_soon_threadsafe(
-                        asyncio.ensure_future,
-                        _unitares_bridge.report_outcome(
-                            outcome_type="drawing_completed",
-                            outcome_score=_sat,
-                            detail={
-                                "mark_count": self.canvas.mark_count,
-                                "pixel_count": len(self.canvas.pixels),
-                                "arc_phase": self.canvas.arc_phase or "unknown",
-                                "era": self.active_era.name if self.active_era else "unknown",
-                                "coherence": _coh,
-                                "spatial_var": spatial_var,
-                                "gesture_variety": gesture_variety,
-                            }
+                    try:
+                        _loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        _loop = None
+                    if _loop:
+                        _loop.call_soon_threadsafe(
+                            asyncio.ensure_future,
+                            _unitares_bridge.report_outcome(
+                                outcome_type="drawing_completed",
+                                outcome_score=_sat,
+                                detail={
+                                    "mark_count": self.canvas.mark_count,
+                                    "pixel_count": len(self.canvas.pixels),
+                                    "arc_phase": self.canvas.arc_phase or "unknown",
+                                    "era": self.active_era.name if self.active_era else "unknown",
+                                    "coherence": _coh,
+                                    "spatial_var": spatial_var,
+                                    "gesture_variety": gesture_variety,
+                                }
+                            )
                         )
-                    )
             except Exception:
                 pass  # Non-fatal
 

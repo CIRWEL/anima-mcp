@@ -61,10 +61,14 @@ class MemoriesMixin:
 
         # Check age milestones
         age_days = identity.age_seconds() / 86400
+        conn = self._connect()
         age_milestones = [1, 7, 30, 100, 365]
         for milestone in age_milestones:
             milestone_key = f"age_{milestone}_days"
-            if age_days >= milestone and milestone_key not in [m.event_id for m in self._memories]:
+            existing = conn.execute(
+                "SELECT 1 FROM memories WHERE event_id = ? LIMIT 1", (milestone_key,)
+            ).fetchone()
+            if age_days >= milestone and not existing:
                 if milestone == 1:
                     msg = "I'm one day old now"
                 elif milestone == 7:
@@ -86,7 +90,10 @@ class MemoriesMixin:
         awakening_milestones = [10, 50, 100, 500, 1000]
         for milestone in awakening_milestones:
             milestone_key = f"awakening_{milestone}"
-            if awakenings >= milestone and milestone_key not in [m.event_id for m in self._memories]:
+            existing = conn.execute(
+                "SELECT 1 FROM memories WHERE event_id = ? LIMIT 1", (milestone_key,)
+            ).fetchone()
+            if awakenings >= milestone and not existing:
                 msg = f"I've awakened {milestone} times"
                 self._record_memory(msg, 0.6, "milestone", event_id=milestone_key)
                 messages.append(msg)

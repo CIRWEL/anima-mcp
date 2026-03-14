@@ -11,9 +11,11 @@ class TestSubsystemHealth:
 
     def test_heartbeat_updates_timestamp(self):
         sub = SubsystemHealth(name="test")
-        assert sub.last_heartbeat == 0.0
+        assert sub.last_heartbeat > 0  # Defaults to time.time() at creation
+        before = sub.last_heartbeat
+        time.sleep(0.01)
         sub.heartbeat()
-        assert sub.last_heartbeat > 0
+        assert sub.last_heartbeat > before
 
     def test_status_ok_after_heartbeat(self):
         sub = SubsystemHealth(name="test")
