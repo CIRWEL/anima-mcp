@@ -65,10 +65,6 @@ def _check_rest_auth(request) -> bool:
         return True
     if not _ANIMA_HTTP_API_TOKEN:
         return True  # Auth disabled if no token configured
-    # Allow same-origin browser requests (dashboard JS fetch calls)
-    sec_fetch_site = request.headers.get("sec-fetch-site", "")
-    if sec_fetch_site == "same-origin":
-        return True
     # Allow requests with valid bearer token
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth or not isinstance(auth, str):
@@ -110,6 +106,8 @@ async def rest_tool_call(request):
     Body: {"name": "tool_name", "arguments": {...}}
     Returns: {"success": true, "result": ...} or {"success": false, "error": "..."}
     """
+    if not _check_rest_auth(request):
+        return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
     try:
         body = await request.json()
         tool_name = body.get("name")

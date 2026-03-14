@@ -69,6 +69,7 @@ class SchemaHub:
         self.last_gap_delta: Optional[GapDelta] = None
         self._previous_schema: Optional[SelfSchema] = None
         self._trajectory_compute_interval = 20  # Recompute every N schemas
+        self._schemas_since_trajectory = 0
 
     def compose_schema(
         self,
@@ -116,8 +117,10 @@ class SchemaHub:
         self.schema_history.append(schema)
 
         # 5. Periodically recompute trajectory from history
-        if len(self.schema_history) % self._trajectory_compute_interval == 0:
+        self._schemas_since_trajectory += 1
+        if self._schemas_since_trajectory >= self._trajectory_compute_interval:
             self.last_trajectory = self._compute_trajectory_from_history()
+            self._schemas_since_trajectory = 0
 
         # 6. Inject trajectory feedback nodes
         schema = self._inject_trajectory_feedback(schema)

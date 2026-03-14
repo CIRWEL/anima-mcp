@@ -59,10 +59,11 @@ class TestRestAuthHelpers:
         request = _make_request(headers={"x-forwarded-for": "not-an-ip"})
         assert rest_api._is_trusted_network(request) is False
 
-    def test_check_rest_auth_accepts_same_origin_with_token(self, monkeypatch):
+    def test_check_rest_auth_rejects_same_origin_header(self, monkeypatch):
+        """sec-fetch-site: same-origin is forgeable and should not bypass auth."""
         monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "secret")
         request = _make_request(headers={"sec-fetch-site": "same-origin"})
-        assert rest_api._check_rest_auth(request) is True
+        assert rest_api._check_rest_auth(request) is False
 
     def test_check_rest_auth_requires_valid_bearer(self, monkeypatch):
         monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "secret")
