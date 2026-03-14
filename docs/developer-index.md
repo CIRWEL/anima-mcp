@@ -92,7 +92,7 @@
 | `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
 
 **Network access:**
-- **Tailscale** (recommended): Direct Pi access via 100.79.215.83
+- **Tailscale** (recommended): Direct Pi access via 100.78.71.1
 - **Local**: lumen.local or 192.168.1.165
 - **ngrok** (legacy): See `archive/2026-02/NGROK_*.md`
 
@@ -100,8 +100,8 @@
 
 | Doc | Component |
 |-----|-----------|
-| `features/LED_*.md` | DotStar LED system |
-| `features/BRAIN_HAT_*.md` | BrainCraft HAT sensors |
+| `CLAUDE.md` (LED section) | DotStar LED system (3 LEDs: warmth, clarity, stability) |
+| `CLAUDE.md` (Neural section) | BrainCraft HAT sensors (AHT20, VEML7700, BMP280) |
 | `features/UNIFIED_WORKFLOWS.md` | UNITARES bridge |
 
 ## Plans & Roadmap
