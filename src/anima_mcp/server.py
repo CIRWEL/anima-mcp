@@ -29,7 +29,7 @@ import threading
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger("anima.server")
 
