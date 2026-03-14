@@ -859,6 +859,16 @@ async def _lumen_self_answer(anima, readings, identity):
         if result:
             logger.debug("[Lumen/SelfAnswer] Q: %s", question.text[:60])
             logger.debug("[Lumen/SelfAnswer] A: %s", answer[:80])
+            # Feed self-answer into learning systems (same path as external answers)
+            try:
+                from .knowledge import extract_insight_from_answer
+                await extract_insight_from_answer(
+                    question=question.text,
+                    answer=answer,
+                    author="lumen"
+                )
+            except Exception:
+                pass
 
 
 async def _extract_and_validate_schema(anima, readings, identity):

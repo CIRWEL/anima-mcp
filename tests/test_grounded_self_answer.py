@@ -138,3 +138,82 @@ class TestGroundedSelfAnswer:
 
         assert answer is not None
         assert "light" in answer.lower()
+
+
+class TestInteractionLevelEnrichment:
+    """Test interaction_level is computed and added to sensor data."""
+
+    def test_interaction_level_recent(self):
+        """Recent message produces high interaction_level."""
+        import time
+        from unittest.mock import MagicMock
+
+        fake_msg = MagicMock()
+        fake_msg.author = "kenny"
+        fake_msg.timestamp = time.time() - 60  # 1 minute ago
+
+        with patch("anima_mcp.messages.get_recent_messages", return_value=[fake_msg]):
+            from anima_mcp.messages import get_recent_messages
+            recent = get_recent_messages(limit=5)
+            non_lumen = [m for m in recent if getattr(m, 'author', '') != 'lumen']
+            assert len(non_lumen) == 1
+            from datetime import datetime
+            now = datetime.now()
+            last_ts = max(m.timestamp for m in non_lumen)
+            minutes_ago = (now.timestamp() - last_ts) / 60
+            level = max(0.0, 1.0 - minutes_ago / 30.0)
+            assert level > 0.9  # 1 minute ago → ~0.97
+
+    def test_interaction_level_old(self):
+        """Old message produces low interaction_level."""
+        import time
+        from unittest.mock import MagicMock
+
+        fake_msg = MagicMock()
+        fake_msg.author = "kenny"
+        fake_msg.timestamp = time.time() - 1800  # 30 minutes ago
+
+        from datetime import datetime
+        now = datetime.now()
+        minutes_ago = (now.timestamp() - fake_msg.timestamp) / 60
+        level = max(0.0, 1.0 - minutes_ago / 30.0)
+        assert level <= 0.05  # 30 min → ~0.0
+
+    def test_interaction_level_no_messages(self):
+        """No messages produces 0.0."""
+        level = 0.0  # default when no non-lumen messages
+        assert level == 0.0
+
+
+class TestSelfReflectionInteraction:
+    """Test that self-reflection can analyze interaction_level correlations."""
+
+    def test_pattern_to_description_interaction(self):
+        """Interaction patterns produce readable descriptions."""
+        from anima_mcp.self_reflection import SelfReflectionSystem, StatePattern
+
+        sys = SelfReflectionSystem.__new__(SelfReflectionSystem)
+
+        high_pattern = StatePattern(
+            condition="high interaction",
+            outcome="higher warmth",
+            correlation=0.15,
+            sample_count=50,
+            avg_warmth=0.7, avg_clarity=0.5,
+            avg_stability=0.5, avg_presence=0.6,
+        )
+        desc = sys._pattern_to_description(high_pattern)
+        assert "someone is around" in desc
+        assert "warmth" in desc
+
+        low_pattern = StatePattern(
+            condition="low interaction",
+            outcome="higher stability",
+            correlation=-0.12,
+            sample_count=50,
+            avg_warmth=0.5, avg_clarity=0.5,
+            avg_stability=0.7, avg_presence=0.4,
+        )
+        desc = sys._pattern_to_description(low_pattern)
+        assert "alone" in desc
+        assert "stability" in desc

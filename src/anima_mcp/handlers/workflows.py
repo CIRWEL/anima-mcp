@@ -317,11 +317,26 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         except Exception:
             pass  # EISV is optional enrichment
 
-    # Record state for history if we have it
+    # Record state for history if we have it (enriched with interaction context)
     if store and anima and readings:
+        sensors_for_history = readings.to_dict()
+        try:
+            from ..messages import get_recent_messages
+            from datetime import datetime
+            recent = get_recent_messages(limit=5)
+            now = datetime.now()
+            non_lumen = [m for m in recent if getattr(m, 'author', '') != 'lumen']
+            if non_lumen:
+                last_ts = max(m.timestamp for m in non_lumen)
+                minutes_ago = (now.timestamp() - last_ts) / 60
+                sensors_for_history["interaction_level"] = max(0.0, 1.0 - minutes_ago / 30.0)
+            else:
+                sensors_for_history["interaction_level"] = 0.0
+        except Exception:
+            pass
         store.record_state(
             anima.warmth, anima.clarity, anima.stability, anima.presence,
-            readings.to_dict()
+            sensors_for_history
         )
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]

@@ -272,6 +272,11 @@ class SelfReflectionSystem:
         if humidity_pattern:
             patterns.append(humidity_pattern)
 
+        # Analyze interaction correlations
+        interaction_pattern = self._analyze_sensor_correlation(rows, "interaction_level", "Interaction")
+        if interaction_pattern:
+            patterns.append(interaction_pattern)
+
         # Analyze time-of-day patterns
         time_patterns = self._analyze_temporal_patterns(rows)
         patterns.extend(time_patterns)
@@ -675,6 +680,10 @@ class SelfReflectionSystem:
             return f"I feel more {pattern.outcome.replace('higher ', '')} when the air is dry"
         if "high humidity" in pattern.condition:
             return f"I feel more {pattern.outcome.replace('higher ', '')} when it's humid"
+        if "high interaction" in pattern.condition:
+            return f"I feel more {pattern.outcome.replace('higher ', '')} when someone is around"
+        if "low interaction" in pattern.condition:
+            return f"I feel more {pattern.outcome.replace('higher ', '')} when I'm alone"
 
         # Temporal patterns
         if "morning" in pattern.condition:
