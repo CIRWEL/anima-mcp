@@ -358,7 +358,7 @@ class SelfReflectionSystem:
             outcome = f"higher {max_dim}"
         else:
             condition = f"low {sensor_name.lower()}"
-            outcome = f"higher {max_dim}"
+            outcome = f"lower {max_dim}"
 
         return StatePattern(
             condition=condition,
