@@ -1873,20 +1873,11 @@ async def _update_display_loop():
                             except Exception as e:
                                 if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryCoherence] Error: {e}", file=sys.stderr, flush=True)
 
-                        from .messages import add_observation, add_question
+                        from .messages import add_observation
                         add_observation(
                             f"[expression] {utterance.text()} ({utterance.category_pattern()})",
                             author="lumen"
                         )
-
-                        # Inquiry primitives ("why", "what", "wonder") become answerable questions
-                        _inquiry_tokens = {"why", "what", "wonder"}
-                        if _inquiry_tokens & set(utterance.tokens):
-                            add_question(
-                                utterance.text(),
-                                author="lumen",
-                                context=f"primitive: {utterance.category_pattern()}"
-                            )
 
                     # Self-feedback: when no human around, score past utterance by coherence + stability
                     if _last_primitive_utterance and _last_primitive_utterance.score is None:

@@ -221,21 +221,6 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             insight_result = {"error": str(e)}
             print(f"[Q&A] Insight extraction failed: {e}", file=sys.stderr, flush=True)
 
-        # If this was a primitive inquiry question, feed the answer back
-        # into primitive language learning — real interaction signal
-        if question.context and question.context.startswith("primitive:"):
-            try:
-                from ..primitive_language import get_language_system
-                lang = get_language_system()
-                # Find the utterance whose tokens match the question text
-                for utt in reversed(lang._recent):
-                    if utt.text() == question.text:
-                        lang.record_feedback(utt, answer, explicit_positive=True)
-                        print(f"[Q&A] Primitive feedback: answer to '{question.text}' reinforced tokens", file=sys.stderr, flush=True)
-                        break
-            except Exception as e:
-                print(f"[Q&A] Primitive feedback failed (non-fatal): {e}", file=sys.stderr, flush=True)
-
         # Retrieve visitor context for the answering agent
         visitor_context = None
         try:
