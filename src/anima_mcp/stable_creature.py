@@ -41,6 +41,7 @@ import sys
 import asyncio
 import concurrent.futures
 import threading
+import psutil
 from datetime import datetime
 from typing import Optional
 from pathlib import Path
@@ -864,6 +865,14 @@ def run_creature():
                         pass
                 if learning_state:
                     shm_data["learning"] = learning_state
+
+            # WiFi status from kernel (no subprocess)
+            try:
+                net_stats = psutil.net_if_stats()
+                wlan = net_stats.get("wlan0")
+                shm_data["wifi_connected"] = bool(wlan and wlan.isup)
+            except Exception:
+                shm_data["wifi_connected"] = False
 
             # Agency LED brightness: broker's desired manual brightness for server to apply
             if _agency_led_brightness != 1.0:

@@ -1988,6 +1988,10 @@ async def _update_display_loop():
                             # Update connection status based on SHM governance source
                             if _screen_renderer:
                                 _screen_renderer.update_connection_status(governance=is_unitares)
+                            # Update WiFi icon from SHM
+                            wifi_up = _last_shm_data.get("wifi_connected")
+                            if wifi_up is not None and _screen_renderer:
+                                _screen_renderer.update_connection_status(wifi=wifi_up)
                             # Fire health heartbeat for fresh governance
                             if _health:
                                 _health.heartbeat("governance")

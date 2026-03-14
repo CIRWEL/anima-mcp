@@ -390,6 +390,7 @@ Things agents keep re-discovering. Read this so you don't waste time.
   "data": {
     "readings": { "cpu_temp_c": ..., "eeg_delta_power": ... },
     "anima": { "warmth": 0.36, "clarity": 0.73, ... },
+    "wifi_connected": true,
     "activity": { "level": "active", "reason": "engaged" },
     "learning": {
       "preferences": { "satisfaction": 0.87 },
