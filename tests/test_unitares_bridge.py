@@ -299,6 +299,111 @@ async def test_resolve_caller_identity_unavailable():
     assert result is None
 
 
+@pytest.mark.asyncio
+async def test_check_availability_staleness_recheck():
+    """Test that availability is rechecked after 5 minutes."""
+    # Use an unreachable URL so the recheck actually fails
+    bridge = UnitaresBridge(unitares_url="http://127.0.0.1:19999/mcp")
+    bridge._available = True
+    import time
+    # Recent check — should return True without rechecking
+    bridge._last_availability_check = time.time()
+    assert await bridge.check_availability() is True
+
+    # Stale check (6 min ago) — should fall through to recheck (and fail, no server)
+    bridge._last_availability_check = time.time() - 360
+    result = await bridge.check_availability()
+    assert result is False
+
+
+def test_anima_snapshot_module_level():
+    """Test that _AnimaSnapshot is defined at module level and reusable."""
+    from anima_mcp.unitares_bridge import _AnimaSnapshot
+    snap1 = _AnimaSnapshot(0.5, 0.6, 0.7, 0.8)
+    snap2 = _AnimaSnapshot(0.1, 0.2, 0.3, 0.4)
+    assert isinstance(snap1, _AnimaSnapshot)
+    assert isinstance(snap2, _AnimaSnapshot)
+    assert snap1.warmth == 0.5
+    assert snap2.clarity == 0.2
+
+
+@pytest.mark.asyncio
+async def test_sync_name_handles_sse_response():
+    """Test sync_name uses _parse_mcp_response instead of response.json()."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    bridge._available = True
+    bridge._agent_id = "test-creature"
+
+    sse_body = 'event: message\ndata: {"result": {"content": [{"text": "ok"}]}}\n\n'
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.headers = {"Content-Type": "text/event-stream"}
+    mock_response.text = AsyncMock(return_value=sse_body)
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(return_value=mock_response)
+
+    with patch.object(bridge, '_get_session', return_value=mock_session):
+        result = await bridge.sync_name("Lumen")
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_report_outcome_handles_sse_response():
+    """Test report_outcome uses _parse_mcp_response instead of response.json()."""
+    bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp")
+    bridge._available = True
+    bridge._agent_id = "test-creature"
+
+    sse_body = 'event: message\ndata: {"result": {"content": [{"text": "ok"}]}}\n\n'
+    mock_response = AsyncMock()
+    mock_response.status = 200
+    mock_response.headers = {"Content-Type": "text/event-stream"}
+    mock_response.text = AsyncMock(return_value=sse_body)
+    mock_response.__aenter__ = AsyncMock(return_value=mock_response)
+    mock_response.__aexit__ = AsyncMock(return_value=False)
+
+    mock_session = AsyncMock()
+    mock_session.post = MagicMock(return_value=mock_response)
+
+    with patch.object(bridge, '_get_session', return_value=mock_session):
+        result = await bridge.report_outcome("drawing_complete", outcome_score=0.8)
+    assert result is True
+
+
+def test_server_bridge_uses_get_identity():
+    """Test that _get_server_bridge uses get_identity() not .identity."""
+    from anima_mcp.server import _get_server_bridge
+    import anima_mcp.server as server_mod
+
+    # Save and reset globals
+    old_bridge = server_mod._server_bridge
+    old_store = server_mod._store
+    try:
+        server_mod._server_bridge = None
+
+        mock_identity = MagicMock()
+        mock_identity.creature_id = "test-creature-id-1234"
+
+        mock_store = MagicMock()
+        mock_store.get_identity = MagicMock(return_value=mock_identity)
+        # Ensure .identity would fail if accessed
+        del mock_store.identity
+        server_mod._store = mock_store
+
+        with patch.dict('os.environ', {'UNITARES_URL': 'http://localhost:8767/mcp'}):
+            bridge = _get_server_bridge()
+
+        if bridge is not None:
+            assert bridge._agent_id == "test-creature-id-1234"
+            mock_store.get_identity.assert_called_once()
+    finally:
+        server_mod._server_bridge = old_bridge
+        server_mod._store = old_store
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
 
