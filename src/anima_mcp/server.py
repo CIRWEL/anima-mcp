@@ -2464,6 +2464,10 @@ async def _update_display_loop():
                         lambda: _extract_and_validate_schema(anima, readings, identity),
                         default=None, log_error=True,
                     )
+                    # Persist schema periodically so crash recovery has recent data
+                    # (not just on clean shutdown — Pi crashes often)
+                    if _schema_hub:
+                        _schema_hub.persist_schema()
                 except Exception as e:
                     logger.warning("[Schema] Extraction error: %s", e)
 
