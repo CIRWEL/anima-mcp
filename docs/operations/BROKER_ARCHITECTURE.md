@@ -1,89 +1,62 @@
-# Broker Architecture - Lumen's Body & Mind Separation
+# Broker Architecture -- Body & Mind Separation
 
-**Created:** January 12, 2026  
-**Last Updated:** January 12, 2026  
-**Status:** Active Architecture
+**Last Updated:** March 14, 2026
 
 ---
 
 ## Overview
 
-Lumen is now split into two systemd services that run independently:
+Lumen runs as two systemd services:
 
-1. **`anima-broker.service`** - Lumen's **Body** (Hardware Broker)
-   - Owns I2C sensors
-   - Writes sensor data to shared memory
-   - Runs `stable_creature.py`
-   - Displays ASCII face in logs
+1. **`anima-broker.service`** -- Lumen's **Body** (Hardware Broker)
+   - Owns I2C sensors, writes to shared memory
+   - Runs learning systems
+   - Command: `anima-creature` (`stable_creature.py`)
 
-2. **`anima.service`** - Lumen's **Mind** (MCP Server)
-   - Reads sensor data from shared memory
-   - Provides MCP interface for external tools
-   - Runs `anima --http`
-   - Depends on broker service
+2. **`anima.service`** -- Lumen's **Mind** (MCP Server)
+   - Reads from shared memory, serves MCP tools
+   - Owns TFT display + LEDs
+   - Command: `anima --http` (`server.py`)
 
-**Key Benefit:** You can restart the MCP server (mind) without interrupting the hardware broker (body). No more cascading reboots or I2C hangs.
-
-**Data Flow:**
-- Broker → Shared Memory (`/dev/shm/anima_state.json`): readings, anima, governance
-- MCP Server ← Shared Memory: reads all data for display and tools
-- Governance: Broker calls UNITARES, MCP server reads result from shared memory
+**Key benefit:** Restart the MCP server without interrupting sensors or learning. No I2C conflicts.
 
 ---
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Hardware Layer                        │
-│  (I2C Sensors: AHT20, BMP280, Light Sensor, LEDs)      │
-└────────────────────┬────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│         anima-broker.service (Lumen's Body)            │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  stable_creature.py                              │   │
-│  │  - Reads sensors (owns I2C bus)                  │   │
-│  │  - Computes anima state                         │   │
-│  │  - Writes to shared memory                      │   │
-│  │  - Displays ASCII face                           │   │
-│  └──────────────────────────────────────────────────┘   │
-└────────────────────┬────────────────────────────────────┘
-                     │
-                     │ Shared Memory
-                     │ (State: sensor readings, anima state)
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│          anima.service (Lumen's Mind)                   │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │  anima --http (MCP Server)                      │   │
-│  │  - Reads from shared memory                     │   │
-│  │  - Provides MCP tools (get_state, show_face)   │   │
-│  │  - Handles external connections                 │   │
-│  │  - Updates display/LEDs (via shared memory)    │   │
-│  └──────────────────────────────────────────────────┘   │
-└────────────────────┬────────────────────────────────────┘
-                     │
-                     ▼
-┌─────────────────────────────────────────────────────────┐
-│              External MCP Clients                      │
-│  (Cursor IDE, UNITARES Governance, etc.)              │
-└─────────────────────────────────────────────────────────┘
+Hardware Layer (I2C Sensors: AHT20, BMP280, VEML7700)
+         |
+         v
+anima-broker.service (Body)
+  stable_creature.py
+  - Reads sensors (exclusive I2C for sensors)
+  - Computes anima state
+  - Runs learning systems
+  - Writes to shared memory
+         |
+         | /dev/shm/anima_state.json
+         v
+anima.service (Mind)
+  anima --http (MCP Server)
+  - Reads from shared memory
+  - Owns TFT display + LEDs (exclusive I2C for display)
+  - Provides MCP tools
+  - Handles external connections
+         |
+         v
+External MCP Clients (Claude Code, Cursor, Claude.ai)
 ```
+
+**Shared memory backends:** Prefers Redis if available, falls back to JSON file in `/dev/shm/`. Both are atomic and fast.
 
 ---
 
 ## Service Dependencies
 
-**Startup Order:**
-1. `anima-broker.service` - must start first
-2. `anima.service` - depends on broker
-
-**Shutdown Order:**
-- Stopping `anima.service` does NOT stop broker
-- Broker continues running, sensors keep reading
-- Face keeps displaying in broker logs
+- **Startup:** `anima-broker` starts first, then `anima`
+- **Stopping `anima`** does NOT stop broker -- sensors keep reading, face keeps displaying
+- **Stopping `anima-broker`** -- server falls back to direct sensor access
 
 ---
 
@@ -91,117 +64,107 @@ Lumen is now split into two systemd services that run independently:
 
 ### Restart Only the Mind (MCP Server)
 
-When iterating on MCP server code:
+```bash
+sudo systemctl restart anima
+```
+Broker stays running -- no sensor interruption, no I2C conflicts.
+
+### Restart Only the Body (Broker)
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "sudo systemctl restart anima"
+sudo systemctl restart anima-broker
+```
+Sensors reinitialize cleanly, state remains available.
+
+### Check Status
+
+```bash
+sudo systemctl status anima-broker anima
 ```
 
-**Result:**
-- ✅ Broker keeps running (sensors uninterrupted)
-- ✅ Face keeps displaying
-- ✅ No I2C conflicts
-- ✅ MCP server restarts with new code
-
-### Restart Only the Body (Hardware Broker)
-
-When debugging sensor issues:
+### View Logs
 
 ```bash
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "sudo systemctl restart anima-broker"
-```
-
-**Result:**
-- ✅ MCP server waits for broker to restart
-- ✅ Sensors reinitialize cleanly
-- ✅ State remains available via shared memory
-
-### View Live ASCII Face
-
-Watch the broker's terminal output:
-
-```bash
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "sudo journalctl -u anima-broker -f"
-```
-
-### Check Service Status
-
-```bash
-# Check both services
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "sudo systemctl status anima anima-broker"
-
-# Check broker only
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "sudo systemctl status anima-broker"
-
-# Check MCP server only
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "sudo systemctl status anima"
+sudo journalctl -u anima -f           # MCP server
+sudo journalctl -u anima-broker -f    # Broker
 ```
 
 ---
 
-## Benefits
+## Learning Systems (Broker Only)
 
-### ✅ No Cascading Reboots
+These modules run in the broker, not the MCP server:
 
-**Before:** Restarting MCP server could cause I2C hang → Pi reboot  
-**After:** Restarting MCP server leaves broker untouched → No hardware interruption
+| Module | Purpose | State Location |
+|--------|---------|----------------|
+| `adaptive_prediction.py` | Temporal pattern learning | Shared memory |
+| `agency.py` | TD-learning action values | Shared memory |
+| `preferences.py` | Preference evolution | Shared memory |
+| `self_model.py` | Self-knowledge beliefs | Shared memory |
+| `activity_state.py` | Active/drowsy/resting cycles | Shared memory |
+| `learning.py` | Calibration adaptation | `anima_config.yaml` |
 
-### ✅ Rapid Iteration
+Learning state is written to `/dev/shm/anima_state.json` and persisted to disk every 5 minutes.
 
-**Before:** Every code change required full restart → Risk of I2C conflicts  
-**After:** Iterate on MCP server code freely → Broker stays stable
+These modules run in the **server** (not broker):
 
-### ✅ Hardware Stability
-
-**Before:** Both processes could fight for I2C bus  
-**After:** Only broker touches hardware → Single point of control
-
-### ✅ State Persistence
-
-**Before:** State lost on restart  
-**After:** Shared memory keeps broker/server state synchronized across service restarts
+| Module | Purpose |
+|--------|---------|
+| `growth/` | Preferences, goals, memories, autobiography |
+| `self_reflection.py` | Insight discovery |
+| `llm_gateway.py` | LLM reflections (Groq/Llama) |
+| `knowledge.py` | Q&A-derived insights |
 
 ---
 
-## Setup
+## Shared Memory Schema
 
-### 1. Install Service Files
-
-```bash
-# Copy service files to Pi (as root)
-scp -P 22 systemd/anima-broker.service \
-  unitares-anima@192.168.1.165:/tmp/anima-broker.service
-
-scp -P 22 systemd/anima.service \
-  unitares-anima@192.168.1.165:/tmp/anima.service
-
-# On Pi, install and reload systemd
-ssh unitares-anima@192.168.1.165 \
-  "sudo cp /tmp/anima-broker.service /etc/systemd/system/anima-broker.service && sudo cp /tmp/anima.service /etc/systemd/system/anima.service && sudo systemctl daemon-reload"
+```json
+{
+    "timestamp": "2026-01-12T06:44:00.123456",
+    "readings": {
+        "cpu_temp": 45.2,
+        "ambient_temp": 22.1,
+        "humidity": 35.0,
+        "light_lux": 120.5,
+        "pressure": 832.8
+    },
+    "anima": {
+        "warmth": 0.38,
+        "clarity": 0.78,
+        "stability": 0.70,
+        "presence": 0.87
+    },
+    "identity": {
+        "creature_id": "49e14444-...",
+        "name": "Lumen",
+        "awakenings": 42
+    },
+    "governance": { ... },
+    "learning": {
+        "preferences": { "satisfaction": 0.87 },
+        "self_beliefs": { ... },
+        "agency": { ... }
+    }
+}
 ```
 
-### 2. Enable Services
+---
+
+## Systemd Service Files
+
+| Service | File | Location |
+|---------|------|----------|
+| `anima.service` | `systemd/anima.service` | `/etc/systemd/system/anima.service` |
+| `anima-broker.service` | `systemd/anima-broker.service` | `/etc/systemd/system/anima-broker.service` |
 
 ```bash
-# Enable broker (starts automatically)
-ssh unitares-anima@192.168.1.165 \
-  "sudo systemctl enable anima-broker"
-```
-
-```bash
-# Enable MCP server (starts automatically after broker)
-ssh unitares-anima@192.168.1.165 \
-  "sudo systemctl enable anima"
-
-# Start both
-ssh unitares-anima@192.168.1.165 \
-  "sudo systemctl start anima-broker anima"
+# Install
+sudo cp systemd/anima-broker.service /etc/systemd/system/
+sudo cp systemd/anima.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable anima-broker anima
+sudo systemctl start anima-broker anima
 ```
 
 ---
@@ -209,49 +172,30 @@ ssh unitares-anima@192.168.1.165 \
 ## Troubleshooting
 
 ### Broker Not Starting
-
 ```bash
-# Check broker logs
-ssh unitares-anima@192.168.1.165 \
-  "sudo journalctl -u anima-broker -n 50"
+sudo journalctl -u anima-broker -n 50
 ```
 
 ### MCP Server Waiting for Broker
-
 ```bash
-# Check if broker is running
-ssh unitares-anima@192.168.1.165 \
-  "sudo systemctl is-active anima-broker"
-
-# If not active, start it
-ssh unitares-anima@192.168.1.165 \
-  "sudo systemctl start anima-broker"
+sudo systemctl is-active anima-broker
+# If not active:
+sudo systemctl start anima-broker
 ```
 
 ### I2C Conflicts (Should Not Happen)
-
-If you see I2C errors, verify only broker is accessing hardware:
-
 ```bash
-# Check what's accessing I2C
-ssh unitares-anima@192.168.1.165 \
-  "lsof /dev/i2c-1 2>/dev/null || echo 'No I2C access detected'"
+lsof /dev/i2c-1 2>/dev/null || echo 'No I2C access detected'
 ```
 
 ---
 
-## Related Documentation
+## Design History
 
-- **`docs/architecture/HARDWARE_BROKER_PATTERN.md`** - Architecture details
-- **`docs/operations/HOLY_GRAIL_STARTUP.md`** - Previous startup guide (now superseded)
-- **`stable_creature.py`** - Broker implementation
-- **`src/anima_mcp/shared_memory.py`** - Shared memory client
+This architecture solves the original I2C concurrency problem: both `stable_creature.py` and `server.py` needed sensor access, causing bus conflicts. The "Hardware Broker Pattern" (Driver and Passenger model) was implemented in three phases:
 
----
+1. **Phase 1:** Shared memory layer (`SharedMemoryClient`, `/dev/shm/anima_state.json`) -- broker writes, server reads
+2. **Phase 2:** MCP server refactored to read from shared memory with fallback to direct sensors
+3. **Phase 3:** Redis backend added for higher performance; auto-detected, falls back to file-based
 
-## Status
-
-✅ **Architecture Active** - Both services configured and running  
-✅ **No I2C Conflicts** - Only broker touches hardware  
-✅ **Rapid Iteration** - MCP server can restart independently  
-✅ **State Persistence** - Shared memory flow keeps broker/server synchronized
+All three phases are complete and verified. Both scripts can run simultaneously safely.

@@ -378,7 +378,7 @@ Things agents keep re-discovering. Read this so you don't waste time.
 | **No client uses /sse** | Claude Code, Claude Desktop, Cursor all connect to `/mcp/`. |
 | **docs/ folder** | Developer reference only. Agents read CLAUDE.md, not docs/. Don't expect docs/ to reach other agents. |
 | **Backups** | `~/backups/lumen/` — real automated backups (hourly snapshots + rsync mirror). `~/lumen-backups/` is OLD/STALE — ignore it. |
-| **Restore after reflash** | One command: `cd ~/projects/anima-mcp && ./scripts/restore_lumen.sh`. Do NOT do it manually. See `RESTORE_LUMEN.md`. |
+| **Restore after reflash** | One command: `cd ~/projects/anima-mcp && ./scripts/restore_lumen.sh`. Do NOT do it manually. See `docs/operations/BACKUP_AND_RESTORE.md`. |
 | **Before declaring data lost** | Run `ls -lt ~/backups/lumen/anima_*.db | head -5` first. Backups run twice daily minimum. |
 
 ## Shared Memory Schema

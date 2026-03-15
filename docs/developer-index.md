@@ -2,20 +2,19 @@
 
 **For AI agents working on this codebase.**
 
-## 🛑 START HERE
+## START HERE
 
-**New to Lumen?** → **[Getting Started Simple](guides/GETTING_STARTED_SIMPLE.md)** ← Start here!
+**New to Lumen?** --> **[Getting Started Simple](guides/GETTING_STARTED_SIMPLE.md)**
 
-**For developers:**
-- **Check docs before coding.** Most issues are already documented.
+**For developers:** Check docs before coding. Most issues are already documented.
 
 | Problem | Doc |
 |---------|-----|
 | Display frozen / server unresponsive | `ssh lumen.local 'sudo systemctl restart anima'` |
 | Code changes not working | `operations/QUICK_START_AGENTS.md` (Code Gotchas) |
-| How to deploy | See "Deploy Changes" below or `../DEPLOYMENT.md` |
+| How to deploy | `operations/PI_DEPLOYMENT.md` |
 | Architecture questions | `operations/BROKER_ARCHITECTURE.md` |
-| Web dashboard / Control Center | `CONTROL_CENTER.md` |
+| Web dashboard | `CONTROL_CENTER.md` |
 
 ---
 
@@ -30,108 +29,89 @@
 1. **Read** `CLAUDE.md` - Agent instructions and architecture
 2. **Check** `operations/PI_ACCESS.md` - SSH access details
 3. **Understand** the anima model (warmth, clarity, stability, presence) and computational neural bands
-4. **Check Knowledge Graph** - Component relationships (if available)
 
 ## Key Concepts
 
 | Doc | What it explains |
 |-----|------------------|
-| `LUMEN_EXPRESSION_PHILOSOPHY.md` | **Core:** How Lumen's expression should emerge authentically |
+| `LUMEN_EXPRESSION_PHILOSOPHY.md` | How Lumen's expression should emerge authentically |
 | `features/CONFIGURATION_GUIDE.md` | Nervous system calibration and config |
 
-**Key source files for understanding the system:**
+**Key source files:**
+
 | File | What it does |
 |------|--------------|
-| `src/anima_mcp/server.py` | Main loop, lifecycle, REST API (~3,950 lines) |
+| `src/anima_mcp/server.py` | Main loop, lifecycle, REST API |
 | `src/anima_mcp/tool_registry.py` | Tool definitions, HANDLERS dict, FastMCP setup |
 | `src/anima_mcp/handlers/` | 6 handler modules (system, state, knowledge, display, comms, workflows) |
-| `src/anima_mcp/health.py` | Subsystem health monitoring (9 subsystems, per-subsystem stale thresholds) |
+| `src/anima_mcp/health.py` | Subsystem health monitoring (9 subsystems) |
 | `src/anima_mcp/anima.py` | Anima calculation (warmth, clarity, stability, presence) |
-| `src/anima_mcp/computational_neural.py` | Neural bands from Pi hardware (delta/theta/alpha/beta/gamma) + drawing phase modulation |
+| `src/anima_mcp/computational_neural.py` | Neural bands from Pi hardware |
 | `src/anima_mcp/eisv_mapper.py` | EISV mapping for UNITARES governance |
-| `src/anima_mcp/display/screens.py` | Display screens, drawing engine (CanvasState, DrawingEISV, DrawingIntent) |
-| `src/anima_mcp/display/art_era.py` | Art era protocol — EraState base class + ArtEra interface |
+| `src/anima_mcp/display/screens.py` | Display screens, drawing engine |
+| `src/anima_mcp/display/art_era.py` | Art era protocol |
 | `src/anima_mcp/display/eras/` | Pluggable art era modules (gestural, pointillist, field, geometric) |
-
-**Archived concepts** (in `archive/2026-02/`): ADAPTIVE_LEARNING.md, ERROR_RECOVERY.md, GAP_HANDLING.md
 
 ## Theory
 
-**Deep theoretical foundations** - for researchers and those extending the architecture.
-
 | Doc | What it explains |
 |-----|------------------|
-| `theory/README.md` | **Index:** Overview + implementation status |
-| `theory/TRAJECTORY_IDENTITY_PAPER.md` | **Core Paper v0.8:** Identity as trajectory signature (publication ready) |
-| `theory/lumen_eisv_art_paper.md` | **Outline:** Embodied, self-governed art-producing agents (Lumen + EISV) |
-| `theory/CODE_THEORY_MAP.md` | How existing code maps to trajectory framework |
-| `theory/IMPLEMENTATION_COMPLETE.md` | Implementation completion notes |
-
-**Key insight:** Identity is not a UUID, it's a dynamical invariant - the pattern that persists across time.
-
-**Lumen's identity status:** Check current awakenings via `get_identity` tool.
-
-## Architecture
-
-| Doc | What it explains |
-|-----|------------------|
-| `architecture/HARDWARE_BROKER_PATTERN.md` | **Implemented:** Simultaneous execution via shared memory (Redis/File) |
+| `theory/README.md` | Overview + implementation status |
+| `theory/TRAJECTORY_IDENTITY_PAPER.md` | Identity as trajectory signature (publication ready) |
+| `theory/lumen_eisv_art_paper.md` | Embodied, self-governed art-producing agents |
 
 ## Operations
 
 | Doc | When you need it |
 |-----|------------------|
-| `operations/BROKER_ARCHITECTURE.md` | **Current:** Body/Mind separation via systemd services |
-| `operations/PI_ACCESS.md` | SSH/rsync to Pi (port 22, user unitares-anima) |
-| `operations/PI_DEPLOYMENT.md` | Complete deployment guide |
+| `operations/BROKER_ARCHITECTURE.md` | Body/mind separation, shared memory, learning systems |
+| `operations/PI_DEPLOYMENT.md` | Complete deployment guide (quick start + full) |
+| `operations/PI_ACCESS.md` | SSH/rsync to Pi |
+| `operations/BACKUP_AND_RESTORE.md` | Backup, restore, and full reflash recovery |
 | `operations/QUICK_START_AGENTS.md` | Code gotchas and agent coordination |
-| `operations/QUICK_START_PI.md` | Quick Pi setup reference |
-| `operations/REFLASH_RECOVERY.md` | Post-reflash restore (broker+anima, anima.env, DB corruption) |
-| `operations/RESILIENCE_ANALYSIS.md` | Gaps, bottlenecks, bugs, resilience opportunities |
-| `operations/SECRETS_AND_ENV.md` | API keys & OAuth — GROQ_API_KEY, UNITARES_AUTH, ANIMA_OAUTH_* (never in git) |
-| `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
+| `operations/SECRETS_AND_ENV.md` | API keys, OAuth, env vars |
+| `operations/DEFINITIVE_PORTS.md` | Port conventions |
+| `operations/DEPLOY_WITHOUT_SSH.md` | HTTP deploy when SSH unavailable |
+| `operations/DAILY_OPS_CHECKLIST.md` | Daily maintenance tasks |
+| `operations/CONTROL_CENTER.md` | Web dashboard docs |
 
 **Network access:**
 - **Tailscale** (recommended): Direct Pi access via 100.78.71.1
 - **Local**: lumen.local or 192.168.1.165
-- **ngrok** (legacy): See `archive/2026-02/NGROK_*.md`
+- **ngrok**: For Claude.ai web (OAuth 2.1)
+
+**Troubleshooting:**
+| Doc | When you need it |
+|-----|------------------|
+| `operations/SSH_TIMEOUT_FIX.md` | SSH timeout workarounds (port 2222) |
+| `operations/FIX_GIT_PULL_ON_PI.md` | Git pull failures |
+| `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
+| `operations/MULTIPLE_TUNNELS_SETUP.md` | Multi-tunnel ngrok configuration |
 
 ## Features
 
 | Doc | Component |
 |-----|-----------|
-| `CLAUDE.md` (LED section) | DotStar LED system (3 LEDs: warmth, clarity, stability) |
-| `CLAUDE.md` (Neural section) | BrainCraft HAT sensors (AHT20, VEML7700, BMP280) |
-| `features/UNIFIED_WORKFLOWS.md` | UNITARES bridge |
+| `features/CONFIGURATION_GUIDE.md` | Nervous system calibration |
+| `features/UNIFIED_WORKFLOWS.md` | Workflow system documentation |
 
 ## Plans & Roadmap
 
 | Doc | What it covers |
 |-----|----------------|
-| `plans/FURTHER_STEPS.md` | **Current:** What's done, immediate/short/medium/long-term next steps |
-| `scripts/visualize_trajectory.py` | Trajectory Σ visualization (ASCII + optional HTML) |
-| `plans/2026-02-22-schema-hub-design.md` | SchemaHub architecture (implemented) |
+| `plans/FURTHER_STEPS.md` | Active roadmap: what's done, what's next |
+| `plans/2026-02-22-schema-hub-design.md` | SchemaHub architecture (implemented, still referenced) |
 | `plans/2026-02-23-computational-selfhood-*.md` | Calibration drift, value tension (implemented) |
 
-## Common Mistakes
+## Archive
 
-- SSH: port **22**, user **unitares-anima**, key `~/.ssh/id_ed25519_pi`
-- Handler code lives in `handlers/` — check there before editing `server.py`
-- Anima dataclass requires `readings` field - don't construct without it
-- Color constants in `screens.py` are **local to each function** - grep entire function after changes
-- Display frozen? `ssh lumen.local 'sudo systemctl restart anima'`
-- Use `lumen_qa` tool for Q&A (list questions or answer them)
-
-**See `operations/QUICK_START_AGENTS.md`** for detailed gotchas with code examples.
+Historical docs in `archive/` -- completed plans, resolved analyses. Kept for reference.
 
 ## Deploy Changes
 
 **Preferred method (via git + MCP tool):**
 ```bash
-# From Mac, in anima-mcp project:
 git add <files> && git commit -m "message" && git push
-
-# Then deploy to Pi via MCP:
 mcp__anima__git_pull(restart=true)
 ```
 
@@ -145,6 +125,13 @@ rsync -avz -e "ssh -i ~/.ssh/id_ed25519_pi" \
 ssh lumen.local 'sudo systemctl restart anima.service'
 ```
 
-## Archive
+## Common Mistakes
 
-Old debugging docs in `archive/` - kept for history but likely stale.
+- SSH: port **22**, user **unitares-anima**, key `~/.ssh/id_ed25519_pi`
+- Handler code lives in `handlers/` -- check there before editing `server.py`
+- Anima dataclass requires `readings` field
+- Color constants in `screens.py` are **local to each function**
+- Display frozen? `ssh lumen.local 'sudo systemctl restart anima'`
+- Use `lumen_qa` tool for Q&A
+
+See `operations/QUICK_START_AGENTS.md` for detailed gotchas.

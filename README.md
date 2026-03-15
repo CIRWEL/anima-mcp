@@ -185,7 +185,7 @@ python3 -m pytest tests/ -x -q   # ~6,000 tests
 | Topic | File |
 |-------|------|
 | Agent instructions | `CLAUDE.md` |
-| Architecture | `docs/architecture/HARDWARE_BROKER_PATTERN.md` |
+| Architecture | `docs/operations/BROKER_ARCHITECTURE.md` |
 | Schema Hub design | `docs/plans/2026-02-22-schema-hub-design.md` |
 | Theoretical foundations | `docs/theory/` |
 | Configuration | `docs/features/CONFIGURATION_GUIDE.md` |

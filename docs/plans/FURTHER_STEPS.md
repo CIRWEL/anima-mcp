@@ -64,7 +64,6 @@
 - Microphone/speaker integration
 
 ### Software
-- Hardware broker pattern (shared memory) — design in `HARDWARE_BROKER_PATTERN.md`
 - Preference meta-learning (computational-selfhood plan Task 3)
 
 ---
