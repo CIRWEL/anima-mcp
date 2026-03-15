@@ -17,7 +17,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83
 
 - **Timeout on 22?** Use the Tailscale IP and/or try `-p 2222`.
 - **Once in via 2222:** You can call the MCP tool `fix_ssh_port` with `port: 22` (when connected to Lumen over HTTP) to switch SSH back to port 22.
-- More: `docs/archive/PI_SSH_TROUBLESHOOTING.md` (firewall, listen address, fail2ban).
+- More: See troubleshooting sections in `docs/operations/PI_DEPLOYMENT.md` (service, SSH, and network checks).
 
 ## Details
 - **Hostname**: lumen.local (mDNS) or via Tailscale

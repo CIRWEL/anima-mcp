@@ -114,6 +114,6 @@ OAuth tokens are in-memory — they reset on restart, and clients re-authenticat
 
 ## See Also
 
-- `docs/operations/PI_DEPLOYMENT.md` - Complete deployment guide
+- `docs/operations/PI_ACCESS.md` - SSH and service operations on Pi
 - `docs/operations/SECRETS_AND_ENV.md` - Environment variables and secrets
-- `docs/operations/TROUBLESHOOTING.md` - Common issues and solutions
+- `docs/operations/PI_DEPLOYMENT.md` - Troubleshooting and operations runbook

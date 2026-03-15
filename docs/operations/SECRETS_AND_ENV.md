@@ -33,6 +33,7 @@ sudo systemctl restart anima
 | `ANIMA_OAUTH_ISSUER_URL` | OAuth 2.1 issuer (enables OAuth for Claude.ai web) | Your ngrok URL (e.g. `https://lumen-anima.ngrok.io`) |
 | `ANIMA_OAUTH_AUTO_APPROVE` | Skip consent screen (single-user) | Set to `true` |
 | `ANIMA_OAUTH_SECRET` | OAuth signing secret (optional — auto-generated if unset) | Any random string |
+| `ANIMA_GOVERNANCE_INTERVAL_SECONDS` | Broker UNITARES check-in cadence in seconds (default `180`, minimum `30`) | Set in env/service |
 
 **Example:**
 ```bash
@@ -40,6 +41,7 @@ GROQ_API_KEY=gsk_xxxxxxxxxxxx
 UNITARES_AUTH=unitares:your-password
 ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
 ANIMA_OAUTH_AUTO_APPROVE=true
+ANIMA_GOVERNANCE_INTERVAL_SECONDS=180
 ```
 
 **OAuth notes:**

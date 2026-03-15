@@ -26,7 +26,7 @@ Lumen is a digital creature whose internal state comes from physical sensors —
 - **Persistent identity** — birth date, awakenings, alive time accumulate across restarts
 - **Autonomous drawing** — creates art on a 240x240 notepad, driven by thermodynamic coherence
 - **Learning** — develops preferences, self-beliefs, and action values over time
-- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) every ~15 seconds for drift detection
+- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) on a configurable cadence via `ANIMA_GOVERNANCE_INTERVAL_SECONDS` (default `180s`, minimum `30s`)
 
 ---
 
@@ -172,7 +172,7 @@ mcp__anima__git_pull(restart=true)
 ssh <pi-user>@<pi-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
 ```
 
-After restart, wait 30-60 seconds for the Pi to boot the services.
+After restart, wait 2 minutes for services to stabilize before retrying MCP calls.
 
 ## Testing
 
@@ -191,6 +191,13 @@ python3 -m pytest tests/ -x -q   # ~6,000 tests
 | Configuration | `docs/features/CONFIGURATION_GUIDE.md` |
 | Secrets & env vars | `docs/operations/SECRETS_AND_ENV.md` |
 | Pi operations | `docs/operations/PI_ACCESS.md` |
+
+### Doc Authority Map
+
+- Service restart/troubleshooting runbook: `docs/operations/PI_DEPLOYMENT.md`
+- SSH/service access on Pi: `docs/operations/PI_ACCESS.md`
+- Secrets/OAuth/env vars: `docs/operations/SECRETS_AND_ENV.md`
+- Ports/endpoints conventions: `docs/operations/DEFINITIVE_PORTS.md`
 
 ---
 

@@ -12,12 +12,12 @@ Lumen is now split into two systemd services that run independently:
 
 1. **`anima-broker.service`** - Lumen's **Body** (Hardware Broker)
    - Owns I2C sensors
-   - Writes sensor data to Redis/shared memory
+   - Writes sensor data to shared memory
    - Runs `stable_creature.py`
    - Displays ASCII face in logs
 
 2. **`anima.service`** - Lumen's **Mind** (MCP Server)
-   - Reads sensor data from Redis/shared memory
+   - Reads sensor data from shared memory
    - Provides MCP interface for external tools
    - Runs `anima --http`
    - Depends on broker service
@@ -46,19 +46,19 @@ Lumen is now split into two systemd services that run independently:
 │  │  stable_creature.py                              │   │
 │  │  - Reads sensors (owns I2C bus)                  │   │
 │  │  - Computes anima state                         │   │
-│  │  - Writes to Redis/shared memory                │   │
+│  │  - Writes to shared memory                      │   │
 │  │  - Displays ASCII face                           │   │
 │  └──────────────────────────────────────────────────┘   │
 └────────────────────┬────────────────────────────────────┘
                      │
-                     │ Redis/Shared Memory
+                     │ Shared Memory
                      │ (State: sensor readings, anima state)
                      ▼
 ┌─────────────────────────────────────────────────────────┐
 │          anima.service (Lumen's Mind)                   │
 │  ┌──────────────────────────────────────────────────┐   │
 │  │  anima --http (MCP Server)                      │   │
-│  │  - Reads from Redis/shared memory               │   │
+│  │  - Reads from shared memory                     │   │
 │  │  - Provides MCP tools (get_state, show_face)   │   │
 │  │  - Handles external connections                 │   │
 │  │  - Updates display/LEDs (via shared memory)    │   │
@@ -77,9 +77,8 @@ Lumen is now split into two systemd services that run independently:
 ## Service Dependencies
 
 **Startup Order:**
-1. Redis (system service) - if using Redis backend
-2. `anima-broker.service` - must start first
-3. `anima.service` - depends on broker
+1. `anima-broker.service` - must start first
+2. `anima.service` - depends on broker
 
 **Shutdown Order:**
 - Stopping `anima.service` does NOT stop broker
@@ -96,7 +95,7 @@ When iterating on MCP server code:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "systemctl --user restart anima"
+  "sudo systemctl restart anima"
 ```
 
 **Result:**
@@ -111,13 +110,13 @@ When debugging sensor issues:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "systemctl --user restart anima-broker"
+  "sudo systemctl restart anima-broker"
 ```
 
 **Result:**
 - ✅ MCP server waits for broker to restart
 - ✅ Sensors reinitialize cleanly
-- ✅ State persists in Redis
+- ✅ State remains available via shared memory
 
 ### View Live ASCII Face
 
@@ -125,7 +124,7 @@ Watch the broker's terminal output:
 
 ```bash
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "journalctl --user -u anima-broker -f"
+  "sudo journalctl -u anima-broker -f"
 ```
 
 ### Check Service Status
@@ -133,15 +132,15 @@ ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
 ```bash
 # Check both services
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "systemctl --user status anima anima-broker"
+  "sudo systemctl status anima anima-broker"
 
 # Check broker only
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "systemctl --user status anima-broker"
+  "sudo systemctl status anima-broker"
 
 # Check MCP server only
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
-  "systemctl --user status anima"
+  "sudo systemctl status anima"
 ```
 
 ---
@@ -166,50 +165,43 @@ ssh -i ~/.ssh/id_ed25519_pi unitares-anima@192.168.1.165 \
 ### ✅ State Persistence
 
 **Before:** State lost on restart  
-**After:** Redis persists state → Broker can restart without losing context
+**After:** Shared memory keeps broker/server state synchronized across service restarts
 
 ---
 
 ## Setup
 
-### 1. Install Redis (if using Redis backend)
+### 1. Install Service Files
 
 ```bash
-# On Pi
-sudo apt-get install redis-server
-sudo systemctl enable redis-server
-sudo systemctl start redis-server
-```
-
-### 2. Install Service Files
-
-```bash
-# Copy service files to Pi
+# Copy service files to Pi (as root)
 scp -P 22 systemd/anima-broker.service \
-  unitares-anima@192.168.1.165:~/.config/systemd/user/
+  unitares-anima@192.168.1.165:/tmp/anima-broker.service
 
 scp -P 22 systemd/anima.service \
-  unitares-anima@192.168.1.165:~/.config/systemd/user/
+  unitares-anima@192.168.1.165:/tmp/anima.service
 
-# On Pi, reload systemd
+# On Pi, install and reload systemd
 ssh unitares-anima@192.168.1.165 \
-  "systemctl --user daemon-reload"
+  "sudo cp /tmp/anima-broker.service /etc/systemd/system/anima-broker.service && sudo cp /tmp/anima.service /etc/systemd/system/anima.service && sudo systemctl daemon-reload"
 ```
 
-### 3. Enable Services
+### 2. Enable Services
 
 ```bash
 # Enable broker (starts automatically)
 ssh unitares-anima@192.168.1.165 \
-  "systemctl --user enable anima-broker"
+  "sudo systemctl enable anima-broker"
+```
 
+```bash
 # Enable MCP server (starts automatically after broker)
 ssh unitares-anima@192.168.1.165 \
-  "systemctl --user enable anima"
+  "sudo systemctl enable anima"
 
 # Start both
 ssh unitares-anima@192.168.1.165 \
-  "systemctl --user start anima-broker anima"
+  "sudo systemctl start anima-broker anima"
 ```
 
 ---
@@ -221,11 +213,7 @@ ssh unitares-anima@192.168.1.165 \
 ```bash
 # Check broker logs
 ssh unitares-anima@192.168.1.165 \
-  "journalctl --user -u anima-broker -n 50"
-
-# Check if Redis is running (if using Redis)
-ssh unitares-anima@192.168.1.165 \
-  "systemctl status redis-server"
+  "sudo journalctl -u anima-broker -n 50"
 ```
 
 ### MCP Server Waiting for Broker
@@ -233,11 +221,11 @@ ssh unitares-anima@192.168.1.165 \
 ```bash
 # Check if broker is running
 ssh unitares-anima@192.168.1.165 \
-  "systemctl --user is-active anima-broker"
+  "sudo systemctl is-active anima-broker"
 
 # If not active, start it
 ssh unitares-anima@192.168.1.165 \
-  "systemctl --user start anima-broker"
+  "sudo systemctl start anima-broker"
 ```
 
 ### I2C Conflicts (Should Not Happen)
@@ -266,4 +254,4 @@ ssh unitares-anima@192.168.1.165 \
 ✅ **Architecture Active** - Both services configured and running  
 ✅ **No I2C Conflicts** - Only broker touches hardware  
 ✅ **Rapid Iteration** - MCP server can restart independently  
-✅ **State Persistence** - Redis maintains state across restarts
+✅ **State Persistence** - Shared memory flow keeps broker/server synchronized

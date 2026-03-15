@@ -116,6 +116,7 @@ sudo nano /etc/systemd/system/anima.service
 - `ExecStart` - Points to correct venv path
 - `ANIMA_ID` - Your creature's UUID
 - `UNITARES_URL` - UNITARES governance URL (if using)
+- `ANIMA_GOVERNANCE_INTERVAL_SECONDS` - Broker governance heartbeat cadence (default `180`, minimum `30`)
 
 ### 3.3 Reload Systemd
 
@@ -273,7 +274,7 @@ sudo systemctl status anima-health.timer
 
 ### 6.1 Set Up Ngrok Tunnel
 
-See `docs/operations/NGROK_SETUP_COMPLETE.md` for detailed instructions.
+See `docs/operations/SECRETS_AND_ENV.md` and `docs/operations/DEFINITIVE_PORTS.md` for current network and OAuth details.
 
 **Quick setup:**
 ```bash
@@ -427,13 +428,13 @@ python scripts/test_display_visual.py
 
 ```bash
 # Check database file
-ls -la ~/anima-mcp/anima.db
+ls -la ~/.anima/anima.db
 
 # Check permissions
-ls -la ~/anima-mcp/ | grep anima.db
+ls -la ~/.anima/ | rg anima.db
 
 # Fix permissions if needed
-chmod 644 ~/anima-mcp/anima.db
+chmod 644 ~/.anima/anima.db
 ```
 
 ---
@@ -489,7 +490,7 @@ sudo systemctl restart anima-broker anima
 
 ```bash
 # On Pi
-cp ~/anima-mcp/anima.db ~/anima.db.backup.$(date +%Y%m%d)
+cp ~/.anima/anima.db ~/.anima/anima.db.backup.$(date +%Y%m%d)
 ```
 
 ---
@@ -562,9 +563,9 @@ curl http://pi.local:8766/state
 
 ## Related Documentation
 
-- **`docs/operations/STARTUP_SERVICE.md`** - Systemd service details
-- **`docs/operations/NGROK_SETUP_COMPLETE.md`** - Ngrok configuration
-- **`docs/operations/TROUBLESHOOTING.md`** - Common issues
+- **`docs/operations/PI_ACCESS.md`** - SSH and service access
+- **`docs/operations/SECRETS_AND_ENV.md`** - OAuth, secrets, and env vars
+- **`docs/operations/DEFINITIVE_PORTS.md`** - Ports and endpoint conventions
 - **`README.md`** - Project overview
 
 ---

@@ -264,7 +264,7 @@ class SchemaNode:
 
 ## Open Questions (Deferred)
 
-1. **History size** — How many schemas to keep? (Starting with 100, ~25 minutes at 15s intervals)
+1. **History size** — How many schemas to keep? (Starting with 100; total wall-clock span depends on current governance/update cadence)
 2. **Trajectory recompute frequency** — Every 20 schemas? Adaptive?
 3. **Belief decay rate** — How fast should confidence decay during gaps?
 4. **Visualization** — How to render the richer schema graph?

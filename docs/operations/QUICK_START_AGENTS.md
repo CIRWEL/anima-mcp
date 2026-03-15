@@ -10,7 +10,7 @@
 
 1. **`docs/developer-index.md`** - Start here, find everything
 2. **This file's "Code Gotchas" section** - Learn from past agent pain
-3. **`docs/operations/RESTART_GUIDE.md`** - When things freeze
+3. **`docs/operations/PI_DEPLOYMENT.md`** - Service restart and troubleshooting runbook
 
 **Rule: If you're about to try something complex, check docs first. The simple solution is probably documented.**
 
@@ -30,6 +30,75 @@
 ### 3. Understand the System
 - ✅ `docs/features/CONFIGURATION_GUIDE.md` - Config system
 - ✅ `docs/operations/BROKER_ARCHITECTURE.md` - Body/mind separation
+
+---
+
+## Governance Rhythm (Daily Use)
+
+Use this lightweight loop so governance data stays comparable across sessions.
+
+### Session Start
+
+1. Run `onboard` (or `bind_session` if resuming with a known continuity token)
+2. Run `get_governance_metrics` once for baseline
+
+### During Work (Milestone-Based Check-Ins)
+
+Call `process_agent_update` after meaningful chunks (not every tool call), typically every 10-25 minutes of real work or after a clear task boundary.
+
+Use this format:
+- `response_text`: "Did X, verified Y, next is Z."
+- `task_type`: `convergent`, `divergent`, or `mixed`
+- `complexity`:
+  - `0.2-0.4` routine or local edits
+  - `0.5-0.7` multi-file/debug/integration work
+  - `0.8-1.0` architecture or high-uncertainty work
+- `confidence`:
+  - `0.8-0.95` verified with tests/runtime checks
+  - `0.6-0.79` partially verified
+  - `<0.6` hypothesis/exploration phase
+
+### Intervention Rules
+
+- `verdict=proceed` + no tight margin -> continue
+- `margin=tight` -> reduce step size, verify sooner, check in after next milestone
+- `verdict=guide` -> adapt approach immediately and log what changed
+- `verdict=pause/reject` -> stop implementation, request dialectic or human review
+
+### Session End
+
+Send one final `process_agent_update` summarizing completed work, what remains, and confidence in the current state.
+
+### Copy-Paste Check-In Examples
+
+Use these as templates when calling `process_agent_update`:
+
+```json
+{
+  "response_text": "Implemented local bug fix in sensor parsing, added regression test, next step is deployment validation.",
+  "task_type": "convergent",
+  "complexity": 0.35,
+  "confidence": 0.9
+}
+```
+
+```json
+{
+  "response_text": "Investigated intermittent governance timeout, identified two likely causes, tests partially complete, next is targeted runtime verification.",
+  "task_type": "mixed",
+  "complexity": 0.65,
+  "confidence": 0.7
+}
+```
+
+```json
+{
+  "response_text": "Drafted architecture change for broker/server fallback coordination; implementation paused pending dialectic or human approval.",
+  "task_type": "design",
+  "complexity": 0.9,
+  "confidence": 0.58
+}
+```
 
 ---
 
@@ -215,7 +284,7 @@ ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83 \
   "sudo systemctl restart anima"
 ```
 
-The systemd service handles everything. See `docs/operations/RESTART_GUIDE.md`.
+The systemd service handles everything. See `docs/operations/PI_DEPLOYMENT.md`.
 
 ### HTTP Server Crashes (SSE Handler)
 
@@ -230,7 +299,7 @@ The **broker** (`stable_creature.py`) calls UNITARES and writes governance to sh
 The **MCP server** (`server.py`) reads governance FROM shared memory - it doesn't call UNITARES directly.
 
 If governance shows "waiting..." or null on diagnostics:
-1. Check broker is running: `systemctl --user status anima-broker`
+1. Check broker is running: `sudo systemctl status anima-broker`
 2. Check shared memory has governance: `cat /dev/shm/anima_state.json | python3 -c "import sys,json; print(json.load(sys.stdin).get('governance'))"`
 3. If broker has governance but display doesn't, the MCP server isn't reading shared memory correctly
 

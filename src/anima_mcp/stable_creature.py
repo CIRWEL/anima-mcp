@@ -328,9 +328,35 @@ def run_creature():
     last_decision = None
     first_check_in = True  # Track first governance check to sync identity
     last_dialectic_time = 0  # Rate limit dialectic synthesis
-    last_governance_time = 0  # Rate limit governance check-ins (every 10s, not every 2s)
+    # Rate limit governance check-ins so they carry meaningful signal.
+    # Override with ANIMA_GOVERNANCE_INTERVAL_SECONDS if needed.
+    DEFAULT_GOVERNANCE_INTERVAL = 180.0
+    MIN_GOVERNANCE_INTERVAL = 30.0
+    _interval_env = os.environ.get("ANIMA_GOVERNANCE_INTERVAL_SECONDS")
+    _interval_raw = None
+    try:
+        _interval_raw = float(_interval_env) if _interval_env is not None else None
+        GOVERNANCE_INTERVAL = (
+            _interval_raw if _interval_raw is not None else DEFAULT_GOVERNANCE_INTERVAL
+        )
+    except (TypeError, ValueError):
+        print(
+            f"[StableCreature] Invalid ANIMA_GOVERNANCE_INTERVAL_SECONDS='{_interval_env}', "
+            f"using default {DEFAULT_GOVERNANCE_INTERVAL:.0f}s",
+            file=sys.stderr,
+            flush=True,
+        )
+        GOVERNANCE_INTERVAL = DEFAULT_GOVERNANCE_INTERVAL
+    GOVERNANCE_INTERVAL = max(MIN_GOVERNANCE_INTERVAL, GOVERNANCE_INTERVAL)
+    if _interval_raw is not None and GOVERNANCE_INTERVAL != _interval_raw:
+        print(
+            f"[StableCreature] Governance interval clamped to {GOVERNANCE_INTERVAL:.0f}s "
+            f"(minimum {MIN_GOVERNANCE_INTERVAL:.0f}s)",
+            file=sys.stderr,
+            flush=True,
+        )
+    last_governance_time = 0
     _last_memory_context = None  # Retrieved memories for dialectic synthesis (past informs present)
-    GOVERNANCE_INTERVAL = 15.0  # Seconds between governance check-ins
     last_action = None  # Track last action for outcome recording
     last_state_for_action = None  # State before action for learning
     last_learning_save = time.time()  # Track periodic learning saves

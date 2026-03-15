@@ -69,9 +69,9 @@ Handler modules use late imports from `server.py` for global state access (e.g.,
 | degraded | Yellow/Orange | Probe failing |
 | missing | Red | No heartbeat AND probe failing |
 
-Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth, governance) use 90s.
+Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth) use 90s. Governance uses dedicated SHM freshness thresholds (currently 210s).
 
-**Governance health** checks broker's shared memory governance data (broker is sole UNITARES caller, every 15s). Stale threshold: 45s.
+**Governance health** checks broker's shared memory governance data (broker is sole UNITARES caller, default every 180s via `ANIMA_GOVERNANCE_INTERVAL_SECONDS`). Stale threshold: 210s.
 
 ### Learning Systems (run in broker only)
 
@@ -343,7 +343,7 @@ ssh unitares-anima@100.78.71.1 'cd ~/anima-mcp && git pull && sudo systemctl res
 
 ## UNITARES Integration
 
-The **broker** (`stable_creature.py`) is the primary UNITARES caller. It checks in every 15s and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM and has a fallback: if no "via unitares" decision arrives for 60s (`SERVER_GOVERNANCE_FALLBACK_SECONDS`), the server calls UNITARES directly using its native async event loop. This fallback exists because the broker's sync+ThreadPoolExecutor+new-event-loop pattern has reliability issues with aiohttp sessions.
+The **broker** (`stable_creature.py`) is the primary UNITARES caller. It checks in on a configurable cadence (`ANIMA_GOVERNANCE_INTERVAL_SECONDS`, default 180s, minimum 30s) and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM and has a fallback: if no "via unitares" decision arrives for 240s (`SERVER_GOVERNANCE_FALLBACK_SECONDS`), the server calls UNITARES directly using its native async event loop. This fallback exists because the broker's sync+ThreadPoolExecutor+new-event-loop pattern has reliability issues with aiohttp sessions.
 
 ```
 UNITARES_URL=http://100.96.201.46:8767/mcp/
@@ -359,7 +359,7 @@ Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy,
 - **Governance EISV** (Mac, dynamics.py) — full thermodynamics (open loop, advisory)
 
 Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
-Server syncs `_last_governance_decision` from SHM when `governance_at` is within `SHM_GOVERNANCE_STALE_SECONDS` (45s).
+Server syncs `_last_governance_decision` from SHM when `governance_at` is within `SHM_GOVERNANCE_STALE_SECONDS` (210s).
 
 ## Operational Facts
 

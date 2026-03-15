@@ -64,6 +64,8 @@ Dogfooding Lumen via `pi(action='context')`, `pi(action='health')`, `pi(action='
 - Self-reflection uses insights in LLM prompts as "Things I've learned about myself"
 
 ### Governance Integration
+> Historical note: timing values in this section reflect the February 2026 snapshot and are not the current runtime defaults.
+
 - Broker checks in every 10s; server every ~60s
 - Circuit breaker: 3 failures → 90s open
 - EISV mapping: Warmth→E, Clarity→I, 1-Stability→S, (1-Presence)*0.3→V

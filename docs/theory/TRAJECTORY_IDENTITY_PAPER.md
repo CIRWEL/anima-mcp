@@ -682,7 +682,7 @@ The UNITARES governance architecture provides:
 | Void integral | Anomaly detection | Deviation metric |
 
 **Sampling parameters**:
-- EISV sampling: Every governance update (~30-60 seconds)
+- EISV sampling: Every governance update (cadence is deployment-configurable; examples in this paper are historical)
 - Alpha estimation: Rolling window of 100 updates (~1 hour)
 - Rho estimation: Requires 5-10 perturbation events
 
