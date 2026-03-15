@@ -326,6 +326,7 @@ def run_creature():
             print(f"[StableCreature] Activity state init error: {e}")
 
     last_decision = None
+    last_decision_checked_at = None
     first_check_in = True  # Track first governance check to sync identity
     last_dialectic_time = 0  # Rate limit dialectic synthesis
     # Rate limit governance check-ins so they carry meaningful signal.
@@ -786,6 +787,7 @@ def run_creature():
                     gov_result = _governance_future.result()
                     if gov_result is not None:
                         last_decision = gov_result["decision"]
+                        last_decision_checked_at = gov_result.get("checked_at")
                         last_governance_time = gov_result["time"]
                         if gov_result.get("first"):
                             first_check_in = False
@@ -821,7 +823,12 @@ def run_creature():
                         ),
                         timeout=15.0  # budget: availability (3+3s) + check-in (3s) + headroom
                     )
-                    return {"decision": decision, "time": _gov_time, "first": _gov_first}
+                    return {
+                        "decision": decision,
+                        "time": _gov_time,
+                        "first": _gov_first,
+                        "checked_at": datetime.now().isoformat(),
+                    }
 
                 _governance_future = _bg_executor.submit(_do_governance)
                 last_governance_time = current_time  # Prevent re-submit while running
@@ -847,7 +854,10 @@ def run_creature():
                 }
             }
             if last_decision:
-                shm_data["governance"] = {**last_decision, "governance_at": datetime.now().isoformat()}
+                shm_data["governance"] = {
+                    **last_decision,
+                    "governance_at": last_decision_checked_at or datetime.now().isoformat(),
+                }
 
             # Add activity state if available
             if activity_state:

@@ -146,6 +146,7 @@
         .quick-help-actions {
             display: flex;
             gap: 8px;
+            align-items: center;
         }
         .quick-help-btn {
             border: 1px solid rgba(255,255,255,0.14);
@@ -166,6 +167,34 @@
             color: var(--accent-cyan);
             background: rgba(0,255,255,0.1);
             box-shadow: 0 0 0 1px rgba(0,255,255,0.2) inset;
+        }
+        .security-chip {
+            font-size: 0.68rem;
+            border-radius: 999px;
+            padding: 3px 10px;
+            border: 1px solid rgba(255,255,255,0.14);
+            color: var(--text-secondary);
+            font-family: 'JetBrains Mono', var(--mono);
+            white-space: nowrap;
+        }
+        .security-chip.strict {
+            border-color: rgba(120, 220, 160, 0.45);
+            color: #c9f5d8;
+            background: rgba(120, 220, 160, 0.1);
+        }
+        .security-chip.warn {
+            border-color: rgba(255, 170, 120, 0.45);
+            color: #ffd8c4;
+            background: rgba(255, 170, 120, 0.12);
+        }
+        .card-age {
+            margin-left: 8px;
+            font-size: 0.68rem;
+            font-weight: normal;
+            color: #666;
+            font-family: 'JetBrains Mono', var(--mono);
+            letter-spacing: 0;
+            text-transform: none;
         }
 
         /* ── Layout grids ── */
@@ -1155,6 +1184,7 @@
                 <span class="help-kbd">?</span> shortcuts
             </div>
             <div class="quick-help-actions">
+                <span id="securityStatus" class="security-chip">REST security: ...</span>
                 <button type="button" id="monitorModeBtn" class="quick-help-btn" onclick="toggleMonitorMode()">Monitor mode: off</button>
                 <button type="button" class="quick-help-btn" onclick="reconnectAll()">Refresh all</button>
             </div>
@@ -1191,6 +1221,7 @@
                 <div class="card-header-collapsible" data-card-id="live-state">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Live State
+                        <span id="stateAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchState()" title="Refresh" aria-label="Refresh state">&#x21bb;</button>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
@@ -1239,6 +1270,7 @@
                 <div class="card-header-collapsible" data-card-id="qa">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Questions &amp; Answers
+                        <span id="qaAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchQA()" title="Refresh" aria-label="Refresh Q&amp;A">&#x21bb;</button>
                         <span id="qaCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
                     </h3>
@@ -1280,6 +1312,7 @@
                 <div class="card-header-collapsible" data-card-id="health">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         System Health
+                        <span id="healthAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchHealth()" title="Refresh" aria-label="Refresh health">&#x21bb;</button>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
@@ -1301,6 +1334,7 @@
             <div class="card-header-collapsible" data-card-id="messages">
                 <h3 class="card-title" style="margin-bottom: 0;">
                     Message Board
+                    <span id="messagesAge" class="card-age">stale</span>
                     <button class="refresh-btn" onclick="event.stopPropagation(); fetchMessages()" title="Refresh" aria-label="Refresh messages">&#x21bb;</button>
                     <span id="msgCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
                 </h3>
@@ -1330,6 +1364,7 @@
                 <div class="card-header-collapsible" data-card-id="growth">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Lumen's Journey
+                        <span id="growthAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchGrowth()" title="Refresh" aria-label="Refresh growth">&#x21bb;</button>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
@@ -1349,6 +1384,7 @@
                 <div class="card-header-collapsible" data-card-id="learning">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Learning
+                        <span id="learningAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchLearning(); fetchGrowth();" title="Refresh" aria-label="Refresh learning">&#x21bb;</button>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
@@ -1374,6 +1410,7 @@
                 <div class="card-header-collapsible" data-card-id="self-knowledge">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Discovered Insights
+                        <span id="insightsAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchSelfKnowledge()" title="Refresh" aria-label="Refresh insights">&#x21bb;</button>
                         <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
                     </h3>
@@ -1395,6 +1432,7 @@
                 <div class="card-header-collapsible" data-card-id="gallery">
                     <h3 class="card-title" style="margin-bottom: 0;">
                         Drawings
+                        <span id="galleryAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchGallery()" title="Refresh" aria-label="Refresh gallery">&#x21bb;</button>
                         <span id="galleryCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
                         <a href="/gallery-page" style="font-size: 0.8rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: 8px; opacity: 0.8;" onclick="event.stopPropagation()">View all &rarr;</a>
@@ -1422,6 +1460,7 @@
         let lastMessagesHasMore = false;
         let monitorMode = false;
         const animaPrev = { warmth: null, clarity: null, stability: null, presence: null };
+        const sectionFetchedAt = {};
 
         // ── HiDPI-aware sparkline canvas setup ──
         function createHiDPICanvas(canvas, width, height) {
@@ -1511,6 +1550,46 @@
             if (el) el.textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
         }
 
+        function markSectionFresh(sectionId) {
+            sectionFetchedAt[sectionId] = Date.now();
+            updateSectionAges();
+        }
+
+        function ageLabel(ms) {
+            const seconds = Math.max(0, Math.floor(ms / 1000));
+            if (seconds < 60) return `${seconds}s ago`;
+            const minutes = Math.floor(seconds / 60);
+            if (minutes < 60) return `${minutes}m ago`;
+            const hours = Math.floor(minutes / 60);
+            return `${hours}h ago`;
+        }
+
+        function updateSectionAges() {
+            const now = Date.now();
+            const ids = ['state', 'qa', 'health', 'messages', 'growth', 'learning', 'insights', 'gallery'];
+            ids.forEach((id) => {
+                const el = document.getElementById(`${id}Age`);
+                if (!el) return;
+                const ts = sectionFetchedAt[id];
+                el.textContent = ts ? ageLabel(now - ts) : 'stale';
+            });
+        }
+
+        function updateSecurityChip(apiSecurity) {
+            const chip = document.getElementById('securityStatus');
+            if (!chip) return;
+            if (!apiSecurity || !apiSecurity.mode) {
+                chip.textContent = 'REST security: unknown';
+                chip.className = 'security-chip warn';
+                return;
+            }
+            const tokenState = apiSecurity.token_configured ? 'token' : 'no-token';
+            const proxyState = apiSecurity.trusted_proxy_networks_configured ? 'proxy-trust' : 'direct-only';
+            const isStrict = apiSecurity.mode === 'strict-no-token' || apiSecurity.mode === 'token';
+            chip.textContent = `REST: ${apiSecurity.mode} · ${tokenState} · ${proxyState}`;
+            chip.className = isStrict ? 'security-chip strict' : 'security-chip warn';
+        }
+
         function reconnectAll() {
             fetchState();
             fetchQA();
@@ -1560,10 +1639,12 @@
                 }
                 updateConnection(true, data.name || 'Lumen');
                 setLastUpdated();
+                markSectionFresh('state');
                 window._lastStateData = data;
                 renderState(data);
                 renderNeural(data);
                 renderSystem(data);
+                updateSecurityChip(data.api_security);
 
                 if (data.warmth != null) sparkWarmth.push(data.warmth);
                 if (data.clarity != null) sparkClarity.push(data.clarity);
@@ -1611,13 +1692,18 @@
                 const isProc = gov.decision === 'PROCEED';
                 const isOff = gov.decision === 'OFFLINE';
                 const dc = isProc ? '#7ecf8b' : isOff ? '#666' : '#e8a87c';
-                const detail = gov.margin ? escapeHtml(gov.margin) : '';
-                const src = gov.source ? ` \u00b7 ${escapeHtml(gov.source)}` : '';
+                const detailParts = [];
+                if (gov.margin) detailParts.push(escapeHtml(gov.margin));
+                if (gov.source) detailParts.push(escapeHtml(gov.source));
+                if (gov.path) detailParts.push(gov.path === 'broker_shm' ? 'broker shm' : 'server fallback');
+                if (typeof gov.fresh === 'boolean') detailParts.push(gov.fresh ? 'fresh' : 'stale');
+                if (Number.isFinite(gov.age_seconds)) detailParts.push(`${gov.age_seconds}s old`);
+                const detail = detailParts.join(' \u00b7 ');
                 govHtml = `
                     <div class="gov-inline">
                         <div class="gov-dot" style="background: ${dc}; box-shadow: 0 0 6px ${dc}60;"></div>
                         <span class="gov-decision" style="color: ${dc};">${gov.decision}</span>
-                        <span class="gov-detail">${detail}${src}</span>
+                        <span class="gov-detail">${detail}</span>
                     </div>`;
             }
 
@@ -1747,6 +1833,7 @@
                 document.getElementById('qaCount').textContent =
                     data.unanswered > 0 ? `(${data.unanswered} unanswered of ${data.total})` : `(${data.total} total)`;
                 renderQA(data.questions);
+                markSectionFresh('qa');
             } catch (e) {
                 renderError('qaContent', 'Could not load Q&A', 'fetchQA');
             }
@@ -1879,6 +1966,7 @@
                 lastMessages = data.messages || [];
                 lastMessagesHasMore = total > returned;
                 renderMessages(lastMessages, lastMessagesHasMore);
+                markSectionFresh('messages');
             } catch (e) {
                 renderError('msgContent', 'Could not load messages', 'fetchMessages');
             }
@@ -1958,6 +2046,7 @@
                     return;
                 }
                 renderLearning(data);
+                markSectionFresh('learning');
             } catch (e) {
                 renderError('learningContent', 'Could not load learning stats', 'fetchLearning');
             }
@@ -2049,6 +2138,7 @@
                 document.getElementById('galleryCount').textContent =
                     data.total > 0 ? `(${data.total} drawings)` : '';
                 renderGalleryPreview(data.drawings);
+                markSectionFresh('gallery');
             } catch (e) {
                 renderError('galleryContent', 'Could not load gallery', 'fetchGallery');
             }
@@ -2097,6 +2187,7 @@
                 document.getElementById('insightCount').textContent = `(${data.total_insights} total)`;
                 renderInsightTabs();
                 renderInsights();
+                markSectionFresh('insights');
             } catch (e) {
                 renderError('insightContent', 'Could not load self-knowledge', 'fetchSelfKnowledge');
             }
@@ -2165,6 +2256,7 @@
                     return;
                 }
                 renderGrowth(data);
+                markSectionFresh('growth');
             } catch (e) {
                 renderError('growthContent', 'Could not load growth data', 'fetchGrowth');
             }
@@ -2276,6 +2368,7 @@
                     return;
                 }
                 renderHealth(data);
+                markSectionFresh('health');
             } catch (e) {
                 renderError('healthContent', 'Could not load health data', 'fetchHealth');
             }
@@ -2345,6 +2438,8 @@
             monitorMode = false;
         }
         applyMonitorMode();
+        updateSectionAges();
+        updateSecurityChip(null);
 
         fetchState();
         fetchQA();
@@ -2366,6 +2461,7 @@
         setInterval(fetchSelfKnowledge, 120000);
         setInterval(fetchGrowth, 120000);
         setInterval(fetchHealth, 30000);
+        setInterval(updateSectionAges, 1000);
     </script>
 </body>
 

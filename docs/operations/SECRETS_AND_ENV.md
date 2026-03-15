@@ -34,6 +34,11 @@ sudo systemctl restart anima
 | `ANIMA_OAUTH_AUTO_APPROVE` | Skip consent screen (single-user) | Set to `true` |
 | `ANIMA_OAUTH_SECRET` | OAuth signing secret (optional — auto-generated if unset) | Any random string |
 | `ANIMA_GOVERNANCE_INTERVAL_SECONDS` | Broker UNITARES check-in cadence in seconds (default `180`, minimum `30`) | Set in env/service |
+| `ANIMA_HTTP_API_TOKEN` | Bearer token for REST API auth on untrusted networks | Set in env/service |
+| `ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN` | Legacy compatibility for REST auth without token (`false` default, secure) | Set `true` only during migration |
+| `ANIMA_TRUSTED_PROXY_NETWORKS` | Comma-separated CIDRs allowed to supply `X-Forwarded-For` | Example: `127.0.0.1/32,::1/128` |
+| `ANIMA_ALLOWED_HOSTS` | Comma-separated MCP transport host allowlist override | Optional; defaults to built-in local/LAN/Tailscale/ngrok list |
+| `ANIMA_ALLOWED_ORIGINS` | Comma-separated MCP transport origin allowlist override | Optional; defaults to built-in localhost/LAN/ngrok list |
 
 **Example:**
 ```bash
@@ -42,7 +47,19 @@ UNITARES_AUTH=unitares:your-password
 ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
 ANIMA_OAUTH_AUTO_APPROVE=true
 ANIMA_GOVERNANCE_INTERVAL_SECONDS=180
+ANIMA_HTTP_API_TOKEN=replace-with-strong-secret
+ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=false
+ANIMA_TRUSTED_PROXY_NETWORKS=127.0.0.1/32,::1/128
+ANIMA_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,100.78.71.1:*,lumen-anima.ngrok.io
+ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen-anima.ngrok.io,null
 ```
+
+**REST auth notes:**
+- Trusted networks (localhost, Tailscale CGNAT, RFC1918 private ranges) can call REST endpoints without a bearer token.
+- Untrusted networks require `Authorization: Bearer <ANIMA_HTTP_API_TOKEN>`.
+- If `ANIMA_HTTP_API_TOKEN` is unset, untrusted requests are denied by default.
+- Set `ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=true` only for temporary migration/compatibility windows.
+- `X-Forwarded-For` is ignored unless the immediate peer IP is in `ANIMA_TRUSTED_PROXY_NETWORKS`.
 
 **OAuth notes:**
 - OAuth is only required for Claude.ai web connections via ngrok.

@@ -341,6 +341,51 @@ def test_get_server_bridge_handles_init_exception(monkeypatch):
     assert server._get_server_bridge() is None
 
 
+def test_parse_shm_governance_freshness_fresh_unitares():
+    now = 1_000.0
+    gov_ts = now - 10.0
+    gov_at = datetime.fromtimestamp(gov_ts).isoformat()
+    fresh, is_unitares, parsed_ts = server._parse_shm_governance_freshness(
+        {"source": "unitares", "governance_at": gov_at},
+        now_ts=now,
+    )
+    assert fresh is True
+    assert is_unitares is True
+    assert parsed_ts == pytest.approx(gov_ts)
+
+
+def test_parse_shm_governance_freshness_stale_or_invalid():
+    now = 2_000.0
+    stale_ts = now - (server.SHM_GOVERNANCE_STALE_SECONDS + 1)
+    stale_at = datetime.fromtimestamp(stale_ts).isoformat()
+    fresh, is_unitares, parsed_ts = server._parse_shm_governance_freshness(
+        {"source": "unitares", "governance_at": stale_at},
+        now_ts=now,
+    )
+    assert fresh is False
+    assert is_unitares is True
+    assert parsed_ts == pytest.approx(stale_ts)
+
+    fresh2, is_unitares2, parsed_ts2 = server._parse_shm_governance_freshness(
+        {"source": "unitares", "governance_at": "not-a-date"},
+        now_ts=now,
+    )
+    assert (fresh2, is_unitares2, parsed_ts2) == (False, False, None)
+
+
+def test_parse_shm_governance_freshness_non_unitares_source():
+    now = 3_000.0
+    gov_ts = now - 5.0
+    gov_at = datetime.fromtimestamp(gov_ts).isoformat()
+    fresh, is_unitares, parsed_ts = server._parse_shm_governance_freshness(
+        {"source": "local", "governance_at": gov_at},
+        now_ts=now,
+    )
+    assert fresh is True
+    assert is_unitares is False
+    assert parsed_ts == pytest.approx(gov_ts)
+
+
 def test_get_schema_hub_lazy_initializes_once(monkeypatch):
     calls = {"count": 0}
 

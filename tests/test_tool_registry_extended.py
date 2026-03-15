@@ -19,6 +19,37 @@ def test_tools_list_populated():
     assert len(tr.TOOLS) >= 19
 
 
+def test_system_service_schema_includes_broker_service():
+    import anima_mcp.tool_registry as tr
+
+    tool = next(t for t in tr.TOOLS if t.name == "system_service")
+    services = tool.inputSchema["properties"]["service"]["enum"]
+    assert "anima-broker" in services
+
+
+def test_transport_security_uses_defaults_without_env(monkeypatch):
+    import anima_mcp.tool_registry as tr
+
+    monkeypatch.delenv("ANIMA_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("ANIMA_ALLOWED_ORIGINS", raising=False)
+    settings = tr._get_transport_security_settings()
+
+    assert settings.enable_dns_rebinding_protection is True
+    assert settings.allowed_hosts == tr._DEFAULT_ALLOWED_HOSTS
+    assert settings.allowed_origins == tr._DEFAULT_ALLOWED_ORIGINS
+
+
+def test_transport_security_uses_env_overrides(monkeypatch):
+    import anima_mcp.tool_registry as tr
+
+    monkeypatch.setenv("ANIMA_ALLOWED_HOSTS", "example.com, 10.0.0.1:* ,")
+    monkeypatch.setenv("ANIMA_ALLOWED_ORIGINS", "https://example.com, null")
+    settings = tr._get_transport_security_settings()
+
+    assert settings.allowed_hosts == ["example.com", "10.0.0.1:*"]
+    assert settings.allowed_origins == ["https://example.com", "null"]
+
+
 def test_json_type_to_python_handles_null_union_and_unknown():
     import anima_mcp.tool_registry as tr
 

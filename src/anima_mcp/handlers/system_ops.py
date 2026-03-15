@@ -6,6 +6,7 @@ They manage deployment, service control, networking, and power.
 
 import asyncio
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -14,6 +15,11 @@ from mcp.types import TextContent
 
 RESTART_LOCKFILE = Path("/tmp/anima-restarting")
 RESTART_WAIT_SECONDS = 120  # Callers must wait this long before retrying
+
+
+def _pi_ssh_host() -> str:
+    """Return Pi host/IP for user-facing SSH instructions."""
+    return os.environ.get("ANIMA_PI_HOST", "100.78.71.1")
 
 
 async def _delayed_restart():
@@ -360,14 +366,16 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
     """
     port = arguments.get("port", 2222)
     if port not in (22, 2222, 22222):
+        pi_host = _pi_ssh_host()
         return [TextContent(type="text", text=json.dumps({
             "error": "port must be 22, 2222, or 22222",
-            "usage_2222": "ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
-            "usage_22": "ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
+            "usage_2222": f"ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@{pi_host}",
+            "usage_22": f"ssh -i ~/.ssh/id_ed25519_pi unitares-anima@{pi_host}",
         }))]
 
     try:
         if port == 22:
+            pi_host = _pi_ssh_host()
             # Reset to default: remove Port 2222 and Port 22222 lines from sshd_config
             sed = subprocess.run(
                 ["sudo", "sed", "-i.bak", "/^Port 2222$/d; /^Port 22222$/d", "/etc/ssh/sshd_config"],
@@ -390,7 +398,7 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
                 "success": restart.returncode == 0,
                 "port": 22,
                 "message": "SSH reset to port 22 (default). Connect with:",
-                "connect": "ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
+                "connect": f"ssh -i ~/.ssh/id_ed25519_pi unitares-anima@{pi_host}",
                 "stderr": restart.stderr.strip() if restart.stderr else None,
             }))]
 
@@ -407,10 +415,11 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
                 text=True,
                 timeout=15,
             )
+            pi_host = _pi_ssh_host()
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "message": f"SSH already on port {port}, restarted",
-                "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
+                "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@{pi_host}",
             }))]
 
         echo = subprocess.run(
@@ -432,11 +441,12 @@ async def handle_fix_ssh_port(arguments: dict) -> list[TextContent]:
             timeout=15,
         )
 
+        pi_host = _pi_ssh_host()
         return [TextContent(type="text", text=json.dumps({
             "success": restart.returncode == 0,
             "port": port,
             "message": f"SSH now on port {port}. Connect with:",
-            "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83",
+            "connect": f"ssh -p {port} -i ~/.ssh/id_ed25519_pi unitares-anima@{pi_host}",
             "stderr": restart.stderr.strip() if restart.stderr else None,
         }))]
     except subprocess.TimeoutExpired:

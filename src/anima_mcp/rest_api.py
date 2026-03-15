@@ -31,6 +31,11 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
 # Bearer token for REST endpoints (optional)
 _ANIMA_HTTP_API_TOKEN = os.environ.get("ANIMA_HTTP_API_TOKEN")
+# Legacy compatibility switch: when true, untrusted requests are allowed if no
+# API token is configured. Default false for secure-by-default behavior.
+_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN = os.environ.get(
+    "ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN", "false"
+).lower() in ("1", "true", "yes", "on")
 
 # Trusted networks: localhost, Tailscale CGNAT, private RFC1918 ranges
 _TRUSTED_NETWORKS = [
@@ -43,18 +48,45 @@ _TRUSTED_NETWORKS = [
 ]
 
 
+def _parse_networks(raw: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """Parse comma-separated CIDR blocks into IP network objects."""
+    networks: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = []
+    for item in (raw or "").split(","):
+        cidr = item.strip()
+        if not cidr:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            continue
+    return networks
+
+
+# Optional: only trust X-Forwarded-For when the immediate peer is in this set.
+# Example: ANIMA_TRUSTED_PROXY_NETWORKS="127.0.0.1/32,::1/128"
+_TRUSTED_PROXY_NETWORKS = _parse_networks(os.environ.get("ANIMA_TRUSTED_PROXY_NETWORKS", ""))
+
+
 def _is_trusted_network(request) -> bool:
     """Check if request originates from a trusted network."""
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        client_ip = forwarded.split(",")[0].strip()
-    else:
-        client_ip = request.client.host if request.client else None
-    if not client_ip:
+    peer_ip = request.client.host if request.client else None
+    if not peer_ip:
         return False
     try:
-        addr = ipaddress.ip_address(client_ip)
-        return any(addr in net for net in _TRUSTED_NETWORKS)
+        client_addr = ipaddress.ip_address(peer_ip)
+    except ValueError:
+        return False
+
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded and _TRUSTED_PROXY_NETWORKS and any(client_addr in net for net in _TRUSTED_PROXY_NETWORKS):
+        candidate = forwarded.split(",")[0].strip()
+        try:
+            client_addr = ipaddress.ip_address(candidate)
+        except ValueError:
+            return False
+
+    try:
+        return any(client_addr in net for net in _TRUSTED_NETWORKS)
     except ValueError:
         return False
 
@@ -64,7 +96,7 @@ def _check_rest_auth(request) -> bool:
     if _is_trusted_network(request):
         return True
     if not _ANIMA_HTTP_API_TOKEN:
-        return True  # Auth disabled if no token configured
+        return _ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN
     # Allow requests with valid bearer token
     auth = request.headers.get("authorization") or request.headers.get("Authorization")
     if not auth or not isinstance(auth, str):
@@ -73,6 +105,15 @@ def _check_rest_auth(request) -> bool:
         return False
     token = auth.split(" ", 1)[1].strip()
     return token == _ANIMA_HTTP_API_TOKEN
+
+
+def _require_rest_auth(request, *, success_shape: bool = False):
+    """Return unauthorized response when auth fails, otherwise None."""
+    if _check_rest_auth(request):
+        return None
+    if success_shape:
+        return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
+    return JSONResponse({"error": "Unauthorized"}, status_code=401)
 
 
 # --- HTML page helpers ---
@@ -106,8 +147,9 @@ async def rest_tool_call(request):
     Body: {"name": "tool_name", "arguments": {...}}
     Returns: {"success": true, "result": ...} or {"success": false, "error": "..."}
     """
-    if not _check_rest_auth(request):
-        return JSONResponse({"success": False, "error": "Unauthorized"}, status_code=401)
+    auth_error = _require_rest_auth(request, success_shape=True)
+    if auth_error:
+        return auth_error
     try:
         body = await request.json()
         tool_name = body.get("name")
@@ -147,10 +189,18 @@ async def dashboard(request):
 
 async def rest_state(request):
     """GET /state - Format matching message_server.py."""
-    if not _check_rest_auth(request):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
-        from .server import _get_readings_and_anima, _get_store, _last_governance_decision, _activity
+        from datetime import datetime as _dt
+        from .server import (
+            SHM_GOVERNANCE_STALE_SECONDS,
+            _get_readings_and_anima,
+            _get_store,
+            _last_governance_decision,
+            _activity,
+        )
 
         # Use internal functions (same as MCP get_state)
         readings, anima = _get_readings_and_anima()
@@ -169,6 +219,26 @@ async def rest_state(request):
 
         # Governance
         gov = _last_governance_decision or {}
+        gov_timestamp = gov.get("governance_at")
+        gov_age_seconds = None
+        gov_fresh = None
+        if gov_timestamp:
+            try:
+                gov_age_seconds = max(0, int((_dt.now().timestamp()) - _dt.fromisoformat(gov_timestamp).timestamp()))
+                gov_fresh = gov_age_seconds <= SHM_GOVERNANCE_STALE_SECONDS
+            except (ValueError, TypeError):
+                gov_timestamp = None
+                gov_age_seconds = None
+                gov_fresh = None
+
+        token_configured = bool(_ANIMA_HTTP_API_TOKEN)
+        allow_no_token = bool(_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN)
+        if token_configured:
+            auth_mode = "token"
+        elif allow_no_token:
+            auth_mode = "permissive-no-token"
+        else:
+            auth_mode = "strict-no-token"
 
         return JSONResponse({
             "name": identity.name if identity else "Lumen",
@@ -194,6 +264,16 @@ async def rest_state(request):
                 "margin": gov.get("margin", "") if gov else "",
                 "source": gov.get("source", "") if gov else "",
                 "connected": bool(gov),
+                "timestamp": gov_timestamp,
+                "age_seconds": gov_age_seconds,
+                "fresh": gov_fresh,
+                "path": "broker_shm" if gov_timestamp else ("server_fallback" if gov else ""),
+            },
+            "api_security": {
+                "mode": auth_mode,
+                "token_configured": token_configured,
+                "allow_unauth_if_no_token": allow_no_token,
+                "trusted_proxy_networks_configured": bool(_TRUSTED_PROXY_NETWORKS),
             },
             "awakenings": identity.total_awakenings if identity else 0,
             "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
@@ -210,6 +290,9 @@ async def rest_state(request):
 
 async def rest_qa(request):
     """GET /qa - Get questions and answers (matching message_server.py format)."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .messages import get_board, MESSAGE_TYPE_QUESTION
 
@@ -252,6 +335,9 @@ async def rest_qa(request):
 
 async def rest_messages(request):
     """GET /messages - Get recent message board entries."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .messages import get_board, get_recent_messages
         limit = int(request.query_params.get("limit", "20"))
@@ -279,6 +365,9 @@ async def rest_messages(request):
 
 async def rest_answer(request):
     """POST /answer - Answer a question from Lumen."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .handlers.communication import handle_lumen_qa
         from .growth import normalize_visitor_identity
@@ -304,6 +393,9 @@ async def rest_answer(request):
 
 async def rest_message(request):
     """POST /message - Send a message to Lumen."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .handlers.communication import handle_post_message
         from .growth import normalize_visitor_identity
@@ -328,6 +420,9 @@ async def rest_message(request):
 
 async def rest_learning(request):
     """GET /learning - Exact copy of message_server.py format."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         import sqlite3
         from datetime import datetime, timedelta
@@ -409,6 +504,9 @@ async def rest_learning(request):
 
 async def rest_voice(request):
     """GET /voice - Get voice system status."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .handlers.communication import handle_configure_voice
 
@@ -423,8 +521,9 @@ async def rest_voice(request):
 
 async def rest_gallery(request):
     """GET /gallery - Get Lumen's drawings."""
-    if not _check_rest_auth(request):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         import re
         from datetime import datetime as dt
@@ -488,8 +587,9 @@ async def rest_gallery(request):
 
 async def rest_gallery_image(request):
     """GET /gallery/{filename} - Serve a drawing image."""
-    if not _check_rest_auth(request):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     filename = request.path_params.get("filename", "")
     # Sanitize filename
     if "/" in filename or ".." in filename or not filename.endswith(".png"):
@@ -511,6 +611,9 @@ async def rest_gallery_image(request):
 
 async def rest_health_detailed(request):
     """GET /health/detailed - Get subsystem health status."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .handlers.state_queries import handle_get_health
 
@@ -525,6 +628,9 @@ async def rest_health_detailed(request):
 
 async def rest_self_knowledge(request):
     """GET /self-knowledge - Get Lumen's accumulated self-knowledge insights."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .handlers.knowledge import handle_get_self_knowledge
 
@@ -541,6 +647,9 @@ async def rest_self_knowledge(request):
 
 async def rest_growth(request):
     """GET /growth - Get Lumen's growth data (autobiography, goals, memories, preferences)."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .handlers.knowledge import handle_get_growth
 
@@ -560,6 +669,9 @@ async def rest_gallery_page(request):
 
 async def rest_layers(request):
     """GET /layers - Full proprioception stack for architecture page."""
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .server import (
             _get_readings_and_anima, _get_store, _last_governance_decision,
@@ -680,8 +792,9 @@ async def rest_architecture_page(request):
 
 async def rest_schema_data(request):
     """Return full self-schema graph, trajectory, and history."""
-    if not _check_rest_auth(request):
-        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+    auth_error = _require_rest_auth(request)
+    if auth_error:
+        return auth_error
     try:
         from .server import _get_schema_hub, _store, _get_readings_and_anima, _growth
 

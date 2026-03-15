@@ -97,6 +97,14 @@ class TestFixSshPortExtended:
 
         data = _parse(await handle_fix_ssh_port({"port": 9999}))
         assert "port must be 22, 2222, or 22222" in data["error"]
+        assert "@100.78.71.1" in data["usage_22"]
+
+    async def test_invalid_port_uses_configured_pi_host(self, monkeypatch):
+        from anima_mcp.handlers.system_ops import handle_fix_ssh_port
+
+        monkeypatch.setenv("ANIMA_PI_HOST", "100.1.2.3")
+        data = _parse(await handle_fix_ssh_port({"port": 9999}))
+        assert "@100.1.2.3" in data["usage_2222"]
 
     async def test_port_22_reset_success(self):
         from anima_mcp.handlers.system_ops import handle_fix_ssh_port

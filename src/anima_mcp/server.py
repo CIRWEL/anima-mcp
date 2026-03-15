@@ -219,6 +219,33 @@ async def _server_governance_fallback(anima, readings):
         return None
 
 
+def _parse_shm_governance_freshness(
+    shm_gov: dict, now_ts: float | None = None
+) -> tuple[bool, bool, float | None]:
+    """Parse SHM governance freshness and source.
+
+    Returns (is_fresh, is_unitares_source, governance_timestamp).
+    """
+    if not isinstance(shm_gov, dict):
+        return False, False, None
+
+    gov_at = shm_gov.get("governance_at")
+    if not gov_at:
+        return False, False, None
+
+    from datetime import datetime as _dt
+
+    try:
+        gov_ts = _dt.fromisoformat(gov_at).timestamp()
+    except (ValueError, TypeError):
+        return False, False, None
+
+    current_ts = time.time() if now_ts is None else now_ts
+    is_fresh = current_ts - gov_ts < SHM_GOVERNANCE_STALE_SECONDS
+    is_unitares = shm_gov.get("source") == "unitares"
+    return is_fresh, is_unitares, gov_ts
+
+
 def _get_schema_hub() -> SchemaHub:
     """Get or create the SchemaHub singleton for schema composition."""
     global _schema_hub
@@ -2002,29 +2029,24 @@ async def _update_display_loop():
                 shm_gov = _last_shm_data["governance"]
                 governance_decision_for_display = shm_gov
                 # Sync into _last_governance_decision if SHM data is fresh
-                gov_at = shm_gov.get("governance_at")
-                if gov_at:
-                    from datetime import datetime as _dt
-                    try:
-                        gov_ts = _dt.fromisoformat(gov_at).timestamp()
-                        if time.time() - gov_ts < SHM_GOVERNANCE_STALE_SECONDS:
-                            _last_governance_decision = shm_gov
-                            is_unitares = shm_gov.get("source") == "unitares"
-                            if is_unitares:
-                                _shm_gov_is_fresh_unitares = True
-                                _last_unitares_success_time = time.time()
-                            # Update connection status based on SHM governance source
-                            if _screen_renderer:
-                                _screen_renderer.update_connection_status(governance=is_unitares)
-                            # Update WiFi icon from SHM
-                            wifi_up = _last_shm_data.get("wifi_connected")
-                            if wifi_up is not None and _screen_renderer:
-                                _screen_renderer.update_connection_status(wifi=wifi_up)
-                            # Fire health heartbeat for fresh governance
-                            if _health:
-                                _health.heartbeat("governance")
-                    except (ValueError, TypeError):
-                        pass
+                is_fresh, is_unitares, gov_ts = _parse_shm_governance_freshness(shm_gov)
+                if is_fresh:
+                    _last_governance_decision = shm_gov
+                    if is_unitares:
+                        _shm_gov_is_fresh_unitares = True
+                        # Track when UNITARES actually checked in, not loop time.
+                        if gov_ts is not None:
+                            _last_unitares_success_time = max(_last_unitares_success_time, gov_ts)
+                    # Update connection status based on SHM governance source
+                    if _screen_renderer:
+                        _screen_renderer.update_connection_status(governance=is_unitares)
+                    # Update WiFi icon from SHM
+                    wifi_up = _last_shm_data.get("wifi_connected")
+                    if wifi_up is not None and _screen_renderer:
+                        _screen_renderer.update_connection_status(wifi=wifi_up)
+                    # Fire health heartbeat for fresh governance
+                    if _health:
+                        _health.heartbeat("governance")
 
             # Server-side UNITARES fallback: if broker hasn't delivered a fresh
             # "via unitares" decision for too long, the server calls UNITARES

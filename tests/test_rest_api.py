@@ -11,6 +11,13 @@ from starlette.requests import Request
 from anima_mcp import rest_api
 
 
+@pytest.fixture(autouse=True)
+def _default_auth_mode(monkeypatch):
+    """Keep legacy permissive mode in tests unless a test overrides it."""
+    monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", None)
+    monkeypatch.setattr(rest_api, "_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN", True)
+
+
 def _make_request(
     method: str = "GET",
     path: str = "/",
@@ -51,8 +58,21 @@ def _make_request(
 
 
 class TestRestAuthHelpers:
-    def test_is_trusted_network_uses_x_forwarded_for(self):
-        request = _make_request(headers={"x-forwarded-for": "100.88.1.8"})
+    def test_is_trusted_network_uses_client_host(self):
+        request = _make_request(client_host="100.88.1.8")
+        assert rest_api._is_trusted_network(request) is True
+
+    def test_is_trusted_network_ignores_x_forwarded_for_from_untrusted_peer(self):
+        request = _make_request(headers={"x-forwarded-for": "100.88.1.8"}, client_host="8.8.8.8")
+        assert rest_api._is_trusted_network(request) is False
+
+    def test_is_trusted_network_uses_x_forwarded_for_from_trusted_proxy(self, monkeypatch):
+        monkeypatch.setattr(
+            rest_api,
+            "_TRUSTED_PROXY_NETWORKS",
+            [rest_api.ipaddress.ip_network("127.0.0.0/8")],
+        )
+        request = _make_request(headers={"x-forwarded-for": "100.88.1.8"}, client_host="127.0.0.1")
         assert rest_api._is_trusted_network(request) is True
 
     def test_is_trusted_network_rejects_invalid_ip(self):
@@ -73,8 +93,15 @@ class TestRestAuthHelpers:
         request_ok = _make_request(headers={"authorization": "Bearer secret"})
         assert rest_api._check_rest_auth(request_ok) is True
 
-    def test_check_rest_auth_disabled_without_token(self, monkeypatch):
+    def test_check_rest_auth_rejects_untrusted_without_token_by_default(self, monkeypatch):
         monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", None)
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN", False)
+        request = _make_request(headers={})
+        assert rest_api._check_rest_auth(request) is False
+
+    def test_check_rest_auth_allows_legacy_mode_without_token(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", None)
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN", True)
         request = _make_request(headers={})
         assert rest_api._check_rest_auth(request) is True
 
@@ -145,6 +172,15 @@ class TestRestToolCall:
         response = await rest_api.rest_tool_call(request)
         assert response.status_code == 500
         assert "tool failed" in json.loads(response.body)["error"]
+
+    async def test_unauthorized_uses_success_error_shape(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_check_rest_auth", lambda _req: False)
+        response = await rest_api.rest_tool_call(
+            _make_request(method="POST", path="/v1/tools/call", body={"name": "demo"})
+        )
+        data = json.loads(response.body)
+        assert response.status_code == 401
+        assert data == {"success": False, "error": "Unauthorized"}
 
 
 @pytest.mark.asyncio
@@ -222,6 +258,9 @@ class TestRestStateAndLayers:
 
     async def test_rest_state_returns_payload(self, monkeypatch):
         monkeypatch.setattr(rest_api, "_check_rest_auth", lambda _req: True)
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "secret")
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN", False)
+        monkeypatch.setattr(rest_api, "_TRUSTED_PROXY_NETWORKS", [])
         feelings = {"mood": "calm"}
         anima = SimpleNamespace(warmth=0.4, clarity=0.5, stability=0.6, presence=0.7, feeling=lambda: feelings)
         readings = SimpleNamespace(
@@ -259,6 +298,9 @@ class TestRestStateAndLayers:
         assert data["mood"] == "calm"
         assert data["eisv"]["E"] == 0.5
         assert data["governance"]["connected"] is True
+        assert data["api_security"]["token_configured"] is True
+        assert data["api_security"]["mode"] == "token"
+        assert "age_seconds" in data["governance"]
 
     async def test_rest_layers_includes_schema_hub_data(self, monkeypatch):
         feelings = {"mood": "steady"}
@@ -338,6 +380,28 @@ class TestRestHandlerDelegates:
             data = json.loads(response.body)
         assert response.status_code == 500
         assert data["error"] == "no data"
+
+    @pytest.mark.parametrize(
+        "endpoint,args",
+        [
+            ("rest_qa", (_make_request(path="/qa"),)),
+            ("rest_messages", (_make_request(path="/messages"),)),
+            ("rest_answer", (_make_request(method="POST", path="/answer", body={"question_id": "q1", "answer": "A1"}),)),
+            ("rest_message", (_make_request(method="POST", path="/message", body={"message": "hello"}),)),
+            ("rest_learning", (_make_request(path="/learning"),)),
+            ("rest_voice", (_make_request(path="/voice"),)),
+            ("rest_health_detailed", (_make_request(path="/health/detailed"),)),
+            ("rest_self_knowledge", (_make_request(path="/self-knowledge"),)),
+            ("rest_growth", (_make_request(path="/growth"),)),
+            ("rest_layers", (_make_request(path="/layers"),)),
+        ],
+    )
+    async def test_sensitive_endpoints_reject_unauthorized(self, monkeypatch, endpoint, args):
+        monkeypatch.setattr(rest_api, "_check_rest_auth", lambda _req: False)
+        handler = getattr(rest_api, endpoint)
+        response = await handler(*args)
+        assert response.status_code == 401
+        assert json.loads(response.body)["error"] == "Unauthorized"
 
 
 @pytest.mark.asyncio

@@ -332,7 +332,7 @@ TOOLS = [
                 "service": {
                     "type": "string",
                     "description": "Service name (rpi-connect, ssh, anima, etc)",
-                    "enum": ["rpi-connect", "rpi-connect-wayvnc", "anima", "anima-mcp", "ssh", "sshd"],
+                    "enum": ["rpi-connect", "rpi-connect-wayvnc", "anima", "anima-broker", "anima-mcp", "ssh", "sshd"],
                 },
                 "action": {
                     "type": "string",
@@ -482,6 +482,47 @@ except ImportError:
 
 _fastmcp: "FastMCP | None" = None
 
+_DEFAULT_ALLOWED_HOSTS = [
+    "127.0.0.1:*",
+    "localhost:*",
+    "[::1]:*",
+    "192.168.1.165:*",
+    "192.168.1.151:*",
+    "100.78.71.1:*",
+    "lumen-anima.ngrok.io",
+    "0.0.0.0:*",
+]
+
+_DEFAULT_ALLOWED_ORIGINS = [
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+    "http://192.168.1.165:*",
+    "http://192.168.1.151:*",
+    "https://lumen-anima.ngrok.io",
+    "null",
+]
+
+
+def _parse_csv_env_list(var_name: str, default: list[str]) -> list[str]:
+    """Parse comma-separated env var into a normalized list."""
+    raw = os.environ.get(var_name)
+    if not raw:
+        return list(default)
+    parsed = [item.strip() for item in raw.split(",") if item.strip()]
+    return parsed or list(default)
+
+
+def _get_transport_security_settings() -> TransportSecuritySettings:
+    """Build transport security settings from env with sane defaults."""
+    allowed_hosts = _parse_csv_env_list("ANIMA_ALLOWED_HOSTS", _DEFAULT_ALLOWED_HOSTS)
+    allowed_origins = _parse_csv_env_list("ANIMA_ALLOWED_ORIGINS", _DEFAULT_ALLOWED_ORIGINS)
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
 
 def _json_type_to_python(json_type):
     """Convert JSON Schema type to Python type annotation."""
@@ -610,22 +651,7 @@ def get_fastmcp() -> "FastMCP":
             host="0.0.0.0",  # Bind to all interfaces
             auth_server_provider=oauth_provider,
             auth=auth_settings,
-            transport_security=TransportSecuritySettings(
-                enable_dns_rebinding_protection=True,
-                allowed_hosts=[
-                    "127.0.0.1:*", "localhost:*", "[::1]:*",  # Localhost
-                    "192.168.1.165:*", "192.168.1.151:*",  # Local network IPs
-                    "100.79.215.83:*",  # Tailscale IP
-                    "lumen-anima.ngrok.io",  # ngrok tunnel
-                    "0.0.0.0:*",  # Bind all
-                ],
-                allowed_origins=[
-                    "http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*",
-                    "http://192.168.1.165:*", "http://192.168.1.151:*",
-                    "https://lumen-anima.ngrok.io",  # Only ngrok, with auth required
-                    "null",  # For local file access
-                ],
-            ),
+            transport_security=_get_transport_security_settings(),
         )
 
         print(f"[FastMCP] Registering {len(HANDLERS)} tools...", file=sys.stderr, flush=True)
