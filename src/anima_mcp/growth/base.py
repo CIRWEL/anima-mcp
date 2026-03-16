@@ -160,6 +160,7 @@ class GrowthSystem(
         migrations = [
             ("relationships", "self_dialogue_topics", "TEXT DEFAULT '[]'"),
             ("relationships", "visitor_type", "TEXT DEFAULT 'agent'"),
+            ("drawing_records", "epoch", "INTEGER NOT NULL DEFAULT 1"),
         ]
         for table, column, col_type in migrations:
             try:

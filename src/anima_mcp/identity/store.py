@@ -17,6 +17,11 @@ from typing import Optional, Dict, Any, List
 import json
 
 
+# Epoch: bump when a model change invalidates existing stored data.
+# Most changes (bug fixes, new tools, docs) do NOT bump the epoch.
+CURRENT_EPOCH = 1
+
+
 @dataclass
 class CreatureIdentity:
     """The persistent self."""
@@ -155,6 +160,13 @@ class IdentityStore:
             conn.execute("ALTER TABLE identity ADD COLUMN last_heartbeat_at TEXT")
         except sqlite3.OperationalError:
             pass  # Column already exists
+
+        # Add epoch columns for data lifecycle management
+        for table in ("state_history", "drawing_history"):
+            try:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN epoch INTEGER NOT NULL DEFAULT 1")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
 
         conn.commit()
 
@@ -452,9 +464,9 @@ class IdentityStore:
 
         conn.execute(
             """INSERT INTO state_history
-               (timestamp, warmth, clarity, stability, presence, sensors)
-               VALUES (?, ?, ?, ?, ?, ?)""",
-            (now.isoformat(), warmth, clarity, stability, presence, json.dumps(sensors))
+               (timestamp, warmth, clarity, stability, presence, sensors, epoch)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (now.isoformat(), warmth, clarity, stability, presence, json.dumps(sensors), CURRENT_EPOCH)
         )
         conn.commit()
 
@@ -468,9 +480,10 @@ class IdentityStore:
         rows = conn.execute(
             """SELECT timestamp, warmth, clarity, stability, presence
                FROM state_history
+               WHERE epoch = ?
                ORDER BY timestamp DESC
                LIMIT ?""",
-            (limit,)
+            (CURRENT_EPOCH, limit,)
         ).fetchall()
 
         result = []
@@ -505,13 +518,14 @@ class IdentityStore:
                     """INSERT INTO drawing_history
                        (timestamp, E, I, S, V, C, marks, phase, era, energy,
                         curiosity, engagement, fatigue, arc_phase,
-                        gesture_entropy, switching_rate, intentionality)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        gesture_entropy, switching_rate, intentionality, epoch)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         datetime.now().isoformat(),
                         E, I, S, V, C, marks, phase, era, energy,
                         curiosity, engagement, fatigue, arc_phase,
                         gesture_entropy, switching_rate, intentionality,
+                        CURRENT_EPOCH,
                     ),
                 )
                 conn.commit()
@@ -529,9 +543,10 @@ class IdentityStore:
                       curiosity, engagement, fatigue, arc_phase,
                       gesture_entropy, switching_rate, intentionality
                FROM drawing_history
+               WHERE epoch = ?
                ORDER BY timestamp DESC
                LIMIT ?""",
-            (limit,),
+            (CURRENT_EPOCH, limit,),
         ).fetchall()
 
         result = []
