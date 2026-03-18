@@ -1073,13 +1073,32 @@ def run_creature():
                                     }
                                 except Exception:
                                     pass
+                            # Read drawing count from DB (server writes to counters table)
+                            _drawing_count = 0
+                            try:
+                                import sqlite3 as _sql
+                                _c = _sql.connect(db_path, timeout=2.0)
+                                _row = _c.execute("SELECT value FROM counters WHERE name = 'drawings_observed'").fetchone()
+                                if _row:
+                                    _drawing_count = _row[0]
+                                _c.close()
+                            except Exception:
+                                pass
+                            # Read question count from messages JSON (server writes)
+                            _question_count = 0
+                            try:
+                                import json as _json
+                                _msg_path = Path.home() / ".anima" / "messages.json"
+                                if _msg_path.exists():
+                                    _msgs = _json.loads(_msg_path.read_text()).get("messages", [])
+                                    _question_count = sum(1 for m in _msgs if m.get("msg_type") == "question")
+                            except Exception:
+                                pass
                             _new_marks = exp_marks.check_and_earn(
                                 awakenings=identity.total_awakenings,
                                 observation_count=_obs_count,
-                                # drawing/question counts live in server process (growth system),
-                                # not available in broker — those marks earned via server path
-                                drawing_count=0,
-                                question_count=0,
+                                drawing_count=_drawing_count,
+                                question_count=_question_count,
                                 long_gap_count=max(0, identity.total_awakenings - 1),
                                 belief_confidences=_belief_confs,
                             )
