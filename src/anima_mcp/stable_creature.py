@@ -990,7 +990,7 @@ def run_creature():
                 if learning_state:
                     shm_data["learning"] = learning_state
 
-            # Experiential accumulation state (reuse _cached_exp_state if governance already collected it)
+            # Experiential accumulation state (collected once per tick above)
             if _exp_state:
                 shm_data["experiential"] = _exp_state
 
