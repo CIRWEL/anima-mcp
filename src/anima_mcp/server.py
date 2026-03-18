@@ -190,13 +190,14 @@ def _parse_shm_governance_freshness(
         return False, False, None
 
     from datetime import datetime as _dt
+    import time as _time
 
     try:
         gov_ts = _dt.fromisoformat(gov_at).timestamp()
     except (ValueError, TypeError):
         return False, False, None
 
-    current_ts = time.time() if now_ts is None else now_ts
+    current_ts = _time.time() if now_ts is None else now_ts
     is_fresh = current_ts - gov_ts < SHM_GOVERNANCE_STALE_SECONDS
     is_unitares = shm_gov.get("source") == "unitares"
     return is_fresh, is_unitares, gov_ts
