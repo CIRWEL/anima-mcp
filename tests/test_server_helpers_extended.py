@@ -138,6 +138,7 @@ def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch
     monkeypatch.setattr(server, "anticipate_state", lambda d: {"anticipated": True})
     monkeypatch.setattr(server, "_get_calibration_drift", lambda: SimpleNamespace(get_midpoints=lambda: {}))
     monkeypatch.setattr(server, "sense_self_with_memory", lambda *args, **kwargs: direct_anima)
+    monkeypatch.setattr(server, "_ctx", SimpleNamespace(last_shm_data=None))
     monkeypatch.setattr(server._get_readings_and_anima, "_last_fallback_log", 0.0, raising=False)
 
     readings, anima = server._get_readings_and_anima()
@@ -147,6 +148,7 @@ def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch
 
 def test_get_readings_and_anima_returns_none_when_sensors_unavailable(monkeypatch):
     monkeypatch.setattr(server, "_get_shm_client", lambda: SimpleNamespace(read=lambda: None))
+    monkeypatch.setattr(server, "_ctx", SimpleNamespace(last_shm_data=None))
     monkeypatch.setattr(server, "_is_broker_running", lambda: False)
     monkeypatch.setattr(server, "_get_sensors", lambda: None)
 

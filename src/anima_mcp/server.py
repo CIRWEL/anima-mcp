@@ -350,9 +350,117 @@ def _get_warm_start_anticipation():
 
 
 def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorReadings | None, Anima | None]:
-    """Read sensor data from shared memory or fallback to direct sensors. Delegates to readings module."""
-    from .readings import get_readings_and_anima as _impl
-    return _impl(fallback_to_sensors)
+    """
+    Read sensor data from shared memory (broker) or fallback to direct sensor access.
+
+    Returns:
+        Tuple of (readings, anima) or (None, None) if unavailable
+    """
+    # Try shared memory first (broker mode)
+    # SharedMemoryClient.read() already returns envelope["data"] (the inner dict)
+    shm_client = _get_shm_client()
+    shm_data = shm_client.read()
+    if _ctx:
+        _ctx.last_shm_data = shm_data  # Cache for reuse within same iteration
+
+    # Check if shared memory data is recent
+    shm_stale = True
+    shm_valid = False
+    if shm_data:
+        try:
+            # Check if we have the required fields
+            if "readings" in shm_data and "anima" in shm_data:
+                # Check timestamp in shared memory data (broker writes "timestamp" field)
+                timestamp_str = shm_data.get("timestamp")
+                if timestamp_str:
+                    from datetime import datetime
+                    timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                    age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
+                    shm_stale = age_seconds > SHM_STALE_THRESHOLD_SECONDS
+                    if not shm_stale:
+                        shm_valid = True
+                else:
+                    # No timestamp - assume fresh if data exists
+                    shm_valid = True
+        except Exception as e:
+            logger.debug("[Server] Error checking shared memory timestamp: %s", e)
+            # If timestamp check fails but data exists, try to use it anyway
+            if shm_data and "readings" in shm_data and "anima" in shm_data:
+                shm_valid = True
+
+    # Try to use shared memory if valid
+    if shm_valid:
+        try:
+            # Reconstruct SensorReadings from shared memory
+            readings = _readings_from_dict(shm_data["readings"])
+
+            # Reconstruct Anima from shared memory (but we need readings object)
+            # The anima dict has warmth/clarity/stability/presence, but we need to create Anima with readings
+            anima_dict = shm_data["anima"]
+            calibration = get_calibration()
+
+            # Use warm start anticipation (first sense after wake) or memory
+            anticipation = _get_warm_start_anticipation() or anticipate_state(shm_data.get("readings", {}))
+
+            # Recompute anima from readings with memory influence
+            drift = _get_calibration_drift()
+            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
+
+            return readings, anima
+        except Exception as e:
+            logger.debug("[Server] Error reading from shared memory: %s", e)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            # Fall through to sensor fallback
+
+    # Fallback to direct sensor access if:
+    # 1. Shared memory is empty/stale/invalid, OR
+    # 2. fallback_to_sensors is True (always allow fallback)
+    if fallback_to_sensors or not shm_valid:
+        # Check if broker is running (for logging purposes)
+        broker_running = _is_broker_running()
+
+        # Log why we're falling back (throttled to avoid spam)
+        import time as _time
+        _now = _time.time()
+        if not hasattr(_get_readings_and_anima, '_last_fallback_log'):
+            _get_readings_and_anima._last_fallback_log = 0.0
+        if _now - _get_readings_and_anima._last_fallback_log > 30.0:
+            _get_readings_and_anima._last_fallback_log = _now
+            if broker_running and not shm_valid:
+                logger.debug("[Server] Broker running but shared memory %s - using direct sensor fallback", 'stale' if shm_stale else 'invalid/empty')
+            elif not broker_running:
+                logger.debug("[Server] Broker not running - using direct sensor access")
+
+        try:
+            sensors = _get_sensors()
+            if sensors is None:
+                logger.warning("[Server] Sensors not initialized - cannot read")
+                return None, None
+
+            readings = sensors.read()
+            if readings is None:
+                logger.debug("[Server] Sensor read returned None")
+                return None, None
+
+            calibration = get_calibration()
+
+            # Use warm start anticipation (first sense after wake) or memory
+            anticipation = _get_warm_start_anticipation() or anticipate_state(readings.to_dict() if readings else {})
+
+            drift = _get_calibration_drift()
+            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
+            if anima is None:
+                logger.warning("[Server] Failed to create anima from readings")
+                return None, None
+
+            return readings, anima
+        except Exception as e:
+            logger.warning("[Server] Error reading sensors directly: %s", e)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+
+    return None, None
 
 def _get_display() -> DisplayRenderer:
     if _ctx is None:
