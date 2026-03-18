@@ -211,6 +211,7 @@ class ActionSelector:
         self_predictions: Optional[Dict[str, float]] = None,
         conflict_rates: Optional[Dict[str, float]] = None,
         drives: Optional[Dict[str, float]] = None,
+        pathway_strengths: Optional[Dict[str, float]] = None,
     ) -> Action:
         """
         Select an action based on current context.
@@ -376,6 +377,14 @@ class ActionSelector:
                 rate = conflict_rates.get(action_key, 0.0)
                 if rate > 0:
                     candidates[i] = (action, value * (0.9 ** rate))
+
+        # Apply experiential pathway strengths
+        if pathway_strengths:
+            for i, (action, value) in enumerate(candidates):
+                action_key = action.action_type.value
+                strength = pathway_strengths.get(action_key, 0.5)
+                multiplier = max(0.25, min(4.0, strength / 0.5))
+                candidates[i] = (action, value * multiplier)
 
         # Add noise for stochasticity
         noisy_candidates = [

@@ -85,6 +85,9 @@ try:
     from .self_model import get_self_model
     from .agency import get_action_selector, get_exploration_manager, ActionType
     from .memory_retrieval import get_memory_retriever, retrieve_relevant_memories
+    from .weighted_pathways import get_weighted_pathways, discretize_context
+    from .experiential_filter import get_experiential_filter
+    from .experiential_marks import get_experiential_marks
     ENHANCED_LEARNING_AVAILABLE = True
 except ImportError as e:
     ENHANCED_LEARNING_AVAILABLE = False
@@ -316,6 +319,21 @@ def run_creature():
         except Exception as e:
             print(f"[StableCreature] Enhanced learning init error: {e}")
 
+    # Initialize Experiential Accumulation (Layer 1-3)
+    pathways = None
+    exp_filter = None
+    exp_marks = None
+    if ENHANCED_LEARNING_AVAILABLE:
+        try:
+            pathways = get_weighted_pathways()
+            print("[StableCreature] Weighted pathways active - decisions shaped by experience")
+            exp_filter = get_experiential_filter()
+            print("[StableCreature] Experiential filter active - perception colored by history")
+            exp_marks = get_experiential_marks()
+            print("[StableCreature] Experiential marks active - significant events leave permanent traces")
+        except Exception as e:
+            print(f"[StableCreature] Experiential accumulation init error: {e}")
+
     # Initialize Activity State (sleep/wake cycle)
     activity_manager = None
     if ACTIVITY_STATE_AVAILABLE:
@@ -359,6 +377,7 @@ def run_creature():
     last_governance_time = 0
     _last_memory_context = None  # Retrieved memories for dialectic synthesis (past informs present)
     last_action = None  # Track last action for outcome recording
+    _last_pw_ctx = None  # Track pathway context for outcome reinforcement
     last_state_for_action = None  # State before action for learning
     last_learning_save = time.time()  # Track periodic learning saves
     readings = None  # Initialize before loop (first iteration has no prior readings)
@@ -406,7 +425,9 @@ def run_creature():
             readings.led_brightness = _instantaneous_led
 
             # 2. Update Anima State (now has correct led_brightness for correction)
-            raw_anima = sense_self(readings)
+            # Layer 2: Apply experiential filter — perception colored by accumulated experience
+            _salience = exp_filter.get_all_saliences() if exp_filter else None
+            raw_anima = sense_self(readings, salience_weights=_salience)
             anima = _mood_momentum.smooth(raw_anima)
             inner_state = _inner_life.update(raw_anima, anima)
 
@@ -480,7 +501,25 @@ def run_creature():
 
             # 2b. Metacognition: Compare prediction to reality
             pred_error = metacog.observe(readings, anima)
-            
+
+            # Layer 2: Update experiential filter from surprise and dissatisfaction
+            if exp_filter:
+                if pred_error.surprise > 0.1:
+                    exp_filter.update_from_surprise(
+                        pred_error.surprise_sources or [], pred_error.surprise)
+                if preferences:
+                    try:
+                        _most_unsat = preferences.get_most_unsatisfied({
+                            "warmth": anima.warmth, "clarity": anima.clarity,
+                            "stability": anima.stability, "presence": anima.presence,
+                        })
+                        _unsat_dim = _most_unsat[0] if isinstance(_most_unsat, tuple) else _most_unsat
+                        if _unsat_dim and _unsat_dim != "none":
+                            exp_filter.update_from_dissatisfaction(_unsat_dim)
+                    except Exception:
+                        pass
+                exp_filter.tick()
+
             # Check if surprise warrants reflection
             should_reflect, reflect_reason = metacog.should_reflect(pred_error)
             if should_reflect:
@@ -657,6 +696,24 @@ def run_creature():
                         except Exception:
                             pass
 
+                    # Layer 1: Get pathway strengths for current context
+                    _pathway_strengths = None
+                    _pw_ctx = None
+                    if pathways:
+                        try:
+                            _strongest_drive = max(inner_state.drives.values()) if inner_state and inner_state.drives else 0.0
+                            _activity_str = activity_state.level.value if activity_state else "active"
+                            _satisfaction = preferences.get_overall_satisfaction(current_state)
+                            _pw_ctx = discretize_context(
+                                surprise=pred_error.surprise,
+                                satisfaction=_satisfaction,
+                                drive=_strongest_drive,
+                                activity=_activity_str,
+                            )
+                            _pathway_strengths = pathways.get_all_strengths(_pw_ctx)
+                        except Exception:
+                            pass
+
                     selected_action = action_selector.select_action(
                         current_state,
                         preferences=preferences,
@@ -665,6 +722,7 @@ def run_creature():
                         can_speak=voice is not None,
                         self_predictions=action_predictions,
                         drives=inner_state.drives if inner_state else None,
+                        pathway_strengths=_pathway_strengths,
                     )
 
                     # Execute action effects
@@ -696,6 +754,7 @@ def run_creature():
                     satisfaction_before = preferences.get_overall_satisfaction(current_state)
                     last_state_for_action = {**current_state, "satisfaction": satisfaction_before}
                     last_action = selected_action
+                    _last_pw_ctx = _pw_ctx  # capture context for pathway reinforcement
 
                 except Exception as e:
                     print(f"[Agency] Action selection error: {e}", file=sys.stderr, flush=True)
@@ -719,6 +778,14 @@ def run_creature():
                         satisfaction_after,
                         pred_error.surprise,
                     )
+
+                    # Layer 1: Reinforce pathway from outcome (using context from when action was selected)
+                    if pathways and _last_pw_ctx:
+                        try:
+                            _outcome_quality = satisfaction_after - last_state_for_action.get("satisfaction", 0.5)
+                            pathways.reinforce(_last_pw_ctx, last_action.action_type.value, _outcome_quality)
+                        except Exception:
+                            pass
 
                     # Verify self-model predictions against actual outcomes
                     if self_model and action_predictions and action_pred_context:
@@ -803,6 +870,24 @@ def run_creature():
                         print(f"[StableCreature] Governance error (non-fatal): {e}", file=sys.stderr, flush=True)
                 _governance_future = None
 
+            # Collect experiential stats once per tick (reused by governance + shm)
+            _exp_state = {}
+            if pathways:
+                try:
+                    _exp_state["pathways"] = pathways.get_stats()
+                except Exception:
+                    pass
+            if exp_filter:
+                try:
+                    _exp_state["filter"] = exp_filter.get_stats()
+                except Exception:
+                    pass
+            if exp_marks:
+                try:
+                    _exp_state["marks"] = exp_marks.get_stats()
+                except Exception:
+                    pass
+
             # Submit new governance check-in if due and no background task running
             if bridge and should_check_governance and _governance_future is None:
                 # Capture current values for the closure (avoid stale references)
@@ -812,6 +897,8 @@ def run_creature():
                 _gov_first = first_check_in
                 _gov_time = current_time
 
+                _gov_exp = _exp_state  # capture for closure
+
                 def _do_governance():
                     # check_in internally calls check_availability via circuit breaker,
                     # so no need for a separate check_availability() call.
@@ -819,7 +906,8 @@ def run_creature():
                         bridge.check_in(
                             _gov_anima, _gov_readings,
                             identity=_gov_identity,
-                            is_first_check_in=_gov_first
+                            is_first_check_in=_gov_first,
+                            experiential_summary=_gov_exp or None,
                         ),
                         timeout=15.0  # budget: availability (3+3s) + check-in (3s) + headroom
                     )
@@ -902,6 +990,10 @@ def run_creature():
                 if learning_state:
                     shm_data["learning"] = learning_state
 
+            # Experiential accumulation state (reuse _cached_exp_state if governance already collected it)
+            if _exp_state:
+                shm_data["experiential"] = _exp_state
+
             # WiFi status from kernel (no subprocess)
             try:
                 net_stats = psutil.net_if_stats()
@@ -965,6 +1057,44 @@ def run_creature():
                         preferences._save()
                     if self_model:
                         self_model.save()
+                    # Layer 3: Check experiential marks (piggyback on 5-min save)
+                    if exp_marks and identity:
+                        try:
+                            # Approximate observation count from total alive time
+                            _obs_count = int(identity.total_alive_seconds / UPDATE_INTERVAL) if identity.total_alive_seconds else 0
+                            _belief_confs = {}
+                            if self_model:
+                                try:
+                                    _beliefs = self_model.get_belief_summary()
+                                    _belief_confs = {
+                                        k: v.get("confidence", 0.0)
+                                        for k, v in _beliefs.items()
+                                        if isinstance(v, dict)
+                                    }
+                                except Exception:
+                                    pass
+                            _new_marks = exp_marks.check_and_earn(
+                                awakenings=identity.total_awakenings,
+                                observation_count=_obs_count,
+                                # drawing/question counts live in server process (growth system),
+                                # not available in broker — those marks earned via server path
+                                drawing_count=0,
+                                question_count=0,
+                                long_gap_count=max(0, identity.total_awakenings - 1),
+                                belief_confidences=_belief_confs,
+                            )
+                            if _new_marks:
+                                print(f"[Experiential] Earned marks: {_new_marks}", file=sys.stderr, flush=True)
+                        except Exception:
+                            pass
+
+                    # Layer 2: Periodic filter save
+                    if exp_filter:
+                        try:
+                            exp_filter.save()
+                        except Exception:
+                            pass
+
                     last_learning_save = time.time()
                 except Exception:
                     pass  # Non-fatal
@@ -1009,6 +1139,26 @@ def run_creature():
                     print("[StableCreature] Saved inner life (temperament + drives)")
             except Exception as e:
                 print(f"[StableCreature] Error saving learning state: {e}")
+
+        # Save experiential accumulation state
+        if exp_filter:
+            try:
+                exp_filter.save()
+                print("[StableCreature] Saved experiential filter")
+            except Exception:
+                pass
+        if pathways:
+            try:
+                pathways.close()
+                print("[StableCreature] Closed pathway DB")
+            except Exception:
+                pass
+        if exp_marks:
+            try:
+                exp_marks.close()
+                print("[StableCreature] Closed experiential marks DB")
+            except Exception:
+                pass
 
         if voice:
             try:

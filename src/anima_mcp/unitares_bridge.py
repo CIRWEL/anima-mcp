@@ -277,7 +277,8 @@ class UnitaresBridge:
         physical_weight: float = 0.7,
         identity: Optional['CreatureIdentity'] = None,
         is_first_check_in: bool = False,
-        drawing_eisv: Optional[Dict[str, Any]] = None
+        drawing_eisv: Optional[Dict[str, Any]] = None,
+        experiential_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Check in with UNITARES governance.
@@ -322,7 +323,7 @@ class UnitaresBridge:
         if unitares_available:
             try:
                 logger.info("Calling UNITARES (agent_id=%s)", self._agent_id[:8] if self._agent_id else 'None')
-                result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv)
+                result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv, experiential_summary=experiential_summary)
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 self._circuit_failures = 0  # Success resets circuit
                 self._circuit_current_backoff = self._circuit_backoff_base
@@ -345,13 +346,14 @@ class UnitaresBridge:
         readings: SensorReadings,
         eisv: EISVMetrics,
         identity: Optional['CreatureIdentity'] = None,
-        drawing_eisv: Optional[Dict[str, Any]] = None
+        drawing_eisv: Optional[Dict[str, Any]] = None,
+        experiential_summary: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Call UNITARES governance via HTTP/SSE."""
         try:
             # Prepare MCP request
             complexity = estimate_complexity(anima, readings)
-            status_text = generate_status_text(anima, readings, eisv)
+            status_text = generate_status_text(anima, readings, eisv, experiential_summary=experiential_summary)
             
             # Build sensor_data payload — include raw sensors for dashboard visibility
             sensor_data = {
@@ -384,6 +386,10 @@ class UnitaresBridge:
             # Include DrawingEISV if Lumen is actively drawing
             if drawing_eisv:
                 sensor_data["drawing_eisv"] = drawing_eisv
+
+            # Include experiential accumulation summary
+            if experiential_summary:
+                sensor_data["experiential"] = experiential_summary
 
             # Compute ethical drift from state changes between check-ins
             ethical_drift = compute_ethical_drift(

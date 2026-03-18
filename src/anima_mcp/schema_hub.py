@@ -131,6 +131,9 @@ class SchemaHub:
         # 8. Inject value tension nodes (structural + transient conflicts)
         schema = self._inject_tension_nodes(schema, tension_conflicts)
 
+        # 9. Inject experiential accumulation nodes
+        schema = self._inject_experiential_accumulation(schema)
+
         return schema
 
     def _inject_identity_enrichment(
@@ -668,5 +671,71 @@ class SchemaHub:
                 target_id=f"anima_{dim_b}",
                 weight=edge_weight,
             ))
+
+        return schema
+
+    def _inject_experiential_accumulation(
+        self,
+        schema: SelfSchema,
+    ) -> SelfSchema:
+        """
+        Inject experiential accumulation nodes: marks, filter bias, pathway density.
+
+        These represent how experience has shaped the creature — not current state,
+        but accumulated structure from living.
+        """
+        try:
+            from .experiential_marks import get_experiential_marks
+            marks = get_experiential_marks()
+            stats = marks.get_stats()
+            if stats["total_marks"] > 0:
+                for mark_info in marks.get_all_earned():
+                    schema.nodes.append(SchemaNode(
+                        node_id=f"mark_{mark_info['mark_id']}",
+                        node_type="mark",
+                        label=mark_info["name"],
+                        value=mark_info["effect_value"],
+                        raw_value={
+                            "category": mark_info["category"],
+                            "effect_key": mark_info["effect_key"],
+                            "earned_at": mark_info["earned_at"],
+                        },
+                    ))
+        except Exception:
+            pass
+
+        try:
+            from .experiential_filter import get_experiential_filter
+            ef = get_experiential_filter()
+            ef_stats = ef.get_stats()
+            if ef_stats["biased_count"] > 0:
+                schema.nodes.append(SchemaNode(
+                    node_id="experiential_filter_bias",
+                    node_type="experiential",
+                    label="Attention bias",
+                    value=ef_stats["mean_salience"],
+                    raw_value=ef_stats["biased_dimensions"],
+                ))
+        except Exception:
+            pass
+
+        try:
+            from .weighted_pathways import get_weighted_pathways
+            pw = get_weighted_pathways()
+            pw_stats = pw.get_stats()
+            if pw_stats["total_pathways"] > 0:
+                schema.nodes.append(SchemaNode(
+                    node_id="experiential_pathway_density",
+                    node_type="experiential",
+                    label="Pathway density",
+                    value=pw_stats["avg_strength"],
+                    raw_value={
+                        "total": pw_stats["total_pathways"],
+                        "contexts": pw_stats["unique_contexts"],
+                        "reinforcements": pw_stats["total_reinforcements"],
+                    },
+                ))
+        except Exception:
+            pass
 
         return schema

@@ -151,7 +151,7 @@ def _apply_drift_to_calibration(
     return drifted
 
 
-def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCalibration] = None, drift_midpoints: Optional[Dict[str, float]] = None) -> Anima:
+def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCalibration] = None, drift_midpoints: Optional[Dict[str, float]] = None, salience_weights: Optional[Dict[str, float]] = None) -> Anima:
     """
     The creature senses itself.
 
@@ -163,6 +163,8 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
         drift_midpoints: Drifted midpoints from CalibrationDrift (optional).
             When provided, shifts calibration ranges so that "normal" reflects
             Lumen's accumulated experience rather than fixed defaults.
+        salience_weights: Per-dimension salience from ExperientialFilter (optional).
+            Amplifies sensor contributions before weighted averaging.
     """
     if calibration is None:
         calibration = get_calibration()
@@ -170,10 +172,10 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
     if drift_midpoints:
         calibration = _apply_drift_to_calibration(calibration, drift_midpoints)
 
-    warmth = _sense_warmth(readings, calibration)
-    clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy())
-    stability = _sense_stability(readings, calibration)
-    presence = _sense_presence(readings, calibration)
+    warmth = _sense_warmth(readings, calibration, salience_weights=salience_weights)
+    clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy(), salience_weights=salience_weights)
+    stability = _sense_stability(readings, calibration, salience_weights=salience_weights)
+    presence = _sense_presence(readings, calibration, salience_weights=salience_weights)
 
     # Clamp to valid range — defensive against edge cases in weighted averages
     warmth = max(0.0, min(1.0, warmth))
@@ -206,6 +208,7 @@ def sense_self_with_memory(
     use_adaptive_blend: bool = True,
     enable_exploration: bool = True,
     drift_midpoints: Optional[Dict[str, float]] = None,
+    salience_weights: Optional[Dict[str, float]] = None,
 ) -> Anima:
     """
     The creature senses itself, informed by memory and exploration.
@@ -240,10 +243,10 @@ def sense_self_with_memory(
         calibration = _apply_drift_to_calibration(calibration, drift_midpoints)
 
     # Base sensed state (raw, before memory influence)
-    raw_warmth = _sense_warmth(readings, calibration)
-    raw_clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy())
-    raw_stability = _sense_stability(readings, calibration)
-    raw_presence = _sense_presence(readings, calibration)
+    raw_warmth = _sense_warmth(readings, calibration, salience_weights=salience_weights)
+    raw_clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy(), salience_weights=salience_weights)
+    raw_stability = _sense_stability(readings, calibration, salience_weights=salience_weights)
+    raw_presence = _sense_presence(readings, calibration, salience_weights=salience_weights)
 
     warmth, clarity, stability, presence = raw_warmth, raw_clarity, raw_stability, raw_presence
 
@@ -316,7 +319,7 @@ def sense_self_with_memory(
     )
 
 
-def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
+def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration, *, salience_weights: Optional[Dict[str, float]] = None) -> float:
     """
     How warm does the creature feel?
 
@@ -328,6 +331,7 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     Note: CPU usage removed - a resting creature in a warm room should feel
     comfortable, not cold. Warmth is about thermal state, not busy-ness.
     """
+    salience = salience_weights or {}
     components = []
     weights = []
 
@@ -337,6 +341,8 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         if temp_range > 0:
             cpu_warmth = (r.cpu_temp_c - cal.cpu_temp_min) / temp_range
             cpu_warmth = max(0, min(1, cpu_warmth))
+            cpu_warmth *= salience.get("cpu_temp", 1.0)
+            cpu_warmth = max(0, min(1, cpu_warmth))
             components.append(cpu_warmth)
             weights.append(cal.warmth_weights.get("cpu_temp", 0.35))
 
@@ -345,6 +351,8 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         temp_range = cal.ambient_temp_max - cal.ambient_temp_min
         if temp_range > 0:
             ambient_warmth = (r.ambient_temp_c - cal.ambient_temp_min) / temp_range
+            ambient_warmth = max(0, min(1, ambient_warmth))
+            ambient_warmth *= salience.get("ambient_temp", 1.0)
             ambient_warmth = max(0, min(1, ambient_warmth))
             components.append(ambient_warmth)
             weights.append(cal.warmth_weights.get("ambient_temp", 0.45))
@@ -376,7 +384,9 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration) -> float:
 def _sense_clarity(
     r: SensorReadings,
     cal: NervousSystemCalibration,
-    prediction_accuracy: Optional[float] = None
+    prediction_accuracy: Optional[float] = None,
+    *,
+    salience_weights: Optional[Dict[str, float]] = None,
 ) -> float:
     """
     How clearly can the creature perceive its own internal state?
@@ -394,6 +404,7 @@ def _sense_clarity(
     gain is near zero. At 15% weight, even a 50% estimation error only shifts
     clarity by ~0.04.
     """
+    salience = salience_weights or {}
     components = []
     weights = []
 
@@ -427,6 +438,8 @@ def _sense_clarity(
             light_clarity = min(1.0, math.log10(r.light_lux) / log_max)
         else:
             light_clarity = 0.0
+        light_clarity *= salience.get("light", 1.0)
+        light_clarity = max(0.0, min(1.0, light_clarity))
         components.append(light_clarity)
         weights.append(cal.clarity_weights.get("world_light", 0.15))
 
@@ -455,7 +468,7 @@ def _sense_clarity(
     return round(sum(c * w for c, w in zip(components, weights)) / total_weight, 3)
 
 
-def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
+def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration, *, salience_weights: Optional[Dict[str, float]] = None) -> float:
     """
     How stable/ordered does the environment feel?
 
@@ -468,18 +481,23 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - Barometric pressure stability (deviations from local normal)
     - Theta/Delta EEG power (deep stability, meditative state)
     """
+    salience = salience_weights or {}
     instability = 0.0
     count = 0
 
     # Humidity deviation from ideal (calibrated)
     if r.humidity_pct is not None:
         humidity_dev = abs(r.humidity_pct - cal.humidity_ideal) / max(1, cal.humidity_ideal)
-        instability += min(1, humidity_dev) * cal.stability_weights.get("humidity_dev", 0.25)
+        humidity_result = min(1, humidity_dev) * salience.get("humidity", 1.0)
+        humidity_result = min(1, humidity_result)
+        instability += humidity_result * cal.stability_weights.get("humidity_dev", 0.25)
         count += cal.stability_weights.get("humidity_dev", 0.25)
 
     # Memory pressure = instability
     if r.memory_percent is not None:
-        instability += (r.memory_percent / 100) * cal.stability_weights.get("memory", 0.3)
+        memory_result = (r.memory_percent / 100) * salience.get("memory", 1.0)
+        memory_result = min(1, memory_result)
+        instability += memory_result * cal.stability_weights.get("memory", 0.3)
         count += cal.stability_weights.get("memory", 0.3)
 
     # Missing sensors = uncertainty
@@ -498,7 +516,9 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
         # ±20 hPa is significant weather change (configurable in future)
         pressure_range = 20.0
         pressure_dev = abs(r.pressure_hpa - cal.pressure_ideal) / pressure_range
-        pressure_instability = min(1, pressure_dev) * pressure_weight
+        pressure_dev = min(1, pressure_dev) * salience.get("pressure", 1.0)
+        pressure_dev = min(1, pressure_dev)
+        pressure_instability = pressure_dev * pressure_weight
         instability += pressure_instability
         count += pressure_weight
 
@@ -528,7 +548,7 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     return round(max(0, min(1, stability)), 3)
 
 
-def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
+def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration, *, salience_weights: Optional[Dict[str, float]] = None) -> float:
     """
     How much capacity/presence does the creature have?
 
@@ -540,6 +560,7 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
     - CPU headroom
     - Gamma EEG power (high gamma = contention = scattered)
     """
+    salience = salience_weights or {}
     void = 0.0
     count = 0
 
@@ -550,12 +571,16 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration) -> float:
 
     if r.memory_percent is not None:
         weight = cal.presence_weights.get("memory", 0.3)
-        void += (r.memory_percent / 100) * weight
+        memory_void = (r.memory_percent / 100) * salience.get("memory", 1.0)
+        memory_void = min(1, memory_void)
+        void += memory_void * weight
         count += weight
 
     if r.cpu_percent is not None:
         weight = cal.presence_weights.get("cpu", 0.25)
-        void += (r.cpu_percent / 100) * weight
+        cpu_void = (r.cpu_percent / 100) * salience.get("cpu", 1.0)
+        cpu_void = min(1, cpu_void)
+        void += cpu_void * weight
         count += weight
 
     # Neural void: High gamma = high ctx switching = scattered = less presence

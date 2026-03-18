@@ -153,22 +153,24 @@ def estimate_complexity(
 def generate_status_text(
     anima: Anima,
     readings: Optional[SensorReadings] = None,
-    eisv: Optional[EISVMetrics] = None
+    eisv: Optional[EISVMetrics] = None,
+    experiential_summary: Optional[dict] = None,
 ) -> str:
     """
     Generate human-readable status text for governance system.
-    
+
     Args:
         anima: Anima state
         readings: Optional sensor readings
         eisv: Optional EISV metrics (will compute if not provided)
-    
+        experiential_summary: Optional dict with marks/filter/pathway stats
+
     Returns:
         Status text string
     """
     feeling = anima.feeling()
     mood = feeling.get("mood", "neutral")
-    
+
     # Build status text
     status_parts = [
         f"Anima state: {mood}",
@@ -177,7 +179,7 @@ def generate_status_text(
         f"Stability: {anima.stability:.2f}",
         f"Presence: {anima.presence:.2f}",
     ]
-    
+
     # Add neural info if available
     if readings:
         alpha = getattr(readings, 'eeg_alpha_power', None)
@@ -196,6 +198,22 @@ def generate_status_text(
     # Add EISV if provided
     if eisv:
         status_parts.append(f"EISV: E={eisv.energy:.2f}, I={eisv.integrity:.2f}, S={eisv.entropy:.2f}, V={eisv.void:.2f}")
+
+    # Add experiential accumulation summary
+    if experiential_summary:
+        exp_parts = []
+        marks = experiential_summary.get("marks", {})
+        if marks.get("total_marks", 0) > 0:
+            exp_parts.append(f"{marks['total_marks']} marks")
+        filt = experiential_summary.get("filter", {})
+        biased = filt.get("biased_count", 0)
+        if biased > 0:
+            exp_parts.append(f"{biased} attention biases")
+        pw = experiential_summary.get("pathways", {})
+        if pw.get("total_pathways", 0) > 0:
+            exp_parts.append(f"{pw['total_pathways']} pathways (avg {pw.get('avg_strength', 0.5):.2f})")
+        if exp_parts:
+            status_parts.append("Experience: " + ", ".join(exp_parts))
 
     return ". ".join(status_parts) + "."
 
