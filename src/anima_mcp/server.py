@@ -152,10 +152,54 @@ def _get_server_bridge():
         return None
 
 
-from .governance_helpers import (
-    parse_shm_governance_freshness as _parse_shm_governance_freshness,
-    server_governance_fallback as _server_governance_fallback,
-)
+async def _server_governance_fallback(anima, readings):
+    """Call UNITARES directly from the server when broker can't reach it.
+
+    Returns governance decision dict or None on failure.
+    """
+    bridge = _get_server_bridge()
+    if bridge is None:
+        logger.warning("[Governance] Fallback: no bridge (UNITARES_URL not set?)")
+        return None
+    try:
+        store = _get_store()
+        identity = store.get_identity() if store else None
+        renderer = _ctx.screen_renderer if _ctx else None
+        drawing_eisv = renderer.get_drawing_eisv() if renderer else None
+        decision = await bridge.check_in(anima, readings, identity=identity, drawing_eisv=drawing_eisv)
+        source = decision.get("source", "?") if decision else "None"
+        logger.debug("[Governance] Fallback: source=%s", source)
+        return decision
+    except Exception as e:
+        logger.warning("[Governance] Fallback error: %s", e)
+        return None
+
+
+def _parse_shm_governance_freshness(
+    shm_gov: dict, now_ts: float | None = None
+) -> tuple[bool, bool, float | None]:
+    """Parse SHM governance freshness and source.
+
+    Returns (is_fresh, is_unitares_source, governance_timestamp).
+    """
+    if not isinstance(shm_gov, dict):
+        return False, False, None
+
+    gov_at = shm_gov.get("governance_at")
+    if not gov_at:
+        return False, False, None
+
+    from datetime import datetime as _dt
+
+    try:
+        gov_ts = _dt.fromisoformat(gov_at).timestamp()
+    except (ValueError, TypeError):
+        return False, False, None
+
+    current_ts = time.time() if now_ts is None else now_ts
+    is_fresh = current_ts - gov_ts < SHM_GOVERNANCE_STALE_SECONDS
+    is_unitares = shm_gov.get("source") == "unitares"
+    return is_fresh, is_unitares, gov_ts
 
 
 def _get_schema_hub() -> SchemaHub:
