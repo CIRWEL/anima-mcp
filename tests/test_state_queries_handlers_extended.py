@@ -58,7 +58,7 @@ class TestGetStateExtended:
              patch("anima_mcp.server._get_sensors", return_value=sensors), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.handlers.state_queries.extract_neural_bands", return_value={"alpha": 0.2}), \
-             patch("anima_mcp.server._last_shm_data", {"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
+             patch("anima_mcp.server._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
              patch("anima_mcp.messages.get_recent_messages", return_value=recent):
             data = _parse(await handle_get_state({}))
 
@@ -92,7 +92,7 @@ class TestReadSensorsExtended:
         shm = SimpleNamespace(read=lambda: {"ok": True})
         with patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: True)), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), None)), \
-             patch("anima_mcp.server._shm_client", shm):
+             patch("anima_mcp.server._get_shm_client", return_value=shm):
             data = _parse(await handle_read_sensors({}))
 
         assert data["source"] == "shared_memory"
@@ -107,7 +107,7 @@ class TestReadSensorsExtended:
 
         with patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: False)), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), None)), \
-             patch("anima_mcp.server._shm_client", None):
+             patch("anima_mcp.server._get_shm_client", return_value=None):
             data = _parse(await handle_read_sensors({}))
 
         assert data["source"] == "direct_sensors"

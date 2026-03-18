@@ -224,9 +224,10 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         # Retrieve visitor context for the answering agent
         visitor_context = None
         try:
-            from ..server import _growth
-            if _growth:
-                visitor_context = _growth.get_visitor_context(agent_name)
+            from ..server import _get_growth
+            growth = _get_growth()
+            if growth:
+                visitor_context = growth.get_visitor_context(agent_name)
         except Exception:
             pass
 
@@ -292,8 +293,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     Consolidates: leave_message + leave_agent_note
     """
     from ..server import (
-        _growth, _activity,
-        _get_readings_and_anima, _store,
+        _get_growth, _get_activity,
+        _get_readings_and_anima, _get_store,
     )
     from ..messages import (
         add_user_message, add_agent_message, get_board, MESSAGE_TYPE_QUESTION,
@@ -324,9 +325,10 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
         if source == "human":
             msg_id = add_user_message(message)
             # Track relationship with human
-            if _growth:
+            growth = _get_growth()
+            if growth:
                 try:
-                    _growth.record_interaction(
+                    growth.record_interaction(
                         agent_id="human",
                         agent_name="human",
                         positive=True,
@@ -337,8 +339,9 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     pass  # Non-fatal
             # Wake Lumen on interaction (activity state)
             try:
-                if _activity:
-                    _activity.record_interaction()
+                activity = _get_activity()
+                if activity:
+                    activity.record_interaction()
             except Exception:
                 pass
             # Signal social boost to broker (inner life mood contagion)
@@ -351,7 +354,8 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
                 if cur_anima:
                     import anima_mcp.server as _srv
-                    _srv._sm_clarity_before_interaction = cur_anima.clarity
+                    if _srv._ctx:
+                        _srv._ctx.sm_clarity_before_interaction = cur_anima.clarity
             except Exception:
                 pass
             return [TextContent(type="text", text=json.dumps({
@@ -397,10 +401,11 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
 
             msg = add_agent_message(message, agent_name, responds_to=validated_question_id or responds_to)
             # Track relationship with agent (identity normalized inside record_interaction)
-            if _growth:
+            growth = _get_growth()
+            if growth:
                 try:
                     is_gift = responds_to is not None  # Answering a question is a gift
-                    _growth.record_interaction(
+                    growth.record_interaction(
                         agent_id=agent_name,
                         agent_name=agent_name,
                         positive=True,
@@ -412,8 +417,9 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                     pass  # Non-fatal
             # Wake Lumen on interaction (activity state)
             try:
-                if _activity:
-                    _activity.record_interaction()
+                activity = _get_activity()
+                if activity:
+                    activity.record_interaction()
             except Exception:
                 pass
             # Signal social boost to broker (inner life mood contagion)
@@ -426,13 +432,14 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                 _, cur_anima = _get_readings_and_anima(fallback_to_sensors=False)
                 if cur_anima:
                     import anima_mcp.server as _srv
-                    _srv._sm_clarity_before_interaction = cur_anima.clarity
+                    if _srv._ctx:
+                        _srv._ctx.sm_clarity_before_interaction = cur_anima.clarity
             except Exception:
                 pass
             # Retrieve visitor context
             visitor_context = None
             try:
-                visitor_context = _growth.get_visitor_context(agent_name) if _growth else None
+                visitor_context = growth.get_visitor_context(agent_name) if growth else None
             except Exception:
                 pass
 
@@ -458,7 +465,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
 
 async def handle_say(arguments: dict) -> list[TextContent]:
     """Have Lumen speak - posts to message board (text mode) or uses TTS (audio mode)."""
-    from ..server import _store, _get_voice, VOICE_MODE
+    from ..server import _get_store, _get_voice, VOICE_MODE
     from ..messages import add_observation
 
     text = arguments.get("text", "")
@@ -473,8 +480,9 @@ async def handle_say(arguments: dict) -> list[TextContent]:
 
     # Also show on display notepad
     try:
-        if _store:
-            _store.add_note(f"[Lumen] {text}")
+        store = _get_store()
+        if store:
+            store.add_note(f"[Lumen] {text}")
     except Exception:
         pass
 
@@ -559,13 +567,14 @@ async def handle_primitive_feedback(arguments: dict) -> list[TextContent]:
     - stats: View learning progress
     - recent: List recent utterances with scores
     """
-    from ..server import _store
+    from ..server import _get_store
     from ..primitive_language import get_language_system
 
     action = arguments.get("action", "stats")
 
     try:
-        lang = get_language_system(str(_store.db_path) if _store else "anima.db")
+        store = _get_store()
+        lang = get_language_system(str(store.db_path) if store else "anima.db")
 
         if action == "resonate":
             # Give strong positive feedback to last utterance

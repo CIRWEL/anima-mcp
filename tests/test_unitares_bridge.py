@@ -506,21 +506,19 @@ def test_server_bridge_uses_get_identity():
     """Test that _get_server_bridge uses get_identity() not .identity."""
     from anima_mcp.server import _get_server_bridge
     import anima_mcp.server as server_mod
+    from types import SimpleNamespace
 
     # Save and reset globals
-    old_bridge = server_mod._server_bridge
-    old_store = server_mod._store
+    old_ctx = server_mod._ctx
     try:
-        server_mod._server_bridge = None
-
         mock_identity = MagicMock()
         mock_identity.creature_id = "test-creature-id-1234"
 
         mock_store = MagicMock()
         mock_store.get_identity = MagicMock(return_value=mock_identity)
-        # Ensure .identity would fail if accessed
-        del mock_store.identity
-        server_mod._store = mock_store
+        del mock_store.identity  # Ensure .identity would fail if accessed
+
+        server_mod._ctx = SimpleNamespace(server_bridge=None, store=mock_store)
 
         with patch.dict('os.environ', {'UNITARES_URL': 'http://localhost:8767/mcp'}):
             bridge = _get_server_bridge()
@@ -529,8 +527,7 @@ def test_server_bridge_uses_get_identity():
             assert bridge._agent_id == "test-creature-id-1234"
             mock_store.get_identity.assert_called_once()
     finally:
-        server_mod._server_bridge = old_bridge
-        server_mod._store = old_store
+        server_mod._ctx = old_ctx
 
 
 if __name__ == "__main__":

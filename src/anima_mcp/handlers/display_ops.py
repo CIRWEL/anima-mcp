@@ -16,16 +16,17 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent | ImageCont
     Returns the actual visual output on Lumen's 240×240 LCD display,
     allowing remote viewing of what Lumen is drawing, showing, or expressing.
     """
-    from ..server import _screen_renderer
+    from ..server import _get_screen_renderer
 
-    if _screen_renderer is None:
+    renderer = _get_screen_renderer()
+    if renderer is None:
         return [TextContent(type="text", text=json.dumps({
             "error": "Screen renderer not initialized"
         }))]
 
     try:
         # Access the renderer's display object to get the current image
-        renderer_display = _screen_renderer._display
+        renderer_display = renderer._display
         if renderer_display is None or not hasattr(renderer_display, '_image'):
             return [TextContent(type="text", text=json.dumps({
                 "error": "Display not available or no image cached"
@@ -47,10 +48,10 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent | ImageCont
         img_base64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
 
         # Get current screen/era context
-        screen_mode = _screen_renderer.get_mode().value
+        screen_mode = renderer.get_mode().value
         era_name = None
-        if screen_mode == "art_eras" and hasattr(_screen_renderer, '_active_era') and _screen_renderer._active_era:
-            era_name = _screen_renderer._active_era.name
+        if screen_mode == "art_eras" and hasattr(renderer, '_active_era') and renderer._active_era:
+            era_name = renderer._active_era.name
 
         # Return image as ImageContent (viewable by agents) + metadata as TextContent
         return [
@@ -127,30 +128,33 @@ async def handle_show_face(arguments: dict) -> list[TextContent]:
 
 async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     """Get system diagnostics including LED and display status."""
-    from ..server import _leds, _display, _display_update_task, _get_sensors
+    from ..server import _get_leds, _get_display, _get_display_update_task, _get_sensors
 
     sensors = _get_sensors()
 
     # LED diagnostics
     led_info = {}
-    if _leds:
-        led_info = _leds.get_diagnostics()
+    leds = _get_leds()
+    display = _get_display()
+    display_task = _get_display_update_task()
+    if leds:
+        led_info = leds.get_diagnostics()
     else:
         led_info = {"available": False, "reason": "not initialized"}
 
     # Display diagnostics
     display_info = {
-        "available": _display.is_available() if _display else False,
-        "initialized": _display is not None,
+        "available": display.is_available() if display else False,
+        "initialized": display is not None,
     }
-    if _display and hasattr(_display, '_init_error') and _display._init_error:
-        display_info["init_error"] = _display._init_error
+    if display and hasattr(display, '_init_error') and display._init_error:
+            display_info["init_error"] = display._init_error
 
     # Update loop status
     loop_info = {
-        "task_exists": _display_update_task is not None,
-        "task_done": _display_update_task.done() if _display_update_task else None,
-        "task_cancelled": _display_update_task.cancelled() if _display_update_task else None,
+        "task_exists": display_task is not None,
+        "task_done": display_task.done() if display_task else None,
+        "task_cancelled": display_task.cancelled() if display_task else None,
     }
 
     result = {
@@ -171,9 +175,10 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
     Control Lumen's display.
     Consolidates: switch_screen + show_face
     """
-    from ..server import _screen_renderer
+    from ..server import _get_screen_renderer
     from ..display.screens import ScreenMode
 
+    renderer = _get_screen_renderer()
     action = arguments.get("action")
     if not action:
         return [TextContent(type="text", text=json.dumps({
@@ -184,7 +189,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
         # Delegate to show_face handler
         return await handle_show_face({})
 
-    if not _screen_renderer:
+    if not renderer:
         return [TextContent(type="text", text=json.dumps({
             "error": "Screen renderer not initialized"
         }))]
@@ -207,7 +212,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "health": ScreenMode.HEALTH,
         }
         if screen in mode_map:
-            _screen_renderer.set_mode(mode_map[screen])
+            renderer.set_mode(mode_map[screen])
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "action": "switch",
@@ -220,23 +225,23 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             }))]
 
     elif action == "next":
-        _screen_renderer.next_mode()
+        renderer.next_mode()
         return [TextContent(type="text", text=json.dumps({
             "success": True,
             "action": "next",
-            "screen": _screen_renderer.get_mode().value
+            "screen": renderer.get_mode().value
         }))]
 
     elif action == "previous":
-        _screen_renderer.previous_mode()
+        renderer.previous_mode()
         return [TextContent(type="text", text=json.dumps({
             "success": True,
             "action": "previous",
-            "screen": _screen_renderer.get_mode().value
+            "screen": renderer.get_mode().value
         }))]
 
     elif action == "list_eras":
-        info = _screen_renderer.get_current_era()
+        info = renderer.get_current_era()
         return [TextContent(type="text", text=json.dumps({
             "success": True,
             "action": "list_eras",
@@ -244,7 +249,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
         }))]
 
     elif action == "get_era":
-        info = _screen_renderer.get_current_era()
+        info = renderer.get_current_era()
         return [TextContent(type="text", text=json.dumps({
             "success": True,
             "action": "get_era",
@@ -259,7 +264,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             return [TextContent(type="text", text=json.dumps({
                 "error": "screen parameter required — set it to the era name (e.g. 'geometric', 'gestural')"
             }))]
-        result = _screen_renderer.set_era(era_name)
+        result = renderer.set_era(era_name)
         return [TextContent(type="text", text=json.dumps({
             "action": "set_era",
             **result,
@@ -267,9 +272,10 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
 
     elif action == "calibrate_leds":
         import asyncio
-        from ..server import _leds, _get_sensors
+        from ..server import _get_leds, _get_sensors
 
-        if not _leds or not _leds.is_available():
+        leds = _get_leds()
+        if not leds or not leds.is_available():
             return [TextContent(type="text", text=json.dumps({
                 "error": "LEDs not available"
             }))]
@@ -279,20 +285,20 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
         SETTLE_SECONDS = 1.0
         SAMPLES_PER_LEVEL = 1
 
-        original_factor = _leds._manual_brightness_factor
+        original_factor = leds._manual_brightness_factor
         calibration_data = []
 
         try:
             for brightness in BRIGHTNESS_LEVELS:
                 # Override auto-brightness pipeline
-                _leds._manual_brightness_factor = brightness
+                leds._manual_brightness_factor = brightness
                 # Directly set LEDs to white at desired brightness
-                if _leds._dots:
+                if leds._dots:
                     for i in range(3):
-                        _leds._dots[i] = (255, 255, 255)
+                        leds._dots[i] = (255, 255, 255)
                     hw_brightness = max(0.001, brightness) if brightness > 0 else 0.0
-                    _leds._dots.brightness = hw_brightness
-                    _leds._dots.show()
+                    leds._dots.brightness = hw_brightness
+                    leds._dots.show()
 
                 # Wait for sensor to settle
                 await asyncio.sleep(SETTLE_SECONDS)
@@ -317,7 +323,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
 
         finally:
             # Always restore normal operation
-            _leds._manual_brightness_factor = original_factor
+            leds._manual_brightness_factor = original_factor
 
         # Linear fit: lux = slope * brightness + intercept
         fitted = None

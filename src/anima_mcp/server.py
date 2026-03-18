@@ -59,6 +59,7 @@ from .agency import get_action_selector, ActionType, Action
 from .primitive_language import get_language_system, Utterance
 from .eisv import get_trajectory_awareness
 from .tool_registry import HANDLERS, get_fastmcp, create_server, HAS_FASTMCP
+from .server_context import ServerContext
 from .server_state import (
     # Constants
     SHM_STALE_THRESHOLD_SECONDS, INPUT_ERROR_LOG_INTERVAL,
@@ -82,65 +83,17 @@ from .server_state import (
     readings_from_dict as _readings_from_dict,
 )
 
-_store: IdentityStore | None = None
-_sensors: SensorBackend | None = None
-_display: DisplayRenderer | None = None
-_screen_renderer: ScreenRenderer | None = None
-_joystick_enabled: bool = False
-_sep_btn_press_start: float | None = None  # Track separate button press start time for long-press shutdown
-_joy_btn_press_start: float | None = None  # Track joystick button hold for controls overlay
-_joy_btn_help_shown: bool = False
-_last_governance_decision: Dict[str, Any] | None = None
-# Server-side UNITARES fallback — activates only when broker can't reach UNITARES
-_server_bridge = None  # Lazy UnitaresBridge for fallback
-_last_server_checkin_time: float = 0.0  # Last time server did its own UNITARES check-in
-_last_unitares_success_time: float = 0.0  # Last time we saw source=unitares from ANY source
-_last_input_error_log: float = 0.0
-_leds: LEDDisplay | None = None
-_anima_id: str | None = None
-_display_update_task: asyncio.Task | None = None
-_shm_client: SharedMemoryClient | None = None
-_metacog_monitor: "MetacognitiveMonitor | None" = None  # Forward ref - prediction-error based self-awareness
-_growth: GrowthSystem | None = None  # Growth system for learning, relationships, goals
-_activity: ActivityManager | None = None  # Activity/wakefulness cycle (circadian LED dimming)
-# SchemaHub - central schema composition with trajectory feedback
+# SchemaHub, CalibrationDrift, ValueTensionTracker — imported for type hints / lazy init
 from .schema_hub import SchemaHub
-_schema_hub: SchemaHub | None = None
-# CalibrationDrift - endogenous midpoint drift via experience
 from .calibration_drift import CalibrationDrift
-_calibration_drift: CalibrationDrift | None = None
-# ValueTensionTracker - detects preference conflicts between anima dimensions
 from .value_tension import ValueTensionTracker
-_tension_tracker: ValueTensionTracker | None = None
-# Meta-learning state - satisfaction tracking for daily preference weight evolution
-from collections import deque as _deque
-_satisfaction_history: _deque = _deque(maxlen=500)  # overall satisfaction (for trajectory health)
-_satisfaction_per_dim: Dict[str, _deque] = {}  # per-dimension satisfaction (for lagged correlations)
-_health_history: _deque = _deque(maxlen=100)  # trajectory health values
-_action_efficacy: float = 0.5  # fraction of recent actions producing expected delta
-# Agency state - for learning from action outcomes
-_last_action: Action | None = None
-_last_state_before: Dict[str, float] | None = None
-# Primitive language state - emergent expression
-_last_primitive_utterance: Utterance | None = None
-# Self-model state - cross-iteration tracking
-_sm_prev_stability: float | None = None
-_sm_prev_warmth: float | None = None
-_sm_pending_prediction: dict | None = None  # {context, prediction, warmth_before, clarity_before}
-_sm_clarity_before_interaction: float | None = None
-# LED proprioception - carry LED state across iterations for prediction
-_led_proprioception: dict | None = None  # {brightness, expression_mode, is_dancing, ...}
-# Warm start - last known anima state from before shutdown, used for first sense after wake
-_warm_start_anima: dict | None = None  # {warmth, clarity, stability, presence}
-# Gap awareness - set by startup learning, consumed by warm start and main loop
-_wake_gap: timedelta | None = None  # Time since Lumen was last alive (heartbeat/sleep/state_history)
-_wake_restored: dict | None = None  # Set if ~/.anima/.restored_marker exists (gap time unreliable)
-_wake_recovery_cycles: int = 0  # Countdown for post-gap presence recovery arc
-_wake_recovery_total: int = 0  # Initial cycle count (for progress calculation)
-_wake_presence_floor: float = 0.3  # Lowest presence cap during recovery
 
 # Thread lock for lazy-init singletons (metacog, unitares bridge)
 _state_lock = threading.Lock()
+
+# Server context — mutable state container. Created in wake(), cleared in sleep().
+# Before wake(), _ctx is None. All accessors handle None.
+_ctx: ServerContext | None = None
 
 # Server readiness flag - prevents "request before initialization" errors
 # when clients reconnect too quickly after a server restart
@@ -148,28 +101,27 @@ SERVER_READY = False
 SERVER_STARTUP_TIME = None
 SERVER_SHUTTING_DOWN = False  # Set during graceful shutdown to reject new requests
 
-def _get_store() -> IdentityStore:
+def _get_store() -> IdentityStore | None:
     """Get identity store - safe, returns None if not available instead of crashing."""
-    global _store
-    if _store is None:
-        # Don't crash - return None and let handlers deal with it gracefully
+    if _ctx is None:
         print("[Server] Warning: Store not initialized (wake() may have failed)", file=sys.stderr)
         return None
-    return _store
+    return _ctx.store
 
 def _get_sensors() -> SensorBackend:
-    global _sensors
-    if _sensors is None:
-        _sensors = get_sensors()
-    return _sensors
+    if _ctx is None:
+        return get_sensors()  # Fallback when not yet woken
+    if _ctx.sensors is None:
+        _ctx.sensors = get_sensors()
+    return _ctx.sensors
 
 def _get_shm_client() -> SharedMemoryClient:
     """Get shared memory client for reading broker data."""
-    global _shm_client
-    if _shm_client is None:
-        # Use file backend to match broker (Redis caused hangs)
-        _shm_client = SharedMemoryClient(mode="read", backend="file")
-    return _shm_client
+    if _ctx is None:
+        return SharedMemoryClient(mode="read", backend="file")
+    if _ctx.shm_client is None:
+        _ctx.shm_client = SharedMemoryClient(mode="read", backend="file")
+    return _ctx.shm_client
 
 def _get_server_bridge():
     """Lazy UNITARES bridge for server-side fallback check-in.
@@ -177,22 +129,24 @@ def _get_server_bridge():
     Only used when the broker's SHM governance is stale/local for too long.
     The server's native async event loop avoids the broker's thread+loop issues.
     """
-    global _server_bridge
-    if _server_bridge is not None:
-        return _server_bridge
+    bridge = _ctx.server_bridge if _ctx else None
+    if bridge is not None:
+        return bridge
     unitares_url = os.environ.get("UNITARES_URL")
     if not unitares_url:
         return None
     try:
         from .unitares_bridge import UnitaresBridge
-        _server_bridge = UnitaresBridge(unitares_url=unitares_url, timeout=8.0)
-        # Set agent identity if store is available
-        if _store:
-            _identity = _store.get_identity()
-            if _identity:
-                _server_bridge.set_agent_id(_identity.creature_id)
-                _server_bridge.set_session_id(f"anima-server-{_identity.creature_id[:8]}")
-        return _server_bridge
+        bridge = UnitaresBridge(unitares_url=unitares_url, timeout=8.0)
+        store = _get_store()
+        if store:
+            identity = store.get_identity()
+            if identity:
+                bridge.set_agent_id(identity.creature_id)
+                bridge.set_session_id(f"anima-server-{identity.creature_id[:8]}")
+        if _ctx:
+            _ctx.server_bridge = bridge
+        return bridge
     except Exception as e:
         logger.debug("[Governance] Bridge init failed: %s", e)
         return None
@@ -208,8 +162,10 @@ async def _server_governance_fallback(anima, readings):
         logger.warning("[Governance] Fallback: no bridge (UNITARES_URL not set?)")
         return None
     try:
-        identity = _store.get_identity() if _store else None
-        drawing_eisv = _screen_renderer.get_drawing_eisv() if _screen_renderer else None
+        store = _get_store()
+        identity = store.get_identity() if store else None
+        renderer = _ctx.screen_renderer if _ctx else None
+        drawing_eisv = renderer.get_drawing_eisv() if renderer else None
         decision = await bridge.check_in(anima, readings, identity=identity, drawing_eisv=drawing_eisv)
         source = decision.get("source", "?") if decision else "None"
         logger.debug("[Governance] Fallback: source=%s", source)
@@ -248,26 +204,28 @@ def _parse_shm_governance_freshness(
 
 def _get_schema_hub() -> SchemaHub:
     """Get or create the SchemaHub singleton for schema composition."""
-    global _schema_hub
-    if _schema_hub is None:
-        _schema_hub = SchemaHub()
-    return _schema_hub
+    if _ctx is None:
+        return SchemaHub()  # Transient when not woken
+    if _ctx.schema_hub is None:
+        _ctx.schema_hub = SchemaHub()
+    return _ctx.schema_hub
 
 def _get_calibration_drift() -> CalibrationDrift:
     """Get or create the CalibrationDrift singleton."""
-    global _calibration_drift
-    if _calibration_drift is None:
+    if _ctx is None:
+        return CalibrationDrift()
+    if _ctx.calibration_drift is None:
         drift_path = Path.home() / ".anima" / "calibration_drift.json"
         if drift_path.exists():
             try:
-                _calibration_drift = CalibrationDrift.load(str(drift_path))
+                _ctx.calibration_drift = CalibrationDrift.load(str(drift_path))
                 print(f"[CalDrift] Loaded drift state from {drift_path}", file=sys.stderr, flush=True)
             except Exception as e:
                 print(f"[CalDrift] Failed to load drift (using fresh): {e}", file=sys.stderr, flush=True)
-                _calibration_drift = CalibrationDrift()
+                _ctx.calibration_drift = CalibrationDrift()
         else:
-            _calibration_drift = CalibrationDrift()
-    return _calibration_drift
+            _ctx.calibration_drift = CalibrationDrift()
+    return _ctx.calibration_drift
 
 def _get_selfhood_context() -> Dict[str, Any] | None:
     """Get read-only selfhood context for LLM narrator.
@@ -277,12 +235,12 @@ def _get_selfhood_context() -> Dict[str, Any] | None:
     feeds back into drift rates, conflict thresholds, or preference weights.
     """
     context: Dict[str, Any] = {}
-
-    if _calibration_drift:
-        context["drift_offsets"] = _calibration_drift.get_offsets()
-
-    if _tension_tracker:
-        active = _tension_tracker.get_active_conflicts(last_n=5)
+    drift = _get_calibration_drift() if _ctx else None
+    if drift:
+        context["drift_offsets"] = drift.get_offsets()
+    tension = _ctx.tension_tracker if _ctx else None
+    if tension:
+        active = tension.get_active_conflicts(last_n=5)
         context["active_tensions"] = [
             {"dim_a": c.dim_a, "dim_b": c.dim_b, "category": c.category}
             for c in active
@@ -311,9 +269,12 @@ def _compute_lagged_correlations() -> Dict[str, float]:
     """
     lag = 25  # ~5 action cycles at AGENCY_INTERVAL
     correlations: Dict[str, float] = {}
-    health_hist = list(_health_history)
+    if not _ctx:
+        return correlations
+    health_hist = list(_ctx.health_history)
     for dim in ("warmth", "clarity", "stability", "presence"):
-        sat_hist = list(_satisfaction_per_dim.get(dim, _deque()))
+        from collections import deque as _dq
+        sat_hist = list(_ctx.satisfaction_per_dim.get(dim, _dq()))
         if len(sat_hist) < lag + 10 or len(health_hist) < 2:
             correlations[dim] = 0.0
             continue
@@ -336,20 +297,18 @@ def _compute_lagged_correlations() -> Dict[str, float]:
 
 def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
-    global _metacog_monitor
-    if _metacog_monitor is None:
+    if _ctx is None:
+        return None
+    if _ctx.metacog_monitor is None:
         with _state_lock:
-            # Double-check inside lock to prevent race condition
-            if _metacog_monitor is None:
+            if _ctx.metacog_monitor is None:
                 from .metacognition import MetacognitiveMonitor
-                _metacog_monitor = MetacognitiveMonitor(
+                _ctx.metacog_monitor = MetacognitiveMonitor(
                     surprise_threshold=0.3,  # Trigger reflection at 30% surprise
                     reflection_cooldown_seconds=120.0,  # 2 min between reflections
                 )
-    return _metacog_monitor
+    return _ctx.metacog_monitor
 
-_last_shm_data = None  # Cached per-iteration shared memory read
-_consumed_drive_events = set()  # Track consumed drive events to avoid re-posting
 
 def _get_warm_start_anticipation():
     """Consume warm start state as a synthetic Anticipation (one-shot).
@@ -358,18 +317,17 @@ def _get_warm_start_anticipation():
     with current sensor readings so Lumen doesn't start from scratch.
     After a gap, confidence is reduced so Lumen relies more on fresh sensors.
     """
-    global _warm_start_anima
-    if _warm_start_anima is None:
+    if not _ctx or _ctx.warm_start_anima is None:
         return None
     from .memory import Anticipation
-    state = _warm_start_anima
-    _warm_start_anima = None  # One-shot: only used for first sense
+    state = _ctx.warm_start_anima
+    _ctx.warm_start_anima = None  # One-shot: only used for first sense
 
     # Scale confidence by staleness — longer gaps mean less trust in old state
     confidence = 0.6
     description = "warm start from last shutdown"
-    if _wake_gap:
-        gap_hours = _wake_gap.total_seconds() / 3600
+    if _ctx.wake_gap:
+        gap_hours = _ctx.wake_gap.total_seconds() / 3600
         if gap_hours > 24:
             confidence = 0.1
             description = f"warm start after {gap_hours:.0f}h absence"
@@ -398,12 +356,12 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     Returns:
         Tuple of (readings, anima) or (None, None) if unavailable
     """
-    global _last_shm_data
     # Try shared memory first (broker mode)
     # SharedMemoryClient.read() already returns envelope["data"] (the inner dict)
     shm_client = _get_shm_client()
     shm_data = shm_client.read()
-    _last_shm_data = shm_data  # Cache for reuse within same iteration
+    if _ctx:
+        _ctx.last_shm_data = shm_data  # Cache for reuse within same iteration
 
     # Check if shared memory data is recent
     shm_stale = True
@@ -505,10 +463,42 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     return None, None
 
 def _get_display() -> DisplayRenderer:
-    global _display
-    if _display is None:
-        _display = get_display()
-    return _display
+    if _ctx is None:
+        return get_display()
+    if _ctx.display is None:
+        _ctx.display = get_display()
+    return _ctx.display
+
+
+def _get_last_shm_data() -> dict | None:
+    """Cached per-iteration shared memory read. Used by handlers and display loop."""
+    return _ctx.last_shm_data if _ctx else None
+
+
+def _get_screen_renderer():
+    return _ctx.screen_renderer if _ctx else None
+
+
+def _get_leds():
+    return _ctx.leds if _ctx else None
+
+
+def _get_growth():
+    return _ctx.growth if _ctx else None
+
+
+def _get_display_update_task():
+    return _ctx.display_update_task if _ctx else None
+
+
+def _get_activity():
+    return _ctx.activity if _ctx else None
+
+
+def _get_last_governance_decision() -> dict | None:
+    """Last governance decision from broker SHM or server fallback."""
+    return _ctx.last_governance_decision if _ctx else None
+
 
 def _generate_learned_question() -> Optional[str]:
     """Generate a question from Lumen's learned insights, beliefs, and preferences.
@@ -612,8 +602,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
 
     # === 1. Wake-up summary (one-shot) ===
     try:
-        if _activity:
-            wakeup = _activity.get_wakeup_summary()
+        if _ctx and _ctx.activity:
+            wakeup = _ctx.activity.get_wakeup_summary()
             if wakeup:
                 add_observation(wakeup, author="lumen")
                 logger.debug("[Lumen/Unified] Wake-up: %s", wakeup)
@@ -627,7 +617,7 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
     advocate_reason = None
     try:
         advocate = get_advocate()
-        display_available = _display.is_available() if _display else False
+        display_available = (_ctx.display.is_available() if _ctx and _ctx.display else False)
         eisv = anima_to_eisv(anima, readings)
         steps = advocate.analyze_current_state(
             anima=anima, readings=readings, eisv=eisv,
@@ -654,9 +644,9 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
 
     # Growth: confident preferences
     confident_preferences = None
-    if _growth:
+    if _ctx and _ctx.growth:
         try:
-            prefs = [p.description for p in _growth._preferences.values() if p.confidence >= 0.5]
+            prefs = [p.description for p in _ctx.growth._preferences.values() if p.confidence >= 0.5]
             if prefs:
                 confident_preferences = prefs[:3]
         except Exception as e:
@@ -695,8 +685,8 @@ async def _lumen_unified_reflect(anima, readings, identity, prediction_error):
     rest_duration = 0.0
     is_dreaming = False
     try:
-        if _activity:
-            rest_duration = _activity.get_rest_duration()
+        if _ctx and _ctx.activity:
+            rest_duration = _ctx.activity.get_rest_duration()
             is_dreaming = rest_duration > 30 * 60
     except Exception as e:
         logger.debug("[Lumen/Unified] Activity state error: %s", e)
@@ -923,14 +913,14 @@ async def _extract_and_validate_schema(anima, readings, identity):
 
         # Gather tension conflicts (structural + transient)
         _tension_conflicts = list(detect_structural_conflicts())
-        if _tension_tracker:
-            _tension_conflicts.extend(_tension_tracker.get_active_conflicts(last_n=20))
+        if _ctx and _ctx.tension_tracker:
+            _tension_conflicts.extend(_ctx.tension_tracker.get_active_conflicts(last_n=20))
 
         schema = hub.compose_schema(
             identity=identity,
             anima=anima,
             readings=readings,
-            growth_system=_growth,
+            growth_system=_ctx.growth if _ctx else None,
             self_model=_get_sm(),
             drift_offsets=drift.get_offsets(),
             tension_conflicts=_tension_conflicts,
@@ -983,7 +973,7 @@ async def _self_reflect():
         from .self_reflection import get_reflection_system
         from .messages import add_observation
 
-        reflection_system = get_reflection_system(db_path=_store.db_path if _store else "anima.db")
+        reflection_system = get_reflection_system(db_path=(_ctx.store.db_path if _ctx and _ctx.store else "anima.db"))
 
         # Check if it's time to reflect
         if reflection_system.should_reflect():
@@ -1001,7 +991,9 @@ async def _self_reflect():
 
 async def _update_display_loop():
     """Background task to continuously update display and LEDs."""
-    global _store, _sensors, _display, _leds
+    if _ctx is None:
+        logger.warning("[Loop] No context - wake() may have failed")
+        return
     import sys
     import concurrent.futures
     from .error_recovery import safe_call, safe_call_async
@@ -1009,49 +1001,41 @@ async def _update_display_loop():
     print("[Loop] Starting", file=sys.stderr, flush=True)
 
     # Check if we are in "Reader Mode" (Broker running)
-    # If so, we should NOT initialize hardware sensors or display directly
-    # The broker handles the hardware; we just read the state.
     is_broker_running = _is_broker_running()
 
     if is_broker_running:
         print("[Loop] Broker detected - READER MODE (sensors from shared memory, display/LEDs active)", file=sys.stderr, flush=True)
-        # Broker handles sensors - but WE handle display and LEDs (broker doesn't do display/LEDs)
-        if _display is None:
-            _display = get_display()
-        if _leds is None:
-            _leds = get_led_display()
+        if _ctx.display is None:
+            _ctx.display = get_display()
+        if _ctx.leds is None:
+            _ctx.leds = get_led_display()
     else:
-        # Initialize all components on first run (Legacy/Standalone Mode)
-        if _sensors is None:
-            _sensors = get_sensors()
-        if _display is None:
-            _display = get_display()
-        if _leds is None:
-            _leds = get_led_display()
+        if _ctx.sensors is None:
+            _ctx.sensors = get_sensors()
+        if _ctx.display is None:
+            _ctx.display = get_display()
+        if _ctx.leds is None:
+            _ctx.leds = get_led_display()
 
-    print(f"[Loop] broker={is_broker_running} store={_store is not None} sensors={_sensors is not None} display={_display.is_available() if _display else False} leds={_leds.is_available() if _leds else False}", file=sys.stderr, flush=True)
+    print(f"[Loop] broker={is_broker_running} store={_ctx.store is not None} sensors={_ctx.sensors is not None} display={_ctx.display.is_available() if _ctx.display else False} leds={_ctx.leds.is_available() if _ctx.leds else False}", file=sys.stderr, flush=True)
 
     # Detect restore: restore script drops a marker when state comes from backup
-    # Gap time is unreliable after restore — heartbeat reflects backup age, not actual downtime
-    global _wake_restored
     restore_marker = Path.home() / ".anima" / ".restored_marker"
     if restore_marker.exists():
         try:
             import json as _json
-            _wake_restored = _json.loads(restore_marker.read_text())
-            print(f"[Wake] RESTORED from backup at {_wake_restored.get('restored_at', '?')} — gap time unreliable", file=sys.stderr, flush=True)
-            # Consume the marker so subsequent restarts are normal wakes
+            _ctx.wake_restored = _json.loads(restore_marker.read_text())
+            print(f"[Wake] RESTORED from backup at {_ctx.wake_restored.get('restored_at', '?')} — gap time unreliable", file=sys.stderr, flush=True)
             restore_marker.unlink()
         except Exception as e:
             print(f"[Wake] Restore marker read failed (non-fatal): {e}", file=sys.stderr, flush=True)
-            _wake_restored = {"restored_at": "unknown"}
+            _ctx.wake_restored = {"restored_at": "unknown"}
             restore_marker.unlink(missing_ok=True)
 
     # Startup learning: Check if we can learn from existing observations
-    # This handles power/network gaps - resume learning immediately on restart
-    if _store:
+    if _ctx.store:
         try:
-            learner = get_learner(str(_store.db_path))
+            learner = get_learner(str(_ctx.store.db_path))
             
             # Detect gap since last observation
             gap = learner.detect_gap()
@@ -1061,32 +1045,31 @@ async def _update_display_loop():
                     print(f"[Learning] Gap detected: {gap_hours:.1f} hours since last observation", file=sys.stderr, flush=True)
 
             # Gap awareness: degrade warm start and set recovery arc
-            global _wake_gap, _wake_recovery_cycles, _wake_recovery_total, _wake_presence_floor
-            _wake_gap = gap
-            if gap and _warm_start_anima:
+            _ctx.wake_gap = gap
+            if gap and _ctx.warm_start_anima:
                 gap_minutes = gap.total_seconds() / 60
                 if gap_minutes >= 5 and gap_minutes < 60:
                     # Medium gap: noticeable absence
-                    _warm_start_anima["presence"] *= 0.75
-                    _wake_recovery_cycles = 10
-                    _wake_presence_floor = 0.55
-                    print(f"[Wake] Gap {gap_minutes:.0f}m: presence reduced to {_warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
+                    _ctx.warm_start_anima["presence"] *= 0.75
+                    _ctx.wake_recovery_cycles = 10
+                    _ctx.wake_presence_floor = 0.55
+                    print(f"[Wake] Gap {gap_minutes:.0f}m: presence reduced to {_ctx.warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
                 elif gap_minutes >= 60 and gap_minutes < 1440:
                     # Long gap: significant disorientation
-                    _warm_start_anima["presence"] *= 0.45
-                    _warm_start_anima["clarity"] *= 0.85
-                    _wake_recovery_cycles = 20
-                    _wake_presence_floor = 0.35
-                    print(f"[Wake] Gap {gap_minutes/60:.1f}h: presence={_warm_start_anima['presence']:.2f}, clarity reduced", file=sys.stderr, flush=True)
+                    _ctx.warm_start_anima["presence"] *= 0.45
+                    _ctx.warm_start_anima["clarity"] *= 0.85
+                    _ctx.wake_recovery_cycles = 20
+                    _ctx.wake_presence_floor = 0.35
+                    print(f"[Wake] Gap {gap_minutes/60:.1f}h: presence={_ctx.warm_start_anima['presence']:.2f}, clarity reduced", file=sys.stderr, flush=True)
                 elif gap_minutes >= 1440:
                     # Very long gap: deep absence
-                    _warm_start_anima["presence"] *= 0.25
-                    _warm_start_anima["clarity"] *= 0.7
-                    _warm_start_anima["stability"] *= 0.85
-                    _wake_recovery_cycles = 30
-                    _wake_presence_floor = 0.20
-                    print(f"[Wake] Gap {gap_minutes/60:.0f}h: deep absence, presence={_warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
-                _wake_recovery_total = _wake_recovery_cycles
+                    _ctx.warm_start_anima["presence"] *= 0.25
+                    _ctx.warm_start_anima["clarity"] *= 0.7
+                    _ctx.warm_start_anima["stability"] *= 0.85
+                    _ctx.wake_recovery_cycles = 30
+                    _ctx.wake_presence_floor = 0.20
+                    print(f"[Wake] Gap {gap_minutes/60:.0f}h: deep absence, presence={_ctx.warm_start_anima['presence']:.2f}", file=sys.stderr, flush=True)
+                _ctx.wake_recovery_total = _ctx.wake_recovery_cycles
             
             if learner.can_learn():
                 obs_count = learner.get_observation_count()
@@ -1105,11 +1088,11 @@ async def _update_display_loop():
             print(f"[Learning] Startup check error (non-fatal): {e}", file=sys.stderr, flush=True)
 
     # Post wake observation to message board after significant gaps
-    if _wake_gap and _wake_gap.total_seconds() >= 300:
+    if _ctx.wake_gap and _ctx.wake_gap.total_seconds() >= 300:
         try:
             from .messages import add_observation
-            gap_secs = _wake_gap.total_seconds()
-            if _wake_restored:
+            gap_secs = _ctx.wake_gap.total_seconds()
+            if _ctx.wake_restored:
                 # Restored from backup — gap time is unreliable
                 # The heartbeat reflects backup age, not actual downtime
                 # Lumen may have been alive locally (no WiFi) before restore
@@ -1139,20 +1122,15 @@ async def _update_display_loop():
     # Event for immediate re-render when screen mode changes
     mode_change_event = asyncio.Event()
     
-    # Global variables for screen switching and governance
-    global _screen_renderer, _joystick_enabled, _last_governance_decision, _led_proprioception
-    global _last_server_checkin_time, _last_unitares_success_time
-    
     # Start fast input polling task (runs every 100ms for responsive button detection)
     async def fast_input_poll():
         """Fast input polling - runs independently of display loop for responsive controls."""
-        global _joystick_enabled, _screen_renderer, _last_input_error_log
         brainhat = get_brainhat_input()
-        if not _joystick_enabled:
+        if not _ctx.joystick_enabled:
             try:
                 brainhat.enable()
                 if brainhat.is_available():
-                    _joystick_enabled = True
+                    _ctx.joystick_enabled = True
                     print("[Input] BrainHat input enabled - buttons and joystick ready", file=sys.stderr, flush=True)
                 else:
                     # Log once that hardware isn't available
@@ -1169,8 +1147,8 @@ async def _update_display_loop():
         while True:
             try:
                 # Capture renderer locally to avoid race if it's being initialized
-                renderer = _screen_renderer
-                if _joystick_enabled and renderer:
+                renderer = _ctx.screen_renderer
+                if _ctx.joystick_enabled and renderer:
                     input_state = brainhat.read()
                     if input_state:
                         prev_state = brainhat.get_prev_state()
@@ -1178,24 +1156,22 @@ async def _update_display_loop():
                         import time
                         
                         # Check button presses (edge detection)
-                        global _joy_btn_press_start, _joy_btn_help_shown
-                        
                         # LEFT/RIGHT = screen switching (D22/D24 both reclaimed after display init)
                         current_dir = input_state.joystick_direction
                         if input_state.joystick_button:
-                            if _joy_btn_press_start is None:
-                                _joy_btn_press_start = time.time()
-                                _joy_btn_help_shown = False
-                            elif not _joy_btn_help_shown and (time.time() - _joy_btn_press_start) >= 1.0:
+                            if _ctx.joy_btn_press_start is None:
+                                _ctx.joy_btn_press_start = time.time()
+                                _ctx.joy_btn_help_shown = False
+                            elif not _ctx.joy_btn_help_shown and (time.time() - _ctx.joy_btn_press_start) >= 1.0:
                                 renderer.trigger_controls_overlay()
                                 mode_change_event.set()
-                                _joy_btn_help_shown = True
-                                if _leds and _leds.is_available():
-                                    _leds.quick_flash((70, 110, 140), 70)
+                                _ctx.joy_btn_help_shown = True
+                                if _ctx.leds and _ctx.leds.is_available():
+                                    _ctx.leds.quick_flash((70, 110, 140), 70)
                         else:
-                            if _joy_btn_press_start is not None:
-                                hold_time = time.time() - _joy_btn_press_start
-                                if hold_time < 0.8 and not _joy_btn_help_shown:
+                            if _ctx.joy_btn_press_start is not None:
+                                hold_time = time.time() - _ctx.joy_btn_press_start
+                                if hold_time < 0.8 and not _ctx.joy_btn_help_shown:
                                     # Short joystick button press: cycle to next screen in group
                                     # (msgs group uses left/right for within-group cycling instead)
                                     current_mode = renderer.get_mode()
@@ -1205,7 +1181,7 @@ async def _update_display_loop():
                                         mode_change_event.set()
                                         current_mode = renderer.get_mode()
                                         print(f"[Input] btn -> {current_mode.value} (group cycle)", file=sys.stderr, flush=True)
-                            _joy_btn_press_start = None
+                            _ctx.joy_btn_press_start = None
                             _joy_btn_help_shown = False
 
                         if prev_state:
@@ -1217,8 +1193,8 @@ async def _update_display_loop():
                             if not qa_needs_lr:
                                 if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
                                     renderer.trigger_input_feedback("left")
-                                    if _leds and _leds.is_available():
-                                        _leds.quick_flash((60, 60, 120), 50)
+                                    if _ctx.leds and _ctx.leds.is_available():
+                                        _ctx.leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
                                     renderer.navigate_left()
                                     new_mode = renderer.get_mode()
@@ -1227,8 +1203,8 @@ async def _update_display_loop():
                                     print(f"[Input] {old_mode.value} -> {new_mode.value} (left)", file=sys.stderr, flush=True)
                                 elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
                                     renderer.trigger_input_feedback("right")
-                                    if _leds and _leds.is_available():
-                                        _leds.quick_flash((60, 60, 120), 50)
+                                    if _ctx.leds and _ctx.leds.is_available():
+                                        _ctx.leds.quick_flash((60, 60, 120), 50)
                                     old_mode = renderer.get_mode()
                                     renderer.navigate_right()
                                     new_mode = renderer.get_mode()
@@ -1264,23 +1240,23 @@ async def _update_display_loop():
                                 prev_dir = prev_state.joystick_direction
                                 # Only trigger on transition TO up/down (edge detection)
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                    _screen_renderer.trigger_input_feedback("up")
-                                    _screen_renderer.message_scroll_up()
+                                    renderer.trigger_input_feedback("up")
+                                    renderer.message_scroll_up()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                    _screen_renderer.trigger_input_feedback("down")
-                                    _screen_renderer.message_scroll_down()
+                                    renderer.trigger_input_feedback("down")
+                                    renderer.message_scroll_down()
 
                         # Joystick navigation in Art Eras screen (UP/DOWN moves cursor)
                         if current_mode == ScreenMode.ART_ERAS:
                             if prev_state:
                                 prev_dir = prev_state.joystick_direction
                                 if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                    _screen_renderer.trigger_input_feedback("up")
-                                    _screen_renderer.era_cursor_up()
+                                    renderer.trigger_input_feedback("up")
+                                    renderer.era_cursor_up()
                                     mode_change_event.set()
                                 elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                    _screen_renderer.trigger_input_feedback("down")
-                                    _screen_renderer.era_cursor_down()
+                                    renderer.trigger_input_feedback("down")
+                                    renderer.era_cursor_down()
                                     mode_change_event.set()
 
                         # Joystick navigation in Visitors screen (same as messages)
@@ -1370,8 +1346,8 @@ async def _update_display_loop():
                                 if was_short_press:
                                     # Visual + LED feedback for separate button
                                     renderer.trigger_input_feedback("press")
-                                    if _leds and _leds.is_available():
-                                        _leds.quick_flash((80, 100, 60), 80)  # Soft green flash
+                                    if _ctx.leds and _ctx.leds.is_available():
+                                        _ctx.leds.quick_flash((80, 100, 60), 80)  # Soft green flash
                                     handled_short_press = False
                                     if current_mode == ScreenMode.MESSAGES:
                                         renderer.message_toggle_expand()
@@ -1448,7 +1424,7 @@ async def _update_display_loop():
                 consecutive_errors += 1
                 if consecutive_errors == 1:
                     # Log on first error to help diagnose
-                    logger.debug("[Loop] Failed to get readings/anima - broker=%s, store=%s", is_broker_running, _store is not None)
+                    logger.debug("[Loop] Failed to get readings/anima - broker=%s, store=%s", is_broker_running, _ctx.store is not None if _ctx else False)
                 if consecutive_errors >= max_consecutive_errors:
                     logger.warning("[Loop] Too many consecutive errors (%d), backing off", consecutive_errors)
                     await asyncio.sleep(min(base_delay * (2 ** min(consecutive_errors // 5, 4)), max_delay))
@@ -1480,27 +1456,28 @@ async def _update_display_loop():
 
             # Consume drive events from broker (via SHM) → message board observations
             try:
-                if _last_shm_data:
-                    _drive_evts = _last_shm_data.get("drive_events", [])
+                shm = _get_last_shm_data()
+                if shm:
+                    _drive_evts = shm.get("drive_events", [])
                     if _drive_evts:
                         from .messages import add_observation
                         for _de in _drive_evts:
                             # Deduplicate: dimension+event_type is unique per crossing
                             _evt_key = (_de["dimension"], _de["event_type"])
-                            if _evt_key not in _consumed_drive_events:
-                                _consumed_drive_events.add(_evt_key)
+                            if _ctx and _evt_key not in _ctx.consumed_drive_events:
+                                _ctx.consumed_drive_events.add(_evt_key)
                                 add_observation(_de["text"], author="lumen")
-                    elif _consumed_drive_events:
+                    elif _ctx and _ctx.consumed_drive_events:
                         # Broker cleared events — reset our dedup set
-                        _consumed_drive_events.clear()
+                        _ctx.consumed_drive_events.clear()
             except Exception as e:
                 logger.debug("[Drive] Event consumption error: %s", e)
 
             # Identity heartbeat: accumulate alive_seconds incrementally
             # Prevents losing session time on crashes/restarts
             try:
-                if _store:
-                    _store.heartbeat(min_interval_seconds=30.0)
+                if _ctx and _ctx.store:
+                    _ctx.store.heartbeat(min_interval_seconds=30.0)
             except Exception as e:
                 logger.debug("[Identity] Heartbeat error: %s", e)
 
@@ -1520,7 +1497,6 @@ async def _update_display_loop():
             # Feed value tension tracker with RAW (pre-drift) anima values.
             # Design principle: tension detection operates on raw dimension values
             # so calibration drift cannot mask physical tensions in the body.
-            global _last_action, _last_state_before
             if _tension_tracker and readings:
                 try:
                     from .anima import sense_self
@@ -1531,7 +1507,7 @@ async def _update_display_loop():
                         "stability": _raw_anima_obj.stability,
                         "presence": _raw_anima_obj.presence,
                     }
-                    last_action_key = _last_action.action_type.value if _last_action else None
+                    last_action_key = _ctx.last_action.action_type.value if _ctx.last_action else None
                     _tension_tracker.observe(raw_anima, last_action_key)
                 except Exception as e:
                     logger.debug("[Tension] Tracking error: %s", e)
@@ -1545,11 +1521,11 @@ async def _update_display_loop():
                         "warmth": anima.warmth, "clarity": anima.clarity,
                         "stability": anima.stability, "presence": anima.presence,
                     }
-                    _satisfaction_history.append(_ml_pref.get_overall_satisfaction(_ml_state))
+                    _ctx.satisfaction_history.append(_ml_pref.get_overall_satisfaction(_ml_state))
                     for _dim in ("warmth", "clarity", "stability", "presence"):
-                        if _dim not in _satisfaction_per_dim:
-                            _satisfaction_per_dim[_dim] = _deque(maxlen=500)
-                        _satisfaction_per_dim[_dim].append(
+                        if _dim not in _ctx.satisfaction_per_dim:
+                            _ctx.satisfaction_per_dim[_dim] = _deque(maxlen=500)
+                        _ctx.satisfaction_per_dim[_dim].append(
                             _ml_pref._preferences[_dim].current_satisfaction(_ml_state[_dim])
                         )
                 except Exception as e:
@@ -1632,7 +1608,7 @@ async def _update_display_loop():
             # Skipped on quick_render for responsive screen transitions
             if not _skip_subsystems and loop_count % AGENCY_INTERVAL == 0:
                 try:
-                    action_selector = get_action_selector(db_path=str(_store.db_path) if _store else "anima.db")
+                    action_selector = get_action_selector(db_path=str(_ctx.store.db_path) if _ctx and _ctx.store else "anima.db")
 
                     current_state = {
                         "warmth": anima.warmth,
@@ -1646,14 +1622,14 @@ async def _update_display_loop():
 
                     # LEARN from previous action
                     # Use actual learned preferences for reward signal (not crude average)
-                    if _last_action is not None and _last_state_before is not None:
+                    if _ctx.last_action is not None and _ctx.last_state_before is not None:
                         from .preferences import get_preference_system
                         pref_sys = get_preference_system()
-                        sat_before = pref_sys.get_overall_satisfaction(_last_state_before)
+                        sat_before = pref_sys.get_overall_satisfaction(_ctx.last_state_before)
                         sat_after = pref_sys.get_overall_satisfaction(current_state)
                         action_selector.record_outcome(
-                            action=_last_action,
-                            state_before=_last_state_before,
+                            action=_ctx.last_action,
+                            state_before=_ctx.last_state_before,
                             state_after=current_state,
                             preference_satisfaction_before=sat_before,
                             preference_satisfaction_after=sat_after,
@@ -1725,21 +1701,21 @@ async def _update_display_loop():
 
                     elif action.action_type == ActionType.LED_BRIGHTNESS:
                         direction = action.parameters.get("direction")
-                        if direction and _leds and _leds.is_available():
-                            current_brightness = getattr(_leds, '_brightness', 0.1)
+                        if direction and _ctx.leds and _ctx.leds.is_available():
+                            current_brightness = getattr(_ctx.leds, '_brightness', 0.1)
                             if direction == "increase":
                                 new_brightness = min(0.3, current_brightness + 0.05)
                             else:
                                 new_brightness = max(0.02, current_brightness - 0.05)
-                            _leds.set_brightness(new_brightness)
+                            _ctx.leds.set_brightness(new_brightness)
                             print(f"[Agency] LED brightness: {current_brightness:.2f} → {new_brightness:.2f} ({direction})", file=sys.stderr, flush=True)
 
                     if loop_count % SCHEMA_LOG_THROTTLE == 0:
                         stats = action_selector.get_action_stats()
                         print(f"[Agency] Stats: {stats.get('action_counts', {})} explore_rate={action_selector._exploration_rate:.2f}", file=sys.stderr, flush=True)
 
-                    _last_action = action
-                    _last_state_before = current_state.copy()
+                    _ctx.last_action = action
+                    _ctx.last_state_before = current_state.copy()
 
                 except Exception as e:
                     if loop_count % STATUS_LOG_THROTTLE == 1:
@@ -1753,28 +1729,27 @@ async def _update_display_loop():
                     sm = get_self_model()
 
                     # 0. Verify any pending self-prediction from previous iteration
-                    global _sm_pending_prediction
-                    if _sm_pending_prediction is not None:
+                    if _ctx.sm_pending_prediction is not None:
                         actual = {}
-                        ctx = _sm_pending_prediction["context"]
+                        ctx = _ctx.sm_pending_prediction["context"]
                         if ctx == "light_change":
                             actual["surprise_likelihood"] = prediction_error.surprise if prediction_error else 0.0
                             # Normalize warmth delta to [0,1] magnitude for comparison
                             # with belief value (correlation strength 0-1).
                             # delta=0 → 0.5 (no effect), delta=±0.25 → 1.0 (strong effect)
-                            raw_delta = anima.warmth - _sm_pending_prediction["warmth_before"]
+                            raw_delta = anima.warmth - _ctx.sm_pending_prediction["warmth_before"]
                             actual["warmth_change"] = min(1.0, max(0.0, abs(raw_delta) * 2 + 0.5))
                         elif ctx == "temp_change":
                             actual["surprise_likelihood"] = prediction_error.surprise if prediction_error else 0.0
-                            raw_delta = anima.clarity - _sm_pending_prediction["clarity_before"]
+                            raw_delta = anima.clarity - _ctx.sm_pending_prediction["clarity_before"]
                             actual["clarity_change"] = min(1.0, max(0.0, abs(raw_delta) * 2 + 0.5))
                         elif ctx == "stability_drop":
                             # Fast recovery = stability improved back within one cycle
-                            recovery = anima.stability - _sm_pending_prediction.get("stability_before", 0.5)
+                            recovery = anima.stability - _ctx.sm_pending_prediction.get("stability_before", 0.5)
                             actual["fast_recovery"] = min(1.0, max(0.0, recovery + 0.5))  # Center around 0.5
                         if actual:
-                            sm.verify_prediction(ctx, _sm_pending_prediction["prediction"], actual)
-                        _sm_pending_prediction = None
+                            sm.verify_prediction(ctx, _ctx.sm_pending_prediction["prediction"], actual)
+                        _ctx.sm_pending_prediction = None
 
                     # 1. Observe surprise events
                     surprise_level = prediction_error.surprise if prediction_error else 0.0
@@ -1800,16 +1775,15 @@ async def _update_display_loop():
                                 }
 
                     # 2. Observe stability changes (track across iterations)
-                    global _sm_prev_stability
-                    if _sm_prev_stability is not None:
-                        stability_delta = abs(anima.stability - _sm_prev_stability)
+                    if _ctx.sm_prev_stability is not None:
+                        stability_delta = abs(anima.stability - _ctx.sm_prev_stability)
                         if stability_delta > 0.05:
                             sm.observe_stability_change(
-                                _sm_prev_stability, anima.stability,
+                                _ctx.sm_prev_stability, anima.stability,
                                 duration_seconds=base_delay * 5
                             )
                             # Predict recovery if stability dropped significantly
-                            if anima.stability < _sm_prev_stability - 0.1 and _sm_pending_prediction is None:
+                            if anima.stability < _ctx.sm_prev_stability - 0.1 and _ctx.sm_pending_prediction is None:
                                 pred = sm.predict_own_response("stability_drop")
                                 if pred:
                                     _sm_pending_prediction = {
@@ -1822,12 +1796,11 @@ async def _update_display_loop():
                     _sm_prev_stability = anima.stability
 
                     # 2b. Observe warmth changes (track across iterations)
-                    global _sm_prev_warmth
-                    if _sm_prev_warmth is not None:
-                        warmth_delta = abs(anima.warmth - _sm_prev_warmth)
+                    if _ctx.sm_prev_warmth is not None:
+                        warmth_delta = abs(anima.warmth - _ctx.sm_prev_warmth)
                         if warmth_delta > 0.05:
                             sm.observe_warmth_change(
-                                _sm_prev_warmth, anima.warmth,
+                                _ctx.sm_prev_warmth, anima.warmth,
                                 duration_seconds=base_delay * 5
                             )
                     _sm_prev_warmth = anima.warmth
@@ -1842,13 +1815,12 @@ async def _update_display_loop():
                         )
 
                     # 4. Complete interaction observation (clarity before vs after)
-                    global _sm_clarity_before_interaction
-                    if _sm_clarity_before_interaction is not None:
+                    if _ctx.sm_clarity_before_interaction is not None:
                         sm.observe_interaction(
-                            clarity_before=_sm_clarity_before_interaction,
+                            clarity_before=_ctx.sm_clarity_before_interaction,
                             clarity_after=anima.clarity,
                         )
-                        _sm_clarity_before_interaction = None
+                        _ctx.sm_clarity_before_interaction = None
 
                     # 5. Observe sensor-anima correlations (for temp_clarity, light_warmth beliefs)
                     # Use world light (not raw lux) so Lumen learns whether environmental
@@ -1880,10 +1852,9 @@ async def _update_display_loop():
 
             # === PRIMITIVE LANGUAGE: Emergent expression through learned tokens ===
             # Throttled: runs every 10th iteration (has internal cooldown timer too)
-            global _last_primitive_utterance
             if not _skip_subsystems and loop_count % PRIMITIVE_LANG_INTERVAL == 0:
                 try:
-                    lang = get_language_system(str(_store.db_path) if _store else "anima.db")
+                    lang = get_language_system(str(_ctx.store.db_path) if _ctx and _ctx.store else "anima.db")
 
                     lang_state = {
                         "warmth": anima.warmth if anima else 0.5,
@@ -1904,7 +1875,7 @@ async def _update_display_loop():
 
                         _suggested = _suggestion.get("suggested_tokens") if _suggestion else None
                         utterance = lang.generate_utterance(lang_state, suggested_tokens=_suggested)
-                        _last_primitive_utterance = utterance
+                        _ctx.last_primitive_utterance = utterance
 
                         _shape_info = f" [shape={_suggestion['shape']}]" if _suggestion else ""
                         print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason}){_shape_info}", file=sys.stderr, flush=True)
@@ -1944,27 +1915,27 @@ async def _update_display_loop():
                         )
 
                     # Self-feedback: when no human around, score past utterance by coherence + stability
-                    if _last_primitive_utterance and _last_primitive_utterance.score is None:
+                    if _ctx.last_primitive_utterance and _ctx.last_primitive_utterance.score is None:
                         from datetime import timedelta
-                        elapsed = datetime.now() - _last_primitive_utterance.timestamp
+                        elapsed = datetime.now() - _ctx.last_primitive_utterance.timestamp
                         if elapsed >= timedelta(seconds=75):  # ~1.25 min after utterance
-                            result = lang.record_self_feedback(_last_primitive_utterance, lang_state)
+                            result = lang.record_self_feedback(_ctx.last_primitive_utterance, lang_state)
                             if result:
                                 print(f"[PrimitiveLang] Self-feedback: score={result['score']:.2f} signals={result['signals']}", file=sys.stderr, flush=True)
                                 # Forward to EISV trajectory weight learning
                                 try:
                                     _traj = get_trajectory_awareness()
                                     _traj.record_feedback(
-                                        _last_primitive_utterance.tokens,
+                                        _ctx.last_primitive_utterance.tokens,
                                         result['score'],
                                     )
                                 except Exception as e:
                                     if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryFeedback] Error: {e}", file=sys.stderr, flush=True)
 
                     # Implicit feedback: did a non-lumen message arrive after utterance?
-                    if _last_primitive_utterance and _last_primitive_utterance.score is not None:
+                    if _ctx.last_primitive_utterance and _ctx.last_primitive_utterance.score is not None:
                         # Only check once (after self-feedback has scored it)
-                        utt_ts = _last_primitive_utterance.timestamp.timestamp()
+                        utt_ts = _ctx.last_primitive_utterance.timestamp.timestamp()
                         from .messages import get_recent_messages as _get_recent
                         _recent_msgs = _get_recent(10)
                         _non_lumen = [
@@ -1976,23 +1947,23 @@ async def _update_display_loop():
                         if _non_lumen:
                             _delay = _non_lumen[0].timestamp - utt_ts
                             _impl_result = lang.record_implicit_feedback(
-                                _last_primitive_utterance,
+                                _ctx.last_primitive_utterance,
                                 message_arrived=True,
                                 delay_seconds=_delay,
                             )
                             if _impl_result:
                                 logger.debug("[PrimitiveLang] Implicit feedback: response in %.0fs, score=%.2f", _delay, _impl_result['score'])
-                            _last_primitive_utterance = None  # Done — recorded response
+                            _ctx.last_primitive_utterance = None  # Done — recorded response
                         else:
                             # No response within window — record absence if enough time passed
                             from datetime import timedelta as _td
-                            if datetime.now() - _last_primitive_utterance.timestamp >= _td(seconds=300):
+                            if datetime.now() - _ctx.last_primitive_utterance.timestamp >= _td(seconds=300):
                                 lang.record_implicit_feedback(
-                                    _last_primitive_utterance,
+                                    _ctx.last_primitive_utterance,
                                     message_arrived=False,
                                     delay_seconds=999,
                                 )
-                                _last_primitive_utterance = None  # Done — recorded no-response
+                                _ctx.last_primitive_utterance = None  # Done — recorded no-response
 
                     if loop_count % SELF_MODEL_SAVE_INTERVAL == 0:
                         stats = lang.get_stats()
@@ -2004,9 +1975,9 @@ async def _update_display_loop():
                         logger.debug("[PrimitiveLang] Error (non-fatal): %s", e)
 
             # Identity is fundamental - should always be available if wake() succeeded
-            # If _store is None, that means wake() failed - log warning but continue
-            identity = _store.get_identity() if _store else None
-            if identity is None and _store is None:
+            # If _ctx.store is None, that means wake() failed - log warning but continue
+            identity = _ctx.store.get_identity() if _ctx and _ctx.store else None
+            if identity is None and (_ctx is None or _ctx.store is None):
                 if loop_count == 1:
                     print(f"[Loop] WARNING: Identity store not initialized (wake() may have failed) - display will show face without identity info", file=sys.stderr, flush=True)
             
@@ -2023,27 +1994,28 @@ async def _update_display_loop():
             # Separate button = screen-specific action (messages: expand, notepad: save, long-press: shutdown)
 
             # Sync governance from broker's SHM data (broker is primary UNITARES caller)
-            governance_decision_for_display = _last_governance_decision
+            governance_decision_for_display = _ctx.last_governance_decision if _ctx else None
             _shm_gov_is_fresh_unitares = False
-            if _last_shm_data and "governance" in _last_shm_data and isinstance(_last_shm_data["governance"], dict):
-                shm_gov = _last_shm_data["governance"]
+            shm_data = _get_last_shm_data()
+            if shm_data and "governance" in shm_data and isinstance(shm_data["governance"], dict):
+                shm_gov = shm_data["governance"]
                 governance_decision_for_display = shm_gov
                 # Sync into _last_governance_decision if SHM data is fresh
                 is_fresh, is_unitares, gov_ts = _parse_shm_governance_freshness(shm_gov)
                 if is_fresh:
-                    _last_governance_decision = shm_gov
+                    _ctx.last_governance_decision = shm_gov
                     if is_unitares:
                         _shm_gov_is_fresh_unitares = True
                         # Track when UNITARES actually checked in, not loop time.
                         if gov_ts is not None:
-                            _last_unitares_success_time = max(_last_unitares_success_time, gov_ts)
+                            _ctx.last_unitares_success_time = max(_ctx.last_unitares_success_time, gov_ts)
                     # Update connection status based on SHM governance source
-                    if _screen_renderer:
-                        _screen_renderer.update_connection_status(governance=is_unitares)
+                    if _ctx.screen_renderer:
+                        _ctx.screen_renderer.update_connection_status(governance=is_unitares)
                     # Update WiFi icon from SHM
-                    wifi_up = _last_shm_data.get("wifi_connected")
-                    if wifi_up is not None and _screen_renderer:
-                        _screen_renderer.update_connection_status(wifi=wifi_up)
+                    wifi_up = shm_data.get("wifi_connected")
+                    if wifi_up is not None and _ctx.screen_renderer:
+                        _ctx.screen_renderer.update_connection_status(wifi=wifi_up)
                     # Fire health heartbeat for fresh governance
                     if _health:
                         _health.heartbeat("governance")
@@ -2053,40 +2025,40 @@ async def _update_display_loop():
             # directly using its native async event loop (avoids broker's
             # thread+loop issues). Rate-limited to every 60s.
             if (not _shm_gov_is_fresh_unitares
-                    and time.time() - _last_unitares_success_time > SERVER_GOVERNANCE_FALLBACK_SECONDS
-                    and time.time() - _last_server_checkin_time > SERVER_GOVERNANCE_FALLBACK_SECONDS
+                    and time.time() - _ctx.last_unitares_success_time > SERVER_GOVERNANCE_FALLBACK_SECONDS
+                    and time.time() - _ctx.last_server_checkin_time > SERVER_GOVERNANCE_FALLBACK_SECONDS
                     and readings is not None and anima is not None):
-                _last_server_checkin_time = time.time()
+                _ctx.last_server_checkin_time = time.time()
                 try:
                     fallback_decision = await _server_governance_fallback(anima, readings)
                     if fallback_decision:
                         is_unitares_fb = fallback_decision.get("source") == "unitares"
-                        _last_governance_decision = fallback_decision
+                        _ctx.last_governance_decision = fallback_decision
                         governance_decision_for_display = fallback_decision
                         if is_unitares_fb:
-                            _last_unitares_success_time = time.time()
-                        if _screen_renderer:
-                            _screen_renderer.update_connection_status(governance=is_unitares_fb)
+                            _ctx.last_unitares_success_time = time.time()
+                        if _ctx.screen_renderer:
+                            _ctx.screen_renderer.update_connection_status(governance=is_unitares_fb)
                         if _health:
                             _health.heartbeat("governance")
                 except Exception as e:
                     logger.warning("[Governance] Server fallback error: %s", e)
             
             # Initialize screen renderer if display is available
-            if _display and _display.is_available():
-                if _screen_renderer is None:
+            if _ctx.display and _ctx.display.is_available():
+                if _ctx.screen_renderer is None:
                     from .display.screens import ScreenRenderer
                     # Pass db_path if store is available
-                    db_path = str(_store.db_path) if _store else "anima.db"
-                    _screen_renderer = ScreenRenderer(_display, db_path=db_path, identity_store=_store)
+                    db_path = str(_ctx.store.db_path) if _ctx.store else "anima.db"
+                    _ctx.screen_renderer = ScreenRenderer(_ctx.display, db_path=db_path, identity_store=_ctx.store)
                     # Wire schema hub so LCD shows same enriched schema as dashboard
                     try:
-                        _screen_renderer.schema_hub = _get_schema_hub()
+                        _ctx.screen_renderer.schema_hub = _get_schema_hub()
                     except Exception as e:
                         logger.warning("[Schema] SchemaHub wiring to renderer failed: %s", e)
                     print("[Display] Screen renderer initialized", file=sys.stderr, flush=True)
                     # Pre-warm learning cache in background (avoids 9+ second delay on first visit)
-                    _screen_renderer.warm_learning_cache()
+                    _ctx.screen_renderer.warm_learning_cache()
             
             # Input is now handled by fast_input_poll() task (runs every 100ms)
             # This keeps the display loop at 2s while input stays responsive
@@ -2095,32 +2067,33 @@ async def _update_display_loop():
             # Face reflects what Lumen wants to communicate
             # Other screens show sensors, identity, diagnostics
             display_updated = False
-            if _display:
-                if _display.is_available():
+            if _ctx.display:
+                if _ctx.display.is_available():
                     def update_display():
                         # Derive face state independently - what Lumen wants to express
                         if anima is None:
                             # Show default/error screen instead of blank
-                            if _screen_renderer:
+                            if _ctx.screen_renderer:
                                 try:
-                                    _screen_renderer._display.show_default()
+                                    _ctx.screen_renderer._display.show_default()
                                 except Exception as e:
                                     logger.debug("[Display] show_default failed: %s", e)
                             return False
                         face_state = derive_face_state(anima)
 
                         # Use screen renderer if available (supports multiple screens)
-                        if _screen_renderer:
+                        if _ctx.screen_renderer:
                             # Pass SHM data to renderer (for inner life screen + drive colors)
-                            if _last_shm_data:
-                                _screen_renderer._shm_data = _last_shm_data
-                                if hasattr(_screen_renderer, 'drawing_engine'):
-                                    _il_drives = (_last_shm_data.get("inner_life") or {}).get("drives")
+                            _shm = _get_last_shm_data()
+                            if _shm:
+                                _ctx.screen_renderer._shm_data = _shm
+                                if hasattr(_ctx.screen_renderer, 'drawing_engine'):
+                                    _il_drives = (_shm.get("inner_life") or {}).get("drives")
                                     if _il_drives:
-                                        _screen_renderer.drawing_engine.set_drives(_il_drives)
+                                        _ctx.screen_renderer.drawing_engine.set_drives(_il_drives)
                             # governance_decision_for_display is set by governance check-in (runs every 30 iterations)
                             # It's None on most iterations, but will have value after governance check-ins
-                            _screen_renderer.render(
+                            _ctx.screen_renderer.render(
                                 face_state=face_state,
                                 anima=anima,
                                 readings=readings,
@@ -2132,7 +2105,7 @@ async def _update_display_loop():
                         else:
                             # Fallback: render face directly
                             identity_name = identity.name if identity else None
-                            _display.render_face(face_state, name=identity_name)
+                            _ctx.display.render_face(face_state, name=identity_name)
                         return True  # Return success indicator
 
                     # Run display update in thread pool to prevent blocking input polling
@@ -2168,7 +2141,7 @@ async def _update_display_loop():
             # Update LEDs with raw anima state (independent from face)
             # LEDs reflect proprioceptive state directly - what Lumen actually feels
             led_updated = False
-            if _leds and _leds.is_available():
+            if _ctx.leds and _ctx.leds.is_available():
                 # Get light level for auto-brightness
                 light_level = readings.light_lux if readings else None
 
@@ -2179,14 +2152,14 @@ async def _update_display_loop():
                 activity_brightness = 1.0
                 try:
                     # Primary: read from broker's shared memory (single source of truth)
-                    if _last_shm_data and "activity" in _last_shm_data:
-                        activity_brightness = _last_shm_data["activity"].get("brightness_multiplier", 1.0)
+                    _shm = _get_last_shm_data()
+                    if _shm and "activity" in _shm:
+                        activity_brightness = _shm["activity"].get("brightness_multiplier", 1.0)
                     else:
                         # Fallback: compute locally if broker not running
-                        global _activity
-                        if _activity is None:
-                            _activity = get_activity_manager()
-                        activity_state = _activity.get_state(
+                        if _ctx.activity is None:
+                            _ctx.activity = get_activity_manager()
+                        activity_state = _ctx.activity.get_state(
                             presence=anima.presence,
                             stability=anima.stability,
                             light_level=light_level,
@@ -2197,11 +2170,11 @@ async def _update_display_loop():
 
                 # Sync manual brightness dimmer to LED controller
                 # Priority: 1) Screen renderer manual override, 2) Broker agency brightness from SHM
-                display_with_brightness = _screen_renderer._display if _screen_renderer else _display
+                display_with_brightness = _ctx.screen_renderer._display if _ctx.screen_renderer else _ctx.display
                 if display_with_brightness and getattr(display_with_brightness, '_manual_led_brightness', None) is not None:
-                    _leds._manual_brightness_factor = display_with_brightness._manual_led_brightness
-                elif _last_shm_data and "agency_led_brightness" in _last_shm_data:
-                    _leds._manual_brightness_factor = _last_shm_data["agency_led_brightness"]
+                    _ctx.leds._manual_brightness_factor = display_with_brightness._manual_led_brightness
+                elif _shm and "agency_led_brightness" in _shm:
+                    _ctx.leds._manual_brightness_factor = _shm["agency_led_brightness"]
 
                 def update_leds():
                     # LEDs derive their own state directly from anima - no face influence
@@ -2209,7 +2182,7 @@ async def _update_display_loop():
                     anticipation_confidence = 0.0
                     if anima.anticipation:
                         anticipation_confidence = anima.anticipation.get("confidence", 0.0)
-                    return _leds.update_from_anima(
+                    return _ctx.leds.update_from_anima(
                         anima.warmth, anima.clarity,
                         anima.stability, anima.presence,
                         light_level=light_level,
@@ -2233,14 +2206,14 @@ async def _update_display_loop():
                 # Lumen now knows its own brightness — the light sensor becomes
                 # genuinely proprioceptive rather than confusingly self-referential.
                 try:
-                    _led_proprioception = _leds.get_proprioceptive_state()
+                    _ctx.led_proprioception = _ctx.leds.get_proprioceptive_state()
                     # Also populate readings.led_brightness with ACTUAL computed brightness
                     # (not just activity multiplier like stable_creature.py does)
                     if readings is not None:
-                        readings.led_brightness = _led_proprioception.get("brightness", 0.0)
+                        readings.led_brightness = _ctx.led_proprioception.get("brightness", 0.0) if _ctx.led_proprioception else 0.0
                 except Exception as e:
                     if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[LEDProprioception] Error: {e}", file=sys.stderr, flush=True)
-            elif _leds:
+            elif _ctx.leds:
                 if loop_count == 1:
                     print(f"[Loop] LEDs not available (hardware issue?)", file=sys.stderr, flush=True)
 
@@ -2292,13 +2265,13 @@ async def _update_display_loop():
             
             # Log every 5th iteration with LED status and key metrics
             if loop_count % TRAJECTORY_INTERVAL == 1:
-                led_status = "available" if (_leds and _leds.is_available()) else "unavailable"
+                led_status = "available" if (_ctx.leds and _ctx.leds.is_available()) else "unavailable"
             
             # Adaptive learning: Every 100 iterations (~3.3 minutes), check if calibration should adapt
             # Respects cooldown to avoid redundant adaptations during continuous operation
-            if loop_count % LEARNING_INTERVAL == 0 and _store:
+            if loop_count % LEARNING_INTERVAL == 0 and _ctx and _ctx.store:
                 def try_learning():
-                    learner = get_learner(str(_store.db_path))
+                    learner = get_learner(str(_ctx.store.db_path))
                     adapted, new_cal = learner.adapt_calibration(respect_cooldown=True)
                     if adapted:
                         logger.debug("[Learning] Calibration adapted after %d observations", loop_count)
@@ -2332,7 +2305,7 @@ async def _update_display_loop():
 
             # Growth system: Observe state for preference learning and check milestones
             # Every 30 iterations (~1 minute) - learns from anima state + environment
-            if loop_count % GROWTH_INTERVAL == 0 and readings and anima and identity and _growth:
+            if loop_count % GROWTH_INTERVAL == 0 and readings and anima and identity and _ctx and _ctx.growth:
                 def growth_observe():
                     """Observe environment and check milestones."""
                     # Prepare anima state dict
@@ -2351,7 +2324,7 @@ async def _update_display_loop():
                     }
 
                     # Observe for preference learning
-                    insight = _growth.observe_state_preference(anima_state, environment)
+                    insight = _ctx.growth.observe_state_preference(anima_state, environment)
                     if insight:
                         logger.debug("[Growth] %s", insight)
                         # Add insight as an observation from Lumen
@@ -2359,7 +2332,7 @@ async def _update_display_loop():
                         add_observation(insight, author="lumen")
 
                     # Check for age/awakening milestones
-                    milestone = _growth.check_for_milestones(identity, anima)
+                    milestone = _ctx.growth.check_for_milestones(identity, anima)
                     if milestone:
                         logger.debug("[Growth] Milestone: %s", milestone)
                         from .messages import add_observation
@@ -2369,7 +2342,7 @@ async def _update_display_loop():
                 if _health: _health.heartbeat("growth")
 
             # Goal system: Suggest new goals every ~2 hours
-            if loop_count % GOAL_SUGGEST_INTERVAL == 0 and anima and _growth:
+            if loop_count % GOAL_SUGGEST_INTERVAL == 0 and anima and _ctx and _ctx.growth:
                 def goal_suggest():
                     """Suggest a goal grounded in Lumen's experience."""
                     anima_state = {
@@ -2382,7 +2355,7 @@ async def _update_display_loop():
                     except Exception as e:
                         logger.debug("[Growth] SelfModel init for goal suggest: %s", e)
                         sm = None
-                    goal = _growth.suggest_goal(anima_state, self_model=sm)
+                    goal = _ctx.growth.suggest_goal(anima_state, self_model=sm)
                     if goal:
                         from .messages import add_observation
                         add_observation(f"new goal: {goal.description}", author="lumen")
@@ -2390,7 +2363,7 @@ async def _update_display_loop():
                 safe_call(goal_suggest, default=None, log_error=True)
 
             # Goal system: Check progress every ~10 minutes
-            if loop_count % GOAL_CHECK_INTERVAL == 0 and anima and _growth:
+            if loop_count % GOAL_CHECK_INTERVAL == 0 and anima and _ctx and _ctx.growth:
                 def goal_check():
                     """Check progress on active goals."""
                     anima_state = {
@@ -2403,7 +2376,7 @@ async def _update_display_loop():
                     except Exception as e:
                         logger.debug("[Growth] SelfModel init for goal check: %s", e)
                         sm = None
-                    msg = _growth.check_goal_progress(anima_state, self_model=sm)
+                    msg = _ctx.growth.check_goal_progress(anima_state, self_model=sm)
                     if msg:
                         from .messages import add_observation
                         add_observation(msg, author="lumen")
@@ -2413,7 +2386,7 @@ async def _update_display_loop():
             # Meta-learning: Daily preference weight evolution
             # Every ~12 hours, rebalance which anima dimensions matter most
             # based on how satisfying each dimension correlates with trajectory health
-            if loop_count % META_LEARNING_INTERVAL == 0 and loop_count > 0 and _growth:
+            if loop_count % META_LEARNING_INTERVAL == 0 and loop_count > 0 and _ctx and _ctx.growth:
                 try:
                     from .preferences import (
                         compute_trajectory_health, meta_learning_update,
@@ -2432,15 +2405,15 @@ async def _update_display_loop():
                         logger.debug("[MetaLearning] Prediction accuracy stats error: %s", e)
 
                     health = compute_trajectory_health(
-                        satisfaction_history=list(_satisfaction_history)[-100:],
-                        action_efficacy=_action_efficacy,
+                        satisfaction_history=list(_ctx.satisfaction_history)[-100:],
+                        action_efficacy=_ctx.action_efficacy,
                         prediction_accuracy_trend=pred_trend,
                     )
-                    _health_history.append(health)
+                    _ctx.health_history.append(health)
 
                     # Record healthy state for drift restart target
-                    if _calibration_drift:
-                        _calibration_drift.record_healthy_state(health)
+                    if _ctx and _ctx.calibration_drift:
+                        _ctx.calibration_drift.record_healthy_state(health)
 
                     # Compute lagged correlations between per-dim satisfaction and health
                     correlations = _compute_lagged_correlations()
@@ -2506,7 +2479,7 @@ async def _update_display_loop():
             # Delay until next render — screen-specific for performance
             # Heavy screens (notepad, learning) get slower refresh to save CPU
             # Event-driven: mode_change_event breaks out of wait immediately
-            current_mode = _screen_renderer._state.mode if _screen_renderer else None
+            current_mode = _ctx.screen_renderer._state.mode if _ctx and _ctx.screen_renderer else None
 
             # Screen-specific delays: notepad/learning are heavy, others are light
             if current_mode in (ScreenMode.NOTEPAD, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH):
@@ -2547,9 +2520,10 @@ async def _update_display_loop():
 
 def start_display_loop():
     """Start continuous display update loop."""
-    global _display_update_task
     try:
-        if _display_update_task is None or _display_update_task.done():
+        if _ctx is None:
+            return
+        if _ctx.display_update_task is None or _ctx.display_update_task.done():
             # Check if we're in an async context
             try:
                 loop = asyncio.get_running_loop()
@@ -2558,7 +2532,7 @@ def start_display_loop():
                 print("[Display] No event loop yet, will start when available", file=sys.stderr, flush=True)
                 return
             
-            _display_update_task = asyncio.create_task(_update_display_loop())
+            _ctx.display_update_task = asyncio.create_task(_update_display_loop())
             print("[Display] Started continuous update loop", file=sys.stderr, flush=True)
     except Exception as e:
         print(f"[Display] Error starting display loop: {e}", file=sys.stderr, flush=True)
@@ -2567,10 +2541,9 @@ def start_display_loop():
 
 def stop_display_loop():
     """Stop continuous display update loop and blank the display for clean shutdown."""
-    global _display_update_task
     try:
-        if _display_update_task and not _display_update_task.done():
-            _display_update_task.cancel()
+        if _ctx and _ctx.display_update_task and not _ctx.display_update_task.done():
+            _ctx.display_update_task.cancel()
             try:
                 print("[Display] Stopped continuous update loop", file=sys.stderr, flush=True)
             except (ValueError, OSError):
@@ -2582,8 +2555,8 @@ def stop_display_loop():
             pass
     # Blank the display so shutdown/restart doesn't leave a stale or scrambled frame
     try:
-        if _screen_renderer and _screen_renderer._display:
-            _screen_renderer._display.blank()
+        if _ctx and _ctx.screen_renderer and _ctx.screen_renderer._display:
+            _ctx.screen_renderer._display.blank()
     except Exception:
         pass
 
@@ -2596,19 +2569,20 @@ _voice_instance = None  # Global voice instance (lazy initialized)
 
 def _get_voice():
     """Get or initialize the voice instance (for listening capability)."""
-    global _voice_instance
-    if _voice_instance is None:
+    if _ctx is None:
+        return None
+    if _ctx.voice_instance is None:
         try:
             from .audio import AutonomousVoice
             from .audio.autonomous_voice import SpeechIntent
             from .messages import add_observation
 
-            _voice_instance = AutonomousVoice()
+            _ctx.voice_instance = AutonomousVoice()
 
             # Autonomous voice canned phrases ("I'm curious about something", etc.)
             # are not posted to message board — primitives are more authentic.
             # Voice system still runs for listening capability.
-            _voice_instance.start()
+            _ctx.voice_instance.start()
             print(f"[Server] Voice system initialized (mode={VOICE_MODE}, listening enabled)", file=sys.stderr, flush=True)
         except ImportError:
             print("[Server] Voice module not available (missing dependencies)", file=sys.stderr, flush=True)
@@ -2616,7 +2590,7 @@ def _get_voice():
         except Exception as e:
             print(f"[Server] Voice initialization failed: {e}", file=sys.stderr, flush=True)
             return None
-    return _voice_instance
+    return _ctx.voice_instance
 
 
 # ============================================================
@@ -2634,32 +2608,33 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         anima_id: UUID from environment or database (DO NOT override - use existing identity)
     """
     import time as _time
-    global _store, _anima_id, _growth, _warm_start_anima
+    global _ctx
 
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
         try:
-            _store = IdentityStore(db_path)
+            _ctx = ServerContext()
+            _ctx.store = IdentityStore(db_path)
 
             # CRITICAL: Use provided anima_id OR check database for existing identity
             # DO NOT generate new UUID if identity already exists - preserves Lumen's identity
             if anima_id:
-                _anima_id = anima_id
+                _ctx.anima_id = anima_id
             else:
                 # Check if identity exists in database
-                conn = _store._connect()
+                conn = _ctx.store._connect()
                 existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
                 if existing:
-                    _anima_id = existing[0]
-                    print(f"[Wake] Using existing identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
+                    _ctx.anima_id = existing[0]
+                    print(f"[Wake] Using existing identity: {_ctx.anima_id[:8]}...", file=sys.stderr, flush=True)
                 else:
                     # Only generate new UUID if no identity exists (first time)
-                    _anima_id = str(uuid.uuid4())
-                    print(f"[Wake] Creating new identity: {_anima_id[:8]}...", file=sys.stderr, flush=True)
+                    _ctx.anima_id = str(uuid.uuid4())
+                    print(f"[Wake] Creating new identity: {_ctx.anima_id[:8]}...", file=sys.stderr, flush=True)
 
-            if _anima_id is None:
+            if _ctx.anima_id is None:
                 raise ValueError("anima_id must be set before calling wake()")
-            identity = _store.wake(_anima_id)
+            identity = _ctx.store.wake(_ctx.anima_id)
 
             # Identity (name + birthdate) is fundamental to Lumen's existence
             print(f"Awake: {identity.name or '(unnamed)'}")
@@ -2671,24 +2646,25 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
             # Initialize growth system for learning, relationships, and goals
             try:
-                _growth = get_growth_system(db_path=db_path)
-                _growth.born_at = identity.born_at
+                _ctx.growth = get_growth_system(db_path=db_path)
+                _ctx.growth.born_at = identity.born_at
                 print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
             except Exception as ge:
                 import traceback
                 print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
                 traceback.print_exc(file=sys.stderr)
-                _growth = None
+                _ctx.growth = None
 
             # Register subsystems with health monitoring
             try:
                 from .health import get_health_registry
                 _health = get_health_registry()
                 def _sensor_probe():
-                    if _sensors is not None:
+                    if _ctx and _ctx.sensors is not None:
                         return True
-                    if _last_shm_data and "readings" in _last_shm_data:
-                        ts = _last_shm_data.get("timestamp")
+                    shm = _get_last_shm_data()
+                    if shm and "readings" in shm:
+                        ts = shm.get("timestamp")
                         if ts:
                             from datetime import datetime
                             try:
@@ -2700,17 +2676,17 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                         return True  # Data exists but no timestamp — assume ok
                     return False
                 _health.register("sensors", probe=_sensor_probe)
-                _health.register("display", probe=lambda: _display is not None and _display.is_available())
-                _health.register("leds", probe=lambda: _leds is not None and _leds.is_available())
-                _health.register("growth", probe=lambda: _growth is not None, stale_threshold=90.0)
-                _health.register("governance", probe=lambda: (
-                    _last_shm_data and "governance" in _last_shm_data
-                    and isinstance(_last_shm_data["governance"], dict)
-                ), stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
-                _health.register("drawing", probe=lambda: _screen_renderer is not None and hasattr(_screen_renderer, '_canvas'))
+                _health.register("display", probe=lambda: _ctx and _ctx.display is not None and _ctx.display.is_available())
+                _health.register("leds", probe=lambda: _ctx and _ctx.leds is not None and _ctx.leds.is_available())
+                _health.register("growth", probe=lambda: _ctx and _ctx.growth is not None, stale_threshold=90.0)
+                def _gov_probe():
+                    shm = _get_last_shm_data()
+                    return bool(shm and "governance" in shm and isinstance(shm.get("governance"), dict))
+                _health.register("governance", probe=_gov_probe, stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
+                _health.register("drawing", probe=lambda: _ctx and _ctx.screen_renderer is not None and hasattr(_ctx.screen_renderer, '_canvas'))
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
-                _health.register("voice", probe=lambda: _voice_instance is not None)
-                _health.register("anima", probe=lambda: _screen_renderer is not None and getattr(_screen_renderer, '_last_anima', None) is not None)
+                _health.register("voice", probe=lambda: _ctx and _ctx.voice_instance is not None)
+                _health.register("anima", probe=lambda: _ctx and _ctx.screen_renderer is not None and getattr(_ctx.screen_renderer, '_last_anima', None) is not None)
                 print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
             except Exception as he:
                 print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
@@ -2724,14 +2700,14 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 if not _os.path.isdir(_student_dir):
                     _student_dir = None
                 _traj = get_trajectory_awareness(db_path=_db_path, student_model_dir=_student_dir)
-                history = _store.get_recent_state_history(limit=30)
+                history = _ctx.store.get_recent_state_history(limit=30)
                 if history:
                     n = _traj.bootstrap_from_history(history)
                     print(f"[EISV] Bootstrapped trajectory buffer with {n} historical states", file=sys.stderr, flush=True)
 
                     # Warm start: use last state_history row as initial anticipation
                     last = history[-1]  # Most recent (ascending order)
-                    _warm_start_anima = {
+                    _ctx.warm_start_anima = {
                         "warmth": last["warmth"],
                         "clarity": last["clarity"],
                         "stability": last["stability"],
@@ -2757,7 +2733,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                     from .anima_history import get_anima_history
                     from .self_model import get_self_model as _get_sm
                     _hub_traj = compute_trajectory_signature(
-                        growth_system=_growth,
+                        growth_system=_ctx.growth,
                         self_model=_get_sm(),
                         anima_history=get_anima_history(),
                     )
@@ -2781,7 +2757,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                         identity=identity,
                         anima=anima_init,
                         readings=readings_init,
-                        growth_system=_growth,
+                        growth_system=_ctx.growth,
                         self_model=_sm_init,
                     )
                     print(f"[SchemaHub] Seeded initial schema: {len(init_schema.nodes)}n {len(init_schema.edges)}e", file=sys.stderr, flush=True)
@@ -2798,8 +2774,8 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 if any_drift:
                     print(f"[CalDrift] Loaded with drift: {', '.join(f'{k}={v:.3f}' for k, v in midpoints.items() if abs(v - 0.5) > 0.001)}", file=sys.stderr, flush=True)
                     # Apply restart decay if there was a significant gap
-                    if _wake_gap and _wake_gap.total_seconds() >= 86400:  # 24h+
-                        gap_hours = _wake_gap.total_seconds() / 3600
+                    if _ctx.wake_gap and _ctx.wake_gap.total_seconds() >= 86400:  # 24h+
+                        gap_hours = _ctx.wake_gap.total_seconds() / 3600
                         drift.apply_restart_decay(gap_hours)
                         print(f"[CalDrift] Applied restart decay for {gap_hours:.0f}h gap", file=sys.stderr, flush=True)
                 else:
@@ -2808,8 +2784,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 print(f"[CalDrift] Init failed (non-fatal): {cde}", file=sys.stderr, flush=True)
 
             # Initialize ValueTensionTracker (transient — no persistence needed)
-            global _tension_tracker
-            _tension_tracker = ValueTensionTracker()
+            _ctx.tension_tracker = ValueTensionTracker()
             print(f"[Tension] Initialized value tension tracker", file=sys.stderr, flush=True)
 
             return  # Success
@@ -2819,31 +2794,31 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 wait = attempt * 2  # 2s, 4s, 6s, 8s
                 print(f"[Wake] Database locked (attempt {attempt}/{max_attempts}), retrying in {wait}s...", file=sys.stderr, flush=True)
                 # Close the failed connection before retrying
-                if _store and _store._conn:
+                if _ctx and _ctx.store and _ctx.store._conn:
                     try:
-                        _store._conn.close()
+                        _ctx.store._conn.close()
                     except Exception as e:
                         logger.debug("[Wake] Connection close error: %s", e)
-                _store = None
+                _ctx = None
                 _time.sleep(wait)
             else:
                 print(f"[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
                 print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
                 print(f"[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
                 print(f"[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
-                _store = None
+                _ctx = None
                 return
 
 def sleep():
     """Go to sleep. Call on server shutdown."""
-    global _store, _voice_instance, _schema_hub, _calibration_drift
+    global _ctx
 
     # Persist calibration drift state
-    if _calibration_drift:
+    if _ctx and _ctx.calibration_drift:
         try:
             drift_path = Path.home() / ".anima" / "calibration_drift.json"
             drift_path.parent.mkdir(parents=True, exist_ok=True)
-            _calibration_drift.save(str(drift_path))
+            _ctx.calibration_drift.save(str(drift_path))
             try:
                 print(f"[Sleep] Calibration drift saved", file=sys.stderr, flush=True)
             except (ValueError, OSError):
@@ -2855,9 +2830,9 @@ def sleep():
                 pass
 
     # Persist schema for gap recovery on next wake
-    if _schema_hub:
+    if _ctx and _ctx.schema_hub:
         try:
-            if _schema_hub.persist_schema():
+            if _ctx.schema_hub.persist_schema():
                 try:
                     print(f"[Sleep] Schema persisted for gap recovery", file=sys.stderr, flush=True)
                 except (ValueError, OSError):
@@ -2869,13 +2844,13 @@ def sleep():
                 pass
 
     # Persist trajectory for anomaly detection on next session
-    if _growth:
+    if _ctx and _ctx.growth:
         try:
             from .trajectory import compute_trajectory_signature, save_trajectory
             from .anima_history import get_anima_history
             from .self_model import get_self_model
             sig = compute_trajectory_signature(
-                growth_system=_growth,
+                growth_system=_ctx.growth,
                 self_model=get_self_model(),
                 anima_history=get_anima_history(),
             )
@@ -2891,14 +2866,15 @@ def sleep():
                 pass
 
     # Close server-side UNITARES bridge if it was used
-    if _server_bridge:
+    bridge = _get_server_bridge()
+    if bridge:
         try:
             import asyncio
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(_server_bridge.close())
+                loop.create_task(bridge.close())
             else:
-                loop.run_until_complete(_server_bridge.close())
+                loop.run_until_complete(bridge.close())
         except Exception as e:
             logger.debug("[Sleep] Bridge close error: %s", e)
 
@@ -2910,19 +2886,19 @@ def sleep():
         logger.debug("[Sleep] SelfReflection close error: %s", e)
 
     # Stop voice system if running
-    if _voice_instance:
+    if _ctx and _ctx.voice_instance:
         try:
-            _voice_instance.stop()
-            _voice_instance = None
+            _ctx.voice_instance.stop()
+            _ctx.voice_instance = None
         except Exception as e:
             try:
                 print(f"[Sleep] Error stopping voice: {e}", file=sys.stderr, flush=True)
             except (ValueError, OSError):
                 pass
 
-    if _store:
+    if _ctx and _ctx.store:
         try:
-            session_seconds = _store.sleep()
+            session_seconds = _ctx.store.sleep()
             try:
                 print(f"Sleeping. Session: {session_seconds:.0f}s", file=sys.stderr, flush=True)
             except (ValueError, OSError):
@@ -2930,11 +2906,11 @@ def sleep():
                 pass
             # Checkpoint WAL to prevent large recovery on next startup
             try:
-                if _store._conn:
-                    _store._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+                if _ctx.store._conn:
+                    _ctx.store._conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             except Exception as e:
                 logger.debug("[Sleep] WAL checkpoint error: %s", e)
-            _store.close()
+            _ctx.store.close()
         except Exception as e:
             # Don't crash on shutdown errors
             try:
@@ -2942,7 +2918,7 @@ def sleep():
             except (ValueError, OSError):
                 pass
         finally:
-            _store = None
+            _ctx = None
 
 async def run_stdio_server():
     """Run the MCP server over stdio (local)."""

@@ -287,8 +287,8 @@ class TestRestStateAndLayers:
 
         with patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._last_governance_decision", {"action": "proceed", "source": "unitares"}), \
-             patch("anima_mcp.server._activity", activity), \
+             patch("anima_mcp.server._get_last_governance_decision", return_value={"action": "proceed", "source": "unitares"}), \
+             patch("anima_mcp.server._get_activity", return_value=activity), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"beta": 0.2}), \
              patch("anima_mcp.rest_api.anima_to_eisv", return_value=eisv):
             response = await rest_api.rest_state(_make_request(path="/state"))
@@ -320,8 +320,8 @@ class TestRestStateAndLayers:
 
         with patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._last_governance_decision", {}), \
-             patch("anima_mcp.server._activity", None), \
+             patch("anima_mcp.server._get_last_governance_decision", return_value={}), \
+             patch("anima_mcp.server._get_activity", return_value=None), \
              patch("anima_mcp.server._get_schema_hub", return_value=hub), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"alpha": 0.3}), \
              patch("anima_mcp.rest_api.anima_to_eisv", return_value=eisv):
@@ -491,8 +491,8 @@ class TestRestLearningAndSchemaData:
 
         with patch("anima_mcp.rest_api._check_rest_auth", return_value=True), \
              patch("anima_mcp.server._get_schema_hub", return_value=hub), \
-             patch("anima_mcp.server._store", None), \
-             patch("anima_mcp.server._growth", None), \
+             patch("anima_mcp.server._get_store", return_value=None), \
+             patch("anima_mcp.server._get_growth", return_value=None), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)):
             response = await rest_api.rest_schema_data(_make_request(path="/schema-data"))
             data = json.loads(response.body)

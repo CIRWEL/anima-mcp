@@ -198,8 +198,8 @@ async def rest_state(request):
             SHM_GOVERNANCE_STALE_SECONDS,
             _get_readings_and_anima,
             _get_store,
-            _last_governance_decision,
-            _activity,
+            _get_last_governance_decision,
+            _get_activity,
         )
 
         # Use internal functions (same as MCP get_state)
@@ -218,7 +218,7 @@ async def rest_state(request):
         eisv = anima_to_eisv(anima, readings)
 
         # Governance
-        gov = _last_governance_decision or {}
+        gov = _get_last_governance_decision() or {}
         gov_timestamp = gov.get("governance_at")
         gov_age_seconds = None
         gov_fresh = None
@@ -279,8 +279,8 @@ async def rest_state(request):
             "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
             "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
             "activity": {
-                **(_activity.get_status() if _activity else {"level": "active"}),
-                "sleep": _activity.get_sleep_summary() if _activity else {"sessions": 0},
+                **(_get_activity().get_status() if _get_activity() else {"level": "active"}),
+                "sleep": _get_activity().get_sleep_summary() if _get_activity() else {"sessions": 0},
             },
             "timestamp": str(readings.timestamp) if readings.timestamp else "",
         })
@@ -674,8 +674,8 @@ async def rest_layers(request):
         return auth_error
     try:
         from .server import (
-            _get_readings_and_anima, _get_store, _last_governance_decision,
-            _activity, _get_schema_hub,
+            _get_readings_and_anima, _get_store, _get_last_governance_decision,
+            _get_activity, _get_schema_hub,
         )
 
         readings, anima = _get_readings_and_anima()
@@ -710,7 +710,7 @@ async def rest_layers(request):
         eisv_data = eisv.to_dict()
 
         # Governance
-        gov = _last_governance_decision or {}
+        gov = _get_last_governance_decision() or {}
         governance_data = {
             "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
             "margin": gov.get("margin", "unknown") if gov else "n/a",
@@ -796,7 +796,7 @@ async def rest_schema_data(request):
     if auth_error:
         return auth_error
     try:
-        from .server import _get_schema_hub, _store, _get_readings_and_anima, _growth
+        from .server import _get_schema_hub, _get_store, _get_readings_and_anima, _get_growth
 
         hub = _get_schema_hub()
 
@@ -809,13 +809,14 @@ async def rest_schema_data(request):
                 from .self_schema import get_current_schema
                 from .growth import get_growth_system
                 from .self_model import get_self_model
-                identity = _store.get_identity() if _store else None
+                store = _get_store()
+                identity = store.get_identity() if store else None
                 readings, anima = _get_readings_and_anima()
                 schema = get_current_schema(
                     identity=identity,
                     anima=anima,
                     readings=readings,
-                    growth_system=_growth,
+                    growth_system=_get_growth(),
                     include_preferences=True,
                     self_model=get_self_model(),
                 ).to_dict()

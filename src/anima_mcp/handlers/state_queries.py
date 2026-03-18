@@ -80,8 +80,9 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
 
     # Add inner life from shared memory (temperament, drives)
     try:
-        from ..server import _last_shm_data
-        il = _last_shm_data.get("inner_life") if _last_shm_data else None
+        from ..server import _get_last_shm_data
+        shm = _get_last_shm_data()
+        il = shm.get("inner_life") if shm else None
         if il:
             result["inner_life"] = {
                 "temperament": il.get("temperament"),
@@ -150,7 +151,7 @@ async def handle_get_identity(arguments: dict) -> list[TextContent]:
 
 async def handle_read_sensors(arguments: dict) -> list[TextContent]:
     """Read raw sensor values - returns only active sensors (nulls suppressed)."""
-    from ..server import _get_sensors, _get_readings_and_anima, _shm_client
+    from ..server import _get_sensors, _get_readings_and_anima, _get_shm_client
 
     sensors = _get_sensors()
 
@@ -170,7 +171,7 @@ async def handle_read_sensors(arguments: dict) -> list[TextContent]:
         "readings": active_readings,
         "available_sensors": sensors.available_sensors(),
         "is_pi": sensors.is_pi(),
-        "source": "shared_memory" if _shm_client and _shm_client.read() else "direct_sensors",
+        "source": "shared_memory" if (shm := _get_shm_client()) and shm.read() else "direct_sensors",
     }
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]

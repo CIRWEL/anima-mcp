@@ -57,9 +57,10 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
 
 async def handle_get_growth(arguments: dict) -> list[TextContent]:
     """Get Lumen's growth: preferences, relationships, goals, memories."""
-    from ..server import _growth
+    from ..server import _get_growth
 
-    if _growth is None:
+    growth = _get_growth()
+    if growth is None:
         return [TextContent(type="text", text=json.dumps({
             "error": "Growth system not initialized",
             "note": "Growth system may not be available yet"
@@ -73,11 +74,11 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
         result = {}
 
         if "autobiography" in include:
-            result["autobiography"] = _growth.get_autobiography_summary()
+            result["autobiography"] = growth.get_autobiography_summary()
 
         if "preferences" in include:
             prefs = []
-            for p in _growth._preferences.values():
+            for p in growth._preferences.values():
                 if p.confidence >= 0.3:  # Only show preferences with some confidence
                     prefs.append({
                         "name": p.name,
@@ -86,7 +87,7 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
                         "observations": p.observation_count
                     })
             result["preferences"] = {
-                "count": len(_growth._preferences),
+                "count": len(growth._preferences),
                 "learned": sorted(prefs, key=lambda p: -p["observations"]),
             }
 
@@ -94,7 +95,7 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
             # Separate self-knowledge from visitors
             self_record = None
             visitors = []
-            for r in _growth._relationships.values():
+            for r in growth._relationships.values():
                 if r.is_self():
                     self_record = r
                 else:
@@ -137,12 +138,12 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
 
             # Legacy key for compatibility
             result["relationships"] = {
-                "count": len(_growth._relationships),
+                "count": len(growth._relationships),
                 "bonds": visitors[:10],
             }
 
             # Inactive visitors (not "missed connections" - agents don't miss Lumen)
-            inactive = _growth.get_inactive_visitors()
+            inactive = growth.get_inactive_visitors()
             if inactive:
                 result["visitors"]["inactive"] = [
                     {"name": name, "days_since": days}
@@ -151,7 +152,7 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
 
         if "goals" in include:
             goals = []
-            for g in _growth._goals.values():
+            for g in growth._goals.values():
                 if g.status.value == "active":
                     goals.append({
                         "description": g.description,
@@ -159,28 +160,28 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
                         "milestones": len(g.milestones),
                     })
             result["goals"] = {
-                "active": len([g for g in _growth._goals.values() if g.status.value == "active"]),
-                "achieved": len([g for g in _growth._goals.values() if g.status.value == "achieved"]),
+                "active": len([g for g in growth._goals.values() if g.status.value == "active"]),
+                "achieved": len([g for g in growth._goals.values() if g.status.value == "achieved"]),
                 "current": goals[:5],
             }
 
         if "memories" in include:
             memories = []
-            for m in _growth._memories[:5]:  # Recent memories
+            for m in growth._memories[:5]:  # Recent memories
                 memories.append({
                     "description": m.description,
                     "category": m.category,
                     "when": m.timestamp.strftime("%Y-%m-%d"),
                 })
             result["memories"] = {
-                "count": len(_growth._memories),
+                "count": len(growth._memories),
                 "recent": memories,
             }
 
         if "curiosities" in include:
             result["curiosities"] = {
-                "count": len(_growth._curiosities),
-                "questions": _growth._curiosities[:5],
+                "count": len(growth._curiosities),
+                "questions": growth._curiosities[:5],
             }
 
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -253,7 +254,8 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
 
     See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
     """
-    from ..server import _growth
+    from ..server import _get_growth
+    growth = _get_growth()
 
     try:
         from ..trajectory import compute_trajectory_signature
@@ -262,7 +264,7 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
 
         # Compute trajectory signature from available data
         signature = compute_trajectory_signature(
-            growth_system=_growth,
+            growth_system=growth,
             self_model=get_self_model(),
             anima_history=get_anima_history(),
         )
@@ -402,9 +404,10 @@ async def handle_query(arguments: dict) -> list[TextContent]:
 
         # Add growth summary when type is growth
         if query_type == "growth":
-            from ..server import _growth
-            if _growth:
-                result["growth"] = _growth.get_autobiography_summary()
+            from ..server import _get_growth
+            growth = _get_growth()
+            if growth:
+                result["growth"] = growth.get_autobiography_summary()
             else:
                 result["growth"] = None
 

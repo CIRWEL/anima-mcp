@@ -124,7 +124,7 @@ class TestPrimitiveFeedback:
 
         lang = MagicMock()
         lang.record_explicit_feedback.return_value = {"score": 0.7, "token_updates": {"warm": 1}}
-        with patch("anima_mcp.server._store", SimpleNamespace(db_path=":memory:")), \
+        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
             data = _parse(await handle_primitive_feedback({"action": "resonate"}))
 
@@ -137,7 +137,7 @@ class TestPrimitiveFeedback:
 
         lang = MagicMock()
         lang.get_recent_utterances.return_value = [{"text": "pulse", "score": 0.2}]
-        with patch("anima_mcp.server._store", SimpleNamespace(db_path=":memory:")), \
+        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
             data = _parse(await handle_primitive_feedback({"action": "recent"}))
 
@@ -149,7 +149,7 @@ class TestPrimitiveFeedback:
 
         lang = MagicMock()
         lang.get_stats.return_value = {"utterances": 42}
-        with patch("anima_mcp.server._store", SimpleNamespace(db_path=":memory:")), \
+        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
             data = _parse(await handle_primitive_feedback({}))
 
@@ -174,9 +174,9 @@ class TestPostMessageRespondsToMatching:
         anima = SimpleNamespace(clarity=0.77)
         boost_flag = SimpleNamespace(touch=MagicMock())
 
-        with patch("anima_mcp.server._growth", growth), \
-             patch("anima_mcp.server._activity", activity), \
-             patch("anima_mcp.server._store", store), \
+        with patch("anima_mcp.server._get_growth", return_value=growth), \
+             patch("anima_mcp.server._get_activity", return_value=activity), \
+             patch("anima_mcp.server._get_store", return_value=store), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.messages.add_user_message", return_value="u1"), \
              patch("anima_mcp.handlers.communication._SOCIAL_BOOST_PATH", boost_flag):
@@ -196,9 +196,9 @@ class TestPostMessageRespondsToMatching:
         growth = MagicMock()
         growth.get_visitor_context.return_value = {"relationship": "trusted"}
 
-        with patch("anima_mcp.server._growth", growth), \
-             patch("anima_mcp.server._activity", None), \
-             patch("anima_mcp.server._store", None), \
+        with patch("anima_mcp.server._get_growth", return_value=growth), \
+             patch("anima_mcp.server._get_activity", return_value=None), \
+             patch("anima_mcp.server._get_store", return_value=None), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.get_board", return_value=board), \
              patch("anima_mcp.messages.add_agent_message", return_value=msg):
@@ -218,9 +218,9 @@ class TestPostMessageRespondsToMatching:
         from anima_mcp.handlers.communication import handle_post_message
 
         board = SimpleNamespace(_messages=[], _load=MagicMock())
-        with patch("anima_mcp.server._growth", None), \
-             patch("anima_mcp.server._activity", None), \
-             patch("anima_mcp.server._store", None), \
+        with patch("anima_mcp.server._get_growth", return_value=None), \
+             patch("anima_mcp.server._get_activity", return_value=None), \
+             patch("anima_mcp.server._get_store", return_value=None), \
              patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.get_board", return_value=board):
             data = _parse(await handle_post_message({
@@ -292,7 +292,7 @@ class TestLumenQaExtended:
              patch("anima_mcp.handlers.communication._get_unitares_bridge", return_value=bridge), \
              patch("anima_mcp.knowledge.extract_insight_from_answer", AsyncMock(return_value=insight)), \
              patch("anima_mcp.knowledge.apply_insight", return_value={"shift": "positive"}), \
-             patch("anima_mcp.server._growth", growth):
+             patch("anima_mcp.server._get_growth", return_value=growth):
             data = _parse(await handle_lumen_qa({
                 "question_id": "q_abc",
                 "answer": "I feel calmer when the room is dim.",
@@ -333,7 +333,7 @@ class TestSayAndPrimitiveFeedbackEdges:
         voice_inner = SimpleNamespace(say=MagicMock())
         voice = SimpleNamespace(_voice=voice_inner)
         with patch("anima_mcp.messages.add_observation", return_value=SimpleNamespace(message_id="obs1")), \
-             patch("anima_mcp.server._store", SimpleNamespace(add_note=MagicMock())), \
+             patch("anima_mcp.server._get_store", return_value=SimpleNamespace(add_note=MagicMock())), \
              patch("anima_mcp.server._get_voice", return_value=voice), \
              patch("anima_mcp.server.VOICE_MODE", "audio"):
             data = _parse(await handle_say({"text": "Hello world"}))
@@ -347,7 +347,7 @@ class TestSayAndPrimitiveFeedbackEdges:
 
         lang = MagicMock()
         lang.record_explicit_feedback.side_effect = [None, {"score": -0.2, "token_updates": {"noise": -1}}]
-        with patch("anima_mcp.server._store", SimpleNamespace(db_path=":memory:")), \
+        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
             no_recent = _parse(await handle_primitive_feedback({"action": "resonate"}))
             confused = _parse(await handle_primitive_feedback({"action": "confused"}))

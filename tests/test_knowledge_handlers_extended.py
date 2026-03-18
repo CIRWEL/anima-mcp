@@ -92,7 +92,7 @@ class TestGetGrowthExtended:
             get_inactive_visitors=lambda: [("OldAgent", 9)],
         )
 
-        with patch("anima_mcp.server._growth", growth):
+        with patch("anima_mcp.server._get_growth", return_value=growth):
             data = _parse(await handle_get_growth({"include": ["all"]}))
 
         assert "autobiography" in data
@@ -173,7 +173,7 @@ class TestQueryExtended:
 
         growth = SimpleNamespace(get_autobiography_summary=lambda: {"highlights": 3})
         with patch("anima_mcp.knowledge.get_relevant_insights", return_value=[]), \
-             patch("anima_mcp.server._growth", growth):
+             patch("anima_mcp.server._get_growth", return_value=growth):
             data = _parse(await handle_query({"text": "growth status", "type": "growth"}))
 
         assert data["type"] == "growth"
