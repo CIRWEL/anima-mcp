@@ -23,7 +23,6 @@ import json
 import logging
 import os
 import signal
-import subprocess
 import sys
 import threading
 import uuid
@@ -35,15 +34,12 @@ logger = logging.getLogger("anima.server")
 
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from mcp.server.transport_security import TransportSecuritySettings
-from mcp.types import Tool, TextContent
-
 from .identity import IdentityStore
 from .sensors import get_sensors, SensorBackend, SensorReadings
 from .anima import sense_self_with_memory, Anima
 from .memory import anticipate_state
 from .display import derive_face_state, get_display, DisplayRenderer
-from .display.leds import get_led_display, LEDDisplay
+from .display.leds import get_led_display
 from .display.screens import ScreenRenderer, ScreenMode
 from .input.brainhat_input import get_brainhat_input, JoystickDirection as InputDirection
 from .next_steps_advocate import get_advocate
@@ -51,12 +47,11 @@ from .eisv_mapper import anima_to_eisv
 from .config import get_calibration
 from .learning import get_learner
 from .messages import add_observation, add_agent_message, add_question, get_unanswered_questions
-from .llm_gateway import get_gateway, ReflectionContext, generate_reflection
 from .shared_memory import SharedMemoryClient
-from .growth import get_growth_system, GrowthSystem
-from .activity_state import get_activity_manager, ActivityManager
+from .growth import get_growth_system
+from .activity_state import get_activity_manager
 from .agency import get_action_selector, ActionType, Action
-from .primitive_language import get_language_system, Utterance
+from .primitive_language import get_language_system
 from .eisv import get_trajectory_awareness
 from .tool_registry import HANDLERS, get_fastmcp, create_server, HAS_FASTMCP
 from .server_context import ServerContext

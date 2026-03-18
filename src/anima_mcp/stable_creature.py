@@ -1104,19 +1104,19 @@ def run_creature():
                             )
                             if _new_marks:
                                 print(f"[Experiential] Earned marks: {_new_marks}", file=sys.stderr, flush=True)
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[Experiential] Mark check error: {e}", file=sys.stderr, flush=True)
 
                     # Layer 2: Periodic filter save
                     if exp_filter:
                         try:
                             exp_filter.save()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"[Experiential] Filter save error: {e}", file=sys.stderr, flush=True)
 
                     last_learning_save = time.time()
-                except Exception:
-                    pass  # Non-fatal
+                except Exception as e:
+                    print(f"[StableCreature] Learning save error: {e}", file=sys.stderr, flush=True)
 
             # Apply learned patterns to activity schedule (~once per hour)
             if ACTIVITY_STATE_AVAILABLE and activity_manager and ENHANCED_LEARNING_AVAILABLE:
