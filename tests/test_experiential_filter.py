@@ -146,14 +146,6 @@ class TestDissatisfactionAmplification:
         assert saliences_before == saliences_after
 
 
-class TestGapSpike:
-    def test_gap_spike_all_dimensions(self, ef):
-        """Gap spike increases all dimensions by 0.15."""
-        ef.apply_gap_spike()
-        for dim in DIMENSIONS:
-            assert abs(ef.get_salience(dim) - 1.15) < 0.001
-
-
 class TestDecay:
     def test_decay_toward_neutral(self, ef):
         """Salience > 1.0 decays back toward 1.0."""
@@ -209,13 +201,6 @@ class TestBounds:
         ef._weights["light"].weight = 0.1
         ef.tick()  # Decay should enforce minimum
         assert ef.get_salience("light") >= SALIENCE_MIN
-
-    def test_gap_spike_respects_max(self, ef):
-        """Even after many gap spikes, salience stays at max."""
-        for _ in range(20):
-            ef.apply_gap_spike()
-        for dim in DIMENSIONS:
-            assert ef.get_salience(dim) <= SALIENCE_MAX
 
     def test_surprise_respects_max(self):
         """SalienceWeight.amplify_from_surprise respects max bound."""

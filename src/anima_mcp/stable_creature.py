@@ -325,11 +325,11 @@ def run_creature():
     exp_marks = None
     if ENHANCED_LEARNING_AVAILABLE:
         try:
-            pathways = get_weighted_pathways()
+            pathways = get_weighted_pathways(db_path=db_path)
             print("[StableCreature] Weighted pathways active - decisions shaped by experience")
             exp_filter = get_experiential_filter()
             print("[StableCreature] Experiential filter active - perception colored by history")
-            exp_marks = get_experiential_marks()
+            exp_marks = get_experiential_marks(db_path=db_path)
             print("[StableCreature] Experiential marks active - significant events leave permanent traces")
         except Exception as e:
             print(f"[StableCreature] Experiential accumulation init error: {e}")

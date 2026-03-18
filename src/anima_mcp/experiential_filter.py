@@ -74,11 +74,6 @@ class SalienceWeight:
         self.weight += 0.001
         self.weight = min(SALIENCE_MAX, self.weight)
 
-    def apply_gap_spike(self) -> None:
-        """Spike salience after a gap (wake from sleep/restart)."""
-        self.weight += 0.15
-        self.weight = min(SALIENCE_MAX, self.weight)
-
     def decay_toward_neutral(self) -> None:
         """Decay weight toward 1.0 (neutral)."""
         if self.weight > 1.0:
@@ -200,11 +195,6 @@ class ExperientialFilter:
         dim = PREF_TO_SENSOR.get(most_unsatisfied)
         if dim and dim in self._weights:
             self._weights[dim].amplify_from_dissatisfaction()
-
-    def apply_gap_spike(self) -> None:
-        """Spike all dimensions after a gap (wake/restart)."""
-        for w in self._weights.values():
-            w.apply_gap_spike()
 
     def tick(self) -> None:
         """Decay all weights toward neutral and maybe save."""

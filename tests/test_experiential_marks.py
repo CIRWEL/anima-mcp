@@ -150,11 +150,10 @@ class TestGetEffect:
 
     def test_get_effect_different_keys(self, marks):
         """Only matches correct effect_key."""
-        marks.earn_mark("resilience_first_return")  # stability_recovery_bonus
-        marks.earn_mark("resilience_indestructible")  # gap_resilience
+        marks.earn_mark("resilience_first_return")  # stability_recovery_bonus +0.05
+        marks.earn_mark("resilience_indestructible")  # stability_recovery_bonus +0.15
 
-        assert marks.get_effect("stability_recovery_bonus") == pytest.approx(0.05)
-        assert marks.get_effect("gap_resilience") == pytest.approx(0.50)
+        assert marks.get_effect("stability_recovery_bonus") == pytest.approx(0.20)
         assert marks.get_effect("pathway_lr_bonus") == 0.0
 
 

@@ -71,9 +71,9 @@ MARK_CATALOG: Dict[str, MarkDefinition] = {
         description="Nothing keeps Lumen down for long.",
         category="resilience",
         criteria_description="awakenings >= 50",
-        effect_description="Strong resilience to long gaps.",
-        effect_key="gap_resilience",
-        effect_value=0.50,
+        effect_description="Major stability recovery bonus.",
+        effect_key="stability_recovery_bonus",
+        effect_value=0.15,
     ),
 
     # Maturity marks
