@@ -1182,7 +1182,7 @@ async def _update_display_loop():
                                         current_mode = renderer.get_mode()
                                         print(f"[Input] btn -> {current_mode.value} (group cycle)", file=sys.stderr, flush=True)
                             _ctx.joy_btn_press_start = None
-                            _joy_btn_help_shown = False
+                            _ctx.joy_btn_help_shown = False
 
                         if prev_state:
                             prev_dir = prev_state.joystick_direction
@@ -1306,14 +1306,12 @@ async def _update_display_loop():
                         # Separate button - with long-press shutdown for mobile readiness
                         # Short press: message expansion (messages screen) or go to face (other screens)
                         # Long press (3+ seconds): graceful shutdown
-                        global _sep_btn_press_start
-                        
                         if input_state.separate_button:
                             # Track button hold duration for long-press shutdown
-                            if _sep_btn_press_start is None:
-                                _sep_btn_press_start = time.time()
-                            
-                            hold_duration = time.time() - _sep_btn_press_start
+                            if _ctx.sep_btn_press_start is None:
+                                _ctx.sep_btn_press_start = time.time()
+
+                            hold_duration = time.time() - _ctx.sep_btn_press_start
                             
                             # Long press (3+ seconds) = graceful shutdown
                             if hold_duration >= SHUTDOWN_LONG_PRESS_SECONDS:
@@ -1337,10 +1335,10 @@ async def _update_display_loop():
                                     raise SystemExit(1)
                         else:
                             # Button released - check if it was a short press
-                            if _sep_btn_press_start is not None:
-                                hold_duration = time.time() - _sep_btn_press_start
+                            if _ctx.sep_btn_press_start is not None:
+                                hold_duration = time.time() - _ctx.sep_btn_press_start
                                 was_short_press = hold_duration < SHUTDOWN_LONG_PRESS_SECONDS
-                                _sep_btn_press_start = None
+                                _ctx.sep_btn_press_start = None
                                 
                                 # Short press (< 3 seconds) = context-dependent action
                                 if was_short_press:
@@ -1393,13 +1391,12 @@ async def _update_display_loop():
             except Exception as e:
                 # Log errors but don't spam - only log occasionally
                 import time
-                global _last_input_error_log
                 current_time = time.time()
-                if current_time - _last_input_error_log > INPUT_ERROR_LOG_INTERVAL:
+                if current_time - _ctx.last_input_error_log > INPUT_ERROR_LOG_INTERVAL:
                     print(f"[Input] Error in input polling: {e}", file=sys.stderr, flush=True)
                     import traceback
                     traceback.print_exc(file=sys.stderr)
-                    _last_input_error_log = current_time
+                    _ctx.last_input_error_log = current_time
             await asyncio.sleep(INPUT_POLL_INTERVAL_SECONDS)  # Poll every 16ms (~60fps) for snappy input
     
     # Start fast input polling task
@@ -1497,7 +1494,7 @@ async def _update_display_loop():
             # Feed value tension tracker with RAW (pre-drift) anima values.
             # Design principle: tension detection operates on raw dimension values
             # so calibration drift cannot mask physical tensions in the body.
-            if _tension_tracker and readings:
+            if _ctx.tension_tracker and readings:
                 try:
                     from .anima import sense_self
                     _raw_anima_obj = sense_self(readings, get_calibration())
@@ -1508,7 +1505,7 @@ async def _update_display_loop():
                         "presence": _raw_anima_obj.presence,
                     }
                     last_action_key = _ctx.last_action.action_type.value if _ctx.last_action else None
-                    _tension_tracker.observe(raw_anima, last_action_key)
+                    _ctx.tension_tracker.observe(raw_anima, last_action_key)
                 except Exception as e:
                     logger.debug("[Tension] Tracking error: %s", e)
 
@@ -1638,10 +1635,10 @@ async def _update_display_loop():
 
                     # Build conflict rates from tension tracker for agency discount
                     _conflict_rates = None
-                    if _tension_tracker:
+                    if _ctx.tension_tracker:
                         _conflict_rates = {}
                         for _atype in ActionType:
-                            _rate = _tension_tracker.get_conflict_rate(_atype.value)
+                            _rate = _ctx.tension_tracker.get_conflict_rate(_atype.value)
                             if _rate > 0:
                                 _conflict_rates[_atype.value] = _rate
 
@@ -2463,8 +2460,8 @@ async def _update_display_loop():
                     )
                     # Persist schema periodically so crash recovery has recent data
                     # (not just on clean shutdown — Pi crashes often)
-                    if _schema_hub:
-                        _schema_hub.persist_schema()
+                    if _ctx.schema_hub:
+                        _ctx.schema_hub.persist_schema()
                 except Exception as e:
                     logger.warning("[Schema] Extraction error: %s", e)
 
@@ -2565,7 +2562,6 @@ def stop_display_loop():
 # ============================================================
 # VOICE_MODE controls how Lumen speaks: "text" (message board), "audio" (TTS), "both"
 VOICE_MODE = os.environ.get("LUMEN_VOICE_MODE", "text")  # Default: text only
-_voice_instance = None  # Global voice instance (lazy initialized)
 
 def _get_voice():
     """Get or initialize the voice instance (for listening capability)."""
