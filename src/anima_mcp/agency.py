@@ -438,11 +438,13 @@ class ActionSelector:
         preference_satisfaction_before: float,
         preference_satisfaction_after: float,
         surprise_after: float,
+        exploration_floor_reduction: float = 0.0,
     ):
         """
         Record the outcome of an action for learning.
 
         This is the critical learning signal: did the action help?
+        exploration_floor_reduction: from experiential marks, lowers the min exploration rate.
         """
         outcome = ActionOutcome(
             action=action,
@@ -492,7 +494,8 @@ class ActionSelector:
             self._exploration_rate = min(1.0, self._exploration_rate + 0.02 * surprise_after)
         else:
             self._exploration_rate *= self._exploration_decay
-        self._exploration_rate = max(0.05, min(1.0, self._exploration_rate))
+        floor = max(0.01, 0.05 - exploration_floor_reduction)
+        self._exploration_rate = max(floor, min(1.0, self._exploration_rate))
 
         # Persist learned values
         self._persist_action(action_key)

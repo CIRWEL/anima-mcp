@@ -138,15 +138,17 @@ class Pathway:
         self.strength *= 0.999 ** hours
         self.strength = max(0.01, self.strength)
 
-    def reinforce(self, outcome_quality: float, now: float) -> None:
+    def reinforce(self, outcome_quality: float, now: float, lr_bonus: float = 0.0) -> None:
         """
         Reinforce (or weaken) this pathway based on outcome quality.
 
         outcome_quality is clamped to [-1, 1].
-        strength += 0.15 * quality, bounded to [0.01, 5.0].
+        strength += lr * quality, bounded to [0.01, 5.0].
+        lr_bonus: from experiential marks (pathway_lr_bonus), scales learning rate.
         """
         quality = max(-1.0, min(1.0, outcome_quality))
-        self.strength += 0.15 * quality
+        lr = 0.15 * (1.0 + lr_bonus)
+        self.strength += lr * quality
         self.strength = max(0.01, min(5.0, self.strength))
         self.use_count += 1
         self.last_used = now
@@ -310,17 +312,19 @@ class WeightedPathways:
                 result[pw.action_key] = pw.strength
         return result
 
-    def reinforce(self, context_key: str, action_key: str, outcome_quality: float) -> None:
+    def reinforce(self, context_key: str, action_key: str, outcome_quality: float,
+                  lr_bonus: float = 0.0) -> None:
         """
         Reinforce a context-action pathway based on outcome quality.
 
         outcome_quality: positive for good outcomes, negative for bad.
+        lr_bonus: from experiential marks, scales learning rate.
         Persists the updated pathway.
         """
         pw = self._get_or_create(context_key, action_key)
         now = time.time()
         pw.decay(now)
-        pw.reinforce(outcome_quality, now)
+        pw.reinforce(outcome_quality, now, lr_bonus=lr_bonus)
         self._persist(pw)
 
     def get_stats(self) -> Dict[str, Any]:

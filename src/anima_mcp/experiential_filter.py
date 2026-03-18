@@ -172,6 +172,7 @@ class ExperientialFilter:
         self,
         surprise_sources: List[str],
         surprise_level: float,
+        temp_dampening: float = 0.0,
     ) -> None:
         """
         Amplify salience for dimensions that caused surprise.
@@ -179,11 +180,16 @@ class ExperientialFilter:
         Args:
             surprise_sources: Source names (e.g. "light", "humidity_pct")
             surprise_level: How surprising (0-1 scale)
+            temp_dampening: from experiential marks (temp_salience_dampening),
+                reduces temperature surprise amplification.
         """
         for source in surprise_sources:
             dim = SOURCE_TO_DIM.get(source)
             if dim and dim in self._weights:
-                self._weights[dim].amplify_from_surprise(surprise_level)
+                effective = surprise_level
+                if dim in ("ambient_temp", "cpu_temp") and temp_dampening > 0:
+                    effective *= (1.0 - temp_dampening)
+                self._weights[dim].amplify_from_surprise(effective)
 
     def update_from_dissatisfaction(self, most_unsatisfied: str) -> None:
         """

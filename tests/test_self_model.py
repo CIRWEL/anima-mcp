@@ -51,6 +51,16 @@ class TestSelfBelief:
             belief2.update_from_evidence(supports=False, strength=1.0)
         assert belief2.confidence >= 0.0
 
+    def test_update_bonus_speeds_learning(self):
+        """update_bonus increases the belief learning rate."""
+        b_normal = SelfBelief(belief_id="t1", description="test", confidence=0.5)
+        b_bonus = SelfBelief(belief_id="t2", description="test", confidence=0.5)
+
+        b_normal.update_from_evidence(supports=True, strength=1.0, update_bonus=0.0)
+        b_bonus.update_from_evidence(supports=True, strength=1.0, update_bonus=0.15)
+
+        assert b_bonus.confidence > b_normal.confidence
+
     def test_evidence_counts_tracked(self):
         """Test that evidence counts are tracked."""
         belief = SelfBelief(belief_id="test", description="test")
@@ -223,6 +233,21 @@ class TestRecoveryProfile:
         model.observe_stability_change(0.8, 0.4, duration_seconds=10)
         model.observe_stability_change(0.4, 0.7, duration_seconds=30)
         assert model._stability_episodes[0]["recovered"] is True
+
+    def test_recovery_bonus_widens_threshold(self, model):
+        """recovery_bonus makes more recoveries count as 'fast'."""
+        # Drop stability
+        model.observe_stability_change(0.8, 0.4, duration_seconds=10)
+        initial_confidence = model._beliefs["stability_recovery"].confidence
+
+        # Recover with bonus — the wider threshold should make this count as fast
+        model.observe_stability_change(0.4, 0.7, duration_seconds=30,
+                                       recovery_bonus=0.30)
+
+        # With 30% bonus, threshold is 600 * 1.30 = 780s per unit
+        # Recovery: time / amount = ~few seconds / 0.3 — well under threshold
+        # So it should count as supporting evidence
+        assert model._beliefs["stability_recovery"].confidence > initial_confidence
 
 
 class TestPersistence:

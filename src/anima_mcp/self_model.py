@@ -46,20 +46,26 @@ class SelfBelief:
     # For categorical beliefs: probability
     value: float = 0.5
 
-    def update_from_evidence(self, supports: bool, strength: float = 1.0):
-        """Update belief based on new evidence."""
+    def update_from_evidence(self, supports: bool, strength: float = 1.0,
+                             update_bonus: float = 0.0):
+        """Update belief based on new evidence.
+
+        update_bonus: from experiential marks (belief_update_bonus),
+            scales the learning rate for faster belief updating.
+        """
         self.last_tested = datetime.now()
+        lr = 0.1 * (1.0 + update_bonus)
 
         if supports:
             self.supporting_count += 1
             # Increase confidence and value
-            adjustment = 0.1 * strength * (1 - self.confidence)
+            adjustment = lr * strength * (1 - self.confidence)
             self.confidence = min(1.0, self.confidence + adjustment)
             self.value = min(1.0, self.value + adjustment * 0.5)
         else:
             self.contradicting_count += 1
             # Decrease confidence, adjust value toward 0.5
-            adjustment = 0.1 * strength * self.confidence
+            adjustment = lr * strength * self.confidence
             self.confidence = max(0.0, self.confidence - adjustment)
             self.value = self.value + (0.5 - self.value) * adjustment
 
@@ -201,9 +207,18 @@ class SelfModel:
         self._surprise_data: deque = deque(maxlen=50)  # (source, surprise_level)
         self._prev_led_brightness: Optional[float] = None  # Track LED changes
         self._temperament_samples: deque = deque(maxlen=30)  # Recent temperament snapshots
+        self.belief_update_bonus: float = 0.0  # From experiential marks
 
         # Load persisted model
+
         self._load()
+
+    def _update_belief(self, belief_id: str, supports: bool, strength: float = 1.0):
+        """Update a belief, automatically applying belief_update_bonus."""
+        self._beliefs[belief_id].update_from_evidence(
+            supports=supports, strength=strength,
+            update_bonus=self.belief_update_bonus,
+        )
 
     def _load(self):
         """Load self-model from disk."""
@@ -280,23 +295,22 @@ class SelfModel:
         # Test sensitivity beliefs
         if "light" in sources:
             # High surprise from light suggests high sensitivity
-            self._beliefs["light_sensitive"].update_from_evidence(
-                supports=surprise_level > 0.3,
-                strength=surprise_level,
-            )
+            self._update_belief("light_sensitive",
+                supports=surprise_level > 0.3, strength=surprise_level)
 
         if "ambient_temp" in sources:
-            self._beliefs["temp_sensitive"].update_from_evidence(
-                supports=surprise_level > 0.3,
-                strength=surprise_level,
-            )
+            self._update_belief("temp_sensitive",
+                supports=surprise_level > 0.3, strength=surprise_level)
 
     def _observe_recovery(self, before: float, after: float,
-                          episodes: deque, belief_id: str):
+                          episodes: deque, belief_id: str,
+                          recovery_bonus: float = 0.0):
         """Shared recovery-belief observer for any anima dimension.
 
         Tracks drop/recovery episodes and tests the named belief.
-        Fast recovery (< 600 s per unit recovered) = supporting evidence.
+        Fast recovery (< threshold s per unit recovered) = supporting evidence.
+        recovery_bonus: from experiential marks (stability_recovery_bonus),
+            widens the threshold so more recoveries count as "fast".
         """
         if before > after:
             episodes.append({
@@ -315,25 +329,26 @@ class SelfModel:
                         episode["recovered"] = True
                         episode["recovery_seconds"] = recovery_time
 
-                        is_fast = recovery_time / max(0.1, recovery_amount) < 600
-                        self._beliefs[belief_id].update_from_evidence(
-                            supports=is_fast,
-                            strength=recovery_amount,
-                        )
+                        threshold = 600 * (1.0 + recovery_bonus)
+                        is_fast = recovery_time / max(0.1, recovery_amount) < threshold
+                        self._update_belief(belief_id,
+                            supports=is_fast, strength=recovery_amount)
                         self._maybe_save()
                     break
 
     def observe_stability_change(self, stability_before: float, stability_after: float,
-                                 duration_seconds: float = 0.0):
+                                 duration_seconds: float = 0.0, recovery_bonus: float = 0.0):
         """Record stability change for recovery belief testing."""
         self._observe_recovery(stability_before, stability_after,
-                               self._stability_episodes, "stability_recovery")
+                               self._stability_episodes, "stability_recovery",
+                               recovery_bonus=recovery_bonus)
 
     def observe_warmth_change(self, warmth_before: float, warmth_after: float,
-                              duration_seconds: float = 0.0):
+                              duration_seconds: float = 0.0, recovery_bonus: float = 0.0):
         """Record warmth change for warmth_recovery belief testing."""
         self._observe_recovery(warmth_before, warmth_after,
-                               self._warmth_episodes, "warmth_recovery")
+                               self._warmth_episodes, "warmth_recovery",
+                               recovery_bonus=recovery_bonus)
 
     def observe_question_asked(self, surprise_level: float):
         """Record that a curiosity question was generated after surprise.
@@ -341,10 +356,8 @@ class SelfModel:
         Tests whether Lumen tends to ask questions when surprised.
         High surprise + question asked = supporting evidence.
         """
-        self._beliefs["question_asking_tendency"].update_from_evidence(
-            supports=True,
-            strength=min(1.0, surprise_level),
-        )
+        self._update_belief("question_asking_tendency",
+            supports=True, strength=min(1.0, surprise_level))
 
     def observe_surprise_no_question(self, surprise_level: float):
         """Record that surprise occurred but no question was generated.
@@ -352,10 +365,8 @@ class SelfModel:
         Contradicting evidence for the question_asking_tendency belief.
         """
         if surprise_level > 0.2:  # Only count meaningful surprises
-            self._beliefs["question_asking_tendency"].update_from_evidence(
-                supports=False,
-                strength=min(1.0, surprise_level * 0.5),  # Weaker signal
-            )
+            self._update_belief("question_asking_tendency",
+                supports=False, strength=min(1.0, surprise_level * 0.5))
 
     def observe_correlation(self, sensor_values: Dict[str, float], anima_values: Dict[str, float]):
         """Record data for correlation beliefs."""
@@ -417,10 +428,9 @@ class SelfModel:
                     same_direction = (led_change > 0 and lux_change > 0) or (led_change < 0 and lux_change < 0)
 
                     # Update belief
-                    self._beliefs["my_leds_affect_lux"].update_from_evidence(
+                    self._update_belief("my_leds_affect_lux",
                         supports=same_direction,
-                        strength=min(1.0, abs(lux_change) / 10.0),  # Normalize by typical lux swing
-                    )
+                        strength=min(1.0, abs(lux_change) / 10.0))
                     self._maybe_save()
 
         self._prev_led_brightness = led_brightness
@@ -483,13 +493,13 @@ class SelfModel:
 
         # Strong correlation supports the belief
         if abs(correlation) > 0.3:
-            belief.update_from_evidence(supports=True, strength=abs(correlation))
+            self._update_belief(belief_id, supports=True, strength=abs(correlation))
             # Update value to reflect correlation direction
             belief.value = 0.5 + correlation * 0.5  # Map -1,1 to 0,1
         else:
             # Weak correlation contradicts — but only mildly, since we confirmed
             # there was real input variance
-            belief.update_from_evidence(supports=False, strength=0.3)
+            self._update_belief(belief_id, supports=False, strength=0.3)
         self._maybe_save()
 
     def observe_interaction(self, clarity_before: float, clarity_after: float):
@@ -501,27 +511,21 @@ class SelfModel:
         # so without a floor the confidence barely moves from 0.5.
         strength = max(0.15, abs(clarity_change) * 2)
 
-        self._beliefs["interaction_clarity_boost"].update_from_evidence(
-            supports=clarity_change > 0,
-            strength=strength,
-        )
+        self._update_belief("interaction_clarity_boost",
+            supports=clarity_change > 0, strength=strength)
         self._maybe_save()
 
     def observe_time_pattern(self, hour: int, warmth: float, clarity: float):
         """Test time-based beliefs."""
         # Evening warmth (6pm-10pm)
         if 18 <= hour <= 22:
-            self._beliefs["evening_warmth_increase"].update_from_evidence(
-                supports=warmth > 0.5,
-                strength=abs(warmth - 0.5),
-            )
+            self._update_belief("evening_warmth_increase",
+                supports=warmth > 0.5, strength=abs(warmth - 0.5))
 
         # Morning clarity (6am-10am)
         if 6 <= hour <= 10:
-            self._beliefs["morning_clarity"].update_from_evidence(
-                supports=clarity > 0.5,
-                strength=abs(clarity - 0.5),
-            )
+            self._update_belief("morning_clarity",
+                supports=clarity > 0.5, strength=abs(clarity - 0.5))
 
     def observe_temperament(self, temperament: Dict[str, float]):
         """Test temperament baseline beliefs using slow-moving averages.
@@ -538,18 +542,14 @@ class SelfModel:
         # Test warmth baseline
         warmth_vals = [s.get("warmth", 0.5) for s in self._temperament_samples]
         warmth_mean = sum(warmth_vals) / len(warmth_vals)
-        self._beliefs["warmth_baseline_low"].update_from_evidence(
-            supports=warmth_mean < 0.40,
-            strength=abs(warmth_mean - 0.40) * 2.0,
-        )
+        self._update_belief("warmth_baseline_low",
+            supports=warmth_mean < 0.40, strength=abs(warmth_mean - 0.40) * 2.0)
 
         # Test presence baseline
         presence_vals = [s.get("presence", 0.5) for s in self._temperament_samples]
         presence_mean = sum(presence_vals) / len(presence_vals)
-        self._beliefs["presence_baseline_low"].update_from_evidence(
-            supports=presence_mean < 0.35,
-            strength=abs(presence_mean - 0.35) * 2.0,
-        )
+        self._update_belief("presence_baseline_low",
+            supports=presence_mean < 0.35, strength=abs(presence_mean - 0.35) * 2.0)
 
         self._maybe_save()
 

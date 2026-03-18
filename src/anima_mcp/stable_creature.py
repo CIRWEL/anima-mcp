@@ -308,6 +308,8 @@ def run_creature():
             print("[StableCreature] Preferences active - Lumen develops values")
 
             self_model = get_self_model()
+            if exp_marks:
+                self_model.belief_update_bonus = exp_marks.get_effect("belief_update_bonus")
             print("[StableCreature] Self-model active - Lumen has beliefs about itself")
 
             action_selector = get_action_selector()
@@ -505,8 +507,10 @@ def run_creature():
             # Layer 2: Update experiential filter from surprise and dissatisfaction
             if exp_filter:
                 if pred_error.surprise > 0.1:
+                    _temp_damp = exp_marks.get_effect("temp_salience_dampening") if exp_marks else 0.0
                     exp_filter.update_from_surprise(
-                        pred_error.surprise_sources or [], pred_error.surprise)
+                        pred_error.surprise_sources or [], pred_error.surprise,
+                        temp_dampening=_temp_damp)
                 if preferences:
                     try:
                         _most_unsat = preferences.get_most_unsatisfied({
@@ -596,7 +600,8 @@ def run_creature():
                     # Track stability changes
                     if last_state_for_action:
                         prev_stability = last_state_for_action.get("stability", anima.stability)
-                        self_model.observe_stability_change(prev_stability, anima.stability, UPDATE_INTERVAL)
+                        _recovery_bonus = exp_marks.get_effect("stability_recovery_bonus") if exp_marks else 0.0
+                        self_model.observe_stability_change(prev_stability, anima.stability, UPDATE_INTERVAL, recovery_bonus=_recovery_bonus)
 
                     # Track correlations (raw lux includes LED glow — that's fine,
                     # Lumen's LEDs are part of its environment)
@@ -770,6 +775,7 @@ def run_creature():
                     }
                     satisfaction_after = preferences.get_overall_satisfaction(current_state)
 
+                    _floor_reduction = exp_marks.get_effect("exploration_floor_reduction") if exp_marks else 0.0
                     action_selector.record_outcome(
                         last_action,
                         last_state_for_action,
@@ -777,13 +783,15 @@ def run_creature():
                         last_state_for_action.get("satisfaction", 0.5),
                         satisfaction_after,
                         pred_error.surprise,
+                        exploration_floor_reduction=_floor_reduction,
                     )
 
                     # Layer 1: Reinforce pathway from outcome (using context from when action was selected)
                     if pathways and _last_pw_ctx:
                         try:
                             _outcome_quality = satisfaction_after - last_state_for_action.get("satisfaction", 0.5)
-                            pathways.reinforce(_last_pw_ctx, last_action.action_type.value, _outcome_quality)
+                            _lr_bonus = exp_marks.get_effect("pathway_lr_bonus") if exp_marks else 0.0
+                            pathways.reinforce(_last_pw_ctx, last_action.action_type.value, _outcome_quality, lr_bonus=_lr_bonus)
                         except Exception:
                             pass
 

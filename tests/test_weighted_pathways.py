@@ -211,6 +211,21 @@ class TestPathway:
         pw.decay(time.time())
         assert pw.strength == 0.8
 
+    def test_reinforce_with_lr_bonus(self):
+        """lr_bonus scales the learning rate."""
+        pw_normal = Pathway(context_key="ctx", action_key="act", strength=0.5)
+        pw_bonus = Pathway(context_key="ctx", action_key="act", strength=0.5)
+
+        now = time.time()
+        pw_normal.reinforce(0.8, now, lr_bonus=0.0)
+        pw_bonus.reinforce(0.8, now, lr_bonus=0.10)
+
+        # Normal: 0.5 + 0.15 * 0.8 = 0.62
+        assert pw_normal.strength == pytest.approx(0.62)
+        # Bonus: 0.5 + 0.15 * 1.10 * 0.8 = 0.632
+        assert pw_bonus.strength == pytest.approx(0.632)
+        assert pw_bonus.strength > pw_normal.strength
+
 
 # ---------------------------------------------------------------------------
 # WeightedPathways — core operations

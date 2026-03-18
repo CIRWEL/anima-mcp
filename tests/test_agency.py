@@ -118,6 +118,36 @@ class TestAgencyPersistence:
         assert sel._exploration_rate < initial_rate
         assert sel._exploration_rate >= 0.05  # Minimum floor
 
+    def test_exploration_floor_reduction(self, tmp_db):
+        """exploration_floor_reduction lowers the minimum exploration floor."""
+        sel = ActionSelector(db_path=tmp_db)
+        sel._exploration_rate = 0.06  # Just above default floor
+
+        # Decay without reduction — floor is 0.05
+        sel.record_outcome(
+            Action(ActionType.STAY_QUIET, motivation="test"),
+            state_before={"warmth": 0.5},
+            state_after={"warmth": 0.5},
+            preference_satisfaction_before=0.5,
+            preference_satisfaction_after=0.5,
+            surprise_after=0.1,
+        )
+        assert sel._exploration_rate >= 0.05
+
+        # Now with reduction of 0.01 — floor drops to 0.04
+        sel._exploration_rate = 0.03  # Below old floor
+        sel.record_outcome(
+            Action(ActionType.STAY_QUIET, motivation="test"),
+            state_before={"warmth": 0.5},
+            state_after={"warmth": 0.5},
+            preference_satisfaction_before=0.5,
+            preference_satisfaction_after=0.5,
+            surprise_after=0.1,
+            exploration_floor_reduction=0.01,
+        )
+        assert sel._exploration_rate >= 0.04  # New lower floor
+        assert sel._exploration_rate < 0.05  # Below old floor
+
     def test_fresh_db_has_defaults(self, tmp_db):
         """Test that a fresh database starts with default values."""
         sel = ActionSelector(db_path=tmp_db)

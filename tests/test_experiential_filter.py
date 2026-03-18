@@ -121,6 +121,29 @@ class TestSurpriseAmplification:
         # Unrelated dimension unaffected
         assert ef.get_salience("humidity") == 1.0
 
+    def test_temp_dampening_reduces_temp_amplification(self, ef):
+        """temp_dampening reduces surprise amplification for temperature dims."""
+        # Without dampening
+        ef.update_from_surprise(["cpu_temp"], 0.8, temp_dampening=0.0)
+        undampened = ef.get_salience("cpu_temp")
+
+        # Reset
+        ef._weights["cpu_temp"].weight = 1.0
+
+        # With 10% dampening
+        ef.update_from_surprise(["cpu_temp"], 0.8, temp_dampening=0.10)
+        dampened = ef.get_salience("cpu_temp")
+
+        assert dampened < undampened
+        assert dampened > 1.0  # Still amplified, just less
+
+    def test_temp_dampening_doesnt_affect_non_temp(self, ef):
+        """temp_dampening only affects ambient_temp and cpu_temp dimensions."""
+        ef.update_from_surprise(["light"], 0.8, temp_dampening=0.10)
+        light_val = ef.get_salience("light")
+        # Should be same as without dampening: 1.0 + 0.02 * 0.8 = 1.016
+        assert abs(light_val - 1.016) < 0.001
+
 
 class TestDissatisfactionAmplification:
     def test_dissatisfaction_amplifies(self, ef):
