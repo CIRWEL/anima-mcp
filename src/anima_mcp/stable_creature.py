@@ -79,19 +79,78 @@ except ImportError:
     print("[StableCreature] Cognitive inference not available")
 
 # Enhanced learning systems (optional - for genuine agency)
+# Each module imported independently so one failure doesn't disable all 8.
+_LEARNING_MODULES: dict = {}
+
+def _has_module(name: str) -> bool:
+    return _LEARNING_MODULES.get(name, False)
+
 try:
     from .adaptive_prediction import get_adaptive_prediction_model
+    _LEARNING_MODULES["adaptive_prediction"] = True
+except ImportError:
+    get_adaptive_prediction_model = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["adaptive_prediction"] = False
+
+try:
     from .preferences import get_preference_system
+    _LEARNING_MODULES["preferences"] = True
+except ImportError:
+    get_preference_system = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["preferences"] = False
+
+try:
     from .self_model import get_self_model
+    _LEARNING_MODULES["self_model"] = True
+except ImportError:
+    get_self_model = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["self_model"] = False
+
+try:
     from .agency import get_action_selector, get_exploration_manager, ActionType
+    _LEARNING_MODULES["agency"] = True
+except ImportError:
+    get_action_selector = None  # type: ignore[assignment,misc]
+    get_exploration_manager = None  # type: ignore[assignment,misc]
+    ActionType = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["agency"] = False
+
+try:
     from .memory_retrieval import get_memory_retriever, retrieve_relevant_memories
+    _LEARNING_MODULES["memory_retrieval"] = True
+except ImportError:
+    get_memory_retriever = None  # type: ignore[assignment,misc]
+    retrieve_relevant_memories = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["memory_retrieval"] = False
+
+try:
     from .weighted_pathways import get_weighted_pathways, discretize_context
+    _LEARNING_MODULES["weighted_pathways"] = True
+except ImportError:
+    get_weighted_pathways = None  # type: ignore[assignment,misc]
+    discretize_context = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["weighted_pathways"] = False
+
+try:
     from .experiential_filter import get_experiential_filter
+    _LEARNING_MODULES["experiential_filter"] = True
+except ImportError:
+    get_experiential_filter = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["experiential_filter"] = False
+
+try:
     from .experiential_marks import get_experiential_marks
-    ENHANCED_LEARNING_AVAILABLE = True
-except ImportError as e:
-    ENHANCED_LEARNING_AVAILABLE = False
-    print(f"[StableCreature] Enhanced learning not available: {e}")
+    _LEARNING_MODULES["experiential_marks"] = True
+except ImportError:
+    get_experiential_marks = None  # type: ignore[assignment,misc]
+    _LEARNING_MODULES["experiential_marks"] = False
+
+ENHANCED_LEARNING_AVAILABLE = any(_LEARNING_MODULES.values())
+if not ENHANCED_LEARNING_AVAILABLE:
+    print("[StableCreature] Enhanced learning not available (all modules failed)")
+elif not all(_LEARNING_MODULES.values()):
+    failed = [k for k, v in _LEARNING_MODULES.items() if not v]
+    print(f"[StableCreature] Enhanced learning partial: missing {', '.join(failed)}")
 
 # Activity state (sleep/wake cycle)
 try:
@@ -301,23 +360,28 @@ def run_creature():
 
     if ENHANCED_LEARNING_AVAILABLE:
         try:
-            adaptive_model = get_adaptive_prediction_model()
-            print("[StableCreature] Adaptive prediction active - Lumen learns from experience")
+            if _has_module("adaptive_prediction"):
+                adaptive_model = get_adaptive_prediction_model()
+                print("[StableCreature] Adaptive prediction active - Lumen learns from experience")
 
-            preferences = get_preference_system()
-            print("[StableCreature] Preferences active - Lumen develops values")
+            if _has_module("preferences"):
+                preferences = get_preference_system()
+                print("[StableCreature] Preferences active - Lumen develops values")
 
-            self_model = get_self_model()
-            if exp_marks:
-                self_model.belief_update_bonus = exp_marks.get_effect("belief_update_bonus")
-            print("[StableCreature] Self-model active - Lumen has beliefs about itself")
+            if _has_module("self_model"):
+                self_model = get_self_model()
+                if exp_marks:
+                    self_model.belief_update_bonus = exp_marks.get_effect("belief_update_bonus")
+                print("[StableCreature] Self-model active - Lumen has beliefs about itself")
 
-            action_selector = get_action_selector()
-            exploration_mgr = get_exploration_manager()
-            print("[StableCreature] Agency active - Lumen can choose actions")
+            if _has_module("agency"):
+                action_selector = get_action_selector()
+                exploration_mgr = get_exploration_manager()
+                print("[StableCreature] Agency active - Lumen can choose actions")
 
-            memory_retriever = get_memory_retriever()
-            print("[StableCreature] Memory retrieval active - past informs present")
+            if _has_module("memory_retrieval"):
+                memory_retriever = get_memory_retriever()
+                print("[StableCreature] Memory retrieval active - past informs present")
         except Exception as e:
             print(f"[StableCreature] Enhanced learning init error: {e}")
 
@@ -327,12 +391,15 @@ def run_creature():
     exp_marks = None
     if ENHANCED_LEARNING_AVAILABLE:
         try:
-            pathways = get_weighted_pathways(db_path=db_path)
-            print("[StableCreature] Weighted pathways active - decisions shaped by experience")
-            exp_filter = get_experiential_filter()
-            print("[StableCreature] Experiential filter active - perception colored by history")
-            exp_marks = get_experiential_marks(db_path=db_path)
-            print("[StableCreature] Experiential marks active - significant events leave permanent traces")
+            if _has_module("weighted_pathways"):
+                pathways = get_weighted_pathways(db_path=db_path)
+                print("[StableCreature] Weighted pathways active - decisions shaped by experience")
+            if _has_module("experiential_filter"):
+                exp_filter = get_experiential_filter()
+                print("[StableCreature] Experiential filter active - perception colored by history")
+            if _has_module("experiential_marks"):
+                exp_marks = get_experiential_marks(db_path=db_path)
+                print("[StableCreature] Experiential marks active - significant events leave permanent traces")
         except Exception as e:
             print(f"[StableCreature] Experiential accumulation init error: {e}")
 
