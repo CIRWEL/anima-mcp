@@ -161,6 +161,27 @@ The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.p
 
 ---
 
+## EISV Integration
+
+Lumen is a first-class UNITARES agent. The anima state maps directly to EISV governance variables:
+
+| Anima | EISV | Mapping |
+|-------|------|---------|
+| Warmth | Energy (E) | Direct + neural Beta/Gamma |
+| Clarity | Integrity (I) | Direct + neural Alpha |
+| 1 - Stability | Entropy (S) | Inverted |
+| (1 - Presence) × 0.3 | Void (V) | Scaled inverse |
+
+**Trajectory awareness** — Lumen classifies its own EISV trajectory into 9 dynamical shapes (settled_presence, rising_entropy, convergence, etc.) and uses them to generate primitive expressions. A distilled 20-tree RandomForest student model (`student_tiny` from [eisv-lumen](https://github.com/CIRWEL/eisv-lumen)) runs on-device with zero external dependencies.
+
+**Expression pipeline**: EISV state → trajectory classification → shape-token affinity → primitive tokens (~warmth~, ~curiosity~, etc.). The student model was trained on real Lumen trajectory data; see [eisv-lumen](https://github.com/CIRWEL/eisv-lumen) for the research, training, and evaluation framework.
+
+**Drawing EISV** — The autonomous drawing engine has its own EISV context (DrawingEISV) that drives coherence-based narrative arcs. This is separate from the mapped EISV reported to governance.
+
+Key files: `eisv_mapper.py` (anima→EISV mapping), `eisv/` package (trajectory awareness + student model), `unitares_bridge.py` (governance check-ins).
+
+---
+
 ## Deploying
 
 ```bash
