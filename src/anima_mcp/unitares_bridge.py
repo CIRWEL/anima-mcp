@@ -507,8 +507,10 @@ class UnitaresBridge:
 
                         # Check application-level error (success: false)
                         if governance_result.get("success") is False:
+                            error_code = governance_result.get("error_code", "UNKNOWN")
                             error_msg = governance_result.get("error") or governance_result.get("reason") or "update rejected"
-                            raise Exception(f"UNITARES check-in failed: {error_msg}")
+                            logger.warning("UNITARES check-in rejected: code=%s msg=%s", error_code, error_msg)
+                            raise Exception(f"UNITARES check-in failed [{error_code}]: {error_msg}")
 
                         logger.debug("Response keys: %s", list(governance_result.keys()))
                         # Log agent binding info from UNITARES
