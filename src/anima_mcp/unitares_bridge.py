@@ -487,6 +487,15 @@ class UnitaresBridge:
                     # Parse MCP response
                     if "result" in result:
                         governance_result = result["result"]
+
+                        # Check MCP-level error flag (tool returned isError)
+                        if governance_result.get("isError"):
+                            error_text = "unknown error"
+                            if "content" in governance_result and governance_result["content"]:
+                                c = governance_result["content"][0]
+                                error_text = c.get("text", error_text)
+                            raise Exception(f"UNITARES rejected check-in: {error_text}")
+
                         # MCP wraps tool results in content[0]["text"] as JSON string
                         if "content" in governance_result and governance_result["content"]:
                             content = governance_result["content"][0]
@@ -495,6 +504,12 @@ class UnitaresBridge:
                                     governance_result = json.loads(content["text"])
                                 except json.JSONDecodeError:
                                     pass  # Keep original if not JSON
+
+                        # Check application-level error (success: false)
+                        if governance_result.get("success") is False:
+                            error_msg = governance_result.get("error") or governance_result.get("reason") or "update rejected"
+                            raise Exception(f"UNITARES check-in failed: {error_msg}")
+
                         logger.debug("Response keys: %s", list(governance_result.keys()))
                         # Log agent binding info from UNITARES
                         bound_id = governance_result.get("resolved_agent_id") or governance_result.get("agent_signature", {}).get("agent_id") or governance_result.get("agent_signature", {}).get("uuid")
