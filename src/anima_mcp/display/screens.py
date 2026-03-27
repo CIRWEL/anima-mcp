@@ -967,9 +967,10 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
                     except Exception:
                         pass
             except Exception as e:
-                # Don't let autonomy errors break rendering, but log them
-                if self._state._frame_count % 100 == 0:
-                    print(f"[Canvas] Autonomy check error: {e}", file=sys.stderr, flush=True)
+                # Don't let autonomy errors break rendering, but always log them
+                import traceback
+                print(f"[Canvas] Autonomy check error: {e}", file=sys.stderr, flush=True)
+                traceback.print_exc(file=sys.stderr)
 
             # Disable auto-return - let user stay on screens as long as they want
             # Only auto-return to FACE if explicitly requested via button

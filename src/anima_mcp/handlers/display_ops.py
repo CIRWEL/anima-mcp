@@ -157,6 +157,23 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
         "task_cancelled": display_task.cancelled() if display_task else None,
     }
 
+    # Drawing diagnostics
+    drawing_info = None
+    try:
+        from ..server import _get_screen_renderer
+        import time as _time
+        renderer = _get_screen_renderer()
+        if renderer and hasattr(renderer, 'drawing_engine'):
+            engine = renderer.drawing_engine
+            drawing_info = engine.get_drawing_eisv()
+            if drawing_info:
+                drawing_info["pixel_count"] = len(engine.canvas.pixels)
+                drawing_info["drawing_age_s"] = round(
+                    _time.time() - engine.canvas.last_clear_time, 1
+                ) if engine.canvas.last_clear_time > 0 else None
+    except Exception:
+        pass
+
     result = {
         "leds": led_info,
         "display": display_info,
@@ -166,6 +183,8 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
             "available": sensors.available_sensors(),
         },
     }
+    if drawing_info:
+        result["drawing"] = drawing_info
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

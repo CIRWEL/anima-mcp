@@ -74,6 +74,7 @@ class CanvasState:
     arc_phase: str = "opening"
     coherence_history: List[float] = field(default_factory=list)
     i_momentum: float = 0.0
+    drawing_start_time: float = 0.0  # When this drawing started (persisted for time limit)
 
     # Art era (persisted so drawings continue in the same era after restart)
     _era_name: str = "gestural"
@@ -118,6 +119,7 @@ class CanvasState:
         self.arc_phase = "opening"
         self.coherence_history = []
         self.i_momentum = 0.0
+        self.drawing_start_time = time.time()
         self._dirty = True
         self._cached_image = None
         self._new_pixels.clear()
@@ -206,6 +208,7 @@ class CanvasState:
                 "arc_phase": self.arc_phase,
                 "coherence_history": self.coherence_history[-20:],  # Keep last 20
                 "i_momentum": self.i_momentum,
+                "drawing_start_time": self.drawing_start_time,
             }
             atomic_json_write(_get_canvas_path(), data)
         except Exception as e:
@@ -430,6 +433,13 @@ class CanvasState:
         except Exception:
             pass
 
+        try:
+            dst = data.get("drawing_start_time", 0.0)
+            if isinstance(dst, (int, float)):
+                self.drawing_start_time = float(dst)
+        except Exception:
+            pass
+
         # Invalidate render cache after loading
         self._dirty = True
         self._cached_image = None
@@ -487,6 +497,7 @@ class DrawingState:
     arc_phase: str = "opening"       # opening, developing, resolving, closing
     phase_mark_count: int = 0        # Marks in current phase
     i_momentum: float = 0.0          # Smoothed I trend (EMA)
+    drawing_start_time: float = 0.0  # When this drawing started (for hard time limit)
 
     # Inner life drives (populated from SHM, influence color)
     drive_warmth: float = 0.0        # Wanting warmth → warmer hues
@@ -510,6 +521,7 @@ class DrawingState:
         self.coherence_velocity = 0.0
         # Narrative arc
         self.arc_phase = "opening"
+        self.drawing_start_time = time.time()
         self.phase_mark_count = 0
         self.i_momentum = 0.0
 
@@ -560,15 +572,21 @@ class DrawingState:
                 return True
 
         # Path 4: Emergency exit - too fatigued to continue
-        if self.fatigue > 0.92:
+        if self.fatigue > 0.85:
             return True
 
-        # Path 5: Stalled -- energy is near-zero (no marks being placed) and
-        # phase hasn't progressed for >120 seconds. This catches the case where
-        # attention signals stall because no marks are placed to evolve them.
-        if canvas is not None and self.derived_energy < 0.05:
-            phase_duration = time.time() - canvas.phase_start_time
-            if phase_duration > 120 and len(canvas.pixels) >= 200:
+        # Path 5: Stalled -- energy is low and drawing has been going for a while.
+        # Uses drawing-level time (not phase time) to avoid resets from phase oscillation.
+        if canvas is not None and self.derived_energy < 0.10:
+            drawing_duration = time.time() - canvas.last_clear_time
+            if drawing_duration > 300 and len(canvas.pixels) >= 200:
+                return True
+
+        # Path 6: Hard time limit -- no single drawing should run longer than 4 hours.
+        # Most drawings complete in 30-90 minutes. This is a safety net.
+        if canvas is not None:
+            drawing_duration = time.time() - canvas.last_clear_time
+            if drawing_duration > 14400 and len(canvas.pixels) >= 50:
                 return True
 
         return False
@@ -746,6 +764,18 @@ class DrawingEngine:
         self.intent.state.arc_phase = self.canvas.arc_phase
         self.intent.state.coherence_history = self.canvas.coherence_history.copy()
         self.intent.state.i_momentum = self.canvas.i_momentum
+        self.intent.state.drawing_start_time = self.canvas.drawing_start_time or time.time()
+
+        # Health check: detect stuck drawings from previous sessions
+        if self.canvas.pixels and self.canvas.last_clear_time > 0:
+            age = time.time() - self.canvas.last_clear_time
+            if age > 7200:  # Drawing older than 2 hours
+                print(f"[Canvas] Stale drawing detected ({age/3600:.1f}h old, "
+                      f"{len(self.canvas.pixels)}px, fatigue={self.canvas.fatigue:.2f}). "
+                      f"Clearing for fresh start.", file=sys.stderr, flush=True)
+                self.canvas.clear()
+                self.intent.reset()
+                self.canvas.save_to_disk()
 
         # Load active art era
         from .eras import get_era
@@ -909,6 +939,7 @@ class DrawingEngine:
         self.canvas.arc_phase = state.arc_phase
         self.canvas.coherence_history = state.coherence_history.copy()
         self.canvas.i_momentum = state.i_momentum
+        self.canvas.drawing_start_time = state.drawing_start_time
 
         # --- Record for mood tracker ---
         try:
@@ -1014,8 +1045,11 @@ class DrawingEngine:
 
         # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
         # In resolving phase, don't regenerate -- otherwise curiosity never exhausts and drawing stays stuck
+        # In developing phase with many marks, drain slowly -- prevents indefinite regeneration
         if state.arc_phase == "resolving":
             curiosity_drain = 0.002  # Gentle drain so arc can complete
+        elif state.arc_phase == "developing" and state.phase_mark_count > 100:
+            curiosity_drain = 0.001  # Slow drain after extended developing without resolving
         elif C < 0.4:
             curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
         else:
@@ -1027,10 +1061,10 @@ class DrawingEngine:
         state.engagement += 0.05 * (target - state.engagement)
         state.engagement = max(0.0, min(1.0, state.engagement))
 
-        # Fatigue: accumulates, never decreases during drawing (gentler per-mark)
+        # Fatigue: accumulates, never decreases during drawing
         if gesture_switch:
-            state.fatigue += 0.005
-        state.fatigue = min(1.0, state.fatigue + 0.0004)
+            state.fatigue += 0.008
+        state.fatigue = min(1.0, state.fatigue + 0.002)
 
     def _update_coherence_tracking(self, C: float, I_signal: float):
         """Track coherence over time for settling detection and narrative arc.
@@ -1108,8 +1142,8 @@ class DrawingEngine:
             # Natural completion
             if state.narrative_complete(self.canvas):
                 transition_to("closing")
-            # Destabilized: coherence dropped
-            elif C < 0.5:
+            # Destabilized: coherence dropped significantly (hysteresis — entered at 0.6, exit at 0.4)
+            elif C < 0.4:
                 transition_to("developing")
 
         elif current_phase == "closing":
