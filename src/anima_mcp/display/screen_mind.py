@@ -960,16 +960,27 @@ class MindMixin:
             y += 12
 
             if last_action_type:
-                display_name = last_action_type.replace("_", " ").upper()
+                display_name = last_action_type.replace("_", " ")
                 action_color = ACTION_COLORS.get(last_action_type, SECONDARY)
                 draw.text((10, y), display_name, fill=action_color, font=f_small)
                 y += 14
 
                 if last_motivation:
                     mot = last_motivation
-                    if len(mot) > 34:
-                        mot = mot[:32] + ".."
-                    draw.text((10, y), f'"{mot}"', fill=DIM, font=f_micro)
+                    # Word-wrap motivation across 2 lines (micro font ~38 chars/line)
+                    if len(mot) > 38:
+                        # Find word break near 38
+                        break_at = mot.rfind(" ", 0, 38)
+                        if break_at < 15:
+                            break_at = 38
+                        draw.text((10, y), f'"{mot[:break_at]}"', fill=DIM, font=f_micro)
+                        y += 10
+                        rest = mot[break_at:].strip()
+                        if len(rest) > 38:
+                            rest = rest[:36] + ".."
+                        draw.text((10, y), f' {rest}', fill=DIM, font=f_micro)
+                    else:
+                        draw.text((10, y), f'"{mot}"', fill=DIM, font=f_micro)
                     y += 12
 
                 if last_reward is not None:
