@@ -42,10 +42,10 @@ async def test_get_state_happy_path_cleans_sensors_records_state_and_injects_inn
     sensors_backend = MagicMock()
     sensors_backend.is_pi.return_value = False
 
-    with patch("anima_mcp.server._get_store", return_value=store), \
-         patch("anima_mcp.server._get_sensors", return_value=sensors_backend), \
-         patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, anima)), \
-         patch("anima_mcp.server._get_last_shm_data", return_value={"inner_life": {"temperament": "calm", "drives": {}, "strongest_drive": "curiosity"}}):
+    with patch("anima_mcp.accessors._get_store", return_value=store), \
+         patch("anima_mcp.accessors._get_sensors", return_value=sensors_backend), \
+         patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
+         patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "calm", "drives": {}, "strongest_drive": "curiosity"}}):
         result = await handle_get_state({})
 
     data = _parse(result)
@@ -93,17 +93,17 @@ async def test_read_sensors_sets_source_shared_memory_vs_direct():
     shm_client = MagicMock()
     shm_client.read.return_value = {"readings": {"timestamp": "x"}, "anima": {"warmth": 0.5}}
 
-    with patch("anima_mcp.server._get_sensors", return_value=sensors_backend), \
-         patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, None)), \
-         patch("anima_mcp.server._get_shm_client", return_value=shm_client):
+    with patch("anima_mcp.accessors._get_sensors", return_value=sensors_backend), \
+         patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, None)), \
+         patch("anima_mcp.accessors._get_shm_client", return_value=shm_client):
         data = _parse(await handle_read_sensors({}))
         assert data["source"] == "shared_memory"
         assert "humidity_pct" not in data["readings"]
 
     # Case 2: no shared memory client
-    with patch("anima_mcp.server._get_sensors", return_value=sensors_backend), \
-         patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, None)), \
-         patch("anima_mcp.server._get_shm_client", return_value=None):
+    with patch("anima_mcp.accessors._get_sensors", return_value=sensors_backend), \
+         patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, None)), \
+         patch("anima_mcp.accessors._get_shm_client", return_value=None):
         data = _parse(await handle_read_sensors({}))
         assert data["source"] == "direct_sensors"
 

@@ -12,7 +12,7 @@ from ..eisv import get_trajectory_awareness
 
 async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
     """Get Lumen's accumulated self-knowledge from pattern analysis."""
-    from ..server import _get_store
+    from ..accessors import _get_store
 
     store = _get_store()
     if store is None:
@@ -57,7 +57,7 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
 
 async def handle_get_growth(arguments: dict) -> list[TextContent]:
     """Get Lumen's growth: preferences, relationships, goals, memories."""
-    from ..server import _get_growth
+    from ..accessors import _get_growth
 
     growth = _get_growth()
     if growth is None:
@@ -254,7 +254,7 @@ async def handle_get_trajectory(arguments: dict) -> list[TextContent]:
 
     See: docs/theory/TRAJECTORY_IDENTITY_PAPER.md
     """
-    from ..server import _get_growth
+    from ..accessors import _get_growth
     growth = _get_growth()
 
     try:
@@ -378,7 +378,7 @@ async def handle_query(arguments: dict) -> list[TextContent]:
 
     try:
         from ..knowledge import get_relevant_insights
-        from ..server import _get_store
+        from ..accessors import _get_store
 
         result = {"query": text, "type": query_type}
 
@@ -404,7 +404,7 @@ async def handle_query(arguments: dict) -> list[TextContent]:
 
         # Add growth summary when type is growth
         if query_type == "growth":
-            from ..server import _get_growth
+            from ..accessors import _get_growth
             growth = _get_growth()
             if growth:
                 result["growth"] = growth.get_autobiography_summary()

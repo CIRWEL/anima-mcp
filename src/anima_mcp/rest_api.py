@@ -194,8 +194,8 @@ async def rest_state(request):
         return auth_error
     try:
         from datetime import datetime as _dt
-        from .server import (
-            SHM_GOVERNANCE_STALE_SECONDS,
+        from .server import SHM_GOVERNANCE_STALE_SECONDS
+        from .accessors import (
             _get_readings_and_anima,
             _get_store,
             _get_last_governance_decision,
@@ -673,7 +673,7 @@ async def rest_layers(request):
     if auth_error:
         return auth_error
     try:
-        from .server import (
+        from .accessors import (
             _get_readings_and_anima, _get_store, _get_last_governance_decision,
             _get_activity, _get_schema_hub,
         )
@@ -796,7 +796,7 @@ async def rest_schema_data(request):
     if auth_error:
         return auth_error
     try:
-        from .server import _get_schema_hub, _get_store, _get_readings_and_anima, _get_growth
+        from .accessors import _get_schema_hub, _get_store, _get_readings_and_anima, _get_growth
 
         hub = _get_schema_hub()
 

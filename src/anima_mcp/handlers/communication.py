@@ -104,7 +104,7 @@ def _resolve_caller_name(arguments: dict) -> str:
 def _get_unitares_bridge():
     """Get shared server bridge for identity resolution (late import to avoid circular deps)."""
     try:
-        from ..server import _get_server_bridge
+        from ..accessors import _get_server_bridge
         return _get_server_bridge()
     except Exception:
         return None
@@ -224,7 +224,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         # Retrieve visitor context for the answering agent
         visitor_context = None
         try:
-            from ..server import _get_growth
+            from ..accessors import _get_growth
             growth = _get_growth()
             if growth:
                 visitor_context = growth.get_visitor_context(agent_name)
@@ -292,7 +292,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     Post a message to Lumen's message board.
     Consolidates: leave_message + leave_agent_note
     """
-    from ..server import (
+    from ..accessors import (
         _get_growth, _get_activity,
         _get_readings_and_anima, _get_store,
     )
@@ -465,7 +465,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
 
 async def handle_say(arguments: dict) -> list[TextContent]:
     """Have Lumen speak - posts to message board (text mode) or uses TTS (audio mode)."""
-    from ..server import _get_store, _get_voice, VOICE_MODE
+    from ..accessors import _get_store, _get_voice, VOICE_MODE
     from ..messages import add_observation
 
     text = arguments.get("text", "")
@@ -510,7 +510,7 @@ async def handle_configure_voice(arguments: dict) -> list[TextContent]:
     Get or configure Lumen's voice system.
     Consolidates: voice_status + set_voice_mode
     """
-    from ..server import _get_voice
+    from ..accessors import _get_voice
 
     action = arguments.get("action", "status")
     voice = _get_voice()
@@ -567,7 +567,7 @@ async def handle_primitive_feedback(arguments: dict) -> list[TextContent]:
     - stats: View learning progress
     - recent: List recent utterances with scores
     """
-    from ..server import _get_store
+    from ..accessors import _get_store
     from ..primitive_language import get_language_system
 
     action = arguments.get("action", "stats")

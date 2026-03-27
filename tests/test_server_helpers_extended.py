@@ -5,6 +5,13 @@ from types import SimpleNamespace
 import pytest
 
 import anima_mcp.server as server
+import anima_mcp.accessors as accessors
+
+
+def _set_ctx(monkeypatch, ctx):
+    """Patch _ctx in both server and accessors modules."""
+    monkeypatch.setattr(server, "_ctx", ctx)
+    monkeypatch.setattr(accessors, "_ctx", ctx)
 
 
 class _Ctx:
@@ -66,7 +73,7 @@ def test_compute_lagged_correlations_handles_sparse_and_dense(monkeypatch):
     ctx = SimpleNamespace(health_history=deque([0.1, 0.2], maxlen=100), satisfaction_per_dim={})
     sparse = {d: deque([0.1, 0.2], maxlen=500) for d in ("warmth", "clarity", "stability", "presence")}
     ctx.satisfaction_per_dim = sparse
-    monkeypatch.setattr(server, "_ctx", ctx)
+    _set_ctx(monkeypatch, ctx)
     out = server._compute_lagged_correlations()
     assert out == {"warmth": 0.0, "clarity": 0.0, "stability": 0.0, "presence": 0.0}
 
@@ -82,7 +89,7 @@ def test_compute_lagged_correlations_handles_sparse_and_dense(monkeypatch):
 
 def test_get_warm_start_anticipation_one_shot_and_gap_scaling(monkeypatch):
     ctx = SimpleNamespace(warm_start_anima={"warmth": 0.2, "clarity": 0.3, "stability": 0.4, "presence": 0.5}, wake_gap=timedelta(hours=26))
-    monkeypatch.setattr(server, "_ctx", ctx)
+    _set_ctx(monkeypatch, ctx)
 
     ant = server._get_warm_start_anticipation()
     assert ant is not None
@@ -104,19 +111,19 @@ def test_get_readings_and_anima_uses_shared_memory_when_fresh(monkeypatch):
     anima_obj = SimpleNamespace()
     ctx = SimpleNamespace(last_shm_data=None)
 
-    monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(server, "_get_shm_client", lambda: SimpleNamespace(read=lambda: shm_payload))
-    monkeypatch.setattr(server, "_readings_from_dict", lambda d: readings_obj)
-    monkeypatch.setattr(server, "get_calibration", lambda: SimpleNamespace())
-    monkeypatch.setattr(server, "_get_warm_start_anticipation", lambda: None)
-    monkeypatch.setattr(server, "anticipate_state", lambda d: {"anticipated": True})
-    monkeypatch.setattr(server, "_get_calibration_drift", lambda: SimpleNamespace(get_midpoints=lambda: {}))
-    monkeypatch.setattr(server, "sense_self_with_memory", lambda *args, **kwargs: anima_obj)
+    _set_ctx(monkeypatch, ctx)
+    monkeypatch.setattr(accessors, "_get_shm_client", lambda: SimpleNamespace(read=lambda: shm_payload))
+    monkeypatch.setattr(accessors, "_readings_from_dict", lambda d: readings_obj)
+    monkeypatch.setattr(accessors, "get_calibration", lambda: SimpleNamespace())
+    monkeypatch.setattr(accessors, "_get_warm_start_anticipation", lambda: None)
+    monkeypatch.setattr(accessors, "anticipate_state", lambda d: {"anticipated": True})
+    monkeypatch.setattr(accessors, "_get_calibration_drift", lambda: SimpleNamespace(get_midpoints=lambda: {}))
+    monkeypatch.setattr(accessors, "sense_self_with_memory", lambda *args, **kwargs: anima_obj)
 
     readings, anima = server._get_readings_and_anima()
     assert readings is readings_obj
     assert anima is anima_obj
-    assert server._ctx.last_shm_data == shm_payload
+    assert accessors._ctx.last_shm_data == shm_payload
 
 
 def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch):
@@ -130,16 +137,16 @@ def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch
     direct_anima = SimpleNamespace()
     sensors = SimpleNamespace(read=lambda: direct_readings)
 
-    monkeypatch.setattr(server, "_get_shm_client", lambda: SimpleNamespace(read=lambda: stale_payload))
-    monkeypatch.setattr(server, "_is_broker_running", lambda: True)
-    monkeypatch.setattr(server, "_get_sensors", lambda: sensors)
-    monkeypatch.setattr(server, "get_calibration", lambda: SimpleNamespace())
-    monkeypatch.setattr(server, "_get_warm_start_anticipation", lambda: None)
-    monkeypatch.setattr(server, "anticipate_state", lambda d: {"anticipated": True})
-    monkeypatch.setattr(server, "_get_calibration_drift", lambda: SimpleNamespace(get_midpoints=lambda: {}))
-    monkeypatch.setattr(server, "sense_self_with_memory", lambda *args, **kwargs: direct_anima)
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace(last_shm_data=None))
-    monkeypatch.setattr(server._get_readings_and_anima, "_last_fallback_log", 0.0, raising=False)
+    monkeypatch.setattr(accessors, "_get_shm_client", lambda: SimpleNamespace(read=lambda: stale_payload))
+    monkeypatch.setattr(accessors, "_is_broker_running", lambda: True)
+    monkeypatch.setattr(accessors, "_get_sensors", lambda: sensors)
+    monkeypatch.setattr(accessors, "get_calibration", lambda: SimpleNamespace())
+    monkeypatch.setattr(accessors, "_get_warm_start_anticipation", lambda: None)
+    monkeypatch.setattr(accessors, "anticipate_state", lambda d: {"anticipated": True})
+    monkeypatch.setattr(accessors, "_get_calibration_drift", lambda: SimpleNamespace(get_midpoints=lambda: {}))
+    monkeypatch.setattr(accessors, "sense_self_with_memory", lambda *args, **kwargs: direct_anima)
+    _set_ctx(monkeypatch, SimpleNamespace(last_shm_data=None))
+    monkeypatch.setattr(accessors._get_readings_and_anima, "_last_fallback_log", 0.0, raising=False)
 
     readings, anima = server._get_readings_and_anima()
     assert readings is direct_readings
@@ -147,10 +154,10 @@ def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch
 
 
 def test_get_readings_and_anima_returns_none_when_sensors_unavailable(monkeypatch):
-    monkeypatch.setattr(server, "_get_shm_client", lambda: SimpleNamespace(read=lambda: None))
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace(last_shm_data=None))
-    monkeypatch.setattr(server, "_is_broker_running", lambda: False)
-    monkeypatch.setattr(server, "_get_sensors", lambda: None)
+    monkeypatch.setattr(accessors, "_get_shm_client", lambda: SimpleNamespace(read=lambda: None))
+    _set_ctx(monkeypatch, SimpleNamespace(last_shm_data=None))
+    monkeypatch.setattr(accessors, "_is_broker_running", lambda: False)
+    monkeypatch.setattr(accessors, "_get_sensors", lambda: None)
 
     readings, anima = server._get_readings_and_anima()
     assert readings is None
@@ -158,7 +165,7 @@ def test_get_readings_and_anima_returns_none_when_sensors_unavailable(monkeypatc
 
 
 def test_get_store_returns_none_when_uninitialized(monkeypatch):
-    monkeypatch.setattr(server, "_ctx", None)
+    _set_ctx(monkeypatch, None)
     assert server._get_store() is None
 
 
@@ -171,8 +178,8 @@ def test_get_sensors_lazy_initializes_once(monkeypatch):
         return sensor_obj
 
     ctx = SimpleNamespace(sensors=None)
-    monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(server, "get_sensors", _factory)
+    _set_ctx(monkeypatch, ctx)
+    monkeypatch.setattr(accessors, "get_sensors", _factory)
 
     assert server._get_sensors() is sensor_obj
     assert server._get_sensors() is sensor_obj
@@ -186,8 +193,8 @@ def test_get_shm_client_lazy_initializes_with_file_backend(monkeypatch):
             self.backend = backend
 
     ctx = SimpleNamespace(shm_client=None)
-    monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(server, "SharedMemoryClient", _FakeClient)
+    _set_ctx(monkeypatch, ctx)
+    monkeypatch.setattr(accessors, "SharedMemoryClient", _FakeClient)
 
     client = server._get_shm_client()
     assert isinstance(client, _FakeClient)
@@ -204,7 +211,7 @@ def test_get_selfhood_context_combines_drift_tension_and_preferences(monkeypatch
     pref_system = SimpleNamespace(_preferences=prefs)
 
     ctx = SimpleNamespace(calibration_drift=drift, tension_tracker=tension)
-    monkeypatch.setattr(server, "_ctx", ctx)
+    _set_ctx(monkeypatch, ctx)
     monkeypatch.setattr("anima_mcp.preferences.get_preference_system", lambda: pref_system)
 
     out = server._get_selfhood_context()
@@ -214,7 +221,7 @@ def test_get_selfhood_context_combines_drift_tension_and_preferences(monkeypatch
 
 
 def test_get_selfhood_context_returns_none_when_empty(monkeypatch):
-    monkeypatch.setattr(server, "_ctx", None)
+    _set_ctx(monkeypatch, None)
     monkeypatch.setattr("anima_mcp.preferences.get_preference_system", lambda: None)
 
     assert server._get_selfhood_context() is None
@@ -272,7 +279,7 @@ def test_generate_learned_question_handles_source_exceptions(monkeypatch):
 
 def test_get_server_bridge_returns_none_without_url(monkeypatch):
     monkeypatch.delenv("UNITARES_URL", raising=False)
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace(server_bridge=None))
+    _set_ctx(monkeypatch, SimpleNamespace(server_bridge=None))
     assert server._get_server_bridge() is None
 
 
@@ -297,7 +304,7 @@ def test_get_server_bridge_initializes_and_sets_identity(monkeypatch):
 
     monkeypatch.setenv("UNITARES_URL", "http://example.test/mcp/")
     ctx = SimpleNamespace(server_bridge=None, store=store)
-    monkeypatch.setattr(server, "_ctx", ctx)
+    _set_ctx(monkeypatch, ctx)
     monkeypatch.setattr("anima_mcp.unitares_bridge.UnitaresBridge", _Bridge)
 
     bridge = server._get_server_bridge()
@@ -321,8 +328,9 @@ async def test_server_governance_fallback_success(monkeypatch):
 
     bridge.check_in = _check_in
     ctx = SimpleNamespace(store=store, screen_renderer=renderer)
-    monkeypatch.setattr(server, "_get_server_bridge", lambda: bridge)
-    monkeypatch.setattr(server, "_ctx", ctx)
+    monkeypatch.setattr(accessors, "_get_server_bridge", lambda: bridge)
+    monkeypatch.setattr(accessors, "_get_store", lambda: store)
+    _set_ctx(monkeypatch, ctx)
 
     out = await server._server_governance_fallback(SimpleNamespace(), SimpleNamespace())
     assert out == decision
@@ -330,8 +338,8 @@ async def test_server_governance_fallback_success(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_server_governance_fallback_without_bridge(monkeypatch):
-    monkeypatch.setattr(server, "_get_server_bridge", lambda: None)
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace())
+    monkeypatch.setattr(accessors, "_get_server_bridge", lambda: None)
+    _set_ctx(monkeypatch, SimpleNamespace())
     out = await server._server_governance_fallback(SimpleNamespace(), SimpleNamespace())
     assert out is None
 
@@ -342,7 +350,7 @@ def test_get_server_bridge_handles_init_exception(monkeypatch):
             raise RuntimeError("no bridge")
 
     monkeypatch.setenv("UNITARES_URL", "http://example.test/mcp/")
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace(server_bridge=None))
+    _set_ctx(monkeypatch, SimpleNamespace(server_bridge=None))
     monkeypatch.setattr("anima_mcp.unitares_bridge.UnitaresBridge", _BrokenBridge)
 
     assert server._get_server_bridge() is None
@@ -400,8 +408,8 @@ def test_get_schema_hub_lazy_initializes_once(monkeypatch):
         def __init__(self):
             calls["count"] += 1
 
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace(schema_hub=None))
-    monkeypatch.setattr(server, "SchemaHub", _FakeHub)
+    _set_ctx(monkeypatch, SimpleNamespace(schema_hub=None))
+    monkeypatch.setattr(accessors, "SchemaHub", _FakeHub)
 
     first = server._get_schema_hub()
     second = server._get_schema_hub()
@@ -417,8 +425,8 @@ def test_get_display_lazy_initializes_once(monkeypatch):
         calls["count"] += 1
         return display_obj
 
-    monkeypatch.setattr(server, "_ctx", SimpleNamespace(display=None))
-    monkeypatch.setattr(server, "get_display", _factory)
+    _set_ctx(monkeypatch, SimpleNamespace(display=None))
+    monkeypatch.setattr(accessors, "get_display", _factory)
 
     assert server._get_display() is display_obj
     assert server._get_display() is display_obj
@@ -435,7 +443,7 @@ def test_get_metacog_monitor_lazy_initializes_once(monkeypatch):
             self.reflection_cooldown_seconds = reflection_cooldown_seconds
 
     ctx = SimpleNamespace(metacog_monitor=None)
-    monkeypatch.setattr(server, "_ctx", ctx)
+    _set_ctx(monkeypatch, ctx)
     monkeypatch.setattr("anima_mcp.metacognition.MetacognitiveMonitor", _FakeMonitor)
 
     first = server._get_metacog_monitor()
@@ -456,9 +464,9 @@ def test_get_calibration_drift_loads_existing_state(monkeypatch, tmp_path):
     (tmp_path / ".anima" / "calibration_drift.json").write_text("{}", encoding="utf-8")
 
     ctx = SimpleNamespace(calibration_drift=None)
-    monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(server, "CalibrationDrift", _FakeDrift)
-    monkeypatch.setattr(server.Path, "home", staticmethod(lambda: tmp_path))
+    _set_ctx(monkeypatch, ctx)
+    monkeypatch.setattr(accessors, "CalibrationDrift", _FakeDrift)
+    monkeypatch.setattr(accessors.Path, "home", staticmethod(lambda: tmp_path))
 
     out = server._get_calibration_drift()
     assert str(out["loaded_from"]).endswith(".anima/calibration_drift.json")
@@ -477,9 +485,9 @@ def test_get_calibration_drift_falls_back_on_load_failure(monkeypatch, tmp_path)
     (tmp_path / ".anima" / "calibration_drift.json").write_text("{}", encoding="utf-8")
 
     ctx = SimpleNamespace(calibration_drift=None)
-    monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(server, "CalibrationDrift", _FakeDrift)
-    monkeypatch.setattr(server.Path, "home", staticmethod(lambda: tmp_path))
+    _set_ctx(monkeypatch, ctx)
+    monkeypatch.setattr(accessors, "CalibrationDrift", _FakeDrift)
+    monkeypatch.setattr(accessors.Path, "home", staticmethod(lambda: tmp_path))
 
     out = server._get_calibration_drift()
     assert out.kind == "fresh"
@@ -491,9 +499,9 @@ def test_get_calibration_drift_creates_fresh_when_missing(monkeypatch, tmp_path)
             self.kind = "fresh"
 
     ctx = SimpleNamespace(calibration_drift=None)
-    monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(server, "CalibrationDrift", _FakeDrift)
-    monkeypatch.setattr(server.Path, "home", staticmethod(lambda: tmp_path))
+    _set_ctx(monkeypatch, ctx)
+    monkeypatch.setattr(accessors, "CalibrationDrift", _FakeDrift)
+    monkeypatch.setattr(accessors.Path, "home", staticmethod(lambda: tmp_path))
 
     out = server._get_calibration_drift()
     assert out.kind == "fresh"

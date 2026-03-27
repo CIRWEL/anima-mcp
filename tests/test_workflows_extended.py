@@ -15,7 +15,7 @@ def _parse(result):
 async def test_unified_workflow_errors_when_store_missing():
     from anima_mcp.handlers.workflows import handle_unified_workflow
 
-    with patch("anima_mcp.server._get_store", return_value=None):
+    with patch("anima_mcp.accessors._get_store", return_value=None):
         data = _parse(await handle_unified_workflow({}))
     assert "error" in data
 
@@ -31,8 +31,8 @@ async def test_unified_workflow_lists_available_templates_when_workflow_missing(
     templates_instance = MagicMock()
     templates_instance.list_templates.return_value = [{"name": "t1"}, {"name": "t2"}]
 
-    with patch("anima_mcp.server._get_store", return_value=store), \
-         patch("anima_mcp.server._get_sensors", return_value=sensors), \
+    with patch("anima_mcp.accessors._get_store", return_value=store), \
+         patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
          patch("anima_mcp.workflow_orchestrator.get_orchestrator", return_value=orchestrator), \
          patch("anima_mcp.workflow_templates.WorkflowTemplates", return_value=templates_instance):
         data = _parse(await handle_unified_workflow({}))
@@ -59,8 +59,8 @@ async def test_unified_workflow_runs_template_when_found():
         errors={},
     ))
 
-    with patch("anima_mcp.server._get_store", return_value=store), \
-         patch("anima_mcp.server._get_sensors", return_value=sensors), \
+    with patch("anima_mcp.accessors._get_store", return_value=store), \
+         patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
          patch("anima_mcp.workflow_orchestrator.get_orchestrator", return_value=orchestrator), \
          patch("anima_mcp.workflow_templates.WorkflowTemplates", return_value=templates_instance):
         data = _parse(await handle_unified_workflow({"workflow": "my_template"}))
@@ -82,8 +82,8 @@ async def test_unified_workflow_unknown_workflow_suggests_alternatives():
     templates_instance.get_template.return_value = None
     templates_instance.list_templates.return_value = [{"name": "t1"}]
 
-    with patch("anima_mcp.server._get_store", return_value=store), \
-         patch("anima_mcp.server._get_sensors", return_value=sensors), \
+    with patch("anima_mcp.accessors._get_store", return_value=store), \
+         patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
          patch("anima_mcp.workflow_orchestrator.get_orchestrator", return_value=orchestrator), \
          patch("anima_mcp.workflow_templates.WorkflowTemplates", return_value=templates_instance):
         data = _parse(await handle_unified_workflow({"workflow": "nope"}))

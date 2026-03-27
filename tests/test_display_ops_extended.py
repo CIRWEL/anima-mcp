@@ -17,7 +17,7 @@ class TestCaptureScreenExtended:
     async def test_capture_screen_renderer_not_initialized(self):
         from anima_mcp.handlers.display_ops import handle_capture_screen
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=None):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=None):
             data = _parse(await handle_capture_screen({}))
 
         assert "Screen renderer not initialized" in data["error"]
@@ -26,7 +26,7 @@ class TestCaptureScreenExtended:
         from anima_mcp.handlers.display_ops import handle_capture_screen
 
         renderer = SimpleNamespace(_display=SimpleNamespace())
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             data = _parse(await handle_capture_screen({}))
 
         assert "Display not available" in data["error"]
@@ -42,7 +42,7 @@ class TestCaptureScreenExtended:
                 raise RuntimeError("encode failed")
 
         renderer = SimpleNamespace(_display=SimpleNamespace(_image=_BadImage()), get_mode=lambda: SimpleNamespace(value="face"))
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             data = _parse(await handle_capture_screen({}))
 
         assert "Failed to capture screen" in data["error"]
@@ -58,7 +58,7 @@ class TestCaptureScreenExtended:
             get_mode=lambda: SimpleNamespace(value="art_eras"),
         )
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             result = await handle_capture_screen({})
 
         assert len(result) == 2
@@ -71,7 +71,7 @@ class TestCaptureScreenExtended:
         from anima_mcp.handlers.display_ops import handle_capture_screen
 
         renderer = SimpleNamespace(_display=SimpleNamespace(_image=None))
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             data = _parse(await handle_capture_screen({}))
 
         assert "error" in data
@@ -83,10 +83,10 @@ class TestShowFaceExtended:
     async def test_show_face_errors_when_readings_unavailable(self):
         from anima_mcp.handlers.display_ops import handle_show_face
 
-        with patch("anima_mcp.server._get_store", return_value=None), \
-             patch("anima_mcp.server._get_sensors", return_value=MagicMock()), \
-             patch("anima_mcp.server._get_display", return_value=SimpleNamespace(is_available=lambda: False)), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)):
+        with patch("anima_mcp.accessors._get_store", return_value=None), \
+             patch("anima_mcp.accessors._get_sensors", return_value=MagicMock()), \
+             patch("anima_mcp.accessors._get_display", return_value=SimpleNamespace(is_available=lambda: False)), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
             data = _parse(await handle_show_face({}))
 
         assert "Unable to read sensor data" in data["error"]
@@ -102,10 +102,10 @@ class TestShowFaceExtended:
         display = SimpleNamespace(is_available=lambda: False)
         bad_store = SimpleNamespace(get_identity=lambda: (_ for _ in ()).throw(RuntimeError("bad store")))
 
-        with patch("anima_mcp.server._get_store", return_value=bad_store), \
-             patch("anima_mcp.server._get_sensors", return_value=MagicMock()), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
+        with patch("anima_mcp.accessors._get_store", return_value=bad_store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=MagicMock()), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.display.derive_face_state", return_value=face_state), \
              patch("anima_mcp.display.face_to_ascii", return_value=":|"):
             data = _parse(await handle_show_face({}))
@@ -124,10 +124,10 @@ class TestShowFaceExtended:
         display = SimpleNamespace(is_available=lambda: False)
         store = SimpleNamespace(get_identity=lambda: SimpleNamespace(name="Lumen"))
 
-        with patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._get_sensors", return_value=MagicMock()), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=MagicMock()), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.display.derive_face_state", return_value=face_state), \
              patch("anima_mcp.display.face_to_ascii", return_value=":-)"):
             data = _parse(await handle_show_face({}))
@@ -148,10 +148,10 @@ class TestShowFaceExtended:
         display = MagicMock()
         display.is_available.return_value = True
 
-        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace(get_identity=lambda: None)), \
-             patch("anima_mcp.server._get_sensors", return_value=MagicMock()), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
+        with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(get_identity=lambda: None)), \
+             patch("anima_mcp.accessors._get_sensors", return_value=MagicMock()), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.display.derive_face_state", return_value=face_state):
             data = _parse(await handle_show_face({}))
 
@@ -168,10 +168,10 @@ class TestDiagnosticsExtended:
         display = SimpleNamespace(is_available=lambda: False, _init_error="spi unavailable")
         sensors = SimpleNamespace(is_pi=lambda: True, available_sensors=lambda: ["cpu", "light"])
 
-        with patch("anima_mcp.server._get_leds", return_value=None), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_display_update_task", return_value=None), \
-             patch("anima_mcp.server._get_sensors", return_value=sensors):
+        with patch("anima_mcp.accessors._get_leds", return_value=None), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_display_update_task", return_value=None), \
+             patch("anima_mcp.accessors._get_sensors", return_value=sensors):
             data = _parse(await handle_diagnostics({}))
 
         assert data["leds"]["available"] is False
@@ -186,10 +186,10 @@ class TestDiagnosticsExtended:
         loop_task = SimpleNamespace(done=lambda: False, cancelled=lambda: False)
         sensors = SimpleNamespace(is_pi=lambda: False, available_sensors=lambda: ["mock"])
 
-        with patch("anima_mcp.server._get_leds", return_value=leds), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_display_update_task", return_value=loop_task), \
-             patch("anima_mcp.server._get_sensors", return_value=sensors):
+        with patch("anima_mcp.accessors._get_leds", return_value=leds), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_display_update_task", return_value=loop_task), \
+             patch("anima_mcp.accessors._get_sensors", return_value=sensors):
             data = _parse(await handle_diagnostics({}))
 
         assert data["leds"]["available"] is True
@@ -216,7 +216,7 @@ class TestManageDisplayExtended:
     async def test_manage_display_requires_renderer_for_non_face(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=None):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=None):
             data = _parse(await handle_manage_display({"action": "next"}))
         assert "Screen renderer not initialized" in data["error"]
 
@@ -224,7 +224,7 @@ class TestManageDisplayExtended:
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         renderer = MagicMock()
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             data = _parse(await handle_manage_display({"action": "switch", "screen": "health"}))
 
         renderer.set_mode.assert_called_once()
@@ -234,7 +234,7 @@ class TestManageDisplayExtended:
     async def test_switch_invalid_screen_returns_error(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             data = _parse(await handle_manage_display({"action": "switch", "screen": "bad-screen"}))
 
         assert "error" in data
@@ -248,7 +248,7 @@ class TestManageDisplayExtended:
             previous_mode=MagicMock(),
             get_mode=lambda: SimpleNamespace(value="identity"),
         )
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             next_data = _parse(await handle_manage_display({"action": "next"}))
             prev_data = _parse(await handle_manage_display({"action": "previous"}))
 
@@ -267,7 +267,7 @@ class TestManageDisplayExtended:
             "available_eras": ["gestural", "geometric"],
         }
         renderer = SimpleNamespace(get_current_era=lambda: info)
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             list_data = _parse(await handle_manage_display({"action": "list_eras"}))
             get_data = _parse(await handle_manage_display({"action": "get_era"}))
 
@@ -279,7 +279,7 @@ class TestManageDisplayExtended:
     async def test_set_era_requires_name(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             data = _parse(await handle_manage_display({"action": "set_era"}))
 
         assert "error" in data
@@ -289,7 +289,7 @@ class TestManageDisplayExtended:
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         renderer = SimpleNamespace(set_era=lambda name: {"success": True, "era": name})
-        with patch("anima_mcp.server._get_screen_renderer", return_value=renderer):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
             data = _parse(await handle_manage_display({"action": "set_era", "screen": "field"}))
 
         assert data["action"] == "set_era"
@@ -299,7 +299,7 @@ class TestManageDisplayExtended:
     async def test_unknown_action_returns_valid_action_list(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             data = _parse(await handle_manage_display({"action": "wat"}))
 
         assert "Unknown action" in data["error"]
@@ -309,8 +309,8 @@ class TestManageDisplayExtended:
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         leds = SimpleNamespace(is_available=lambda: False)
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()), \
-             patch("anima_mcp.server._get_leds", return_value=leds):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()), \
+             patch("anima_mcp.accessors._get_leds", return_value=leds):
             data = _parse(await handle_manage_display({"action": "calibrate_leds"}))
 
         assert "LEDs not available" in data["error"]
@@ -337,9 +337,9 @@ class TestManageDisplayExtended:
         sensor_values = iter([5.0, 25.0, 60.0])
         sensors = SimpleNamespace(read=lambda: SimpleNamespace(light_lux=next(sensor_values)))
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()), \
-             patch("anima_mcp.server._get_leds", return_value=leds), \
-             patch("anima_mcp.server._get_sensors", return_value=sensors), \
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()), \
+             patch("anima_mcp.accessors._get_leds", return_value=leds), \
+             patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("asyncio.sleep", new_callable=AsyncMock):
             data = _parse(await handle_manage_display({"action": "calibrate_leds"}))
 

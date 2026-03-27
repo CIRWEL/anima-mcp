@@ -77,6 +77,22 @@ class TestWakeSleepCycle:
         assert identity.creature_id == CREATURE_ID
         assert identity.total_alive_seconds > 0
 
+    def test_forked_database_files_independent(self, tmp_path):
+        """Same creature_id string on two DB paths = two independent records (fork semantics)."""
+        uid = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+        p1 = str(tmp_path / "one.db")
+        p2 = str(tmp_path / "two.db")
+        sa = IdentityStore(db_path=p1)
+        sb = IdentityStore(db_path=p2)
+        sa.wake(uid)
+        sb.wake(uid)
+        aw_b_before = sb.get_identity().total_awakenings
+        sa.sleep()
+        time.sleep(0.02)
+        sa.wake(uid, dedupe_window_seconds=0)
+        assert sa.get_identity().total_awakenings > 1
+        assert sb.get_identity().total_awakenings == aw_b_before
+
     def test_awakening_deduplication(self, store):
         """Rapid re-wakes within dedupe window should not increment awakenings."""
         store.wake(CREATURE_ID, dedupe_window_seconds=300)

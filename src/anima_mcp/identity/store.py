@@ -6,6 +6,9 @@ The creature remembers:
 - How many times it has awakened
 - Total time alive
 - Its name (if it has chosen one)
+
+Record identity (UUID row in *this* file) vs trajectory / behavioral identity:
+see CLAUDE.md section "Identity, Continuity, and Control".
 """
 
 import sys
@@ -432,7 +435,7 @@ class IdentityStore:
         if sync_to_unitares:
             try:
                 import asyncio
-                from ..server import _get_server_bridge
+                from ..accessors import _get_server_bridge
                 bridge = _get_server_bridge()
                 if bridge is not None:
                     async def sync_name():

@@ -488,7 +488,7 @@ Respond with just 1-2 short sentences. No quotes, no explanation, no preamble.""
 
         # Computational selfhood context (read-only — never feeds back)
         try:
-            from .server import _get_selfhood_context
+            from .accessors import _get_selfhood_context
             selfhood = _get_selfhood_context()
             if selfhood:
                 parts = []

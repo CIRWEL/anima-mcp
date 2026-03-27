@@ -685,7 +685,8 @@ def create_server() -> Server:
     async def call_tool(name: str, arguments: dict | None):
         # Any MCP tool call = external interaction → wake Lumen
         try:
-            from .server import _activity
+            from .accessors import _get_activity
+            _activity = _get_activity()
             if _activity:
                 _activity.record_interaction()
         except Exception:

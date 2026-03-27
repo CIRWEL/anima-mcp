@@ -54,11 +54,11 @@ class TestGetStateExtended:
         )
         recent = [SimpleNamespace(author="user", timestamp=datetime.now().timestamp() - 30)]
 
-        with patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._get_sensors", return_value=sensors), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.handlers.state_queries.extract_neural_bands", return_value={"alpha": 0.2}), \
-             patch("anima_mcp.server._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
              patch("anima_mcp.messages.get_recent_messages", return_value=recent):
             data = _parse(await handle_get_state({}))
 
@@ -72,9 +72,9 @@ class TestGetStateExtended:
         from anima_mcp.handlers.state_queries import handle_get_state
 
         store = SimpleNamespace(get_identity=lambda: (_ for _ in ()).throw(RuntimeError("identity fail")))
-        with patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(to_dict=lambda: {}), SimpleNamespace())):
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(to_dict=lambda: {}), SimpleNamespace())):
             data = _parse(await handle_get_state({}))
         assert "error" in data
         assert "identity fail" in data["error"]
@@ -90,9 +90,9 @@ class TestReadSensorsExtended:
                 return {"timestamp": "now", "cpu_temp_c": 50, "ambient_temp_c": None}
 
         shm = SimpleNamespace(read=lambda: {"ok": True})
-        with patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: True)), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), None)), \
-             patch("anima_mcp.server._get_shm_client", return_value=shm):
+        with patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: True)), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), None)), \
+             patch("anima_mcp.accessors._get_shm_client", return_value=shm):
             data = _parse(await handle_read_sensors({}))
 
         assert data["source"] == "shared_memory"
@@ -105,9 +105,9 @@ class TestReadSensorsExtended:
             def to_dict(self):
                 return {"timestamp": "now", "cpu_temp_c": 50}
 
-        with patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: False)), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), None)), \
-             patch("anima_mcp.server._get_shm_client", return_value=None):
+        with patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: False)), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), None)), \
+             patch("anima_mcp.accessors._get_shm_client", return_value=None):
             data = _parse(await handle_read_sensors({}))
 
         assert data["source"] == "direct_sensors"
@@ -130,7 +130,7 @@ class TestGetIdentityAndCalibrationExtended:
             name_history=["Lumen"],
         )
         store = SimpleNamespace(get_identity=lambda: identity, get_session_alive_seconds=lambda: 120)
-        with patch("anima_mcp.server._get_store", return_value=store):
+        with patch("anima_mcp.accessors._get_store", return_value=store):
             data = _parse(await handle_get_identity({}))
         assert data["name"] == "Lumen"
         assert data["total_awakenings"] == 7

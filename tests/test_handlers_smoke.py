@@ -63,7 +63,7 @@ class TestStateQueriesSmoke:
         from anima_mcp.handlers.state_queries import handle_get_state
 
         with patch("anima_mcp.handlers.state_queries.handle_get_state.__module__", "anima_mcp.handlers.state_queries"):
-            with patch("anima_mcp.server._get_store", return_value=None):
+            with patch("anima_mcp.accessors._get_store", return_value=None):
                 result = run_async(handle_get_state({}))
                 data = parse_handler_result(result)
                 assert "error" in data
@@ -72,7 +72,7 @@ class TestStateQueriesSmoke:
         """get_identity returns error JSON when server not initialized."""
         from anima_mcp.handlers.state_queries import handle_get_identity
 
-        with patch("anima_mcp.server._get_store", return_value=None):
+        with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_get_identity({}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -130,7 +130,7 @@ class TestKnowledgeSmoke:
         """get_self_knowledge returns error when store is None."""
         from anima_mcp.handlers.knowledge import handle_get_self_knowledge
 
-        with patch("anima_mcp.server._get_store", return_value=None):
+        with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_get_self_knowledge({}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -139,7 +139,7 @@ class TestKnowledgeSmoke:
         """get_growth returns error when growth system is None."""
         from anima_mcp.handlers.knowledge import handle_get_growth
 
-        with patch("anima_mcp.server._get_growth", return_value=None):
+        with patch("anima_mcp.accessors._get_growth", return_value=None):
             result = run_async(handle_get_growth({}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -203,9 +203,9 @@ class TestCommunicationSmoke:
         """say handler returns error when text is empty."""
         from anima_mcp.handlers.communication import handle_say
 
-        with patch("anima_mcp.server._get_store", return_value=None), \
-             patch("anima_mcp.server._get_voice", return_value=None), \
-             patch("anima_mcp.server.VOICE_MODE", "text"):
+        with patch("anima_mcp.accessors._get_store", return_value=None), \
+             patch("anima_mcp.accessors._get_voice", return_value=None), \
+             patch("anima_mcp.accessors.VOICE_MODE", "text"):
             result = run_async(handle_say({"text": ""}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -214,10 +214,10 @@ class TestCommunicationSmoke:
         """post_message handler returns error when message is empty."""
         from anima_mcp.handlers.communication import handle_post_message
 
-        with patch("anima_mcp.server._get_growth", return_value=None), \
-             patch("anima_mcp.server._get_activity", return_value=None), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)), \
-             patch("anima_mcp.server._get_store", return_value=None):
+        with patch("anima_mcp.accessors._get_growth", return_value=None), \
+             patch("anima_mcp.accessors._get_activity", return_value=None), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
+             patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_post_message({"message": ""}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -227,7 +227,7 @@ class TestCommunicationSmoke:
         """configure_voice returns error when voice system unavailable."""
         from anima_mcp.handlers.communication import handle_configure_voice
 
-        with patch("anima_mcp.server._get_voice", return_value=None):
+        with patch("anima_mcp.accessors._get_voice", return_value=None):
             result = run_async(handle_configure_voice({"action": "status"}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -262,7 +262,7 @@ class TestDisplayOpsSmoke:
         """capture_screen returns error when screen renderer not initialized."""
         from anima_mcp.handlers.display_ops import handle_capture_screen
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=None):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=None):
             result = run_async(handle_capture_screen({}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -271,7 +271,7 @@ class TestDisplayOpsSmoke:
         """manage_display returns error when action is not provided."""
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             result = run_async(handle_manage_display({}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -281,7 +281,7 @@ class TestDisplayOpsSmoke:
         """manage_display returns error for unknown action."""
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        with patch("anima_mcp.server._get_screen_renderer", return_value=MagicMock()):
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             result = run_async(handle_manage_display({"action": "nonexistent"}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -318,7 +318,7 @@ class TestWorkflowsSmoke:
         """unified_workflow returns error when store is None."""
         from anima_mcp.handlers.workflows import handle_unified_workflow
 
-        with patch("anima_mcp.server._get_store", return_value=None):
+        with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_unified_workflow({}))
             data = parse_handler_result(result)
             assert "error" in data
@@ -343,7 +343,7 @@ class TestWorkflowsSmoke:
         """learning_visualization returns error when store is None."""
         from anima_mcp.handlers.workflows import handle_learning_visualization
 
-        with patch("anima_mcp.server._get_store", return_value=None):
+        with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_learning_visualization({}))
             data = parse_handler_result(result)
             assert "error" in data

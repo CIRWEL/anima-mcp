@@ -14,7 +14,7 @@ from ..config import ConfigManager
 async def handle_get_state(arguments: dict) -> list[TextContent]:
     """Get current state: anima (self-sense) + identity. Safe, never crashes."""
     # Late imports to avoid circular dependency (server.py imports us)
-    from ..server import _get_store, _get_sensors, _get_readings_and_anima
+    from ..accessors import _get_store, _get_sensors, _get_readings_and_anima
 
     store = _get_store()
     if store is None:
@@ -80,7 +80,7 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
 
     # Add inner life from shared memory (temperament, drives)
     try:
-        from ..server import _get_last_shm_data
+        from ..accessors import _get_last_shm_data
         shm = _get_last_shm_data()
         il = shm.get("inner_life") if shm else None
         if il:
@@ -118,7 +118,7 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
 
 async def handle_get_identity(arguments: dict) -> list[TextContent]:
     """Get full identity: birth, awakenings, name history. Safe, never crashes."""
-    from ..server import _get_store
+    from ..accessors import _get_store
 
     store = _get_store()
     if store is None:
@@ -151,7 +151,7 @@ async def handle_get_identity(arguments: dict) -> list[TextContent]:
 
 async def handle_read_sensors(arguments: dict) -> list[TextContent]:
     """Read raw sensor values - returns only active sensors (nulls suppressed)."""
-    from ..server import _get_sensors, _get_readings_and_anima, _get_shm_client
+    from ..accessors import _get_sensors, _get_readings_and_anima, _get_shm_client
 
     sensors = _get_sensors()
 

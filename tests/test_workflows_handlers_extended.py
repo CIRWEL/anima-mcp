@@ -43,11 +43,11 @@ class TestNextStepsExtended:
         display = SimpleNamespace(is_available=lambda: True)
         eisv = SimpleNamespace(to_dict=lambda: {"E": 0.7})
 
-        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace()), \
-             patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace()), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, anima)), \
-             patch("anima_mcp.server._get_server_bridge", return_value=Bridge()), \
+        with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace()), \
+             patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace()), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
+             patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = _parse(await handle_next_steps({}))
@@ -72,11 +72,11 @@ class TestNextStepsExtended:
         display = SimpleNamespace(is_available=lambda: False)
         eisv = SimpleNamespace(to_dict=lambda: {"E": 0.1})
 
-        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace()), \
-             patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace()), \
-             patch("anima_mcp.server._get_display", return_value=display), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(readings, anima)), \
-             patch("anima_mcp.server._get_server_bridge", return_value=Bridge()), \
+        with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace()), \
+             patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace()), \
+             patch("anima_mcp.accessors._get_display", return_value=display), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
+             patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = _parse(await handle_next_steps({}))
@@ -179,9 +179,9 @@ class TestLumenContextExtended:
         recent_message = SimpleNamespace(author="user", timestamp=datetime.now().timestamp() - 60)
         eisv = SimpleNamespace(to_dict=lambda: {"E": 0.3})
 
-        with patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._get_sensors", return_value=sensors), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.messages.get_recent_messages", return_value=[recent_message]), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = _parse(await handle_get_lumen_context({"include": ["identity", "anima", "sensors", "mood", "eisv"]}))
@@ -197,9 +197,9 @@ class TestLumenContextExtended:
         from anima_mcp.handlers.workflows import handle_get_lumen_context
 
         store = SimpleNamespace(get_identity=lambda: (_ for _ in ()).throw(RuntimeError("identity fail")))
-        with patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)):
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
             data = _parse(await handle_get_lumen_context({"include": "identity"}))
 
         assert "error" in data["identity"]
@@ -214,8 +214,8 @@ class TestLearningVisualizationExtended:
         summary = {"dominant_pattern": "night calm"}
         visualizer = SimpleNamespace(get_learning_summary=lambda readings, anima: summary)
 
-        with patch("anima_mcp.server._get_store", return_value=store), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(SimpleNamespace(), SimpleNamespace())), \
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), SimpleNamespace())), \
              patch("anima_mcp.learning_visualization.LearningVisualizer", return_value=visualizer):
             data = _parse(await handle_learning_visualization({}))
 
@@ -224,8 +224,8 @@ class TestLearningVisualizationExtended:
     async def test_learning_visualization_sensor_error(self):
         from anima_mcp.handlers.workflows import handle_learning_visualization
 
-        with patch("anima_mcp.server._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
-             patch("anima_mcp.server._get_readings_and_anima", return_value=(None, None)):
+        with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
             data = _parse(await handle_learning_visualization({}))
 
         assert data["error"] == "Unable to read sensor data"

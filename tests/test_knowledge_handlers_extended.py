@@ -25,7 +25,7 @@ class TestGetSelfKnowledgeExtended:
         )
         store = SimpleNamespace(db_path=":memory:")
 
-        with patch("anima_mcp.server._get_store", return_value=store), \
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.self_reflection.get_reflection_system", return_value=reflection):
             data = _parse(await handle_get_self_knowledge({"limit": 5}))
 
@@ -92,7 +92,7 @@ class TestGetGrowthExtended:
             get_inactive_visitors=lambda: [("OldAgent", 9)],
         )
 
-        with patch("anima_mcp.server._get_growth", return_value=growth):
+        with patch("anima_mcp.accessors._get_growth", return_value=growth):
             data = _parse(await handle_get_growth({"include": ["all"]}))
 
         assert "autobiography" in data
@@ -173,7 +173,7 @@ class TestQueryExtended:
 
         growth = SimpleNamespace(get_autobiography_summary=lambda: {"highlights": 3})
         with patch("anima_mcp.knowledge.get_relevant_insights", return_value=[]), \
-             patch("anima_mcp.server._get_growth", return_value=growth):
+             patch("anima_mcp.accessors._get_growth", return_value=growth):
             data = _parse(await handle_query({"text": "growth status", "type": "growth"}))
 
         assert data["type"] == "growth"
@@ -195,7 +195,7 @@ class TestQueryExtended:
         store = SimpleNamespace(db_path=":memory:")
 
         with patch("anima_mcp.knowledge.get_relevant_insights", return_value=[qa]), \
-             patch("anima_mcp.server._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.self_reflection.get_reflection_system", return_value=reflection):
             data = _parse(await handle_query({"text": "light", "type": "cognitive"}))
 

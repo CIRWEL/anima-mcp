@@ -1,6 +1,6 @@
 # Backup & Restore
 
-**Last Updated:** March 14, 2026
+**Last Updated:** March 27, 2026
 
 ---
 
@@ -50,6 +50,14 @@ From Pi's `~/.anima/`:
 | `metacognition_baselines.json` | Metacognition baselines |
 | `display_brightness.json` | Display brightness config |
 | `drawings/` | All saved artwork |
+
+### Identity continuity
+
+- **Same backup restored** → same `creature_id`, events, and growth history (continuity of the identity row and DB).
+- **New Pi with empty `~/.anima/`** → a new `creature_id` unless you restore `anima.db` from backup.
+- **Copying `anima.db` to a second device** → forks record identity; trajectory and behavior may diverge with environment.
+
+**Behavioral** identity (trajectory signatures, attractor) is documented in `docs/theory/TRAJECTORY_IDENTITY_PAPER.md` — distinct from UUID continuity.
 
 ## Backup Schedule
 

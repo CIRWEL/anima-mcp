@@ -361,6 +361,28 @@ Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy,
 Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
 Server syncs `_last_governance_decision` from SHM when `governance_at` is within `SHM_GOVERNANCE_STALE_SECONDS` (210s).
 
+## Identity, Continuity, and Control
+
+**Two identity notions (do not conflate):**
+- **Record identity:** `creature_id` + SQLite (`identity/store.py`) — continuity of *this* deployment’s database file.
+- **Trajectory identity:** `TrajectorySignature` (`trajectory.py`) — behavioral similarity over time. Same UUID with different lived history is still one record; trajectory compares *patterns*.
+
+**Restore / fork:** `restore_lumen.sh` and restoring `anima.db` **preserve** record identity and accumulated history. A **fresh** DB (new install, no copy) yields a **new** `creature_id`. Copying DB to another Pi **forks** record identity; behavior and trajectory may diverge with environment.
+
+**Governance boundary:** UNITARES is **advisory** (thermodynamic check-in, verdicts). The broker still owns sensors and learning; **SHM** carries governance for the server. **`_local_governance()`** when Mac is unreachable is a **fallback**, not a substitute for embodied state — it keeps check-ins from going silent, not from replacing sensors.
+
+**Damping time scales (broker tick ≈ 2s):** Fast noise is filtered so state reads as a creature, not a flickering meter.
+
+| Layer | Where | Role |
+|-------|--------|------|
+| Anima mood | `MoodMomentum` in `anima.py` | Per-dimension α ∈ [0.08, 0.25] — EMA on raw anima |
+| Temperament | `TEMPERAMENT_ALPHA` in `inner_life.py` | α ∈ [0.005, 0.010] — ~2–5 min half-life (see file comments) |
+| Drives | `inner_life.py` | Accumulate/decay per tick toward “wanting…” |
+| Neural bands | `computational_neural.py` | EMA on θ, γ (α ≈ 0.2–0.3) |
+| LEDs | `display/leds/display.py` | Debounce + brightness easing |
+
+Tuning mood vs temperament alphas changes how **responsive** vs **stubborn** the system feels — constants live in the files above.
+
 ## Operational Facts
 
 Things agents keep re-discovering. Read this so you don't waste time.

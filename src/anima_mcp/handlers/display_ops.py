@@ -16,7 +16,7 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent | ImageCont
     Returns the actual visual output on Lumen's 240×240 LCD display,
     allowing remote viewing of what Lumen is drawing, showing, or expressing.
     """
-    from ..server import _get_screen_renderer
+    from ..accessors import _get_screen_renderer
 
     renderer = _get_screen_renderer()
     if renderer is None:
@@ -75,7 +75,7 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent | ImageCont
 
 async def handle_show_face(arguments: dict) -> list[TextContent]:
     """Show face on display (or return ASCII art if no display). Safe, never crashes."""
-    from ..server import _get_store, _get_sensors, _get_display, _get_readings_and_anima
+    from ..accessors import _get_store, _get_sensors, _get_display, _get_readings_and_anima
     from ..display import derive_face_state, face_to_ascii
 
     store = _get_store()
@@ -128,7 +128,7 @@ async def handle_show_face(arguments: dict) -> list[TextContent]:
 
 async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     """Get system diagnostics including LED and display status."""
-    from ..server import _get_leds, _get_display, _get_display_update_task, _get_sensors
+    from ..accessors import _get_leds, _get_display, _get_display_update_task, _get_sensors
 
     sensors = _get_sensors()
 
@@ -160,7 +160,7 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     # Drawing diagnostics
     drawing_info = None
     try:
-        from ..server import _get_screen_renderer
+        from ..accessors import _get_screen_renderer
         import time as _time
         renderer = _get_screen_renderer()
         if renderer and hasattr(renderer, 'drawing_engine'):
@@ -194,7 +194,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
     Control Lumen's display.
     Consolidates: switch_screen + show_face
     """
-    from ..server import _get_screen_renderer
+    from ..accessors import _get_screen_renderer
     from ..display.screens import ScreenMode
 
     renderer = _get_screen_renderer()
@@ -293,7 +293,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
 
     elif action == "calibrate_leds":
         import asyncio
-        from ..server import _get_leds, _get_sensors
+        from ..accessors import _get_leds, _get_sensors
 
         leds = _get_leds()
         if not leds or not leds.is_available():

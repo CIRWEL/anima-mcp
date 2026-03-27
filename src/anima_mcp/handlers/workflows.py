@@ -16,7 +16,7 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
     If workflow name matches a template, uses template. Otherwise uses original workflow logic.
     """
     import os
-    from ..server import _get_store, _get_sensors
+    from ..accessors import _get_store, _get_sensors
     from ..workflow_orchestrator import get_orchestrator
     from ..workflow_templates import WorkflowTemplates
 
@@ -84,7 +84,7 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
 
 async def handle_next_steps(arguments: dict) -> list[TextContent]:
     """Get proactive next steps to achieve goals. Safe, never crashes."""
-    from ..server import _get_store, _get_sensors, _get_display, _get_readings_and_anima
+    from ..accessors import _get_store, _get_sensors, _get_display, _get_readings_and_anima
     from ..next_steps_advocate import get_advocate
     from ..eisv_mapper import anima_to_eisv
 
@@ -115,7 +115,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
     unitares_connected = False
     unitares_status = "not_configured"
     try:
-        from ..server import _get_server_bridge
+        from ..accessors import _get_server_bridge
         bridge = _get_server_bridge()
         if bridge is not None:
             unitares_connected = await bridge.check_availability()
@@ -252,7 +252,7 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
     Get Lumen's complete current context in one call.
     Consolidates: get_state + get_identity + read_sensors
     """
-    from ..server import _get_store, _get_sensors, _get_readings_and_anima
+    from ..accessors import _get_store, _get_sensors, _get_readings_and_anima
 
     store = _get_store()
     sensors = _get_sensors()
@@ -344,7 +344,7 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
 
 async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
     """Get learning visualization - shows why Lumen feels what it feels."""
-    from ..server import _get_store, _get_readings_and_anima
+    from ..accessors import _get_store, _get_readings_and_anima
     from ..learning_visualization import LearningVisualizer
 
     store = _get_store()

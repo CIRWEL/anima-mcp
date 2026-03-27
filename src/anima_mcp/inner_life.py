@@ -7,6 +7,8 @@ Layer 2: Temperament — slow EMA of mood (~5 min half-life). Baseline emotional
          "I've been feeling cool lately."
 Layer 3: Drives — needs that accumulate when temperament stays low.
          "I want warmth" not just "I am cold."
+
+Damping stack (mood vs temperament vs neural): CLAUDE.md "Identity, Continuity, and Control".
 """
 
 import json

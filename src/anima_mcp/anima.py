@@ -85,7 +85,11 @@ class Anima:
 
 
 class MoodMomentum:
-    """Temporal inertia for anima dimensions. State lingers."""
+    """Temporal inertia for anima dimensions. State lingers.
+
+    Broader damping stack (temperament, drives, neural EMAs): see CLAUDE.md
+    "Identity, Continuity, and Control".
+    """
 
     ALPHA = {
         "warmth": 0.08,

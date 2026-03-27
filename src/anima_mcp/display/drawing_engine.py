@@ -28,7 +28,7 @@ from ..expression_moods import ExpressionMoodTracker
 def _get_drawing_bridge():
     """Get shared server bridge for drawing outcome reporting (late import to avoid circular deps)."""
     try:
-        from ..server import _get_server_bridge
+        from ..accessors import _get_server_bridge
         return _get_server_bridge()
     except Exception:
         return None
