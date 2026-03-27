@@ -47,6 +47,8 @@ class ScreenMode(Enum):
     INNER_LIFE = "inner_life"        # Inner life - cognitive and emotional state
     LEARNING = "learning"            # Learning visualization - why Lumen feels what it feels
     SELF_GRAPH = "self_graph"        # Self-schema G_t visualization
+    GOALS_BELIEFS = "goals_beliefs"  # Goals and self-beliefs
+    AGENCY = "agency"                # Action selection and TD-learning
     NOTEPAD = "notepad"              # Drawing canvas - Lumen's creative space
     MESSAGES = "messages"            # Message board - Lumen's observations only
     QUESTIONS = "questions"          # Q&A - Lumen's questions and answers
@@ -602,10 +604,12 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
         ScreenMode.SENSORS: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
         ScreenMode.DIAGNOSTICS: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
         ScreenMode.HEALTH: ("info", [ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH]),
-        ScreenMode.NEURAL: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.INNER_LIFE: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
-        ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH]),
+        ScreenMode.NEURAL: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY]),
+        ScreenMode.INNER_LIFE: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY]),
+        ScreenMode.LEARNING: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY]),
+        ScreenMode.SELF_GRAPH: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY]),
+        ScreenMode.GOALS_BELIEFS: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY]),
+        ScreenMode.AGENCY: ("mind", [ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY]),
         ScreenMode.MESSAGES: ("msgs", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
         ScreenMode.QUESTIONS: ("msgs", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
         ScreenMode.VISITORS: ("msgs", [ScreenMode.MESSAGES, ScreenMode.QUESTIONS, ScreenMode.VISITORS]),
@@ -994,6 +998,10 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
                     self._render_learning(anima, readings)
                 elif mode == ScreenMode.SELF_GRAPH:
                     self._render_self_graph(anima, readings, identity)
+                elif mode == ScreenMode.GOALS_BELIEFS:
+                    self._render_goals_beliefs(anima, identity)
+                elif mode == ScreenMode.AGENCY:
+                    self._render_agency()
                 elif mode == ScreenMode.MESSAGES:
                     self._render_messages()
                 elif mode == ScreenMode.QUESTIONS:

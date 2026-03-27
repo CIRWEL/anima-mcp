@@ -229,6 +229,8 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "visitors": ScreenMode.VISITORS,
             "art_eras": ScreenMode.ART_ERAS,
             "health": ScreenMode.HEALTH,
+            "goals_beliefs": ScreenMode.GOALS_BELIEFS,
+            "agency": ScreenMode.AGENCY,
         }
         if screen in mode_map:
             renderer.set_mode(mode_map[screen])

@@ -123,6 +123,7 @@ class MindMixin:
                       fill=dominant_color, font=font_small)
 
             self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, self._state.mode)
 
             self._store_screen_cache("neural", neural_key, image)
             if hasattr(self._display, '_image'):
@@ -312,6 +313,7 @@ class MindMixin:
                 draw.text((155, y), "content", fill=COLORS.SOFT_GREEN, font=f_tiny)
 
             self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, self._state.mode)
 
             self._store_screen_cache("inner_life", cache_key, image)
             if hasattr(self._display, '_image'):
@@ -598,6 +600,7 @@ class MindMixin:
 
             # Status bar
             self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, self._state.mode)
 
             # Update display
             if hasattr(self._display, '_image'):
@@ -685,33 +688,33 @@ class MindMixin:
 
             draw.text((5, 2), "self-schema G_t", fill=COLORS.SOFT_CYAN, font=font_small)
 
-            count_str = f"{len(schema.nodes)} nodes, {len(schema.edges)} edges"
-            draw.text((5, 225), count_str, fill=COLORS.TEXT_DIM, font=font_small)
-
-            # Compact legend -- colored dots with labels
+            # Legend: 2 columns x 3 rows, bottom-left; counts right-aligned
             font_micro = fonts['micro']
-            legend = [
+            legend_items = [
                 ((255, 200, 100), "id"),
-                ((100, 150, 255), "anima"),
-                ((100, 200, 100), "sensor"),
-            ]
-            legend2 = [
                 ((255, 150, 0), "pref"),
+                ((100, 150, 255), "anima"),
                 ((180, 180, 255), "belief"),
+                ((100, 200, 100), "sensor"),
                 ((180, 220, 140), "traj"),
             ]
-            lx = 5
-            for color, label in legend:
-                draw.rectangle([lx, 209, lx + 4, 213], fill=color)
-                draw.text((lx + 6, 208), label, fill=COLORS.TEXT_DIM, font=font_micro)
-                lx += 6 + len(label) * 6 + 4
-            lx = 5
-            for color, label in legend2:
-                draw.rectangle([lx, 218, lx + 4, 222], fill=color)
-                draw.text((lx + 6, 217), label, fill=COLORS.TEXT_DIM, font=font_micro)
-                lx += 6 + len(label) * 6 + 4
+            COL_W = 58
+            ROW_H = 12
+            base_y = 202
+            for i, (color, label) in enumerate(legend_items):
+                col = i % 2
+                row = i // 2
+                lx = 5 + col * COL_W
+                ly = base_y + row * ROW_H
+                draw.rectangle([lx, ly + 2, lx + 4, ly + 6], fill=color)
+                draw.text((lx + 7, ly), label, fill=COLORS.TEXT_DIM, font=font_micro)
+
+            # Node/edge counts right-aligned
+            draw.text((150, base_y), f"nodes: {len(schema.nodes)}", fill=COLORS.TEXT_DIM, font=font_micro)
+            draw.text((150, base_y + ROW_H), f"edges: {len(schema.edges)}", fill=COLORS.TEXT_DIM, font=font_micro)
 
             self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, self._state.mode)
 
             self._store_screen_cache("self_graph", sg_key, image)
             if hasattr(self._display, '_image'):
@@ -721,4 +724,328 @@ class MindMixin:
         except Exception as e:
             print(f"[Self Graph] Canvas error: {e}", file=sys.stderr, flush=True)
             import traceback
+            traceback.print_exc(file=sys.stderr)
+
+    def _render_goals_beliefs(
+        self,
+        anima: Optional[Anima] = None,
+        identity: Optional[CreatureIdentity] = None,
+    ):
+        """Render goals & beliefs screen — active goals + top self-beliefs."""
+        from ..growth import get_growth_system
+        from ..growth.models import GoalStatus
+        from ..self_model import get_self_model
+
+        growth = get_growth_system()
+        self_model = get_self_model()
+
+        # Gather data
+        goals = []
+        if growth and hasattr(growth, '_goals'):
+            goals = [g for g in growth._goals.values() if g.status == GoalStatus.ACTIVE]
+            goals.sort(key=lambda g: g.progress, reverse=True)
+            goals = goals[:2]
+
+        beliefs = {}
+        if self_model:
+            try:
+                beliefs = self_model.get_belief_summary()
+            except Exception:
+                pass
+
+        # Sort beliefs by confidence descending, take top 5
+        top_beliefs = sorted(beliefs.items(), key=lambda kv: kv[1].get("confidence", 0), reverse=True)[:5]
+
+        # Cache key
+        g_key = "|".join(f"{g.goal_id}:{g.progress:.2f}" for g in goals) if goals else "none"
+        b_key = "|".join(f"{k}:{v.get('confidence', 0):.2f}" for k, v in top_beliefs) if top_beliefs else "none"
+        cache_key = f"gb|{g_key}|{b_key}"
+        if self._check_screen_cache("goals_beliefs", cache_key):
+            return
+
+        if not hasattr(self._display, '_create_canvas'):
+            lines = ["goals & beliefs", ""]
+            for g in goals:
+                lines.append(f"  {g.description[:30]}")
+                lines.append(f"  {g.progress:.0%} {g.status.value}")
+            if not goals:
+                lines.append("  no active goals")
+            lines.append("")
+            for bid, bdata in top_beliefs:
+                lines.append(f"  {bdata['description'][:25]} {bdata['confidence']:.2f}")
+            self._display.render_text("\n".join(lines), (10, 10))
+            return
+
+        try:
+            from .design import lighten_color, blend_color
+
+            image, draw = self._display._create_canvas(COLORS.BG_DARK)
+            fonts = self._get_fonts()
+            f_title = fonts['title']
+            f_small = fonts['small']
+            f_tiny = fonts['tiny']
+            f_micro = fonts['micro']
+            DIM = COLORS.TEXT_DIM
+            SECONDARY = COLORS.TEXT_SECONDARY
+
+            # Title
+            draw.text((10, 6), "goals & beliefs", fill=COLORS.SOFT_CYAN, font=f_title)
+
+            y = 28
+
+            # -- Goals section --
+            if goals:
+                for g in goals:
+                    # Goal description (truncate to fit)
+                    desc = g.description
+                    if len(desc) > 32:
+                        desc = desc[:30] + ".."
+                    draw.text((10, y), desc, fill=COLORS.TEXT_PRIMARY, font=f_tiny)
+                    y += 14
+
+                    # Progress bar
+                    BAR_X = 10
+                    BAR_W = 140
+                    BAR_H = 8
+                    draw.rectangle([BAR_X, y, BAR_X + BAR_W, y + BAR_H], fill=(15, 15, 22))
+                    fill_w = int(g.progress * BAR_W)
+                    if fill_w > 0:
+                        bar_color = blend_color(COLORS.SOFT_CYAN, COLORS.SOFT_GREEN, g.progress)
+                        draw.rectangle([BAR_X, y, BAR_X + fill_w, y + BAR_H], fill=bar_color)
+
+                    # Progress % + status
+                    draw.text((BAR_X + BAR_W + 6, y - 1), f"{g.progress:.0%}", fill=COLORS.SOFT_CYAN, font=f_tiny)
+                    draw.text((BAR_X + BAR_W + 32, y - 1), g.status.value, fill=DIM, font=f_micro)
+                    y += 16
+            else:
+                draw.text((10, y), "no active goals", fill=DIM, font=f_tiny)
+                y += 16
+
+            # -- Separator --
+            y += 2
+            sep_text = " beliefs "
+            draw.line([(10, y + 5), (60, y + 5)], fill=(30, 30, 40), width=1)
+            draw.text((62, y), sep_text, fill=DIM, font=f_micro)
+            draw.line([(120, y + 5), (230, y + 5)], fill=(30, 30, 40), width=1)
+            y += 14
+
+            # -- Beliefs section --
+            if top_beliefs:
+                for bid, bdata in top_beliefs:
+                    conf = bdata.get("confidence", 0)
+                    desc = bdata.get("description", bid)
+                    if len(desc) > 28:
+                        desc = desc[:26] + ".."
+
+                    # Color by confidence
+                    if conf > 0.7:
+                        conf_color = COLORS.SOFT_GREEN
+                    elif conf > 0.4:
+                        conf_color = COLORS.SOFT_YELLOW
+                    else:
+                        conf_color = DIM
+
+                    # Left edge bar colored by confidence
+                    bar_h = 10
+                    draw.rectangle([10, y + 1, 13, y + bar_h], fill=conf_color)
+
+                    # Description + confidence value
+                    draw.text((18, y), desc, fill=SECONDARY, font=f_tiny)
+                    draw.text((210, y), f"{conf:.2f}", fill=conf_color, font=f_tiny)
+                    y += 15
+            else:
+                draw.text((18, y), "no beliefs yet", fill=DIM, font=f_tiny)
+
+            self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, self._state.mode)
+
+            self._store_screen_cache("goals_beliefs", cache_key, image)
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+
+        except Exception as e:
+            import traceback
+            print(f"[Goals/Beliefs Screen] Error: {e}", file=sys.stderr, flush=True)
+            traceback.print_exc(file=sys.stderr)
+
+    def _render_agency(self):
+        """Render agency screen — last action, action values, exploration rate."""
+        shm = self._shm_data or {}
+        learning = shm.get("learning", {})
+        agency_shm = learning.get("agency", {})
+
+        # Try to get richer data from the action selector directly
+        action_values = agency_shm.get("action_values", {})
+        exploration_rate = agency_shm.get("exploration_rate", 0.5)
+        last_action_type = agency_shm.get("last_action_type", None)
+        attention_focus = agency_shm.get("attention_focus", None)
+
+        # Get last outcome from action selector if available
+        last_motivation = None
+        last_reward = None
+        try:
+            from ..agency import get_action_selector
+            selector = get_action_selector()
+            stats = selector.get_action_stats()
+            # Prefer server-side data if available (richer)
+            if stats.get("action_values"):
+                action_values = stats["action_values"]
+            if stats.get("exploration_rate") is not None:
+                exploration_rate = stats["exploration_rate"]
+            if stats.get("attention_focus"):
+                attention_focus = stats["attention_focus"]
+            # Last outcome
+            if selector._outcome_history:
+                last_out = selector._outcome_history[-1]
+                last_action_type = last_out.action.action_type.value
+                last_motivation = last_out.action.motivation
+                last_reward = last_out.reward
+        except Exception:
+            pass
+
+        # Cache key
+        av_key = "|".join(f"{k}:{v:.2f}" for k, v in sorted(action_values.items())[:4]) if action_values else "none"
+        cache_key = f"ag|{last_action_type}|{exploration_rate:.2f}|{av_key}"
+        if self._check_screen_cache("agency", cache_key):
+            return
+
+        if not shm and not action_values:
+            self._display.render_text("agency\n\nwaiting for data...", (10, 10), color=COLORS.TEXT_DIM)
+            return
+
+        if not hasattr(self._display, '_create_canvas'):
+            lines = ["agency", "", f"exploration: {exploration_rate:.0%}"]
+            if last_action_type:
+                lines.append(f"last: {last_action_type}")
+            for k, v in sorted(action_values.items(), key=lambda x: x[1], reverse=True)[:4]:
+                lines.append(f"  {k}: {v:.2f}")
+            self._display.render_text("\n".join(lines), (10, 10))
+            return
+
+        try:
+            from .design import lighten_color
+
+            image, draw = self._display._create_canvas(COLORS.BG_DARK)
+            fonts = self._get_fonts()
+            f_title = fonts['title']
+            f_small = fonts['small']
+            f_tiny = fonts['tiny']
+            f_micro = fonts['micro']
+            f_medium = fonts['medium']
+            DIM = COLORS.TEXT_DIM
+            SECONDARY = COLORS.TEXT_SECONDARY
+
+            # Title
+            draw.text((10, 6), "agency", fill=COLORS.SOFT_CYAN, font=f_title)
+
+            y = 28
+
+            # -- Last action section --
+            ACTION_COLORS = {
+                "ask_question": COLORS.SOFT_CYAN,
+                "focus_attention": COLORS.SOFT_PURPLE,
+                "led_brightness": COLORS.SOFT_YELLOW,
+                "explore": COLORS.SOFT_GREEN,
+                "face_expression": COLORS.SOFT_ORANGE,
+                "stay_quiet": DIM,
+                "speak": COLORS.SOFT_BLUE,
+                "observe": COLORS.SOFT_BLUE,
+                "rest": DIM,
+                "draw": COLORS.SOFT_CORAL,
+            }
+
+            draw.text((10, y), "last action", fill=DIM, font=f_micro)
+            y += 12
+
+            if last_action_type:
+                display_name = last_action_type.replace("_", " ").upper()
+                action_color = ACTION_COLORS.get(last_action_type, SECONDARY)
+                draw.text((10, y), display_name, fill=action_color, font=f_small)
+                y += 14
+
+                if last_motivation:
+                    mot = last_motivation
+                    if len(mot) > 34:
+                        mot = mot[:32] + ".."
+                    draw.text((10, y), f'"{mot}"', fill=DIM, font=f_micro)
+                    y += 12
+
+                if last_reward is not None:
+                    if last_reward > 0:
+                        reward_color = COLORS.SOFT_GREEN
+                        reward_str = f"reward: +{last_reward:.2f}"
+                    elif last_reward < 0:
+                        reward_color = COLORS.SOFT_CORAL
+                        reward_str = f"reward: {last_reward:.2f}"
+                    else:
+                        reward_color = DIM
+                        reward_str = "reward: 0.00"
+                    draw.text((10, y), reward_str, fill=reward_color, font=f_tiny)
+                    y += 14
+            else:
+                draw.text((10, y), "none yet", fill=DIM, font=f_small)
+                y += 16
+
+            # -- Separator --
+            y += 2
+            draw.line([(10, y), (230, y)], fill=(30, 30, 40), width=1)
+            y += 6
+
+            # -- Action values section --
+            draw.text((10, y), "action values", fill=DIM, font=f_micro)
+            y += 12
+
+            if action_values:
+                top_actions = sorted(action_values.items(), key=lambda x: x[1], reverse=True)[:4]
+                BAR_X = 10
+                BAR_W = 100
+                BAR_H = 7
+
+                max_val = max(v for _, v in top_actions) if top_actions else 1.0
+                max_val = max(max_val, 0.01)
+
+                for action_name, value in top_actions:
+                    # Short label
+                    label = action_name.replace("_", " ")
+                    if len(label) > 14:
+                        label = label[:12] + ".."
+                    action_color = ACTION_COLORS.get(action_name, SECONDARY)
+
+                    draw.text((BAR_X, y), label, fill=action_color, font=f_micro)
+                    y += 10
+
+                    # Bar
+                    draw.rectangle([BAR_X, y, BAR_X + BAR_W, y + BAR_H], fill=(15, 15, 22))
+                    fill_w = int((value / max_val) * BAR_W)
+                    if fill_w > 0:
+                        draw.rectangle([BAR_X, y, BAR_X + fill_w, y + BAR_H], fill=action_color)
+
+                    # Value
+                    draw.text((BAR_X + BAR_W + 6, y - 1), f".{int(value * 100):02d}" if value < 1 else f"{value:.1f}",
+                              fill=action_color, font=f_micro)
+                    y += 12
+
+            # -- Footer --
+            y = max(y + 4, 214)
+            draw.line([(10, y), (230, y)], fill=(30, 30, 40), width=1)
+            y += 4
+
+            draw.text((10, y), f"exploration: {exploration_rate:.0%}", fill=COLORS.SOFT_ORANGE, font=f_tiny)
+            if attention_focus:
+                draw.text((140, y), f"attn: {attention_focus}", fill=DIM, font=f_tiny)
+
+            self._draw_status_bar(draw)
+            self._draw_screen_indicator(draw, self._state.mode)
+
+            self._store_screen_cache("agency", cache_key, image)
+            if hasattr(self._display, '_image'):
+                self._display._image = image
+            if hasattr(self._display, '_show'):
+                self._display._show()
+
+        except Exception as e:
+            import traceback
+            print(f"[Agency Screen] Error: {e}", file=sys.stderr, flush=True)
             traceback.print_exc(file=sys.stderr)
