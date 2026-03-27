@@ -876,32 +876,32 @@ class MindMixin:
         learning = shm.get("learning", {})
         agency_shm = learning.get("agency", {})
 
-        # Try to get richer data from the action selector directly
+        # SHM is the real-time source (broker updates it every cycle).
+        # Server-side get_action_selector() is a separate instance loaded from DB
+        # at init — it does NOT get real-time updates from record_outcome().
+        # Only use server-side for outcome history (not in SHM).
         action_values = agency_shm.get("action_values", {})
         exploration_rate = agency_shm.get("exploration_rate", 0.5)
         last_action_type = agency_shm.get("last_action_type", None)
         attention_focus = agency_shm.get("attention_focus", None)
 
-        # Get last outcome from action selector if available
         last_motivation = None
         last_reward = None
         try:
             from ..agency import get_action_selector
             selector = get_action_selector()
-            stats = selector.get_action_stats()
-            # Prefer server-side data if available (richer)
-            if stats.get("action_values"):
-                action_values = stats["action_values"]
-            if stats.get("exploration_rate") is not None:
-                exploration_rate = stats["exploration_rate"]
-            if stats.get("attention_focus"):
-                attention_focus = stats["attention_focus"]
-            # Last outcome
+            # Only use server-side for outcome history (SHM doesn't carry this)
             if selector._outcome_history:
                 last_out = selector._outcome_history[-1]
-                last_action_type = last_out.action.action_type.value
+                last_action_type = last_action_type or last_out.action.action_type.value
                 last_motivation = last_out.action.motivation
                 last_reward = last_out.reward
+            # Fall back to server-side only if SHM has no data
+            if not action_values:
+                stats = selector.get_action_stats()
+                action_values = stats.get("action_values", {})
+                exploration_rate = stats.get("exploration_rate", exploration_rate)
+                attention_focus = stats.get("attention_focus", attention_focus)
         except Exception:
             pass
 
