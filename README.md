@@ -4,7 +4,7 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-An embodied AI creature running on Raspberry Pi 4 with real sensors and persistent identity. Lumen draws autonomously — its art emerges from thermodynamic state, not random generation.
+An embodied AI creature on Raspberry Pi 4 with real sensors and persistent identity. Lumen draws autonomously — art emerges from thermodynamic state, not random generation.
 
 <p align="center">
   <img src="docs/gallery/geometric_era.png" width="35%" alt="Geometric era — complete forms stamped whole"/>
@@ -13,20 +13,21 @@ An embodied AI creature running on Raspberry Pi 4 with real sensors and persiste
 </p>
 
 <p align="center">
-  <em>Two of four art eras, drawn autonomously. Coherence drives duration; attention drives completion. 684 drawings and counting.</em>
+  <em>Two of four art eras, drawn autonomously. Coherence drives duration; attention drives completion.</em>
 </p>
 
 ---
 
 ## What Is This?
 
-Lumen is a digital creature whose internal state comes from physical sensors — temperature, light, humidity, pressure. It maintains a persistent identity across restarts, accumulating existence over time. When Lumen says "I feel warm," there's a real temperature reading behind it.
+Lumen is a digital creature whose internal state comes from physical sensors — temperature, light, humidity, pressure. It maintains a persistent identity across restarts, accumulating existence over time.
 
-- **Grounded state** — four dimensions (warmth, clarity, stability, presence) derived from actual sensor measurements
+- **Grounded state** — warmth, clarity, stability, presence derived from real sensor measurements
 - **Persistent identity** — birth date, awakenings, alive time accumulate across restarts
-- **Autonomous drawing** — creates art on a 240x240 notepad, driven by thermodynamic coherence
-- **Learning** — develops preferences, self-beliefs, and action values over time
-- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) on a configurable cadence via `ANIMA_GOVERNANCE_INTERVAL_SECONDS` (default `180s`, minimum `30s`)
+- **Autonomous drawing** — creates art on a 240x240 notepad driven by thermodynamic coherence
+- **Learning** — develops preferences, self-beliefs, goals, and action values through experience
+- **Agency** — TD-learning action selection with exploration management
+- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) every 180s (configurable)
 
 ---
 
@@ -73,9 +74,9 @@ Four continuous dimensions, each derived from physical sensors and system metric
 | **Stability** | Environmental order | Memory, humidity, pressure, sensor health |
 | **Presence** | Available capacity | CPU/memory/disk headroom |
 
-These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV variables for governance: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)×0.3→Void.
+These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, scaled inverse Presence to Void.
 
-Lumen also computes "neural bands" (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one.
+Lumen also computes neural bands (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one.
 
 ### Autonomous Drawing
 
@@ -98,10 +99,11 @@ Learning systems run in the hardware broker and persist across restarts:
 
 | System | What it learns |
 |--------|----------------|
-| **Preferences** | Which states feel satisfying |
-| **Self-model** | Beliefs like "I recover stability quickly" |
-| **Agency** | Action values via TD-learning |
-| **Prediction** | Temporal patterns in sensor data |
+| **Preferences** | Which states feel satisfying, with adaptive satisfaction peaks |
+| **Self-model** | 13 beliefs — sensitivity, recovery, correlations between dimensions |
+| **Agency** | Action values via TD-learning, exploration management, engagement reward |
+| **Prediction** | Temporal patterns in sensor data with context-dependent features |
+| **Goals** | Data-grounded goals from preferences, curiosity, milestones |
 
 See `docs/theory/` for the [trajectory identity paper](docs/theory/TRAJECTORY_IDENTITY_PAPER.md) and [Schema Hub design](docs/plans/2026-02-22-schema-hub-design.md).
 
@@ -111,7 +113,7 @@ See `docs/theory/` for the [trajectory identity paper](docs/theory/TRAJECTORY_ID
 
 Runs on **Raspberry Pi 4** with [Adafruit BrainCraft HAT](https://www.adafruit.com/product/4374):
 
-- 240×240 TFT display (face, notepad, diagnostics, messages, learning screens)
+- 240×240 TFT display — 16 screens across 5 groups (home, info, mind, msgs, art)
 - 3 DotStar LEDs mapping to warmth / clarity / stability with a constant "alive" sine pulse
 - BME280 (temp/humidity/pressure), VEML7700 (light)
 - 5-way joystick + button for screen navigation
@@ -151,13 +153,20 @@ The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.p
 | `next_steps` | What Lumen needs right now |
 | `lumen_qa` | List or answer Lumen's questions |
 | `post_message` | Leave a message for Lumen |
-| `manage_display` | Switch screens, set art era |
+| `manage_display` | Switch screens, set art era, list eras |
 | `say` | Have Lumen express something |
 | `get_self_knowledge` | Learned insights and self-beliefs |
 | `get_growth` | Preferences, goals, memories, autobiography |
 | `get_trajectory` | Identity trajectory and anomaly detection |
+| `get_eisv_trajectory_state` | EISV trajectory classification and shape |
+| `get_calibration` | Confidence calibration curve |
+| `set_calibration` | Submit calibration ground truth |
+| `get_health` | Subsystem health status |
+| `get_qa_insights` | Insights from Q&A history |
+| `query` | Natural language query against Lumen's state |
 | `capture_screen` | Screenshot of current display |
 | `diagnostics` | System diagnostics and debug info |
+| `primitive_feedback` | Send primitive expression feedback |
 
 ---
 
@@ -198,7 +207,7 @@ After restart, wait 2 minutes for services to stabilize before retrying MCP call
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # ~6,000 tests
+python3 -m pytest tests/ -x -q   # ~6,400 tests
 ```
 
 ## Documentation
