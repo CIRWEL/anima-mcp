@@ -327,7 +327,7 @@ class ActionSelector:
                     "warmth": (ActionType.LED_BRIGHTNESS, {"direction": "increase"}),
                     "clarity": (ActionType.REQUEST_REFLECTION, {}),
                     "stability": (ActionType.ADJUST_SENSITIVITY, {"direction": "decrease"}),
-                    "presence": (ActionType.ASK_QUESTION, {"surprise_sources": ["presence"]}),
+                    "presence": (ActionType.FACE_EXPRESSION, {"trigger": "drive"}),
                 }
                 if strongest_dim == "presence" and can_speak:
                     drive_actions["presence"] = (ActionType.SPEAK, {"trigger": "drive"})

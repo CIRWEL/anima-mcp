@@ -58,12 +58,22 @@ class Preference:
     # Meta-learning: how much satisfying this preference predicts flourishing
     influence_weight: float = 1.0
 
+    # Learned satisfaction peak within the optimal range.
+    # Shifts toward values associated with good outcomes instead of
+    # always assuming the geometric center is best.
+    optimal_center: Optional[float] = None
+
     def current_satisfaction(self, value: float) -> float:
         """How satisfied is this preference given current value?"""
         if self.optimal_low <= value <= self.optimal_high:
-            # In optimal range
-            center = (self.optimal_low + self.optimal_high) / 2
-            distance_from_center = abs(value - center) / (self.optimal_high - self.optimal_low)
+            # Use learned center if available, else geometric midpoint
+            center = self.optimal_center if self.optimal_center is not None else (self.optimal_low + self.optimal_high) / 2
+            # Clamp center to range
+            center = max(self.optimal_low, min(self.optimal_high, center))
+            span = self.optimal_high - self.optimal_low
+            if span < 0.01:
+                return 1.0
+            distance_from_center = abs(value - center) / span
             return 1.0 - distance_from_center * 0.3  # Slight preference for center
         elif value < self.optimal_low:
             return max(0.0, 1.0 - (self.optimal_low - value) * 2)
@@ -93,6 +103,9 @@ class Preference:
                 self.optimal_low = self.optimal_low - learning_rate * (self.optimal_low - state_value)
             elif state_value > self.optimal_high:
                 self.optimal_high = self.optimal_high + learning_rate * (state_value - self.optimal_high)
+            # Shift satisfaction peak toward good-outcome values
+            center = self.optimal_center if self.optimal_center is not None else (self.optimal_low + self.optimal_high) / 2
+            self.optimal_center = center + learning_rate * (state_value - center) * outcome_valence
         elif outcome_valence < -0.3:
             # This state led to bad outcome - contract optimal range away from it
             center = (self.optimal_low + self.optimal_high) / 2
@@ -118,6 +131,7 @@ class Preference:
             "confidence": self.confidence,
             "experience_count": self.experience_count,
             "influence_weight": self.influence_weight,
+            "optimal_center": self.optimal_center,
         }
 
     @classmethod
@@ -131,6 +145,7 @@ class Preference:
             confidence=data.get("confidence", 0.0),
             experience_count=data.get("experience_count", 0),
             influence_weight=data.get("influence_weight", 1.0),
+            optimal_center=data.get("optimal_center"),
         )
 
 
