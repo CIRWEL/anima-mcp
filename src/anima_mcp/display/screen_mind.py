@@ -960,7 +960,7 @@ class MindMixin:
             y += 12
 
             if last_action_type:
-                display_name = last_action_type.replace("_", " ")
+                display_name = last_action_type.replace("_", " ").upper()
                 action_color = ACTION_COLORS.get(last_action_type, SECONDARY)
                 draw.text((10, y), display_name, fill=action_color, font=f_small)
                 y += 14
