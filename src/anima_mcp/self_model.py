@@ -476,12 +476,18 @@ class SelfModel:
         if sum_sq_x < EPSILON or sum_sq_y < EPSILON:
             return  # Values are constant or near-constant, no meaningful correlation
 
-        # Only test when there's real variance in the input (coefficient of variation > 5%).
-        # In a lunchbox with stable light, most 50-sample windows show noise.
-        # Testing noise as "weak correlation → contradicting" buries real signal.
+        # Only run full correlation test when there's real variance in input (CV > 5%).
+        # In stable environments, most windows show noise not signal.
         cv_x = math.sqrt(sum_sq_x / n) / (abs(mean_x) + EPSILON)
         if cv_x < 0.05:
-            return  # Input hasn't changed meaningfully — not evidence either way
+            # Stable input: weak evidence AGAINST the belief.
+            # Reasoning: if X truly affected Y, we'd expect co-variation even at
+            # small scales. Prolonged stability without correlation is mild
+            # disconfirmation — enough to decay beliefs toward neutral over time,
+            # but too weak to overwhelm real signal when variation does appear.
+            self._update_belief(belief_id, supports=False, strength=0.05)
+            self._correlation_data[data_key].clear()
+            return
 
         denom_x = math.sqrt(sum_sq_x)
         denom_y = math.sqrt(sum_sq_y)

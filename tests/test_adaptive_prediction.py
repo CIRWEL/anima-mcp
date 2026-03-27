@@ -331,7 +331,7 @@ class TestPersistence:
         assert stats.get("insufficient_data") is True
 
     def test_accuracy_stats_after_recording_errors(self, tmp_path):
-        """After recording errors, get_accuracy_stats returns correct means."""
+        """After recording errors, get_accuracy_stats returns normalized means."""
         m = AdaptivePredictionModel(persistence_path=tmp_path / "p.json")
         m.record_prediction_error("temp", predicted=20.0, actual=22.0)
         m.record_prediction_error("temp", predicted=21.0, actual=22.0)
@@ -340,11 +340,11 @@ class TestPersistence:
         stats = m.get_accuracy_stats()
         assert stats.get("insufficient_data") is not True
         assert stats["total_errors"] == 3
-        # temp errors: |20-22|=2, |21-22|=1 => mean 1.5
-        assert stats["temp_mean_error"] == pytest.approx(1.5)
+        # temp errors normalized by /10: |20-22|/10=0.2, |21-22|/10=0.1 => mean 0.15
+        assert stats["temp_mean_error"] == pytest.approx(0.15)
         assert stats["temp_sample_count"] == 2
-        # humidity errors: |50-55|=5 => mean 5.0
-        assert stats["humidity_mean_error"] == pytest.approx(5.0)
+        # humidity errors normalized by /30: |50-55|/30=0.1667 => mean 0.1667
+        assert stats["humidity_mean_error"] == pytest.approx(5.0 / 30.0)
         assert stats["humidity_sample_count"] == 1
-        # overall mean: (2+1+5)/3 = 2.666...
-        assert stats["overall_mean_error"] == pytest.approx(8.0 / 3.0)
+        # overall mean: (0.2+0.1+0.1667)/3
+        assert stats["overall_mean_error"] == pytest.approx((0.2 + 0.1 + 5.0/30.0) / 3.0)

@@ -346,9 +346,27 @@ class AdaptivePredictionModel:
             self._save_patterns()
 
     def record_prediction_error(self, variable: str, predicted: float, actual: float):
-        """Record prediction error for tracking accuracy improvement."""
+        """Record prediction error for tracking accuracy improvement.
+
+        Normalizes error by variable scale so light (0-1000 lux) and warmth (0-1)
+        are comparable in aggregate stats.
+        """
         error = abs(predicted - actual)
-        self._recent_errors.append((variable, error))  # deque auto-manages size
+        # Normalize to 0-1 scale (same logic as get_surprising_deviation)
+        if variable in ("warmth", "clarity", "stability", "presence"):
+            normalized = error  # Already 0-1
+        elif variable == "light":
+            if predicted > 0 and actual > 0:
+                normalized = abs(math.log10(actual) - math.log10(predicted)) / 3.0
+            else:
+                normalized = 1.0
+        elif "temp" in variable:
+            normalized = error / 10.0  # 10°C range
+        elif "humid" in variable:
+            normalized = error / 30.0  # 30% range
+        else:
+            normalized = error
+        self._recent_errors.append((variable, min(1.0, normalized)))
 
     def get_accuracy_stats(self) -> Dict[str, Any]:
         """Get statistics on prediction accuracy."""
