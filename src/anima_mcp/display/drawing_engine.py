@@ -772,7 +772,28 @@ class DrawingEngine:
             if age > 7200:  # Drawing older than 2 hours
                 print(f"[Canvas] Stale drawing detected ({age/3600:.1f}h old, "
                       f"{len(self.canvas.pixels)}px, fatigue={self.canvas.fatigue:.2f}). "
-                      f"Clearing for fresh start.", file=sys.stderr, flush=True)
+                      f"Saving and clearing for fresh start.", file=sys.stderr, flush=True)
+                # Save the drawing before clearing — it's still Lumen's work
+                if len(self.canvas.pixels) >= 50:
+                    try:
+                        from PIL import Image
+                        from datetime import datetime
+                        drawings_dir = Path.home() / ".anima" / "drawings"
+                        drawings_dir.mkdir(parents=True, exist_ok=True)
+                        img = Image.new("RGB", (self.canvas.width, self.canvas.height), (0, 0, 0))
+                        for (x, y), color in self.canvas.pixels.items():
+                            if 0 <= x < self.canvas.width and 0 <= y < self.canvas.height:
+                                img.putpixel((x, y), color)
+                        era_tag = f"_{self.canvas._era_name}" if self.canvas._era_name else ""
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        filename = f"lumen_drawing_{timestamp}{era_tag}_stale.png"
+                        filepath = drawings_dir / filename
+                        img.save(filepath)
+                        self.canvas.drawings_saved += 1
+                        print(f"[Canvas] Saved stale drawing: {filepath} ({len(self.canvas.pixels)}px)",
+                              file=sys.stderr, flush=True)
+                    except Exception as e:
+                        print(f"[Canvas] Could not save stale drawing: {e}", file=sys.stderr, flush=True)
                 self.canvas.clear()
                 self.intent.reset()
                 self.canvas.save_to_disk()
