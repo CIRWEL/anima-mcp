@@ -30,10 +30,10 @@ class GesturalState(EraState):
 
         Smooth commitment replaces binary lock contribution.
         """
-        I = 0.1
-        I += 0.5 * self.direction_commitment
+        I = 0.15
+        I += 0.55 * self.direction_commitment
         if self.gesture_remaining > 0:
-            I += min(0.2, self.gesture_remaining / 25.0 * 0.2)
+            I += min(0.3, self.gesture_remaining / 20.0 * 0.3)
         return min(1.0, I)
 
     def gestures(self) -> List[str]:
@@ -160,7 +160,7 @@ class GesturalEra:
             direction += random.gauss(0, 0.03)
             state.direction_lock_remaining -= 1
             # Ramp up commitment smoothly (field-era style)
-            state.direction_commitment = min(1.0, state.direction_commitment + 0.04)
+            state.direction_commitment = min(1.0, state.direction_commitment + 0.06)
             if state.direction_lock_remaining <= 0:
                 state.direction_locked = False
         else:

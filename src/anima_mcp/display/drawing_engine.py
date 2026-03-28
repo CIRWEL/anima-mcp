@@ -572,21 +572,21 @@ class DrawingState:
                 return True
 
         # Path 4: Emergency exit - too fatigued to continue
-        if self.fatigue > 0.85:
+        if self.fatigue > 0.90:
             return True
 
-        # Path 5: Stalled -- energy is low and drawing has been going for a while.
+        # Path 5: Stalled -- energy is near-zero and drawing has been going for a while.
         # Uses drawing-level time (not phase time) to avoid resets from phase oscillation.
-        if canvas is not None and self.derived_energy < 0.10:
+        if canvas is not None and self.derived_energy < 0.05:
             drawing_duration = time.time() - canvas.last_clear_time
             if drawing_duration > 300 and len(canvas.pixels) >= 200:
                 return True
 
-        # Path 6: Hard time limit -- no single drawing should run longer than 4 hours.
-        # Most drawings complete in 30-90 minutes. This is a safety net.
+        # Path 6: Hard time limit -- no single drawing should run longer than 8 hours.
+        # Safety net only — natural completion should happen well before this.
         if canvas is not None:
             drawing_duration = time.time() - canvas.last_clear_time
-            if drawing_duration > 14400 and len(canvas.pixels) >= 50:
+            if drawing_duration > 28800 and len(canvas.pixels) >= 50:
                 return True
 
         return False
@@ -1066,11 +1066,8 @@ class DrawingEngine:
 
         # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
         # In resolving phase, don't regenerate -- otherwise curiosity never exhausts and drawing stays stuck
-        # In developing phase with many marks, drain slowly -- prevents indefinite regeneration
         if state.arc_phase == "resolving":
             curiosity_drain = 0.002  # Gentle drain so arc can complete
-        elif state.arc_phase == "developing" and state.phase_mark_count > 100:
-            curiosity_drain = 0.001  # Slow drain after extended developing without resolving
         elif C < 0.4:
             curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
         else:
@@ -1084,8 +1081,8 @@ class DrawingEngine:
 
         # Fatigue: accumulates, never decreases during drawing
         if gesture_switch:
-            state.fatigue += 0.008
-        state.fatigue = min(1.0, state.fatigue + 0.002)
+            state.fatigue += 0.006
+        state.fatigue = min(1.0, state.fatigue + 0.001)
 
     def _update_coherence_tracking(self, C: float, I_signal: float):
         """Track coherence over time for settling detection and narrative arc.

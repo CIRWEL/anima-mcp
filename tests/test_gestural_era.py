@@ -12,23 +12,23 @@ def test_intentionality_smooth_range():
 
     # No commitment -> base I
     state.direction_commitment = 0.0
-    assert abs(state.intentionality() - 0.1) < 0.01
+    assert abs(state.intentionality() - 0.15) < 0.01
 
     # Mid commitment
     state.direction_commitment = 0.5
     i_mid = state.intentionality()
-    assert 0.3 < i_mid < 0.4, f"Expected ~0.35, got {i_mid}"
+    assert 0.4 < i_mid < 0.5, f"Expected ~0.425, got {i_mid}"
 
     # Full commitment
     state.direction_commitment = 1.0
     i_full = state.intentionality()
-    assert 0.55 < i_full < 0.65, f"Expected ~0.6, got {i_full}"
+    assert 0.65 < i_full < 0.75, f"Expected ~0.70, got {i_full}"
 
     # Full commitment + active gesture run
     state.direction_commitment = 1.0
-    state.gesture_remaining = 25
+    state.gesture_remaining = 20
     i_max = state.intentionality()
-    assert 0.75 < i_max < 0.85, f"Expected ~0.8, got {i_max}"
+    assert 0.9 < i_max <= 1.0, f"Expected ~1.0, got {i_max}"
 
 
 def test_commitment_ramps_during_lock():
@@ -43,9 +43,9 @@ def test_commitment_ramps_during_lock():
     for _ in range(20):
         fx, fy, d = era.drift_focus(state, fx, fy, d, 0.5, 0.5, 0.5, 0.5)
 
-    # 20 marks * +0.04 = 0.80 commitment
-    assert state.direction_commitment > 0.6, (
-        f"Expected commitment > 0.6 after 20 locked marks, got {state.direction_commitment}"
+    # 20 marks * +0.06 = 1.0 commitment (capped)
+    assert state.direction_commitment > 0.8, (
+        f"Expected commitment > 0.8 after 20 locked marks, got {state.direction_commitment}"
     )
 
 
