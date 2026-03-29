@@ -28,8 +28,8 @@ async def fast_input_poll(mode_change_event: asyncio.Event):
     )
 
     def _get_ctx():
-        from . import server
-        return server._ctx
+        from .ctx_ref import get_ctx
+        return get_ctx()
 
     brainhat = get_brainhat_input()
     _ctx = _get_ctx()
@@ -120,93 +120,14 @@ async def fast_input_poll(mode_change_event: asyncio.Event):
                     # Refresh mode after possible group navigation
                     current_mode = renderer.get_mode()
 
-                    # Joystick UP/DOWN on FACE screen = brightness control
-                    if current_mode == ScreenMode.FACE:
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                renderer.trigger_input_feedback("up")
-                                preset_name = renderer._display.brightness_up()
-                                preset = renderer._display.get_brightness_preset()
-                                display_level = min(1.0, preset["leds"] / 0.28)
-                                renderer.trigger_brightness_overlay(preset_name, display_level)
-                                mode_change_event.set()
-                            elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                renderer.trigger_input_feedback("down")
-                                preset_name = renderer._display.brightness_down()
-                                preset = renderer._display.get_brightness_preset()
-                                display_level = min(1.0, preset["leds"] / 0.28)
-                                renderer.trigger_brightness_overlay(preset_name, display_level)
-                                mode_change_event.set()
-
-                    # Joystick navigation in message board (UP/DOWN scrolls messages)
-                    if current_mode == ScreenMode.MESSAGES:
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                renderer.trigger_input_feedback("up")
-                                renderer.message_scroll_up()
-                            elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                renderer.trigger_input_feedback("down")
-                                renderer.message_scroll_down()
-
-                    # Joystick navigation in Art Eras screen (UP/DOWN moves cursor)
-                    if current_mode == ScreenMode.ART_ERAS:
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                renderer.trigger_input_feedback("up")
-                                renderer.era_cursor_up()
-                                mode_change_event.set()
-                            elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                renderer.trigger_input_feedback("down")
-                                renderer.era_cursor_down()
-                                mode_change_event.set()
-
-                    # Joystick navigation in Visitors screen (same as messages)
-                    if current_mode == ScreenMode.VISITORS:
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                renderer.trigger_input_feedback("up")
-                                renderer.message_scroll_up()
-                            elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                renderer.trigger_input_feedback("down")
-                                renderer.message_scroll_down()
-
-                    # Joystick navigation in Questions screen (Q&A specific)
-                    if current_mode == ScreenMode.QUESTIONS:
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                renderer.trigger_input_feedback("up")
-                                renderer.qa_scroll_up()
-                            elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                renderer.trigger_input_feedback("down")
-                                renderer.qa_scroll_down()
-                            elif current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
-                                renderer.trigger_input_feedback("left")
-                                renderer.qa_focus_next()
-                            elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
-                                renderer.trigger_input_feedback("right")
-                                renderer.qa_focus_next()
-
-                    # Group-local up/down for screens that don't consume up/down directly
-                    if current_mode in (
-                        ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS, ScreenMode.HEALTH,
-                        ScreenMode.NEURAL, ScreenMode.INNER_LIFE, ScreenMode.LEARNING, ScreenMode.SELF_GRAPH,
-                        ScreenMode.GOALS_BELIEFS, ScreenMode.AGENCY, ScreenMode.NOTEPAD
-                    ):
-                        if prev_state:
-                            prev_dir = prev_state.joystick_direction
-                            if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
-                                renderer.trigger_input_feedback("up")
-                                renderer.previous_in_group()
-                                mode_change_event.set()
-                            elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
-                                renderer.trigger_input_feedback("down")
-                                renderer.next_in_group()
-                                mode_change_event.set()
+                    # Per-screen UP/DOWN (and QUESTIONS L/R) via dispatch
+                    if prev_state:
+                        _handle_up_down(
+                            input_state.joystick_direction,
+                            prev_state.joystick_direction,
+                            current_mode, renderer, mode_change_event,
+                            ScreenMode, InputDirection,
+                        )
 
                     # Separate button - with long-press shutdown for mobile readiness
                     _handle_separate_button(
@@ -224,6 +145,84 @@ async def fast_input_poll(mode_change_event: asyncio.Event):
                     traceback.print_exc(file=sys.stderr)
                     _ctx.last_input_error_log = current_time
         await asyncio.sleep(INPUT_POLL_INTERVAL_SECONDS)
+
+
+# Dispatch table: ScreenMode → (up_method, down_method, triggers_mode_change_event)
+# Populated lazily since ScreenMode isn't available at import time.
+_SCREEN_ACTIONS: dict | None = None
+_GROUP_LOCAL_SCREENS: frozenset | None = None
+
+
+def _get_dispatch_tables(ScreenMode):
+    """Build dispatch tables on first use (avoids import-time dependency on ScreenMode)."""
+    global _SCREEN_ACTIONS, _GROUP_LOCAL_SCREENS
+    if _SCREEN_ACTIONS is not None:
+        return _SCREEN_ACTIONS, _GROUP_LOCAL_SCREENS
+    _SCREEN_ACTIONS = {
+        ScreenMode.MESSAGES: ("message_scroll_up", "message_scroll_down", False),
+        ScreenMode.VISITORS: ("message_scroll_up", "message_scroll_down", False),
+        ScreenMode.ART_ERAS: ("era_cursor_up", "era_cursor_down", True),
+        ScreenMode.QUESTIONS: ("qa_scroll_up", "qa_scroll_down", False),
+    }
+    _GROUP_LOCAL_SCREENS = frozenset({
+        ScreenMode.IDENTITY, ScreenMode.SENSORS, ScreenMode.DIAGNOSTICS,
+        ScreenMode.HEALTH, ScreenMode.NEURAL, ScreenMode.INNER_LIFE,
+        ScreenMode.LEARNING, ScreenMode.SELF_GRAPH, ScreenMode.GOALS_BELIEFS,
+        ScreenMode.AGENCY, ScreenMode.NOTEPAD,
+    })
+    return _SCREEN_ACTIONS, _GROUP_LOCAL_SCREENS
+
+
+def _handle_up_down(current_dir, prev_dir, current_mode, renderer, mode_change_event,
+                    ScreenMode, InputDirection):
+    """Dispatch UP/DOWN joystick input based on screen mode."""
+    # FACE has special brightness handler
+    if current_mode == ScreenMode.FACE:
+        if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+            renderer.trigger_input_feedback("up")
+            preset_name = renderer._display.brightness_up()
+            preset = renderer._display.get_brightness_preset()
+            display_level = min(1.0, preset["leds"] / 0.28)
+            renderer.trigger_brightness_overlay(preset_name, display_level)
+            mode_change_event.set()
+        elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+            renderer.trigger_input_feedback("down")
+            preset_name = renderer._display.brightness_down()
+            preset = renderer._display.get_brightness_preset()
+            display_level = min(1.0, preset["leds"] / 0.28)
+            renderer.trigger_brightness_overlay(preset_name, display_level)
+            mode_change_event.set()
+        return
+
+    # QUESTIONS also handles L/R for focus navigation
+    if current_mode == ScreenMode.QUESTIONS:
+        if current_dir == InputDirection.LEFT and prev_dir != InputDirection.LEFT:
+            renderer.trigger_input_feedback("left")
+            renderer.qa_focus_next()
+        elif current_dir == InputDirection.RIGHT and prev_dir != InputDirection.RIGHT:
+            renderer.trigger_input_feedback("right")
+            renderer.qa_focus_next()
+
+    # Look up in dispatch table
+    actions, group_screens = _get_dispatch_tables(ScreenMode)
+    entry = actions.get(current_mode)
+    if entry is None and current_mode in group_screens:
+        entry = ("previous_in_group", "next_in_group", True)
+
+    if entry is None:
+        return
+
+    up_method, down_method, needs_event = entry
+    if current_dir == InputDirection.UP and prev_dir != InputDirection.UP:
+        renderer.trigger_input_feedback("up")
+        getattr(renderer, up_method)()
+        if needs_event:
+            mode_change_event.set()
+    elif current_dir == InputDirection.DOWN and prev_dir != InputDirection.DOWN:
+        renderer.trigger_input_feedback("down")
+        getattr(renderer, down_method)()
+        if needs_event:
+            mode_change_event.set()
 
 
 def _handle_separate_button(

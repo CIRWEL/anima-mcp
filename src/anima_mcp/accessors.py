@@ -4,7 +4,8 @@ State accessors for the anima-mcp server.
 All _get_* functions live here. They provide thread-safe, None-safe access
 to ServerContext subsystems with lazy initialization.
 
-_ctx is set by server.py's wake() via set_ctx() and cleared by sleep().
+_ctx lives in ctx_ref.py (single source of truth). This module re-exports
+set_ctx() for backward compatibility and reads _ctx via the ctx_ref module.
 Server flags (SERVER_READY, etc.) remain in server.py.
 """
 
@@ -33,6 +34,10 @@ from .server_state import (
 from .schema_hub import SchemaHub
 from .calibration_drift import CalibrationDrift
 
+# ctx_ref is the single source of truth for _ctx
+from . import ctx_ref as _cr
+from .ctx_ref import set_ctx  # re-exported for lifecycle.py and tests
+
 logger = logging.getLogger("anima.server")
 
 # ============================================================
@@ -42,18 +47,8 @@ logger = logging.getLogger("anima.server")
 # Thread lock for lazy-init singletons (metacog, unitares bridge)
 _state_lock = threading.Lock()
 
-# Server context — mutable state container. Created in wake(), cleared in sleep().
-# Before wake(), _ctx is None. All accessors handle None.
-_ctx: ServerContext | None = None
-
 # VOICE_MODE controls how Lumen speaks: "text" (message board), "audio" (TTS), "both"
 VOICE_MODE = os.environ.get("LUMEN_VOICE_MODE", "text")  # Default: text only
-
-
-def set_ctx(ctx: "ServerContext | None"):
-    """Set the server context. Called by server.py wake() and sleep()."""
-    global _ctx
-    _ctx = ctx
 
 
 # ============================================================
@@ -62,27 +57,27 @@ def set_ctx(ctx: "ServerContext | None"):
 
 def _get_store():
     """Get identity store - safe, returns None if not available instead of crashing."""
-    if _ctx is None:
+    if _cr._ctx is None:
         print("[Server] Warning: Store not initialized (wake() may have failed)", file=sys.stderr)
         return None
-    return _ctx.store
+    return _cr._ctx.store
 
 
 def _get_sensors() -> SensorBackend:
-    if _ctx is None:
+    if _cr._ctx is None:
         return get_sensors()  # Fallback when not yet woken
-    if _ctx.sensors is None:
-        _ctx.sensors = get_sensors()
-    return _ctx.sensors
+    if _cr._ctx.sensors is None:
+        _cr._ctx.sensors = get_sensors()
+    return _cr._ctx.sensors
 
 
 def _get_shm_client() -> SharedMemoryClient:
     """Get shared memory client for reading broker data."""
-    if _ctx is None:
+    if _cr._ctx is None:
         return SharedMemoryClient(mode="read", backend="file")
-    if _ctx.shm_client is None:
-        _ctx.shm_client = SharedMemoryClient(mode="read", backend="file")
-    return _ctx.shm_client
+    if _cr._ctx.shm_client is None:
+        _cr._ctx.shm_client = SharedMemoryClient(mode="read", backend="file")
+    return _cr._ctx.shm_client
 
 
 def _get_server_bridge():
@@ -91,7 +86,7 @@ def _get_server_bridge():
     Only used when the broker's SHM governance is stale/local for too long.
     The server's native async event loop avoids the broker's thread+loop issues.
     """
-    bridge = _ctx.server_bridge if _ctx else None
+    bridge = _cr._ctx.server_bridge if _cr._ctx else None
     if bridge is not None:
         return bridge
     unitares_url = os.environ.get("UNITARES_URL")
@@ -106,8 +101,8 @@ def _get_server_bridge():
             if identity:
                 bridge.set_agent_id(identity.creature_id)
                 bridge.set_session_id(f"anima-server-{identity.creature_id[:8]}")
-        if _ctx:
-            _ctx.server_bridge = bridge
+        if _cr._ctx:
+            _cr._ctx.server_bridge = bridge
         return bridge
     except Exception as e:
         logger.debug("[Governance] Bridge init failed: %s", e)
@@ -116,29 +111,29 @@ def _get_server_bridge():
 
 def _get_schema_hub() -> SchemaHub:
     """Get or create the SchemaHub singleton for schema composition."""
-    if _ctx is None:
+    if _cr._ctx is None:
         return SchemaHub()  # Transient when not woken
-    if _ctx.schema_hub is None:
-        _ctx.schema_hub = SchemaHub()
-    return _ctx.schema_hub
+    if _cr._ctx.schema_hub is None:
+        _cr._ctx.schema_hub = SchemaHub()
+    return _cr._ctx.schema_hub
 
 
 def _get_calibration_drift() -> CalibrationDrift:
     """Get or create the CalibrationDrift singleton."""
-    if _ctx is None:
+    if _cr._ctx is None:
         return CalibrationDrift()
-    if _ctx.calibration_drift is None:
+    if _cr._ctx.calibration_drift is None:
         drift_path = Path.home() / ".anima" / "calibration_drift.json"
         if drift_path.exists():
             try:
-                _ctx.calibration_drift = CalibrationDrift.load(str(drift_path))
+                _cr._ctx.calibration_drift = CalibrationDrift.load(str(drift_path))
                 print(f"[CalDrift] Loaded drift state from {drift_path}", file=sys.stderr, flush=True)
             except Exception as e:
                 print(f"[CalDrift] Failed to load drift (using fresh): {e}", file=sys.stderr, flush=True)
-                _ctx.calibration_drift = CalibrationDrift()
+                _cr._ctx.calibration_drift = CalibrationDrift()
         else:
-            _ctx.calibration_drift = CalibrationDrift()
-    return _ctx.calibration_drift
+            _cr._ctx.calibration_drift = CalibrationDrift()
+    return _cr._ctx.calibration_drift
 
 
 def _get_selfhood_context() -> Dict[str, Any] | None:
@@ -149,10 +144,10 @@ def _get_selfhood_context() -> Dict[str, Any] | None:
     feeds back into drift rates, conflict thresholds, or preference weights.
     """
     context: Dict[str, Any] = {}
-    drift = _get_calibration_drift() if _ctx else None
+    drift = _get_calibration_drift() if _cr._ctx else None
     if drift:
         context["drift_offsets"] = drift.get_offsets()
-    tension = _ctx.tension_tracker if _ctx else None
+    tension = _cr._ctx.tension_tracker if _cr._ctx else None
     if tension:
         active = tension.get_active_conflicts(last_n=5)
         context["active_tensions"] = [
@@ -177,17 +172,17 @@ def _get_selfhood_context() -> Dict[str, Any] | None:
 
 def _get_metacog_monitor():
     """Get metacognitive monitor - Lumen's self-awareness through prediction errors."""
-    if _ctx is None:
+    if _cr._ctx is None:
         return None
-    if _ctx.metacog_monitor is None:
+    if _cr._ctx.metacog_monitor is None:
         with _state_lock:
-            if _ctx.metacog_monitor is None:
+            if _cr._ctx.metacog_monitor is None:
                 from .metacognition import MetacognitiveMonitor
-                _ctx.metacog_monitor = MetacognitiveMonitor(
+                _cr._ctx.metacog_monitor = MetacognitiveMonitor(
                     surprise_threshold=0.3,  # Trigger reflection at 30% surprise
                     reflection_cooldown_seconds=120.0,  # 2 min between reflections
                 )
-    return _ctx.metacog_monitor
+    return _cr._ctx.metacog_monitor
 
 
 def _get_warm_start_anticipation():
@@ -197,17 +192,17 @@ def _get_warm_start_anticipation():
     with current sensor readings so Lumen doesn't start from scratch.
     After a gap, confidence is reduced so Lumen relies more on fresh sensors.
     """
-    if not _ctx or _ctx.warm_start_anima is None:
+    if not _cr._ctx or _cr._ctx.warm_start_anima is None:
         return None
     from .memory import Anticipation
-    state = _ctx.warm_start_anima
-    _ctx.warm_start_anima = None  # One-shot: only used for first sense
+    state = _cr._ctx.warm_start_anima
+    _cr._ctx.warm_start_anima = None  # One-shot: only used for first sense
 
     # Scale confidence by staleness — longer gaps mean less trust in old state
     confidence = 0.6
     description = "warm start from last shutdown"
-    if _ctx.wake_gap:
-        gap_hours = _ctx.wake_gap.total_seconds() / 3600
+    if _cr._ctx.wake_gap:
+        gap_hours = _cr._ctx.wake_gap.total_seconds() / 3600
         if gap_hours > 24:
             confidence = 0.1
             description = f"warm start after {gap_hours:.0f}h absence"
@@ -240,8 +235,8 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
     # SharedMemoryClient.read() already returns envelope["data"] (the inner dict)
     shm_client = _get_shm_client()
     shm_data = shm_client.read()
-    if _ctx:
-        _ctx.last_shm_data = shm_data  # Cache for reuse within same iteration
+    if _cr._ctx:
+        _cr._ctx.last_shm_data = shm_data  # Cache for reuse within same iteration
 
     # Check if shared memory data is recent
     shm_stale = True
@@ -343,57 +338,57 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
 
 
 def _get_display() -> DisplayRenderer:
-    if _ctx is None:
+    if _cr._ctx is None:
         return get_display()
-    if _ctx.display is None:
-        _ctx.display = get_display()
-    return _ctx.display
+    if _cr._ctx.display is None:
+        _cr._ctx.display = get_display()
+    return _cr._ctx.display
 
 
 def _get_last_shm_data() -> dict | None:
     """Cached per-iteration shared memory read. Used by handlers and display loop."""
-    return _ctx.last_shm_data if _ctx else None
+    return _cr._ctx.last_shm_data if _cr._ctx else None
 
 
 def _get_screen_renderer():
-    return _ctx.screen_renderer if _ctx else None
+    return _cr._ctx.screen_renderer if _cr._ctx else None
 
 
 def _get_leds():
-    return _ctx.leds if _ctx else None
+    return _cr._ctx.leds if _cr._ctx else None
 
 
 def _get_growth():
-    return _ctx.growth if _ctx else None
+    return _cr._ctx.growth if _cr._ctx else None
 
 
 def _get_display_update_task():
-    return _ctx.display_update_task if _ctx else None
+    return _cr._ctx.display_update_task if _cr._ctx else None
 
 
 def _get_activity():
-    return _ctx.activity if _ctx else None
+    return _cr._ctx.activity if _cr._ctx else None
 
 
 def _get_last_governance_decision() -> dict | None:
     """Last governance decision from broker SHM or server fallback."""
-    return _ctx.last_governance_decision if _ctx else None
+    return _cr._ctx.last_governance_decision if _cr._ctx else None
 
 
 def _get_voice():
     """Get or initialize the voice instance (for listening capability)."""
-    if _ctx is None:
+    if _cr._ctx is None:
         return None
-    if _ctx.voice_instance is None:
+    if _cr._ctx.voice_instance is None:
         try:
             from .audio import AutonomousVoice
 
-            _ctx.voice_instance = AutonomousVoice()
+            _cr._ctx.voice_instance = AutonomousVoice()
 
             # Autonomous voice canned phrases ("I'm curious about something", etc.)
             # are not posted to message board — primitives are more authentic.
             # Voice system still runs for listening capability.
-            _ctx.voice_instance.start()
+            _cr._ctx.voice_instance.start()
             print(f"[Server] Voice system initialized (mode={VOICE_MODE}, listening enabled)", file=sys.stderr, flush=True)
         except ImportError:
             print("[Server] Voice module not available (missing dependencies)", file=sys.stderr, flush=True)
@@ -401,4 +396,4 @@ def _get_voice():
         except Exception as e:
             print(f"[Server] Voice initialization failed: {e}", file=sys.stderr, flush=True)
             return None
-    return _ctx.voice_instance
+    return _cr._ctx.voice_instance

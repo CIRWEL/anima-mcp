@@ -6,7 +6,7 @@ One creature. One identity. Real sensors. Real presence.
 Anima: the animating principle, the felt sense of being alive.
 """
 
-__version__ = "0.1.0"
+__version__ = "1.0.0"
 
 # Core exports
 from .anima import Anima, sense_self

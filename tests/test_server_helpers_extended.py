@@ -6,12 +6,13 @@ import pytest
 
 import anima_mcp.server as server
 import anima_mcp.accessors as accessors
+import anima_mcp.ctx_ref as ctx_ref
 
 
 def _set_ctx(monkeypatch, ctx):
-    """Patch _ctx in both server and accessors modules."""
+    """Patch _ctx in server and ctx_ref modules."""
     monkeypatch.setattr(server, "_ctx", ctx)
-    monkeypatch.setattr(accessors, "_ctx", ctx)
+    monkeypatch.setattr(ctx_ref, "_ctx", ctx)
 
 
 class _Ctx:
@@ -123,7 +124,8 @@ def test_get_readings_and_anima_uses_shared_memory_when_fresh(monkeypatch):
     readings, anima = server._get_readings_and_anima()
     assert readings is readings_obj
     assert anima is anima_obj
-    assert accessors._ctx.last_shm_data == shm_payload
+    import anima_mcp.ctx_ref as ctx_ref
+    assert ctx_ref._ctx.last_shm_data == shm_payload
 
 
 def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch):

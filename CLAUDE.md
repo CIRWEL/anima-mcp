@@ -42,11 +42,18 @@ anima-broker.service        anima.service
 
 ### MCP Server Structure
 
-`server.py` is the orchestrator (~3,300 lines). Handlers, REST endpoints, and tool definitions are extracted:
+`server.py` is the main loop coordinator (~1,900 lines). Core subsystems are extracted into dedicated modules:
 
 | Module | Purpose |
 |--------|---------|
-| `server.py` | Main loop, wake/sleep lifecycle, global state |
+| `server.py` | Main loop (`_update_display_loop`), transport layers, `main()` entry point |
+| `ctx_ref.py` | Single source of truth for `_ctx` (ServerContext pointer) |
+| `accessors.py` | State accessors (`_get_store`, `_get_sensors`, etc.), lazy singletons |
+| `lifecycle.py` | `wake()`/`sleep()` lifecycle management |
+| `input_handler.py` | Joystick/button polling at ~60fps, input event dispatch |
+| `loop_phases.py` | Main loop phase helpers (governance fallback, reflections, schema extraction) |
+| `server_context.py` | `ServerContext` dataclass — mutable state container |
+| `server_state.py` | Constants and pure helpers (intervals, thresholds) |
 | `rest_api.py` | REST endpoint functions (health, dashboard, state, QA, gallery, etc.) |
 | `tool_registry.py` | Tool definitions (TOOLS list), HANDLERS dict, FastMCP setup |
 | `handlers/system_ops.py` | git_pull, system_service, power, deploy, tailscale, ssh_port |
@@ -56,7 +63,7 @@ anima-broker.service        anima.service
 | `handlers/communication.py` | lumen_qa, post_message, say, configure_voice, primitive_feedback |
 | `handlers/workflows.py` | unified_workflow, next_steps, set_calibration, get_lumen_context |
 
-Handler modules use late imports from `server.py` for global state access (e.g., `from ..server import _get_store`).
+Handler modules import state accessors from `accessors.py` (e.g., `from ..accessors import _get_store`). Extracted modules (`lifecycle.py`, `input_handler.py`, `loop_phases.py`) access `_ctx` via `ctx_ref.py`.
 
 ### Health Monitoring
 

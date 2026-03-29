@@ -25,8 +25,8 @@ async def server_governance_fallback(anima, readings):
         logger.warning("[Governance] Fallback: no bridge (UNITARES_URL not set?)")
         return None
     try:
-        from . import server
-        _ctx = server._ctx
+        from .ctx_ref import get_ctx
+        _ctx = get_ctx()
         store = _get_store()
         identity = store.get_identity() if store else None
         renderer = _ctx.screen_renderer if _ctx else None
@@ -77,11 +77,11 @@ def compute_lagged_correlations() -> Dict[str, float]:
     health[t+lag] to determine which dimensions predict flourishing.
     Returns 0.0 for dimensions with insufficient data.
     """
-    from . import server
+    from .ctx_ref import get_ctx
 
     lag = 25  # ~5 action cycles at AGENCY_INTERVAL
     correlations: Dict[str, float] = {}
-    _ctx = server._ctx
+    _ctx = get_ctx()
     if not _ctx:
         return correlations
     health_hist = list(_ctx.health_history)
@@ -202,15 +202,15 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
     """Unified voice: grounded observations from Lumen's actual state.
 
     Extracted from _update_display_loop(). Module globals are accessed via
-    server._ctx; loop-local values are passed as explicit parameters.
+    ctx_ref; loop-local values are passed as explicit parameters.
     """
     import os
-    from . import server
+    from .ctx_ref import get_ctx
     from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
     from .next_steps_advocate import get_advocate
     from .eisv_mapper import anima_to_eisv
 
-    _ctx = server._ctx
+    _ctx = get_ctx()
 
     # === 1. Wake-up summary (one-shot) ===
     try:
@@ -505,12 +505,12 @@ async def extract_and_validate_schema(anima, readings, identity):
     """Extract G_t via SchemaHub, save, and optionally run real VQA validation.
 
     Extracted from _update_display_loop(). Module globals are accessed via
-    server._ctx; loop-local values are passed as explicit parameters.
+    ctx_ref; loop-local values are passed as explicit parameters.
     """
-    from . import server
+    from .ctx_ref import get_ctx
     from .accessors import _get_schema_hub, _get_calibration_drift
 
-    _ctx = server._ctx
+    _ctx = get_ctx()
 
     try:
         from .self_schema_renderer import (
@@ -581,10 +581,10 @@ async def extract_and_validate_schema(anima, readings, identity):
 async def self_reflect():
     """Lumen reflects on accumulated experience to learn about itself.
 
-    Extracted from _update_display_loop(). Uses server._ctx for db_path.
+    Extracted from _update_display_loop(). Uses ctx_ref for db_path.
     """
-    from . import server
-    _ctx = server._ctx
+    from .ctx_ref import get_ctx
+    _ctx = get_ctx()
 
     try:
         from .self_reflection import get_reflection_system

@@ -17,7 +17,7 @@ SSH_OPTS="-i ${SSH_KEY} -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new
 
 # Fallback hosts if primary fails
 if [ "$PI_HOST" = "lumen.local" ]; then
-    HOSTS="lumen.local 192.168.1.165 100.79.215.83"
+    HOSTS="lumen.local 192.168.1.165 100.84.100.128"
 else
     HOSTS="$PI_HOST"
 fi
@@ -147,6 +147,9 @@ printf "[connection]\nwifi.powersave = 2\n" | sudo tee /etc/NetworkManager/conf.
 
 # Never stop retrying WiFi connection
 sudo nmcli connection modify "preconfigured" connection.autoconnect-retries 0 2>/dev/null || true
+
+# Force 2.4 GHz (more stable through walls than 5 GHz)
+sudo nmcli connection modify "preconfigured" 802-11-wireless.band bg 2>/dev/null || true
 
 # Disable IPv6 (reduces WiFi stack load)
 printf "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n" | sudo tee /etc/sysctl.d/90-disable-ipv6.conf >/dev/null

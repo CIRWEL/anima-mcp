@@ -16,18 +16,19 @@ import pytest
 
 import anima_mcp.server as server
 import anima_mcp.accessors as accessors
+import anima_mcp.ctx_ref as ctx_ref
 
 
 def _set_ctx(ctx):
-    """Set ctx in both server and accessors."""
+    """Set ctx in server, ctx_ref, and accessors."""
     server._ctx = ctx
-    accessors.set_ctx(ctx)
+    ctx_ref.set_ctx(ctx)
 
 
 def _clear_ctx():
-    """Clear ctx from both modules."""
+    """Clear ctx from all modules."""
     server._ctx = None
-    accessors.set_ctx(None)
+    ctx_ref.set_ctx(None)
 
 
 # ============================================================
@@ -56,8 +57,8 @@ def test_wake_creates_valid_context(tmp_path, monkeypatch):
         # Growth system should be initialized (or None if deps missing)
         # Don't assert it's not None since it may fail in test env
 
-        # Accessors should also have the context
-        assert accessors._ctx is ctx, "Accessors should be synced"
+        # ctx_ref should also have the context
+        assert ctx_ref._ctx is ctx, "ctx_ref should be synced"
 
     finally:
         if server._ctx and server._ctx.store:
@@ -84,7 +85,7 @@ def test_sleep_clears_context(tmp_path, monkeypatch):
 
         # Context should be cleared
         assert server._ctx is None, "sleep() should clear _ctx"
-        assert accessors._ctx is None, "sleep() should clear accessors._ctx"
+        assert ctx_ref._ctx is None, "sleep() should clear ctx_ref._ctx"
 
     finally:
         if server._ctx and server._ctx.store:

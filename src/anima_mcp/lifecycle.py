@@ -1,7 +1,7 @@
 """Server lifecycle — wake (startup) and sleep (shutdown).
 
 Extracted from server.py to isolate the startup/shutdown logic.
-Operates on the global _ctx (ServerContext) via server._ctx and accessors.set_ctx().
+Operates on the global _ctx (ServerContext) via ctx_ref (single source of truth).
 """
 
 from __future__ import annotations
@@ -11,21 +11,16 @@ import sys
 import uuid
 from pathlib import Path
 
+from .ctx_ref import get_ctx as _get_ctx, set_ctx as _set_ctx_ref
+
 logger = logging.getLogger("anima.server")
 
 
 def _set_ctx(ctx):
-    """Set _ctx in both server.py and accessors.py."""
+    """Set _ctx in ctx_ref (canonical) and server.py (backward compat)."""
     from . import server
-    from . import accessors as _acc
-    server._ctx = ctx
-    _acc.set_ctx(ctx)
-
-
-def _get_ctx():
-    """Read current _ctx from server.py."""
-    from . import server
-    return server._ctx
+    _set_ctx_ref(ctx)
+    server._ctx = ctx  # bridge: server.py still reads _ctx directly in ~30 places
 
 
 def wake(db_path: str = "anima.db", anima_id: str | None = None):
