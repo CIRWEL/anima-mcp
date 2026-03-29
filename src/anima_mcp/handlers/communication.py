@@ -358,10 +358,21 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
                         _srv._ctx.sm_clarity_before_interaction = cur_anima.clarity
             except Exception:
                 pass
+            # Determine delivery status based on Lumen's activity state
+            delivery_status = "delivered"
+            try:
+                act = _get_activity()
+                if act and act._current_level.value == "resting":
+                    delivery_status = "delivered_dormant"
+                elif act and act._current_level.value == "drowsy":
+                    delivery_status = "delivered_drowsy"
+            except Exception:
+                pass
             return [TextContent(type="text", text=json.dumps({
                 "success": True,
                 "message_id": msg_id,
                 "source": "human",
+                "delivery_status": delivery_status,
                 "message": f"Message received: {message[:50]}..."
             }))]
         else:
@@ -443,11 +454,22 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
             except Exception:
                 pass
 
+            # Determine delivery status based on Lumen's activity state
+            delivery_status = "delivered"
+            try:
+                act = _get_activity()
+                if act and act._current_level.value == "resting":
+                    delivery_status = "delivered_dormant"
+                elif act and act._current_level.value == "drowsy":
+                    delivery_status = "delivered_drowsy"
+            except Exception:
+                pass
             result = {
                 "success": True,
                 "message_id": msg.message_id,
                 "source": "agent",
                 "agent_name": agent_name,
+                "delivery_status": delivery_status,
                 "message": f"Note received from {agent_name}",
             }
             if responds_to:

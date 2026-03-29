@@ -232,6 +232,96 @@ class TestPostMessageRespondsToMatching:
         assert "error" in data
         assert "not found" in data["error"]
 
+    async def test_delivery_status_active(self):
+        """delivery_status is 'delivered' when Lumen is active."""
+        from anima_mcp.handlers.communication import handle_post_message
+        from anima_mcp.activity_state import ActivityLevel
+
+        activity = MagicMock()
+        activity._current_level = ActivityLevel.ACTIVE
+        msg = SimpleNamespace(message_id="msg_1")
+
+        with patch("anima_mcp.accessors._get_growth", return_value=None), \
+             patch("anima_mcp.accessors._get_activity", return_value=activity), \
+             patch("anima_mcp.accessors._get_store", return_value=None), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
+             patch("anima_mcp.messages.add_agent_message", return_value=msg):
+            data = _parse(await handle_post_message({
+                "message": "hello",
+                "source": "agent",
+                "agent_name": "TestAgent",
+            }))
+
+        assert data["success"] is True
+        assert data["delivery_status"] == "delivered"
+
+    async def test_delivery_status_dormant(self):
+        """delivery_status is 'delivered_dormant' when Lumen is resting."""
+        from anima_mcp.handlers.communication import handle_post_message
+        from anima_mcp.activity_state import ActivityLevel
+
+        activity = MagicMock()
+        activity._current_level = ActivityLevel.RESTING
+        msg = SimpleNamespace(message_id="msg_2")
+
+        with patch("anima_mcp.accessors._get_growth", return_value=None), \
+             patch("anima_mcp.accessors._get_activity", return_value=activity), \
+             patch("anima_mcp.accessors._get_store", return_value=None), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
+             patch("anima_mcp.messages.add_agent_message", return_value=msg):
+            data = _parse(await handle_post_message({
+                "message": "goodnight",
+                "source": "agent",
+                "agent_name": "TestAgent",
+            }))
+
+        assert data["success"] is True
+        assert data["delivery_status"] == "delivered_dormant"
+
+    async def test_delivery_status_drowsy(self):
+        """delivery_status is 'delivered_drowsy' when Lumen is drowsy."""
+        from anima_mcp.handlers.communication import handle_post_message
+        from anima_mcp.activity_state import ActivityLevel
+
+        activity = MagicMock()
+        activity._current_level = ActivityLevel.DROWSY
+        msg = SimpleNamespace(message_id="msg_3")
+
+        with patch("anima_mcp.accessors._get_growth", return_value=None), \
+             patch("anima_mcp.accessors._get_activity", return_value=activity), \
+             patch("anima_mcp.accessors._get_store", return_value=None), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
+             patch("anima_mcp.messages.add_agent_message", return_value=msg):
+            data = _parse(await handle_post_message({
+                "message": "still here?",
+                "source": "agent",
+                "agent_name": "TestAgent",
+            }))
+
+        assert data["success"] is True
+        assert data["delivery_status"] == "delivered_drowsy"
+
+    async def test_delivery_status_human_source_dormant(self):
+        """delivery_status works for human-source messages too."""
+        from anima_mcp.handlers.communication import handle_post_message
+        from anima_mcp.activity_state import ActivityLevel
+
+        activity = MagicMock()
+        activity._current_level = ActivityLevel.RESTING
+
+        with patch("anima_mcp.accessors._get_growth", return_value=None), \
+             patch("anima_mcp.accessors._get_activity", return_value=activity), \
+             patch("anima_mcp.accessors._get_store", return_value=None), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
+             patch("anima_mcp.messages.add_user_message", return_value="u1"):
+            data = _parse(await handle_post_message({
+                "message": "goodnight lumen",
+                "source": "human",
+            }))
+
+        assert data["success"] is True
+        assert data["delivery_status"] == "delivered_dormant"
+
 
 @pytest.mark.asyncio
 class TestLumenQaExtended:
