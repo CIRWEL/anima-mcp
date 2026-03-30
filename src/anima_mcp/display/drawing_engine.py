@@ -805,6 +805,7 @@ class DrawingEngine:
 
         self._db_path = db_path or "anima.db"
         self._identity_store = identity_store
+        self._last_persist_time = 0.0  # Rate-limit canvas persistence
         # Initialize expression mood tracker
         self._mood_tracker = ExpressionMoodTracker(identity_store=identity_store)
 
@@ -870,8 +871,14 @@ class DrawingEngine:
         if random.random() > draw_chance:
             return
 
-        # Canvas size limit
+        # Canvas size limit — trigger completion instead of silently stopping
         if len(self.canvas.pixels) > 15000:
+            if self.intent.state.arc_phase != "closing":
+                print(f"[Canvas] Pixel limit reached ({len(self.canvas.pixels)}px) — completing",
+                      file=sys.stderr, flush=True)
+                self.intent.state.arc_phase = "closing"
+                self.canvas.drawing_phase = "closing"
+                self.canvas.mark_satisfied()
             return
 
         # --- Delegate to active era ---
@@ -921,10 +928,7 @@ class DrawingEngine:
         self.intent.focus_y = new_fy
         self.intent.direction = new_dir
 
-        # --- EISV thermodynamic step ---
-        dE_coupling, C = self._eisv_step()
-
-        # Track gesture for behavioral entropy
+        # Track gesture for behavioral entropy (before EISV step so both use same history)
         state = self.intent.state
         state.gesture_history.append(era_state.gesture)
         if len(state.gesture_history) > 20:
@@ -932,21 +936,9 @@ class DrawingEngine:
 
         # Detect gesture switch
         gesture_switch = len(state.gesture_history) >= 2 and state.gesture_history[-1] != state.gesture_history[-2]
-        gesture_count = len(era_state.gestures()) if era_state else 5
-        max_entropy = math.log2(max(gesture_count, 2))
-        if len(state.gesture_history) >= 5:
-            counts: Dict[str, int] = {}
-            for g in state.gesture_history:
-                counts[g] = counts.get(g, 0) + 1
-            total = len(state.gesture_history)
-            S_signal = 0.0
-            for count in counts.values():
-                prob = count / total
-                if prob > 0:
-                    S_signal -= prob * math.log2(prob)
-            S_signal = min(1.0, S_signal / max_entropy)
-        else:
-            S_signal = 0.5
+
+        # --- EISV thermodynamic step (also computes S_signal from gesture history) ---
+        dE_coupling, C, S_signal = self._eisv_step()
 
         # --- Update attention and coherence tracking (replaces arbitrary energy depletion) ---
         self._update_attention(I_signal, S_signal, C, gesture_switch)
@@ -997,11 +989,11 @@ class DrawingEngine:
                 import sys
                 print(f"[DrawingEngine] record_drawing_state failed: {e}", file=sys.stderr, flush=True)
 
-    def _eisv_step(self) -> Tuple[float, float]:
+    def _eisv_step(self) -> Tuple[float, float, float]:
         """Step EISV thermodynamics -- same equations as governance, proprioceptive signals.
 
-        Returns (dE_coupling, C) where dE_coupling modulates energy depletion
-        and C is the coherence signal for drift/gesture modulation.
+        Returns (dE_coupling, C, S_signal) where dE_coupling modulates energy depletion,
+        C is the coherence signal, and S_signal is behavioral entropy (reused by caller).
         """
         eisv = self.intent.eisv
         p = _EISV_PARAMS
@@ -1052,7 +1044,7 @@ class DrawingEngine:
         eisv.S = max(0.001, min(2.0, eisv.S + dS * dt))
         eisv.V = max(-2.0, min(2.0, eisv.V + dV * dt))
 
-        return dE * dt, C
+        return dE * dt, C, S_signal
 
     def _update_attention(self, I_signal: float, S_signal: float, C: float, gesture_switch: bool):
         """Update attention signals based on drawing activity.
@@ -1675,10 +1667,9 @@ class DrawingEngine:
         # No arbitrary mark limit -- fatigue accumulates (0.0005/mark + 0.005/switch)
         # so attention exhausts naturally. Canvas pixel limit (15000) is the only hard cap.
 
-        # Periodically persist canvas state (every 60s of drawing)
-        time_since_clear = now - self.canvas.last_clear_time
-        if pixel_count > 0 and time_since_clear > 60.0:
-            # Only save if we have new pixels since last persist
+        # Periodically persist canvas state (every 60s)
+        if pixel_count > 0 and now - self._last_persist_time > 60.0:
             self.canvas.save_to_disk()
+            self._last_persist_time = now
 
         return None
