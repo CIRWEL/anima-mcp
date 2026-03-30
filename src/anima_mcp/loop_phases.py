@@ -227,14 +227,22 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
     advocate_desire = None
     advocate_reason = None
     try:
+        from .accessors import _get_last_shm_data
         advocate = get_advocate()
         display_available = (_ctx.display.is_available() if _ctx and _ctx.display else False)
         eisv = anima_to_eisv(anima, readings)
+        # Read actual drives from inner_life (broker writes to SHM)
+        _shm = _get_last_shm_data()
+        _il = (_shm.get("inner_life") or {}) if _shm else {}
+        _drives = _il.get("drives")
+        _strongest = _il.get("strongest_drive")
         steps = advocate.analyze_current_state(
             anima=anima, readings=readings, eisv=eisv,
             display_available=display_available,
             brain_hat_available=display_available,
             unitares_connected=bool(os.environ.get("UNITARES_URL")),
+            drives=_drives,
+            strongest_drive=_strongest,
         )
         if steps:
             advocate_feeling = steps[0].feeling

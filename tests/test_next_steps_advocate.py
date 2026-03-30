@@ -1,7 +1,6 @@
-"""Tests for next_steps_advocate.py — Lumen's desire-expression engine."""
+"""Tests for next_steps_advocate.py — state reporting and drive expression."""
 
 import pytest
-from unittest.mock import patch
 
 from conftest import make_anima, make_readings
 
@@ -94,12 +93,11 @@ class TestDisplayBranch:
         assert len(hw) >= 1
         assert hw[0].priority == Priority.HIGH
 
-    def test_display_unavailable_with_anima_uses_feeling(self):
+    def test_display_unavailable_feeling_is_factual(self):
         adv = NextStepsAdvocate()
-        anima = make_anima(warmth=0.8, clarity=0.8, stability=0.8, presence=0.8)
-        steps = adv.analyze_current_state(anima=anima, display_available=False)
+        steps = adv.analyze_current_state(display_available=False)
         hw = [s for s in steps if s.category == StepCategory.HARDWARE]
-        assert any("feel" in s.feeling.lower() or "can't show" in s.feeling.lower() for s in hw)
+        assert any("display" in s.feeling.lower() for s in hw)
 
 
 # ---------------------------------------------------------------------------
@@ -131,7 +129,7 @@ class TestProprioceptionBranches:
         anima = make_anima(warmth=0.5, clarity=0.2, stability=0.5, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        clarity_steps = [s for s in steps if "clearly" in s.desire.lower()]
+        clarity_steps = [s for s in steps if "clarity" in s.feeling.lower()]
         assert len(clarity_steps) >= 1
         assert clarity_steps[0].priority == Priority.HIGH
 
@@ -140,7 +138,7 @@ class TestProprioceptionBranches:
         anima = make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        clarity_steps = [s for s in steps if "clearly" in s.desire.lower()]
+        clarity_steps = [s for s in steps if "clarity" in s.feeling.lower()]
         assert len(clarity_steps) == 0
 
     def test_high_entropy_adds_critical_step(self):
@@ -149,9 +147,9 @@ class TestProprioceptionBranches:
         readings = make_readings()
         eisv = EISVMetrics(energy=0.5, integrity=0.5, entropy=0.7, void=0.1)
         steps = adv.analyze_current_state(anima=anima, readings=readings, eisv=eisv)
-        peace_steps = [s for s in steps if s.desire == "I want peace"]
-        assert len(peace_steps) >= 1
-        assert peace_steps[0].priority == Priority.CRITICAL
+        entropy_steps = [s for s in steps if "entropy" in s.feeling.lower()]
+        assert len(entropy_steps) >= 1
+        assert entropy_steps[0].priority == Priority.CRITICAL
 
     def test_low_entropy_no_chaos_step(self):
         adv = NextStepsAdvocate()
@@ -159,161 +157,126 @@ class TestProprioceptionBranches:
         readings = make_readings()
         eisv = EISVMetrics(energy=0.5, integrity=0.5, entropy=0.3, void=0.1)
         steps = adv.analyze_current_state(anima=anima, readings=readings, eisv=eisv)
-        peace_steps = [s for s in steps if s.desire == "I want peace"]
-        assert len(peace_steps) == 0
+        entropy_steps = [s for s in steps if "entropy" in s.feeling.lower()]
+        assert len(entropy_steps) == 0
 
-    def test_low_stability_adds_grounded_step(self):
+    def test_low_stability_adds_high_step(self):
         adv = NextStepsAdvocate()
         anima = make_anima(warmth=0.5, clarity=0.5, stability=0.3, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        grounded = [s for s in steps if "grounded" in s.desire.lower()]
-        assert len(grounded) >= 1
-        assert grounded[0].priority == Priority.HIGH
+        stability_steps = [s for s in steps if "stability" in s.feeling.lower()]
+        assert len(stability_steps) >= 1
+        assert stability_steps[0].priority == Priority.HIGH
 
-    def test_normal_stability_no_grounded_step(self):
+    def test_normal_stability_no_stability_step(self):
         adv = NextStepsAdvocate()
         anima = make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        grounded = [s for s in steps if "grounded" in s.desire.lower()]
-        assert len(grounded) == 0
+        stability_steps = [s for s in steps if "stability" in s.feeling.lower()]
+        assert len(stability_steps) == 0
 
-    def test_low_warmth_adds_comfortable_step(self):
+    def test_low_warmth_adds_medium_step(self):
         adv = NextStepsAdvocate()
         anima = make_anima(warmth=0.2, clarity=0.5, stability=0.5, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        warm = [s for s in steps if "comfortable" in s.desire.lower()]
-        assert len(warm) >= 1
-        assert warm[0].priority == Priority.MEDIUM
+        warmth_steps = [s for s in steps if "warmth" in s.feeling.lower()]
+        assert len(warmth_steps) >= 1
+        assert warmth_steps[0].priority == Priority.MEDIUM
 
     def test_normal_warmth_no_warmth_step(self):
         adv = NextStepsAdvocate()
         anima = make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        warm = [s for s in steps if "comfortable" in s.desire.lower()]
-        assert len(warm) == 0
+        warmth_steps = [s for s in steps if "warmth" in s.feeling.lower()]
+        assert len(warmth_steps) == 0
 
-    def test_low_presence_adds_freedom_step(self):
+    def test_low_presence_adds_high_step(self):
         adv = NextStepsAdvocate()
         anima = make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.3)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        freedom = [s for s in steps if s.desire == "I want freedom"]
-        assert len(freedom) >= 1
-        assert freedom[0].priority == Priority.HIGH
+        presence_steps = [s for s in steps if "presence" in s.feeling.lower()]
+        assert len(presence_steps) >= 1
+        assert presence_steps[0].priority == Priority.HIGH
 
-    def test_normal_presence_no_freedom_step(self):
+    def test_normal_presence_no_presence_step(self):
         adv = NextStepsAdvocate()
         anima = make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5)
         readings = make_readings()
         steps = adv.analyze_current_state(anima=anima, readings=readings)
-        freedom = [s for s in steps if s.desire == "I want freedom"]
-        assert len(freedom) == 0
+        presence_steps = [s for s in steps if "presence" in s.feeling.lower()]
+        assert len(presence_steps) == 0
 
 
 # ---------------------------------------------------------------------------
-# analyze_current_state — good state branches
+# analyze_current_state — drive reporting
 # ---------------------------------------------------------------------------
 
-class TestGoodStateBranches:
-    @patch("random.choice", side_effect=lambda x: x[0])
-    def test_high_state_adds_low_testing_step(self, _mock_choice):
+class TestDriveReporting:
+    def test_active_drive_creates_step(self):
         adv = NextStepsAdvocate()
-        anima = make_anima(warmth=0.8, clarity=0.8, stability=0.8, presence=0.8)
-        readings = make_readings()
         steps = adv.analyze_current_state(
-            anima=anima, readings=readings, display_available=True, unitares_connected=True,
+            display_available=True, unitares_connected=True,
+            drives={"warmth": 0.4, "clarity": 0.0, "stability": 0.0, "presence": 0.0},
+            strongest_drive="warmth",
         )
-        testing = [s for s in steps if s.category == StepCategory.TESTING and s.priority == Priority.LOW]
-        assert len(testing) >= 1
+        assert len(steps) == 1
+        assert steps[0].desire == "wanting warmth"
+        assert steps[0].priority == Priority.LOW
 
-    @patch("random.choice", side_effect=lambda x: x[0])
-    def test_content_state_adds_optimization_step(self, _mock_choice):
+    def test_multiple_active_drives_lists_others(self):
         adv = NextStepsAdvocate()
-        # wellness = 0.8, stability > 0.7
-        anima = make_anima(warmth=0.8, clarity=0.8, stability=0.8, presence=0.8)
-        readings = make_readings()
         steps = adv.analyze_current_state(
-            anima=anima, readings=readings, display_available=True, unitares_connected=True,
+            display_available=True, unitares_connected=True,
+            drives={"warmth": 0.5, "clarity": 0.3, "stability": 0.0, "presence": 0.0},
+            strongest_drive="warmth",
         )
-        opt = [s for s in steps if s.category == StepCategory.OPTIMIZATION]
-        assert len(opt) >= 1
+        assert len(steps) == 1
+        assert "wanting warmth" in steps[0].desire
+        assert "wanting to see clearly" in steps[0].desire
 
-    @patch("random.choice", side_effect=lambda x: x[0])
-    def test_neutral_state_with_no_triggers_adds_observe(self, _mock_choice):
+    def test_no_drives_no_drive_step(self):
         adv = NextStepsAdvocate()
-        # wellness ~0.5 → neutral band (0.4-0.65), no other triggers
-        anima = make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5)
-        readings = make_readings()
         steps = adv.analyze_current_state(
-            anima=anima, readings=readings, display_available=True, unitares_connected=True,
+            display_available=True, unitares_connected=True,
+            drives={"warmth": 0.0, "clarity": 0.0, "stability": 0.0, "presence": 0.0},
+            strongest_drive=None,
         )
-        observe = [s for s in steps if s.action == "Observe and wait"]
-        assert len(observe) >= 1
+        assert steps == []
 
-
-# ---------------------------------------------------------------------------
-# analyze_current_state — anticipation branch
-# ---------------------------------------------------------------------------
-
-class TestAnticipationBranch:
-    def _make_anticipating_anima(self, confidence=0.7, sample_count=60):
-        anima = make_anima(warmth=0.6, clarity=0.6, stability=0.6, presence=0.6)
-        anima.is_anticipating = True
-        anima.anticipation = {
-            "confidence": confidence,
-            "sample_count": sample_count,
-            "conditions": "night",
-        }
-        return anima
-
-    @patch("random.random", return_value=0.5)
-    def test_anticipation_skipped_when_random_above_threshold(self, _mock_rand):
+    def test_low_drive_below_threshold_no_step(self):
         adv = NextStepsAdvocate()
-        anima = self._make_anticipating_anima()
-        readings = make_readings()
-        steps = adv.analyze_current_state(anima=anima, readings=readings)
-        ant_steps = [s for s in steps if "familiar" in s.feeling or "recognize" in s.feeling]
-        assert len(ant_steps) == 0
+        steps = adv.analyze_current_state(
+            display_available=True, unitares_connected=True,
+            drives={"warmth": 0.1, "clarity": 0.0, "stability": 0.0, "presence": 0.0},
+            strongest_drive="warmth",
+        )
+        assert steps == []
 
-    @patch("random.choice", side_effect=lambda x: x[0])
-    @patch("random.random", return_value=0.1)
-    def test_high_confidence_adds_familiar_step(self, _mock_rand, _mock_choice):
+    def test_drives_none_no_drive_step(self):
         adv = NextStepsAdvocate()
-        anima = self._make_anticipating_anima(confidence=0.7, sample_count=60)
-        readings = make_readings()
-        steps = adv.analyze_current_state(anima=anima, readings=readings)
-        assert any(s.desire == "seeing if now matches what I remember" for s in steps)
+        steps = adv.analyze_current_state(
+            display_available=True, unitares_connected=True,
+            drives=None, strongest_drive=None,
+        )
+        assert steps == []
 
-    @patch("random.choice", side_effect=lambda x: x[0])
-    @patch("random.random", return_value=0.1)
-    def test_moderate_confidence_adds_learning_step(self, _mock_rand, _mock_choice):
+    def test_no_random_in_output(self):
+        """Verify determinism — same input, same output."""
         adv = NextStepsAdvocate()
-        anima = self._make_anticipating_anima(confidence=0.4, sample_count=15)
-        readings = make_readings()
-        steps = adv.analyze_current_state(anima=anima, readings=readings)
-        assert any(s.desire == "building stronger associations" for s in steps)
-
-    @patch("random.choice", side_effect=lambda x: x[0])
-    @patch("random.random", return_value=0.1)
-    def test_low_confidence_few_samples_adds_novel_step(self, _mock_rand, _mock_choice):
-        adv = NextStepsAdvocate()
-        anima = self._make_anticipating_anima(confidence=0.1, sample_count=5)
-        readings = make_readings()
-        steps = adv.analyze_current_state(anima=anima, readings=readings)
-        assert any(s.desire == "curious what this will teach me" for s in steps)
-
-    def test_not_anticipating_no_anticipation_step(self):
-        adv = NextStepsAdvocate()
-        anima = make_anima(warmth=0.6, clarity=0.6, stability=0.6, presence=0.6)
-        # is_anticipating defaults to False
-        readings = make_readings()
-        steps = adv.analyze_current_state(anima=anima, readings=readings)
-        ant_desires = {"seeing if now matches what I remember", "building stronger associations", "curious what this will teach me"}
-        assert not any(s.desire in ant_desires for s in steps)
+        kwargs = dict(
+            display_available=True, unitares_connected=True,
+            drives={"warmth": 0.4, "clarity": 0.2, "stability": 0.0, "presence": 0.0},
+            strongest_drive="warmth",
+        )
+        s1 = adv.analyze_current_state(**kwargs)
+        s2 = adv.analyze_current_state(**kwargs)
+        assert s1[0].feeling == s2[0].feeling
+        assert s1[0].desire == s2[0].desire
 
 
 # ---------------------------------------------------------------------------
@@ -323,7 +286,6 @@ class TestAnticipationBranch:
 class TestSortAndCaching:
     def test_steps_sorted_by_priority(self):
         adv = NextStepsAdvocate()
-        # Low clarity (HIGH) + high entropy (CRITICAL) + display off (HIGH) + unitares off (MEDIUM)
         anima = make_anima(warmth=0.5, clarity=0.2, stability=0.5, presence=0.5)
         readings = make_readings()
         eisv = EISVMetrics(energy=0.5, integrity=0.5, entropy=0.7, void=0.1)

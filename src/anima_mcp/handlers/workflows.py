@@ -131,7 +131,10 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
         unitares_status = f"error: {str(e)}"
         print(f"[Diagnostics] UNITARES check failed: {e}", file=sys.stderr, flush=True)
 
-    # Get advocate recommendations
+    # Get advocate recommendations (with actual drives from SHM)
+    from ..accessors import _get_last_shm_data
+    _shm = _get_last_shm_data()
+    _il = (_shm.get("inner_life") or {}) if _shm else {}
     advocate = get_advocate()
     steps = advocate.analyze_current_state(
         anima=anima,
@@ -140,6 +143,8 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
         display_available=display_available,
         brain_hat_available=brain_hat_hardware_available,
         unitares_connected=unitares_connected,
+        drives=_il.get("drives"),
+        strongest_drive=_il.get("strongest_drive"),
     )
 
     summary = advocate.get_next_steps_summary()

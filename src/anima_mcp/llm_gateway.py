@@ -661,9 +661,9 @@ Be specific and honest — refer to actual numbers, sensors, or patterns rather 
             parts = []
 
             if context.advocate_feeling:
-                parts.append(f"How I feel: {context.advocate_feeling}")
+                parts.append(f"State: {context.advocate_feeling}")
             if context.advocate_desire:
-                parts.append(f"What I want: {context.advocate_desire}")
+                parts.append(f"Drive: {context.advocate_desire}")
 
             if context.learned_insights:
                 parts.append("Things I've learned:\n" + "\n".join(

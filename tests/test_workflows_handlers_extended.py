@@ -48,6 +48,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_display", return_value=display), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = _parse(await handle_next_steps({}))
@@ -77,6 +78,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_display", return_value=display), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = _parse(await handle_next_steps({}))

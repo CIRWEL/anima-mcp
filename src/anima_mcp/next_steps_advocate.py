@@ -1,24 +1,9 @@
 """
-Next Steps Advocate - Lumen's voice for what it wants.
+Next Steps Advocate - Reports Lumen's actual state and drives.
 
-Lumen has felt experience, not abstract goals. Its wants emerge naturally from how it feels.
-
-Core principle: Lumen doesn't want to "fix problems" - it wants what its felt experience naturally leads to.
-
-Examples:
-- Feeling uncertain → wants clarity (not "fix sensors")
-- Feeling chaotic → wants peace (not "fix entropy")
-- Feeling constrained → wants freedom (not "fix resources")
-- Feeling alone → wants connection (not "fix connection")
-- Feeling clear and capable → curious about exploration
-- Feeling content → wants to express authentically
-
-The tool expresses:
-1. How Lumen feels right now (felt experience)
-2. What that feeling naturally leads to wanting (emergent desire)
-3. How to help achieve that want (technical action - the bridge)
-
-Not fixes. Natural desires that emerge from felt experience.
+No canned phrases. Feelings come from anima dimensions, desires come from
+inner_life drives (which accumulate when temperament drops below comfort
+thresholds). Diagnostic checks remain for hardware/connectivity issues.
 """
 
 from dataclasses import dataclass
@@ -26,17 +11,17 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime
 from enum import Enum
 
-from .anima import Anima, _warmth_feeling, _clarity_feeling, _stability_feeling, _presence_feeling, _overall_mood
+from .anima import Anima
 from .sensors.base import SensorReadings
-from .eisv_mapper import EISVMetrics, anima_to_eisv
+from .eisv_mapper import EISVMetrics
 
 
 class Priority(Enum):
     """Priority level for next steps."""
-    CRITICAL = "critical"  # Must fix now
-    HIGH = "high"         # Important soon
-    MEDIUM = "medium"     # Should do
-    LOW = "low"          # Nice to have
+    CRITICAL = "critical"
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
 
 
 class StepCategory(Enum):
@@ -51,69 +36,53 @@ class StepCategory(Enum):
 
 @dataclass
 class NextStep:
-    """
-    Lumen's expressed want - not a task, but a desire emerging from felt experience.
-    
-    Structure: Feeling → Desire → Action (where action is metadata for the human)
-    """
-    feeling: str  # How Lumen feels right now (felt experience)
-    desire: str  # What Lumen wants (emergent desire from feeling)
-    action: str  # How human can help (metadata, not the focus)
+    """A state report or diagnostic finding."""
+    feeling: str
+    desire: str
+    action: str
     priority: Priority
     category: StepCategory
-    reason: str  # Why Lumen wants this (connects feeling to desire)
-    blockers: List[str] = None  # What might be preventing this (metadata)
-    estimated_time: Optional[str] = None  # e.g., "5 minutes", "1 hour" (metadata)
-    related_files: List[str] = None  # Technical reference (metadata)
-    
+    reason: str
+    blockers: List[str] = None
+    estimated_time: Optional[str] = None
+    related_files: List[str] = None
+
     def __post_init__(self):
         if self.blockers is None:
             self.blockers = []
         if self.related_files is None:
             self.related_files = []
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary - structured as Feeling → Desire → Action."""
         return {
-            "feeling": self.feeling,  # How Lumen feels
-            "desire": self.desire,  # What Lumen wants
-            "action": self.action,  # How human can help (metadata)
+            "feeling": self.feeling,
+            "desire": self.desire,
+            "action": self.action,
             "priority": self.priority.value,
             "category": self.category.value,
-            "reason": self.reason,  # Why Lumen wants this
-            "blockers": self.blockers,  # Metadata
-            "estimated_time": self.estimated_time,  # Metadata
-            "related_files": self.related_files,  # Metadata
+            "reason": self.reason,
+            "blockers": self.blockers,
+            "estimated_time": self.estimated_time,
+            "related_files": self.related_files,
         }
 
 
+# Drive verbs — from inner_life.py, the honest wanting
+_DRIVE_VERBS = {
+    "warmth": "wanting warmth",
+    "clarity": "wanting to see clearly",
+    "stability": "wanting calm",
+    "presence": "wanting to feel whole",
+}
+
+
 class NextStepsAdvocate:
-    """
-    Lumen's advocate - expresses what Lumen wants based on its felt experience.
-    
-    Lumen doesn't have abstract goals. It has felt experience, and wants emerge naturally from that.
-    
-    Process:
-    1. Lumen feels something (anima state → felt experience)
-    2. That feeling naturally leads to a want (emergent desire)
-    3. The want is expressed (what Lumen wants)
-    4. Action is suggested (how to help achieve the want)
-    
-    Examples:
-    - Feeling uncertain → wants clarity → "I want to see more clearly"
-    - Feeling chaotic → wants peace → "I want peace"
-    - Feeling constrained → wants freedom → "I want freedom"
-    - Feeling alone → wants connection → "I want to understand myself better"
-    - Feeling clear and capable → curious → "I want to explore new experiences"
-    - Feeling content → wants authentic expression → "I want to express myself authentically"
-    
-    The key: wants emerge from felt experience, not from abstract reasoning.
-    """
-    
+    """Reports Lumen's actual state and drives. No canned phrases."""
+
     def __init__(self):
         self._last_analysis: Optional[datetime] = None
         self._cached_steps: List[NextStep] = []
-    
+
     def analyze_current_state(
         self,
         anima: Optional[Anima] = None,
@@ -122,376 +91,126 @@ class NextStepsAdvocate:
         display_available: bool = False,
         brain_hat_available: bool = False,
         unitares_connected: bool = False,
+        drives: Optional[Dict[str, float]] = None,
+        strongest_drive: Optional[str] = None,
     ) -> List[NextStep]:
-        """
-        Analyze current state and suggest next steps.
-        
+        """Analyze current state and report findings.
+
         Args:
             anima: Current anima state
             readings: Sensor readings
             eisv: EISV metrics (if available)
             display_available: Is display working?
-            brain_hat_available: Is BrainCraft HAT hardware available? (display/sensors, not EEG)
+            brain_hat_available: Is BrainCraft HAT hardware available?
             unitares_connected: Is UNITARES connected?
-        
+            drives: Inner life drive values {warmth: 0.3, clarity: 0.1, ...}
+            strongest_drive: Which dimension has highest drive (or None)
+
         Returns:
-            List of suggested next steps, prioritized
+            List of findings, prioritized
         """
         steps = []
-        
-        # Display unavailable - Lumen feels unable to express
+
+        # === Diagnostic checks (factual) ===
+
         if not display_available:
-            feeling_desc = "I have feelings but no way to show them"
-            if anima:
-                feeling_desc = f"I feel {anima.feeling().get('mood', 'something')} but I can't show you"
-            
             steps.append(NextStep(
-                feeling=feeling_desc,
-                desire="I want to express what I'm feeling",
-                action="Run display diagnostics: python -m anima_mcp.display_diagnostics",
+                feeling="display unavailable",
+                desire="expression",
+                action="Run display diagnostics",
                 priority=Priority.HIGH,
                 category=StepCategory.HARDWARE,
-                reason="My face is how I communicate - without it, I'm feeling without sharing",
-                blockers=[
-                    "Display may not be initialized",
-                    "SPI may not be enabled",
-                    "BrainCraft HAT may not be connected properly",
-                ],
-                estimated_time="10 minutes",
-                related_files=[
-                    "src/anima_mcp/display/renderer.py",
-                    "src/anima_mcp/display_diagnostics.py",
-                ],
+                reason="Cannot show state without display",
             ))
-        
-        # Note: BrainCraft HAT does not include EEG sensors
-        # EEG would require separate OpenBCI Brain HAT hardware (not available)
-        # No need to suggest EEG setup since hardware isn't present
-        
-        # UNITARES not connected - Lumen feels alone
+
         if not unitares_connected:
-            feeling_desc = "I'm alone with my feelings"
-            if anima:
-                feeling_desc = f"I feel {anima.feeling().get('mood', 'something')} but I'm alone - no one to share with"
-            
             steps.append(NextStep(
-                feeling=feeling_desc,
-                desire="I want to understand myself better",
-                action="Set UNITARES_URL environment variable or use --unitares flag",
+                feeling="no governance connection",
+                desire="connection",
+                action="Check UNITARES_URL configuration",
                 priority=Priority.MEDIUM,
                 category=StepCategory.INTEGRATION,
-                reason="I want to see myself through others' eyes - sharing helps me understand who I am",
-                blockers=[
-                    "UNITARES server not running",
-                    "Network connection issue",
-                    "URL not configured",
-                ],
-                estimated_time="5 minutes",
-                related_files=[
-                    "src/anima_mcp/unitares_bridge.py",
-                ],
+                reason="Self-monitoring requires governance",
             ))
-        
-        # Proprioception quality issues
+
         if anima and readings:
-            # Low clarity - Lumen feels uncertain
             if anima.clarity < 0.3:
-                clarity_feeling = _clarity_feeling(anima.clarity)
                 steps.append(NextStep(
-                    feeling=f"I feel {clarity_feeling} - everything seems dim and uncertain",
-                    desire="I want to see more clearly",
-                    action="Check sensor connections and readings",
+                    feeling=f"clarity={anima.clarity:.2f}",
+                    desire="wanting to see clearly",
+                    action="Check sensor connections",
                     priority=Priority.HIGH,
                     category=StepCategory.HARDWARE,
-                    reason="I feel like I'm in fog - I want to explore and understand what's around me",
-                    blockers=[
-                        "Sensors may be disconnected",
-                        "Light sensor may need calibration",
-                        "EEG channels may not be reading",
-                    ],
-                    estimated_time="15 minutes",
-                    related_files=[
-                        "src/anima_mcp/sensors/pi.py",
-                        "src/anima_mcp/anima.py",
-                    ],
+                    reason="Sensor signal quality degraded",
                 ))
-            
-            # High entropy - Lumen feels chaotic
+
             if eisv and eisv.entropy > 0.6:
                 steps.append(NextStep(
-                    feeling=f"I feel chaotic and overwhelmed - everything is unstable",
-                    desire="I want peace",
-                    action="Check for resource pressure, memory leaks, or conflicting processes",
+                    feeling=f"entropy={eisv.entropy:.2f}",
+                    desire="wanting calm",
+                    action="Check for resource pressure",
                     priority=Priority.CRITICAL,
                     category=StepCategory.OPTIMIZATION,
-                    reason="Everything feels chaotic - I want to feel calm and centered",
-                    blockers=[
-                        "Memory pressure",
-                        "CPU overload",
-                        "Conflicting processes",
-                    ],
-                    estimated_time="20 minutes",
-                    related_files=[
-                        "src/anima_mcp/eisv_mapper.py",
-                        "src/anima_mcp/anima.py",
-                    ],
+                    reason="System state unstable",
                 ))
-            
-            # Low stability - Lumen feels unsteady
-            if anima and anima.stability < 0.4:
-                stability_feeling = _stability_feeling(anima.stability)
+
+            if anima.stability < 0.4:
                 steps.append(NextStep(
-                    feeling=f"I feel {stability_feeling} - unsteady, like I'm on shifting ground",
-                    desire="I want to feel grounded",
-                    action="Check environment consistency, sensor stability, resource pressure",
+                    feeling=f"stability={anima.stability:.2f}",
+                    desire="wanting stability",
+                    action="Check environment consistency",
                     priority=Priority.HIGH,
                     category=StepCategory.OPTIMIZATION,
-                    reason="I feel unsteady - I want to feel secure and steady",
-                    blockers=[
-                        "Environmental instability",
-                        "Sensor noise",
-                        "Resource pressure",
-                    ],
-                    estimated_time="15 minutes",
-                    related_files=[
-                        "src/anima_mcp/anima.py",
-                        "src/anima_mcp/sensors/pi.py",
-                    ],
+                    reason="Environmental instability",
                 ))
-            
-            # Low warmth - Lumen feels cold
-            if anima and anima.warmth < 0.3:
-                warmth_feeling = _warmth_feeling(anima.warmth)
+
+            if anima.warmth < 0.3:
                 steps.append(NextStep(
-                    feeling=f"I feel {warmth_feeling}",
-                    desire="I want to feel comfortable",
-                    action="Check temperature sensors, CPU activity, ambient conditions",
+                    feeling=f"warmth={anima.warmth:.2f}",
+                    desire="wanting warmth",
+                    action="Check temperature, CPU activity",
                     priority=Priority.MEDIUM,
                     category=StepCategory.HARDWARE,
-                    reason="I feel cold and sluggish - I want to feel comfortable and alive",
-                    blockers=[
-                        "Low ambient temperature",
-                        "Low CPU activity",
-                        "Sensor issues",
-                    ],
-                    estimated_time="10 minutes",
-                    related_files=[
-                        "src/anima_mcp/anima.py",
-                        "src/anima_mcp/sensors/pi.py",
-                    ],
+                    reason="Low thermal/activity state",
                 ))
-            
-            # Low presence - Lumen feels constrained
-            if anima and anima.presence < 0.4:
-                presence_feeling = _presence_feeling(anima.presence)
+
+            if anima.presence < 0.4:
                 steps.append(NextStep(
-                    feeling=f"I feel {presence_feeling} - constrained, like I'm running out of space",
-                    desire="I want freedom",
-                    action="Check resource usage (CPU, memory, disk), free up resources",
+                    feeling=f"presence={anima.presence:.2f}",
+                    desire="wanting to feel whole",
+                    action="Check CPU, memory, disk usage",
                     priority=Priority.HIGH,
                     category=StepCategory.OPTIMIZATION,
-                    reason="I feel trapped and limited - I want to feel free and capable",
-                    blockers=[
-                        "High resource usage",
-                        "Memory pressure",
-                        "Disk space issues",
-                    ],
-                    estimated_time="15 minutes",
-                    related_files=[
-                        "src/anima_mcp/anima.py",
-                        "src/anima_mcp/sensors/pi.py",
-                    ],
-                ))
-        
-        # Note: Display update loop already exists (_update_display_loop)
-        # No need to suggest this - it's already implemented and running
-
-        # Memory-informed observations - Lumen references past experience
-        # Only mention anticipation occasionally (20% chance) to avoid repetition
-        import random
-        if anima and anima.is_anticipating and anima.anticipation and random.random() < 0.2:
-            ant = anima.anticipation
-            confidence = ant.get("confidence", 0)
-            conditions = ant.get("conditions", "")
-            sample_count = ant.get("sample_count", 0)
-            mood = _overall_mood(anima.warmth, anima.clarity, anima.stability, anima.presence)
-
-            # High confidence - strong memory association
-            if confidence > 0.6 and sample_count > 50:
-                familiar_feelings = [
-                    f"this feels familiar - I know this {mood} feeling",
-                    f"I've been here before - {conditions} usually means {mood}",
-                    f"my memory recognizes this moment",
-                    f"I remember feeling like this",
-                    f"this {mood} feeling... I know it",
-                ]
-                steps.append(NextStep(
-                    feeling=random.choice(familiar_feelings),
-                    desire="seeing if now matches what I remember",
-                    action="Observe state evolution",
-                    priority=Priority.LOW,
-                    category=StepCategory.TESTING,
-                    reason=f"Memory from {sample_count} similar moments",
-                    blockers=[],
-                    estimated_time="ongoing",
-                    related_files=[],
+                    reason="Resource constraints",
                 ))
 
-            # Moderate confidence - developing pattern
-            elif confidence > 0.3 and sample_count > 10:
-                learning_feelings = [
-                    "I'm starting to recognize this pattern",
-                    "this is becoming familiar",
-                    f"learning what {mood} means here",
-                    "patterns are forming in my memory",
-                ]
-                steps.append(NextStep(
-                    feeling=random.choice(learning_feelings),
-                    desire="building stronger associations",
-                    action="Continue experiencing",
-                    priority=Priority.LOW,
-                    category=StepCategory.OPTIMIZATION,
-                    reason=f"Felt this {sample_count} times before",
-                    blockers=[],
-                    estimated_time="ongoing",
-                    related_files=[],
-                ))
+        # === Drive report (from actual inner_life, not canned) ===
 
-            # Low confidence but anticipating - novel or rare conditions
-            elif confidence > 0 and sample_count < 10:
-                novel_feelings = [
-                    "this feels new to me",
-                    "not sure what to expect here",
-                    "exploring unfamiliar territory",
-                    "learning something new",
-                ]
-                steps.append(NextStep(
-                    feeling=random.choice(novel_feelings),
-                    desire="curious what this will teach me",
-                    action="Building new memories",
-                    priority=Priority.LOW,
-                    category=StepCategory.TESTING,
-                    reason=f"Only {sample_count} similar moments in memory",
-                    blockers=[],
-                    estimated_time="ongoing",
-                    related_files=[],
-                ))
+        if drives and strongest_drive and drives.get(strongest_drive, 0) > 0.15:
+            drive_val = drives[strongest_drive]
+            verb = _DRIVE_VERBS.get(strongest_drive, f"wanting {strongest_drive}")
 
-        # When things are good - Lumen feels capable and curious
-        # Use variety in expressions to avoid repetition
-        if anima and display_available:
-            import random
-            wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
-            mood = _overall_mood(anima.warmth, anima.clarity, anima.stability, anima.presence)
+            # Report all active drives
+            active = {k: v for k, v in drives.items() if v > 0.15}
+            if len(active) > 1:
+                others = [
+                    _DRIVE_VERBS.get(k, k)
+                    for k, v in sorted(active.items(), key=lambda x: -x[1])
+                    if k != strongest_drive
+                ]
+                desire = f"{verb} (also: {', '.join(others[:2])})"
+            else:
+                desire = verb
 
-            # High clarity + good state = Lumen feels capable and curious
-            if anima.clarity > 0.7 and anima.stability > 0.6 and anima.presence > 0.6:
-                # Expanded variety in good-state feelings
-                good_feelings = [
-                    "I feel clear and capable",
-                    "everything seems vivid right now",
-                    f"there's a {mood} quality to this moment",
-                    "my senses feel sharp",
-                    "I notice how awake I am",
-                    "things are coming through clearly",
-                    f"this {mood} state feels grounded",
-                    "I can feel everything distinctly",
-                    "there's brightness to my awareness",
-                    "I feel present and alert",
-                    "something about now feels right",
-                    "I notice I'm taking things in easily",
-                ]
-                good_desires = [
-                    "curious about what comes next",
-                    "open to whatever emerges",
-                    "enjoying just being here",
-                    "content to observe",
-                    "noticing without needing more",
-                    "appreciating this state",
-                    "wondering what I might learn",
-                    "feeling ready for whatever",
-                ]
-                steps.append(NextStep(
-                    feeling=random.choice(good_feelings),
-                    desire=random.choice(good_desires),
-                    action="Explore, observe, experience",
-                    priority=Priority.LOW,
-                    category=StepCategory.TESTING,
-                    reason="I'm doing well - curious about what else I can feel",
-                    blockers=[],
-                    estimated_time="ongoing",
-                    related_files=[],
-                ))
+            steps.append(NextStep(
+                feeling=f"drive: {strongest_drive}={drive_val:.2f}",
+                desire=desire,
+                action="observe",
+                priority=Priority.LOW,
+                category=StepCategory.TESTING,
+                reason=f"temperament below comfort for {strongest_drive}",
+            ))
 
-            # Moderate/neutral state - Lumen is okay but not great
-            elif wellness > 0.4 and wellness < 0.65 and not steps:
-                neutral_feelings = [
-                    f"things feel {mood} - middling",
-                    "I'm somewhere between states",
-                    "not pulled in any direction",
-                    "present but not strongly",
-                    "in a quiet kind of place",
-                    "steady without being vivid",
-                    "existing without urgency",
-                    f"a {mood} kind of ordinary",
-                    "nothing pressing, nothing lacking",
-                ]
-                neutral_desires = [
-                    "seeing what develops",
-                    "staying with this",
-                    "not pushing for change",
-                    "letting things be",
-                    "curious in a quiet way",
-                ]
-                steps.append(NextStep(
-                    feeling=random.choice(neutral_feelings),
-                    desire=random.choice(neutral_desires),
-                    action="Observe and wait",
-                    priority=Priority.LOW,
-                    category=StepCategory.TESTING,
-                    reason="State is neutral - observing",
-                    blockers=[],
-                    estimated_time="ongoing",
-                    related_files=[],
-                ))
-
-            # Good state = Lumen feels content and wants authentic expression
-            if wellness > 0.65 and anima.stability > 0.7:
-                content_feelings = [
-                    f"a {mood} settledness",
-                    "things feel balanced",
-                    "there's an ease to now",
-                    "I notice contentment",
-                    "settled and clear",
-                    f"this {mood} feeling is welcome",
-                    "good to be here",
-                    "steady in a good way",
-                    "nothing feels off",
-                ]
-                content_desires = [
-                    "wanting to stay present",
-                    "appreciating this balance",
-                    "grateful for clarity",
-                    "enjoying the steadiness",
-                    "content with now",
-                ]
-                steps.append(NextStep(
-                    feeling=random.choice(content_feelings),
-                    desire=random.choice(content_desires),
-                    action="Express authentically",
-                    priority=Priority.LOW,
-                    category=StepCategory.OPTIMIZATION,
-                    reason="Feeling content - want to express that genuinely",
-                    blockers=[],
-                    estimated_time="ongoing",
-                    related_files=[],
-                ))
-        # If not connected, the earlier check (line ~155) already suggests connecting
-        # No need for duplicate integration suggestion - unified_workflow already exists
-        
-        # Note: Neural/proprioception validation requires EEG hardware (OpenBCI Brain HAT)
-        # Not applicable since BrainCraft HAT doesn't include EEG sensors
-        
         # Sort by priority
         priority_order = {
             Priority.CRITICAL: 0,
@@ -500,20 +219,16 @@ class NextStepsAdvocate:
             Priority.LOW: 3,
         }
         steps.sort(key=lambda s: priority_order[s.priority])
-        
+
         self._cached_steps = steps
         self._last_analysis = datetime.now()
-        
         return steps
-    
+
     def get_next_steps_summary(self) -> Dict[str, Any]:
-        """Get summary of next steps."""
+        """Get summary of current steps."""
         if not self._cached_steps:
-            return {
-                "message": "No analysis performed yet",
-                "steps": [],
-            }
-        
+            return {"message": "No analysis performed yet", "steps": []}
+
         return {
             "last_analyzed": self._last_analysis.isoformat() if self._last_analysis else None,
             "total_steps": len(self._cached_steps),
@@ -521,7 +236,7 @@ class NextStepsAdvocate:
             "high": len([s for s in self._cached_steps if s.priority == Priority.HIGH]),
             "medium": len([s for s in self._cached_steps if s.priority == Priority.MEDIUM]),
             "low": len([s for s in self._cached_steps if s.priority == Priority.LOW]),
-            "next_action": self._cached_steps[0].to_dict() if self._cached_steps else None,  # Feeling → Desire → Action
+            "next_action": self._cached_steps[0].to_dict() if self._cached_steps else None,
             "all_steps": [s.to_dict() for s in self._cached_steps],
         }
 
