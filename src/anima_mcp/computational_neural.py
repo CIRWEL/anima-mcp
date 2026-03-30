@@ -182,13 +182,13 @@ class ComputationalNeuralSensor:
             self._ema_theta = theta
         else:
             self._ema_theta = 0.3 * theta + 0.7 * self._ema_theta
-        theta = self._ema_theta
+        theta = max(0.0, min(1.0, self._ema_theta))
 
         if self._ema_gamma is None:
             self._ema_gamma = gamma
         else:
             self._ema_gamma = 0.2 * gamma + 0.8 * self._ema_gamma
-        gamma = self._ema_gamma
+        gamma = max(0.0, min(1.0, self._ema_gamma))
 
         return ComputationalNeuralState(
             delta=round(delta, 3),

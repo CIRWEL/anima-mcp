@@ -806,6 +806,7 @@ class DrawingEngine:
         self._db_path = db_path or "anima.db"
         self._identity_store = identity_store
         self._last_persist_time = 0.0  # Rate-limit canvas persistence
+        self._behavioral_C = 0.5  # Behavioral coherence (EMA-smoothed)
         # Initialize expression mood tracker
         self._mood_tracker = ExpressionMoodTracker(identity_store=identity_store)
 
@@ -904,7 +905,7 @@ class DrawingEngine:
         color, hue_category = self.active_era.generate_color(
             era_state, draw_warmth, draw_clarity, draw_stability, draw_presence, light_regime=light_regime)
 
-        C = self.intent.state.coherence()
+        C = self._behavioral_C  # Behavioral coherence, not ODE
         if era_state.gesture_remaining <= 0:
             self.active_era.choose_gesture(era_state, clarity, stability, presence, C)
 
@@ -937,10 +938,15 @@ class DrawingEngine:
         # Detect gesture switch
         gesture_switch = len(state.gesture_history) >= 2 and state.gesture_history[-1] != state.gesture_history[-2]
 
-        # --- EISV thermodynamic step (also computes S_signal from gesture history) ---
-        dE_coupling, C, S_signal = self._eisv_step()
+        # --- EISV thermodynamic step (runs for reporting, not for decisions) ---
+        dE_coupling, _C_ode, S_signal = self._eisv_step()
 
-        # --- Update attention and coherence tracking (replaces arbitrary energy depletion) ---
+        # --- Behavioral coherence: emerges from gesture commitment + consistency ---
+        C_raw = I_signal * (1.0 - 0.5 * S_signal)
+        self._behavioral_C = 0.15 * C_raw + 0.85 * self._behavioral_C
+        C = self._behavioral_C
+
+        # --- Update attention and coherence tracking ---
         self._update_attention(I_signal, S_signal, C, gesture_switch)
         self._update_coherence_tracking(C, I_signal)
 
@@ -1050,9 +1056,9 @@ class DrawingEngine:
         """Update attention signals based on drawing activity.
 
         Curiosity: depletes while exploring (low C), regenerates when finding patterns (high C).
-        In resolving phase: stop regenerating so the arc can complete (avoids stuck-at-high-C).
+        In resolving phase: drain toward completion, slight regen if deeply coherent.
         Engagement: rises with intentionality, falls with entropy.
-        Fatigue: accumulates, never decreases during drawing.
+        Fatigue: rate depends on engagement — engaged work tires less. Slight recovery when coherent.
         """
         state = self.intent.state
 
@@ -1074,12 +1080,14 @@ class DrawingEngine:
         state.engagement += 0.05 * (target - state.engagement)
         state.engagement = max(0.0, min(1.0, state.engagement))
 
-        # Fatigue: accumulates, but partially recovers during coherent engagement (second wind)
+        # Fatigue: rate depends on engagement — engaged work tires you less
         if gesture_switch:
             state.fatigue += 0.006
-        state.fatigue = min(1.0, state.fatigue + 0.001)
+        base_fatigue = 0.0004 + 0.0008 * (1.0 - state.engagement)  # 0.0004-0.0012
+        state.fatigue = min(1.0, state.fatigue + base_fatigue)
+        # Second wind: slight recovery during coherent engagement
         if C > 0.6 and state.engagement > 0.5:
-            state.fatigue = max(0.0, state.fatigue - 0.0008)
+            state.fatigue = max(0.0, state.fatigue - 0.0005)
 
     def _update_coherence_tracking(self, C: float, I_signal: float):
         """Track coherence over time for settling detection and narrative arc.
@@ -1118,7 +1126,7 @@ class DrawingEngine:
         resolving -> developing: destabilized if coherence drops
         """
         state = self.intent.state
-        C = state.coherence()
+        C = self._behavioral_C  # Behavioral coherence, not ODE
         current_phase = state.arc_phase
         marks = state.phase_mark_count
 
@@ -1140,9 +1148,9 @@ class DrawingEngine:
 
         if current_phase == "opening":
             # Transition to developing once intentionality builds.
-            # Gestural era (baseline I=0.1) needs direction commitment to cross 0.3,
-            # so this naturally gates on lock engagement. Other eras cross easily.
-            if state.i_momentum > 0.3 and marks > 10:
+            # Threshold 0.15 is reachable by all eras — gestural baseline ~0.1
+            # rises when direction locks engage, other eras cross quickly.
+            if state.i_momentum > 0.15 and marks > 10:
                 transition_to("developing")
 
         elif current_phase == "developing":
