@@ -769,7 +769,7 @@ class DrawingEngine:
         # Health check: detect stuck drawings from previous sessions
         if self.canvas.pixels and self.canvas.last_clear_time > 0:
             age = time.time() - self.canvas.last_clear_time
-            if age > 7200:  # Drawing older than 2 hours
+            if age > 21600:  # Drawing older than 6 hours
                 print(f"[Canvas] Stale drawing detected ({age/3600:.1f}h old, "
                       f"{len(self.canvas.pixels)}px, fatigue={self.canvas.fatigue:.2f}). "
                       f"Saving and clearing for fresh start.", file=sys.stderr, flush=True)

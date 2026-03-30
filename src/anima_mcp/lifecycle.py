@@ -307,6 +307,22 @@ def sleep():
             except (ValueError, OSError):
                 pass
 
+    # Persist canvas state so in-progress drawings survive restart
+    if _ctx and _ctx.screen_renderer:
+        try:
+            canvas = _ctx.screen_renderer.drawing_engine.canvas
+            if canvas.pixels:
+                canvas.save_to_disk()
+                try:
+                    print(f"[Sleep] Canvas saved ({len(canvas.pixels)}px)", file=sys.stderr, flush=True)
+                except (ValueError, OSError):
+                    pass
+        except Exception as e:
+            try:
+                print(f"[Sleep] Error saving canvas: {e}", file=sys.stderr, flush=True)
+            except (ValueError, OSError):
+                pass
+
     # Close server-side UNITARES bridge if it was used
     bridge = _get_server_bridge()
     if bridge:
