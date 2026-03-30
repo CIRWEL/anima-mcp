@@ -17,7 +17,7 @@ class TestDrawingEISV:
     def test_initialization(self):
         """Test EISV starts with correct values."""
         eisv = DrawingEISV()
-        assert eisv.E == 0.7
+        assert eisv.E == 0.4
         assert eisv.I == 0.2
         assert eisv.S == 0.5
         assert eisv.V == 0.0
@@ -32,7 +32,7 @@ class TestDrawingEISV:
         eisv.V = 0.8
         eisv.gesture_history = ["dot", "stroke", "curve"]
         eisv.reset()
-        assert eisv.E == 0.7
+        assert eisv.E == 0.4
         assert eisv.I == 0.2
         assert eisv.S == 0.5
         assert eisv.V == 0.0
@@ -94,7 +94,7 @@ class TestDrawingIntentEISV:
         intent.eisv.V = 0.5
         intent.eisv.gesture_history = ["dot"] * 10
         intent.reset()
-        assert intent.eisv.E == 0.7
+        assert intent.eisv.E == 0.4
         assert intent.eisv.V == 0.0
         assert intent.eisv.gesture_history == []
 

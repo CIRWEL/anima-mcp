@@ -478,7 +478,7 @@ class DrawingState:
     Completion emerges from attention exhaustion + coherence settling, not arbitrary energy.
     """
     # EISV core (preserved)
-    E: float = 0.7    # Drawing energy (now derived from attention)
+    E: float = 0.4    # Drawing energy (now derived from attention)
     I: float = 0.2    # Intentionality (proprioceptive: locks, orbits, gesture runs)
     S: float = 0.5    # Behavioral entropy (gesture variety)
     V: float = 0.0    # Accumulated I-E imbalance
@@ -507,7 +507,7 @@ class DrawingState:
 
     def reset(self):
         """Reset state for new drawing."""
-        self.E = 0.7
+        self.E = 0.4
         self.I = 0.2
         self.S = 0.5
         self.V = 0.0
@@ -537,7 +537,7 @@ class DrawingState:
         recent = self.coherence_history[-10:]
         mean_C = sum(recent) / len(recent)
         variance = sum((c - mean_C)**2 for c in recent) / len(recent)
-        return mean_C > 0.7 and variance < 0.01
+        return mean_C > 0.6 and variance < 0.015
 
     def attention_exhausted(self) -> bool:
         """True when curiosity depleted AND either disengaged or fatigued."""
@@ -579,7 +579,7 @@ class DrawingState:
         # Uses drawing-level time (not phase time) to avoid resets from phase oscillation.
         if canvas is not None and self.derived_energy < 0.05:
             drawing_duration = time.time() - canvas.last_clear_time
-            if drawing_duration > 300 and len(canvas.pixels) >= 200:
+            if drawing_duration > 900 and len(canvas.pixels) >= 200:
                 return True
 
         # Path 6: Hard time limit -- no single drawing should run longer than 8 hours.
@@ -1065,9 +1065,12 @@ class DrawingEngine:
         state = self.intent.state
 
         # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
-        # In resolving phase, don't regenerate -- otherwise curiosity never exhausts and drawing stays stuck
+        # In resolving phase, drain toward completion — but allow slight regen if deeply coherent
         if state.arc_phase == "resolving":
-            curiosity_drain = 0.002  # Gentle drain so arc can complete
+            if C > 0.65:
+                curiosity_drain = -0.0005 * C  # Slight regen — reward deep pattern
+            else:
+                curiosity_drain = 0.002  # Normal drain toward completion
         elif C < 0.4:
             curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
         else:
@@ -1079,10 +1082,12 @@ class DrawingEngine:
         state.engagement += 0.05 * (target - state.engagement)
         state.engagement = max(0.0, min(1.0, state.engagement))
 
-        # Fatigue: accumulates, never decreases during drawing
+        # Fatigue: accumulates, but partially recovers during coherent engagement (second wind)
         if gesture_switch:
             state.fatigue += 0.006
         state.fatigue = min(1.0, state.fatigue + 0.001)
+        if C > 0.6 and state.engagement > 0.5:
+            state.fatigue = max(0.0, state.fatigue - 0.0008)
 
     def _update_coherence_tracking(self, C: float, I_signal: float):
         """Track coherence over time for settling detection and narrative arc.
