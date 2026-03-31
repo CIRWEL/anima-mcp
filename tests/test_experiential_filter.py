@@ -35,15 +35,6 @@ def reset_singleton():
     ef._instance = None
 
 
-@pytest.fixture(autouse=True)
-def reset_neural_sensor():
-    """Reset the global neural sensor singleton between tests to avoid EMA bleed."""
-    import anima_mcp.computational_neural as cn
-    cn._sensor = None
-    yield
-    cn._sensor = None
-
-
 @pytest.fixture
 def ef(tmp_path):
     """ExperientialFilter backed by a temporary file."""

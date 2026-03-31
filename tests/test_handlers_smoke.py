@@ -6,9 +6,10 @@ testing belongs in dedicated test files.
 """
 
 import asyncio
-import json
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
+
+from conftest import parse_result
 
 
 # ---------------------------------------------------------------------------
@@ -22,13 +23,6 @@ def run_async(coro):
         return loop.run_until_complete(coro)
     finally:
         loop.close()
-
-
-def parse_handler_result(result):
-    """Extract JSON from handler TextContent result list."""
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
 
 
 # ===========================================================================
@@ -65,7 +59,7 @@ class TestStateQueriesSmoke:
         with patch("anima_mcp.handlers.state_queries.handle_get_state.__module__", "anima_mcp.handlers.state_queries"):
             with patch("anima_mcp.accessors._get_store", return_value=None):
                 result = run_async(handle_get_state({}))
-                data = parse_handler_result(result)
+                data = parse_result(result)
                 assert "error" in data
 
     def test_get_identity_returns_error_when_store_none(self):
@@ -74,7 +68,7 @@ class TestStateQueriesSmoke:
 
         with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_get_identity({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_get_health_handles_exception(self):
@@ -84,7 +78,7 @@ class TestStateQueriesSmoke:
         with patch("anima_mcp.handlers.state_queries.handle_get_health.__module__", "anima_mcp.handlers.state_queries"):
             with patch("anima_mcp.health.get_health_registry", side_effect=RuntimeError("test")):
                 result = run_async(handle_get_health({}))
-                data = parse_handler_result(result)
+                data = parse_result(result)
                 assert "error" in data
 
     def test_get_calibration_returns_valid_json(self):
@@ -92,7 +86,7 @@ class TestStateQueriesSmoke:
         from anima_mcp.handlers.state_queries import handle_get_calibration
 
         result = run_async(handle_get_calibration({}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "calibration" in data
         assert "config_file" in data
 
@@ -132,7 +126,7 @@ class TestKnowledgeSmoke:
 
         with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_get_self_knowledge({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_get_growth_returns_error_when_growth_none(self):
@@ -141,7 +135,7 @@ class TestKnowledgeSmoke:
 
         with patch("anima_mcp.accessors._get_growth", return_value=None):
             result = run_async(handle_get_growth({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_get_eisv_trajectory_state_handles_exception(self):
@@ -150,7 +144,7 @@ class TestKnowledgeSmoke:
 
         with patch("anima_mcp.handlers.knowledge.get_trajectory_awareness", side_effect=RuntimeError("no data")):
             result = run_async(handle_get_eisv_trajectory_state({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_query_requires_text(self):
@@ -158,7 +152,7 @@ class TestKnowledgeSmoke:
         from anima_mcp.handlers.knowledge import handle_query
 
         result = run_async(handle_query({}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
         assert "text" in data.get("error", "").lower() or "text" in str(data)
 
@@ -167,7 +161,7 @@ class TestKnowledgeSmoke:
         from anima_mcp.handlers.knowledge import handle_query
 
         result = run_async(handle_query({"text": "what have I learned"}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "qa_insights" in data
         assert "query" in data
 
@@ -207,7 +201,7 @@ class TestCommunicationSmoke:
              patch("anima_mcp.accessors._get_voice", return_value=None), \
              patch("anima_mcp.accessors.VOICE_MODE", "text"):
             result = run_async(handle_say({"text": ""}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_post_message_rejects_empty_message(self):
@@ -219,7 +213,7 @@ class TestCommunicationSmoke:
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_post_message({"message": ""}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
             assert "message parameter required" in data["error"]
 
@@ -229,7 +223,7 @@ class TestCommunicationSmoke:
 
         with patch("anima_mcp.accessors._get_voice", return_value=None):
             result = run_async(handle_configure_voice({"action": "status"}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
 
@@ -264,7 +258,7 @@ class TestDisplayOpsSmoke:
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=None):
             result = run_async(handle_capture_screen({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_manage_display_rejects_missing_action(self):
@@ -273,7 +267,7 @@ class TestDisplayOpsSmoke:
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             result = run_async(handle_manage_display({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
             assert "action" in data["error"].lower()
 
@@ -283,7 +277,7 @@ class TestDisplayOpsSmoke:
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
             result = run_async(handle_manage_display({"action": "nonexistent"}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
 
@@ -320,7 +314,7 @@ class TestWorkflowsSmoke:
 
         with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_unified_workflow({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
     def test_set_calibration_rejects_empty_updates(self):
@@ -328,7 +322,7 @@ class TestWorkflowsSmoke:
         from anima_mcp.handlers.workflows import handle_set_calibration
 
         result = run_async(handle_set_calibration({"updates": {}}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
 
     def test_set_calibration_rejects_no_updates(self):
@@ -336,7 +330,7 @@ class TestWorkflowsSmoke:
         from anima_mcp.handlers.workflows import handle_set_calibration
 
         result = run_async(handle_set_calibration({}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
 
     def test_learning_visualization_returns_error_when_store_none(self):
@@ -345,7 +339,7 @@ class TestWorkflowsSmoke:
 
         with patch("anima_mcp.accessors._get_store", return_value=None):
             result = run_async(handle_learning_visualization({}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "error" in data
 
 
@@ -383,7 +377,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_system_service
 
         result = run_async(handle_system_service({}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
         assert "service" in data["error"].lower()
 
@@ -392,7 +386,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_system_service
 
         result = run_async(handle_system_service({"service": "nginx"}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
         assert "allowed" in data
 
@@ -401,7 +395,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_system_service
 
         result = run_async(handle_system_service({"service": "anima", "action": "nuke"}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
         assert "allowed" in data
 
@@ -410,7 +404,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_fix_ssh_port
 
         result = run_async(handle_fix_ssh_port({"port": 80}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
 
     def test_setup_tailscale_rejects_empty_key(self):
@@ -418,7 +412,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_setup_tailscale
 
         result = run_async(handle_setup_tailscale({}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
 
     def test_setup_tailscale_rejects_invalid_key_format(self):
@@ -426,7 +420,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_setup_tailscale
 
         result = run_async(handle_setup_tailscale({"auth_key": "invalid-key-format"}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
 
     def test_system_power_status_works(self):
@@ -439,7 +433,7 @@ class TestSystemOpsSmoke:
 
         with patch("anima_mcp.handlers.system_ops.subprocess.run", return_value=mock_result):
             result = run_async(handle_system_power({"action": "status"}))
-            data = parse_handler_result(result)
+            data = parse_result(result)
             assert "uptime" in data
 
     def test_system_power_reboot_requires_confirm(self):
@@ -447,7 +441,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_system_power
 
         result = run_async(handle_system_power({"action": "reboot"}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
         assert "confirm" in data["error"].lower()
 
@@ -456,7 +450,7 @@ class TestSystemOpsSmoke:
         from anima_mcp.handlers.system_ops import handle_system_power
 
         result = run_async(handle_system_power({"action": "format"}))
-        data = parse_handler_result(result)
+        data = parse_result(result)
         assert "error" in data
 
 

@@ -5,11 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 def _cp(returncode=0, stdout="", stderr=""):
@@ -25,20 +21,20 @@ class TestSystemServiceExtended:
     async def test_missing_service_param_returns_error(self):
         from anima_mcp.handlers.system_ops import handle_system_service
 
-        data = _parse(await handle_system_service({"action": "status"}))
+        data = parse_result(await handle_system_service({"action": "status"}))
         assert "service parameter required" in data["error"]
 
     async def test_invalid_service_rejected(self):
         from anima_mcp.handlers.system_ops import handle_system_service
 
-        data = _parse(await handle_system_service({"service": "postgres", "action": "status"}))
+        data = parse_result(await handle_system_service({"service": "postgres", "action": "status"}))
         assert "not in allowed list" in data["error"]
         assert "allowed" in data
 
     async def test_invalid_action_rejected(self):
         from anima_mcp.handlers.system_ops import handle_system_service
 
-        data = _parse(await handle_system_service({"service": "anima", "action": "reload"}))
+        data = parse_result(await handle_system_service({"service": "anima", "action": "reload"}))
         assert "not allowed" in data["error"]
         assert "allowed" in data
 
@@ -46,7 +42,7 @@ class TestSystemServiceExtended:
         from anima_mcp.handlers.system_ops import handle_system_service
 
         with patch("anima_mcp.handlers.system_ops.subprocess.run", return_value=_cp(stdout="enabled")) as run_mock:
-            data = _parse(await handle_system_service({"service": "rpi-connect", "action": "start"}))
+            data = parse_result(await handle_system_service({"service": "rpi-connect", "action": "start"}))
 
         run_mock.assert_called_once()
         assert data["success"] is True
@@ -59,7 +55,7 @@ class TestSystemServiceExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=[_cp(stdout="anima status"), _cp(stdout="active\n")],
         ):
-            data = _parse(await handle_system_service({"service": "anima", "action": "status"}))
+            data = parse_result(await handle_system_service({"service": "anima", "action": "status"}))
 
         assert data["success"] is True
         assert data["action"] == "status"
@@ -72,7 +68,7 @@ class TestSystemServiceExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="systemctl", timeout=30),
         ):
-            data = _parse(await handle_system_service({"service": "anima", "action": "restart"}))
+            data = parse_result(await handle_system_service({"service": "anima", "action": "restart"}))
 
         assert "error" in data
         assert "timed out" in data["error"]
@@ -84,7 +80,7 @@ class TestSystemServiceExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=FileNotFoundError("systemctl"),
         ):
-            data = _parse(await handle_system_service({"service": "anima", "action": "status"}))
+            data = parse_result(await handle_system_service({"service": "anima", "action": "status"}))
 
         assert "error" in data
         assert "Command not found" in data["error"]
@@ -95,7 +91,7 @@ class TestFixSshPortExtended:
     async def test_invalid_port_rejected(self):
         from anima_mcp.handlers.system_ops import handle_fix_ssh_port
 
-        data = _parse(await handle_fix_ssh_port({"port": 9999}))
+        data = parse_result(await handle_fix_ssh_port({"port": 9999}))
         assert "port must be 22, 2222, or 22222" in data["error"]
         assert "@100.78.71.1" in data["usage_22"]
 
@@ -103,7 +99,7 @@ class TestFixSshPortExtended:
         from anima_mcp.handlers.system_ops import handle_fix_ssh_port
 
         monkeypatch.setenv("ANIMA_PI_HOST", "100.1.2.3")
-        data = _parse(await handle_fix_ssh_port({"port": 9999}))
+        data = parse_result(await handle_fix_ssh_port({"port": 9999}))
         assert "@100.1.2.3" in data["usage_2222"]
 
     async def test_port_22_reset_success(self):
@@ -113,7 +109,7 @@ class TestFixSshPortExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=[_cp(returncode=0), _cp(returncode=0, stderr="")],
         ):
-            data = _parse(await handle_fix_ssh_port({"port": 22}))
+            data = parse_result(await handle_fix_ssh_port({"port": 22}))
 
         assert data["success"] is True
         assert data["port"] == 22
@@ -125,7 +121,7 @@ class TestFixSshPortExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=[_cp(returncode=0), _cp(returncode=0)],
         ):
-            data = _parse(await handle_fix_ssh_port({"port": 2222}))
+            data = parse_result(await handle_fix_ssh_port({"port": 2222}))
 
         assert data["success"] is True
         assert "already on port 2222" in data["message"]
@@ -140,7 +136,7 @@ class TestFixSshPortExtended:
                 _cp(returncode=1, stderr="tee failed"),  # echo append fails
             ],
         ):
-            data = _parse(await handle_fix_ssh_port({"port": 22222}))
+            data = parse_result(await handle_fix_ssh_port({"port": 22222}))
 
         assert data["success"] is False
         assert "Failed to update sshd_config" in data["error"]
@@ -152,7 +148,7 @@ class TestFixSshPortExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="grep", timeout=5),
         ):
-            data = _parse(await handle_fix_ssh_port({"port": 2222}))
+            data = parse_result(await handle_fix_ssh_port({"port": 2222}))
 
         assert data["success"] is False
         assert "timed out" in data["error"]
@@ -164,7 +160,7 @@ class TestFixSshPortExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=RuntimeError("kaboom"),
         ):
-            data = _parse(await handle_fix_ssh_port({"port": 2222}))
+            data = parse_result(await handle_fix_ssh_port({"port": 2222}))
 
         assert data["success"] is False
         assert data["error"] == "kaboom"
@@ -175,13 +171,13 @@ class TestSetupTailscaleExtended:
     async def test_setup_tailscale_requires_auth_key(self):
         from anima_mcp.handlers.system_ops import handle_setup_tailscale
 
-        data = _parse(await handle_setup_tailscale({}))
+        data = parse_result(await handle_setup_tailscale({}))
         assert "auth_key required" in data["error"]
 
     async def test_setup_tailscale_rejects_bad_key_prefix(self):
         from anima_mcp.handlers.system_ops import handle_setup_tailscale
 
-        data = _parse(await handle_setup_tailscale({"auth_key": "abc"}))
+        data = parse_result(await handle_setup_tailscale({"auth_key": "abc"}))
         assert "Invalid auth_key format" in data["error"]
 
     async def test_setup_tailscale_install_failure(self):
@@ -191,7 +187,7 @@ class TestSetupTailscaleExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             return_value=_cp(returncode=1, stderr="install failed"),
         ):
-            data = _parse(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
+            data = parse_result(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
 
         assert data["success"] is False
         assert "Install failed" in data["error"]
@@ -207,7 +203,7 @@ class TestSetupTailscaleExtended:
                 _cp(returncode=0, stdout="100.78.71.1\n"),  # tailscale ip -4
             ],
         ):
-            data = _parse(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
+            data = parse_result(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
 
         assert data["success"] is True
         assert data["tailscale_ip"] == "100.78.71.1"
@@ -223,7 +219,7 @@ class TestSetupTailscaleExtended:
                 _cp(returncode=1, stderr="bad key"),  # tailscale up
             ],
         ):
-            data = _parse(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
+            data = parse_result(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
 
         assert data["success"] is False
         assert "hint" in data
@@ -235,7 +231,7 @@ class TestSetupTailscaleExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="tailscale", timeout=120),
         ):
-            data = _parse(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
+            data = parse_result(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
 
         assert data["success"] is False
         assert "timed out" in data["error"]
@@ -247,7 +243,7 @@ class TestSetupTailscaleExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=RuntimeError("oops"),
         ):
-            data = _parse(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
+            data = parse_result(await handle_setup_tailscale({"auth_key": "tskey-auth-abc"}))
 
         assert data["success"] is False
         assert data["error"] == "oops"
@@ -258,14 +254,14 @@ class TestSystemPowerExtended:
     async def test_invalid_power_action_rejected(self):
         from anima_mcp.handlers.system_ops import handle_system_power
 
-        data = _parse(await handle_system_power({"action": "hibernate"}))
+        data = parse_result(await handle_system_power({"action": "hibernate"}))
         assert "not allowed" in data["error"]
 
     async def test_status_returns_uptime_text(self):
         from anima_mcp.handlers.system_ops import handle_system_power
 
         with patch("anima_mcp.handlers.system_ops.subprocess.run", return_value=_cp(stdout="up 10 minutes")):
-            data = _parse(await handle_system_power({"action": "status"}))
+            data = parse_result(await handle_system_power({"action": "status"}))
 
         assert data["action"] == "status"
         assert "up 10 minutes" in data["uptime"]
@@ -273,14 +269,14 @@ class TestSystemPowerExtended:
     async def test_reboot_requires_confirm(self):
         from anima_mcp.handlers.system_ops import handle_system_power
 
-        data = _parse(await handle_system_power({"action": "reboot", "confirm": False}))
+        data = parse_result(await handle_system_power({"action": "reboot", "confirm": False}))
         assert "requires confirm=true" in data["error"]
 
     async def test_reboot_with_confirm_schedules_shutdown(self):
         from anima_mcp.handlers.system_ops import handle_system_power
 
         with patch("anima_mcp.handlers.system_ops.subprocess.Popen") as popen_mock:
-            data = _parse(await handle_system_power({"action": "reboot", "confirm": True}))
+            data = parse_result(await handle_system_power({"action": "reboot", "confirm": True}))
 
         popen_mock.assert_called_once()
         assert data["success"] is True
@@ -290,7 +286,7 @@ class TestSystemPowerExtended:
         from anima_mcp.handlers.system_ops import handle_system_power
 
         with patch("anima_mcp.handlers.system_ops.subprocess.Popen") as popen_mock:
-            data = _parse(await handle_system_power({"action": "shutdown", "confirm": True}))
+            data = parse_result(await handle_system_power({"action": "shutdown", "confirm": True}))
 
         popen_mock.assert_called_once()
         assert data["success"] is True
@@ -303,7 +299,7 @@ class TestSystemPowerExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="uptime", timeout=10),
         ):
-            data = _parse(await handle_system_power({"action": "status"}))
+            data = parse_result(await handle_system_power({"action": "status"}))
 
         assert "timed out" in data["error"]
 
@@ -314,7 +310,7 @@ class TestSystemPowerExtended:
             "anima_mcp.handlers.system_ops.subprocess.Popen",
             side_effect=RuntimeError("no permission"),
         ):
-            data = _parse(await handle_system_power({"action": "shutdown", "confirm": True}))
+            data = parse_result(await handle_system_power({"action": "shutdown", "confirm": True}))
 
         assert "Power command failed" in data["error"]
 
@@ -415,7 +411,7 @@ class TestGitPullExtended:
                 _cp(returncode=0, stdout="abc123 test commit\n"),    # git log -1
             ],
         ), patch("anima_mcp.handlers.system_ops._sync_systemd_services", return_value=[]):
-            data = _parse(await handle_git_pull({"restart": False}))
+            data = parse_result(await handle_git_pull({"restart": False}))
 
         assert data["success"] is True
         assert data["latest_commit"] == "abc123 test commit"
@@ -428,7 +424,7 @@ class TestGitPullExtended:
             "anima_mcp.handlers.system_ops.subprocess.run",
             side_effect=subprocess.TimeoutExpired(cmd="git pull", timeout=60),
         ):
-            data = _parse(await handle_git_pull({}))
+            data = parse_result(await handle_git_pull({}))
 
         assert data["error"] == "Git pull timed out"
 
@@ -450,7 +446,7 @@ class TestGitPullExtended:
         ), patch(
             "anima_mcp.handlers.system_ops.asyncio.create_task"
         ) as create_task_mock:
-            data = _parse(await handle_git_pull({"stash": True, "force": True, "restart": True}))
+            data = parse_result(await handle_git_pull({"stash": True, "force": True, "restart": True}))
 
         assert data["success"] is True
         assert data["latest_commit"] == "def456 latest"
@@ -470,7 +466,7 @@ class TestDeployFromGithubExtended:
             "urllib.request.urlretrieve",
             side_effect=RuntimeError("network down"),
         ):
-            data = _parse(await handle_deploy_from_github({"restart": False}))
+            data = parse_result(await handle_deploy_from_github({"restart": False}))
 
         assert data["success"] is False
         assert "network down" in data["error"]

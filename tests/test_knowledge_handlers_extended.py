@@ -1,15 +1,10 @@
-import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 @pytest.mark.asyncio
@@ -27,7 +22,7 @@ class TestGetSelfKnowledgeExtended:
 
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.self_reflection.get_reflection_system", return_value=reflection):
-            data = _parse(await handle_get_self_knowledge({"limit": 5}))
+            data = parse_result(await handle_get_self_knowledge({"limit": 5}))
 
         assert data["total_insights"] == 1
         assert data["summary"] == "dim light helps calm"
@@ -93,7 +88,7 @@ class TestGetGrowthExtended:
         )
 
         with patch("anima_mcp.accessors._get_growth", return_value=growth):
-            data = _parse(await handle_get_growth({"include": ["all"]}))
+            data = parse_result(await handle_get_growth({"include": ["all"]}))
 
         assert "autobiography" in data
         assert data["preferences"]["count"] == 2
@@ -114,7 +109,7 @@ class TestQaInsightsExtended:
         kb = SimpleNamespace(_insights=[])
         with patch("anima_mcp.knowledge.get_knowledge", return_value=kb), \
              patch("anima_mcp.knowledge.get_insights", return_value=[]):
-            data = _parse(await handle_get_qa_insights({"limit": 3}))
+            data = parse_result(await handle_get_qa_insights({"limit": 3}))
 
         assert data["total_insights"] == 0
         assert "note" in data
@@ -133,7 +128,7 @@ class TestTrajectoryExtended:
         with patch("anima_mcp.trajectory.compute_trajectory_signature", return_value=sig), \
              patch("anima_mcp.anima_history.get_anima_history", return_value=SimpleNamespace()), \
              patch("anima_mcp.self_model.get_self_model", return_value=SimpleNamespace()):
-            data = _parse(await handle_get_trajectory({}))
+            data = parse_result(await handle_get_trajectory({}))
 
         assert data["identity_status"] == "stable"
         assert "note" in data
@@ -153,7 +148,7 @@ class TestTrajectoryExtended:
              patch("anima_mcp.self_model.get_self_model", return_value=SimpleNamespace()), \
              patch("anima_mcp.trajectory.load_trajectory", return_value=None), \
              patch("anima_mcp.trajectory.GENESIS_MIN_OBSERVATIONS", 20):
-            data = _parse(await handle_get_trajectory({"compare_to_historical": True}))
+            data = parse_result(await handle_get_trajectory({"compare_to_historical": True}))
 
         assert data["identity_status"] == "forming"
         assert data["anomaly_detection"]["available"] is False
@@ -164,7 +159,7 @@ class TestQueryExtended:
     async def test_invalid_type_rejected(self):
         from anima_mcp.handlers.knowledge import handle_query
 
-        data = _parse(await handle_query({"text": "hello", "type": "bad"}))
+        data = parse_result(await handle_query({"text": "hello", "type": "bad"}))
         assert "error" in data
         assert "valid_types" in data
 
@@ -174,7 +169,7 @@ class TestQueryExtended:
         growth = SimpleNamespace(get_autobiography_summary=lambda: {"highlights": 3})
         with patch("anima_mcp.knowledge.get_relevant_insights", return_value=[]), \
              patch("anima_mcp.accessors._get_growth", return_value=growth):
-            data = _parse(await handle_query({"text": "growth status", "type": "growth"}))
+            data = parse_result(await handle_query({"text": "growth status", "type": "growth"}))
 
         assert data["type"] == "growth"
         assert data["growth"]["highlights"] == 3
@@ -197,7 +192,7 @@ class TestQueryExtended:
         with patch("anima_mcp.knowledge.get_relevant_insights", return_value=[qa]), \
              patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.self_reflection.get_reflection_system", return_value=reflection):
-            data = _parse(await handle_query({"text": "light", "type": "cognitive"}))
+            data = parse_result(await handle_query({"text": "light", "type": "cognitive"}))
 
         assert len(data["qa_insights"]) == 1
         assert data["self_knowledge"] == "dim helps"
@@ -211,5 +206,5 @@ class TestEisvTrajectoryStateExtended:
 
         traj = SimpleNamespace(get_state=lambda: {"coherence": 0.5})
         with patch("anima_mcp.handlers.knowledge.get_trajectory_awareness", return_value=traj):
-            data = _parse(await handle_get_eisv_trajectory_state({}))
+            data = parse_result(await handle_get_eisv_trajectory_state({}))
         assert data["coherence"] == 0.5

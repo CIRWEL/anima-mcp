@@ -1,14 +1,9 @@
-import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch, AsyncMock
 
 import pytest
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 @pytest.mark.asyncio
@@ -16,7 +11,7 @@ async def test_unified_workflow_errors_when_store_missing():
     from anima_mcp.handlers.workflows import handle_unified_workflow
 
     with patch("anima_mcp.accessors._get_store", return_value=None):
-        data = _parse(await handle_unified_workflow({}))
+        data = parse_result(await handle_unified_workflow({}))
     assert "error" in data
 
 
@@ -35,7 +30,7 @@ async def test_unified_workflow_lists_available_templates_when_workflow_missing(
          patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
          patch("anima_mcp.workflow_orchestrator.get_orchestrator", return_value=orchestrator), \
          patch("anima_mcp.workflow_templates.WorkflowTemplates", return_value=templates_instance):
-        data = _parse(await handle_unified_workflow({}))
+        data = parse_result(await handle_unified_workflow({}))
 
     assert "available_workflows" in data
     assert "available_templates" in data
@@ -63,7 +58,7 @@ async def test_unified_workflow_runs_template_when_found():
          patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
          patch("anima_mcp.workflow_orchestrator.get_orchestrator", return_value=orchestrator), \
          patch("anima_mcp.workflow_templates.WorkflowTemplates", return_value=templates_instance):
-        data = _parse(await handle_unified_workflow({"workflow": "my_template"}))
+        data = parse_result(await handle_unified_workflow({"workflow": "my_template"}))
 
     assert data["status"] == "success"
     assert data["template"] == "my_template"
@@ -86,7 +81,7 @@ async def test_unified_workflow_unknown_workflow_suggests_alternatives():
          patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
          patch("anima_mcp.workflow_orchestrator.get_orchestrator", return_value=orchestrator), \
          patch("anima_mcp.workflow_templates.WorkflowTemplates", return_value=templates_instance):
-        data = _parse(await handle_unified_workflow({"workflow": "nope"}))
+        data = parse_result(await handle_unified_workflow({"workflow": "nope"}))
 
     assert "error" in data
     assert "available_templates" in data

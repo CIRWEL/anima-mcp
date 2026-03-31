@@ -1,15 +1,10 @@
-import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 @pytest.mark.asyncio
@@ -51,7 +46,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
-            data = _parse(await handle_next_steps({}))
+            data = parse_result(await handle_next_steps({}))
 
         assert data["summary"]["priority"] == "high"
         assert data["current_state"]["unitares_connected"] is True
@@ -81,7 +76,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
-            data = _parse(await handle_next_steps({}))
+            data = parse_result(await handle_next_steps({}))
 
         assert data["current_state"]["unitares_connected"] is False
         assert "error:" in data["current_state"]["unitares_status"]
@@ -98,7 +93,7 @@ class TestSetCalibrationExtended:
         with patch("anima_mcp.config.get_calibration", return_value=calibration), \
              patch("anima_mcp.config.ConfigManager", return_value=MagicMock()), \
              patch("anima_mcp.config.NervousSystemCalibration.from_dict", return_value=updated_cal):
-            data = _parse(await handle_set_calibration({"updates": {"ambient_temp_min": 99.0}}))
+            data = parse_result(await handle_set_calibration({"updates": {"ambient_temp_min": 99.0}}))
 
         assert "error" in data
         assert "Invalid calibration" in data["error"]
@@ -125,7 +120,7 @@ class TestSetCalibrationExtended:
         with patch("anima_mcp.config.get_calibration", return_value=calibration), \
              patch("anima_mcp.config.ConfigManager", return_value=manager), \
              patch("anima_mcp.config.NervousSystemCalibration.from_dict", return_value=updated_cal):
-            data = _parse(await handle_set_calibration({"updates": {"ambient_temp_min": 12.0}, "source": "agent"}))
+            data = parse_result(await handle_set_calibration({"updates": {"ambient_temp_min": 12.0}, "source": "agent"}))
 
         assert data["success"] is True
         assert data["metadata"]["update_count"] == 3
@@ -142,7 +137,7 @@ class TestSetCalibrationExtended:
         with patch("anima_mcp.config.get_calibration", return_value=calibration), \
              patch("anima_mcp.config.ConfigManager", return_value=manager), \
              patch("anima_mcp.config.NervousSystemCalibration.from_dict", return_value=updated_cal):
-            data = _parse(await handle_set_calibration({"updates": {"ambient_temp_min": 12.0}}))
+            data = parse_result(await handle_set_calibration({"updates": {"ambient_temp_min": 12.0}}))
 
         assert data["error"] == "Failed to save calibration"
 
@@ -186,7 +181,7 @@ class TestLumenContextExtended:
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.messages.get_recent_messages", return_value=[recent_message]), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
-            data = _parse(await handle_get_lumen_context({"include": ["identity", "anima", "sensors", "mood", "eisv"]}))
+            data = parse_result(await handle_get_lumen_context({"include": ["identity", "anima", "sensors", "mood", "eisv"]}))
 
         assert data["identity"]["name"] == "Lumen"
         assert data["eisv"]["E"] == 0.3
@@ -202,7 +197,7 @@ class TestLumenContextExtended:
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
-            data = _parse(await handle_get_lumen_context({"include": "identity"}))
+            data = parse_result(await handle_get_lumen_context({"include": "identity"}))
 
         assert "error" in data["identity"]
 
@@ -219,7 +214,7 @@ class TestLearningVisualizationExtended:
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), SimpleNamespace())), \
              patch("anima_mcp.learning_visualization.LearningVisualizer", return_value=visualizer):
-            data = _parse(await handle_learning_visualization({}))
+            data = parse_result(await handle_learning_visualization({}))
 
         assert data["dominant_pattern"] == "night calm"
 
@@ -228,6 +223,6 @@ class TestLearningVisualizationExtended:
 
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
-            data = _parse(await handle_learning_visualization({}))
+            data = parse_result(await handle_learning_visualization({}))
 
         assert data["error"] == "Unable to read sensor data"

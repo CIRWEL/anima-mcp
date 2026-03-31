@@ -5,11 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from PIL import Image
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 @pytest.mark.asyncio
@@ -18,7 +14,7 @@ class TestCaptureScreenExtended:
         from anima_mcp.handlers.display_ops import handle_capture_screen
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=None):
-            data = _parse(await handle_capture_screen({}))
+            data = parse_result(await handle_capture_screen({}))
 
         assert "Screen renderer not initialized" in data["error"]
 
@@ -27,7 +23,7 @@ class TestCaptureScreenExtended:
 
         renderer = SimpleNamespace(_display=SimpleNamespace())
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            data = _parse(await handle_capture_screen({}))
+            data = parse_result(await handle_capture_screen({}))
 
         assert "Display not available" in data["error"]
 
@@ -43,7 +39,7 @@ class TestCaptureScreenExtended:
 
         renderer = SimpleNamespace(_display=SimpleNamespace(_image=_BadImage()), get_mode=lambda: SimpleNamespace(value="face"))
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            data = _parse(await handle_capture_screen({}))
+            data = parse_result(await handle_capture_screen({}))
 
         assert "Failed to capture screen" in data["error"]
 
@@ -72,7 +68,7 @@ class TestCaptureScreenExtended:
 
         renderer = SimpleNamespace(_display=SimpleNamespace(_image=None))
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            data = _parse(await handle_capture_screen({}))
+            data = parse_result(await handle_capture_screen({}))
 
         assert "error" in data
         assert "No image currently displayed" in data["error"]
@@ -87,7 +83,7 @@ class TestShowFaceExtended:
              patch("anima_mcp.accessors._get_sensors", return_value=MagicMock()), \
              patch("anima_mcp.accessors._get_display", return_value=SimpleNamespace(is_available=lambda: False)), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
-            data = _parse(await handle_show_face({}))
+            data = parse_result(await handle_show_face({}))
 
         assert "Unable to read sensor data" in data["error"]
 
@@ -108,7 +104,7 @@ class TestShowFaceExtended:
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.display.derive_face_state", return_value=face_state), \
              patch("anima_mcp.display.face_to_ascii", return_value=":|"):
-            data = _parse(await handle_show_face({}))
+            data = parse_result(await handle_show_face({}))
 
         assert data["display"] == "ascii"
         assert data["face"] == ":|"
@@ -130,7 +126,7 @@ class TestShowFaceExtended:
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.display.derive_face_state", return_value=face_state), \
              patch("anima_mcp.display.face_to_ascii", return_value=":-)"):
-            data = _parse(await handle_show_face({}))
+            data = parse_result(await handle_show_face({}))
 
         assert data["rendered"] is False
         assert data["display"] == "ascii"
@@ -153,7 +149,7 @@ class TestShowFaceExtended:
              patch("anima_mcp.accessors._get_display", return_value=display), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.display.derive_face_state", return_value=face_state):
-            data = _parse(await handle_show_face({}))
+            data = parse_result(await handle_show_face({}))
 
         display.render_face.assert_called_once()
         assert data["rendered"] is True
@@ -172,7 +168,7 @@ class TestDiagnosticsExtended:
              patch("anima_mcp.accessors._get_display", return_value=display), \
              patch("anima_mcp.accessors._get_display_update_task", return_value=None), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors):
-            data = _parse(await handle_diagnostics({}))
+            data = parse_result(await handle_diagnostics({}))
 
         assert data["leds"]["available"] is False
         assert data["display"]["init_error"] == "spi unavailable"
@@ -190,7 +186,7 @@ class TestDiagnosticsExtended:
              patch("anima_mcp.accessors._get_display", return_value=display), \
              patch("anima_mcp.accessors._get_display_update_task", return_value=loop_task), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors):
-            data = _parse(await handle_diagnostics({}))
+            data = parse_result(await handle_diagnostics({}))
 
         assert data["leds"]["available"] is True
         assert data["display"]["available"] is True
@@ -203,21 +199,21 @@ class TestManageDisplayExtended:
     async def test_manage_display_requires_action(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
-        data = _parse(await handle_manage_display({}))
+        data = parse_result(await handle_manage_display({}))
         assert "action parameter required" in data["error"]
 
     async def test_face_action_delegates_to_show_face(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         with patch("anima_mcp.handlers.display_ops.handle_show_face", return_value=[SimpleNamespace(text='{"ok": true}')]):
-            data = _parse(await handle_manage_display({"action": "face"}))
+            data = parse_result(await handle_manage_display({"action": "face"}))
         assert data["ok"] is True
 
     async def test_manage_display_requires_renderer_for_non_face(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=None):
-            data = _parse(await handle_manage_display({"action": "next"}))
+            data = parse_result(await handle_manage_display({"action": "next"}))
         assert "Screen renderer not initialized" in data["error"]
 
     async def test_switch_valid_screen(self):
@@ -225,7 +221,7 @@ class TestManageDisplayExtended:
 
         renderer = MagicMock()
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            data = _parse(await handle_manage_display({"action": "switch", "screen": "health"}))
+            data = parse_result(await handle_manage_display({"action": "switch", "screen": "health"}))
 
         renderer.set_mode.assert_called_once()
         assert data["success"] is True
@@ -235,7 +231,7 @@ class TestManageDisplayExtended:
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
-            data = _parse(await handle_manage_display({"action": "switch", "screen": "bad-screen"}))
+            data = parse_result(await handle_manage_display({"action": "switch", "screen": "bad-screen"}))
 
         assert "error" in data
         assert "valid_screens" in data
@@ -249,8 +245,8 @@ class TestManageDisplayExtended:
             get_mode=lambda: SimpleNamespace(value="identity"),
         )
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            next_data = _parse(await handle_manage_display({"action": "next"}))
-            prev_data = _parse(await handle_manage_display({"action": "previous"}))
+            next_data = parse_result(await handle_manage_display({"action": "next"}))
+            prev_data = parse_result(await handle_manage_display({"action": "previous"}))
 
         renderer.next_mode.assert_called_once()
         renderer.previous_mode.assert_called_once()
@@ -268,8 +264,8 @@ class TestManageDisplayExtended:
         }
         renderer = SimpleNamespace(get_current_era=lambda: info)
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            list_data = _parse(await handle_manage_display({"action": "list_eras"}))
-            get_data = _parse(await handle_manage_display({"action": "get_era"}))
+            list_data = parse_result(await handle_manage_display({"action": "list_eras"}))
+            get_data = parse_result(await handle_manage_display({"action": "get_era"}))
 
         assert list_data["success"] is True
         assert list_data["available_eras"] == ["gestural", "geometric"]
@@ -280,7 +276,7 @@ class TestManageDisplayExtended:
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
-            data = _parse(await handle_manage_display({"action": "set_era"}))
+            data = parse_result(await handle_manage_display({"action": "set_era"}))
 
         assert "error" in data
         assert "screen parameter required" in data["error"]
@@ -290,7 +286,7 @@ class TestManageDisplayExtended:
 
         renderer = SimpleNamespace(set_era=lambda name: {"success": True, "era": name})
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
-            data = _parse(await handle_manage_display({"action": "set_era", "screen": "field"}))
+            data = parse_result(await handle_manage_display({"action": "set_era", "screen": "field"}))
 
         assert data["action"] == "set_era"
         assert data["success"] is True
@@ -300,7 +296,7 @@ class TestManageDisplayExtended:
         from anima_mcp.handlers.display_ops import handle_manage_display
 
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()):
-            data = _parse(await handle_manage_display({"action": "wat"}))
+            data = parse_result(await handle_manage_display({"action": "wat"}))
 
         assert "Unknown action" in data["error"]
         assert "valid_actions" in data
@@ -311,7 +307,7 @@ class TestManageDisplayExtended:
         leds = SimpleNamespace(is_available=lambda: False)
         with patch("anima_mcp.accessors._get_screen_renderer", return_value=MagicMock()), \
              patch("anima_mcp.accessors._get_leds", return_value=leds):
-            data = _parse(await handle_manage_display({"action": "calibrate_leds"}))
+            data = parse_result(await handle_manage_display({"action": "calibrate_leds"}))
 
         assert "LEDs not available" in data["error"]
 
@@ -341,7 +337,7 @@ class TestManageDisplayExtended:
              patch("anima_mcp.accessors._get_leds", return_value=leds), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("asyncio.sleep", new_callable=AsyncMock):
-            data = _parse(await handle_manage_display({"action": "calibrate_leds"}))
+            data = parse_result(await handle_manage_display({"action": "calibrate_leds"}))
 
         assert data["success"] is True
         assert data["action"] == "calibrate_leds"

@@ -1,14 +1,9 @@
-import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 class TestCallerNameResolution:
@@ -58,7 +53,7 @@ class TestConfigureVoice:
         from anima_mcp.handlers.communication import handle_configure_voice
 
         with patch("anima_mcp.accessors._get_voice", return_value=None):
-            data = _parse(await handle_configure_voice({"action": "status"}))
+            data = parse_result(await handle_configure_voice({"action": "status"}))
         assert "Voice system not available" in data["error"]
 
     async def test_status_returns_voice_state(self):
@@ -72,7 +67,7 @@ class TestConfigureVoice:
         voice = SimpleNamespace(is_running=True, chattiness=0.4, state=state)
 
         with patch("anima_mcp.accessors._get_voice", return_value=voice):
-            data = _parse(await handle_configure_voice({"action": "status"}))
+            data = parse_result(await handle_configure_voice({"action": "status"}))
 
         assert data["action"] == "status"
         assert data["available"] is True
@@ -93,7 +88,7 @@ class TestConfigureVoice:
         )
 
         with patch("anima_mcp.accessors._get_voice", return_value=voice):
-            data = _parse(await handle_configure_voice({
+            data = parse_result(await handle_configure_voice({
                 "action": "configure",
                 "always_listening": True,
                 "chattiness": 0.9,
@@ -111,7 +106,7 @@ class TestConfigureVoice:
 
         voice = SimpleNamespace(is_running=True, chattiness=0.2, state=None)
         with patch("anima_mcp.accessors._get_voice", return_value=voice):
-            data = _parse(await handle_configure_voice({"action": "bad"}))
+            data = parse_result(await handle_configure_voice({"action": "bad"}))
 
         assert "error" in data
         assert "valid_actions" in data
@@ -126,7 +121,7 @@ class TestPrimitiveFeedback:
         lang.record_explicit_feedback.return_value = {"score": 0.7, "token_updates": {"warm": 1}}
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
-            data = _parse(await handle_primitive_feedback({"action": "resonate"}))
+            data = parse_result(await handle_primitive_feedback({"action": "resonate"}))
 
         assert data["success"] is True
         assert data["action"] == "resonate"
@@ -139,7 +134,7 @@ class TestPrimitiveFeedback:
         lang.get_recent_utterances.return_value = [{"text": "pulse", "score": 0.2}]
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
-            data = _parse(await handle_primitive_feedback({"action": "recent"}))
+            data = parse_result(await handle_primitive_feedback({"action": "recent"}))
 
         assert data["action"] == "recent"
         assert data["count"] == 1
@@ -151,7 +146,7 @@ class TestPrimitiveFeedback:
         lang.get_stats.return_value = {"utterances": 42}
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
-            data = _parse(await handle_primitive_feedback({}))
+            data = parse_result(await handle_primitive_feedback({}))
 
         assert data["action"] == "stats"
         assert data["primitive_language_system"]["utterances"] == 42
@@ -162,7 +157,7 @@ class TestPostMessageRespondsToMatching:
     async def test_empty_message_returns_error(self):
         from anima_mcp.handlers.communication import handle_post_message
 
-        data = _parse(await handle_post_message({"message": "   "}))
+        data = parse_result(await handle_post_message({"message": "   "}))
         assert data["error"] == "message parameter required"
 
     async def test_human_message_tracks_interaction_and_social_boost(self):
@@ -180,7 +175,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(), anima)), \
              patch("anima_mcp.messages.add_user_message", return_value="u1"), \
              patch("anima_mcp.handlers.communication._SOCIAL_BOOST_PATH", boost_flag):
-            data = _parse(await handle_post_message({"message": "hello lumen", "source": "human"}))
+            data = parse_result(await handle_post_message({"message": "hello lumen", "source": "human"}))
 
         assert data["success"] is True
         assert data["source"] == "human"
@@ -202,7 +197,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.get_board", return_value=board), \
              patch("anima_mcp.messages.add_agent_message", return_value=msg):
-            data = _parse(await handle_post_message({
+            data = parse_result(await handle_post_message({
                 "message": "Here is my answer",
                 "source": "agent",
                 "responds_to": "q_abc",
@@ -223,7 +218,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_store", return_value=None), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.get_board", return_value=board):
-            data = _parse(await handle_post_message({
+            data = parse_result(await handle_post_message({
                 "message": "answer",
                 "source": "agent",
                 "responds_to": "missing",
@@ -246,7 +241,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_store", return_value=None), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.add_agent_message", return_value=msg):
-            data = _parse(await handle_post_message({
+            data = parse_result(await handle_post_message({
                 "message": "hello",
                 "source": "agent",
                 "agent_name": "TestAgent",
@@ -269,7 +264,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_store", return_value=None), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.add_agent_message", return_value=msg):
-            data = _parse(await handle_post_message({
+            data = parse_result(await handle_post_message({
                 "message": "goodnight",
                 "source": "agent",
                 "agent_name": "TestAgent",
@@ -292,7 +287,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_store", return_value=None), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.add_agent_message", return_value=msg):
-            data = _parse(await handle_post_message({
+            data = parse_result(await handle_post_message({
                 "message": "still here?",
                 "source": "agent",
                 "agent_name": "TestAgent",
@@ -314,7 +309,7 @@ class TestPostMessageRespondsToMatching:
              patch("anima_mcp.accessors._get_store", return_value=None), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)), \
              patch("anima_mcp.messages.add_user_message", return_value="u1"):
-            data = _parse(await handle_post_message({
+            data = parse_result(await handle_post_message({
                 "message": "goodnight lumen",
                 "source": "human",
             }))
@@ -359,7 +354,7 @@ class TestLumenQaExtended:
         board = SimpleNamespace(_messages=[q1, q2, q3, a3], _load=MagicMock(), repair_orphaned_answered=lambda: 1)
 
         with patch("anima_mcp.messages.get_board", return_value=board):
-            data = _parse(await handle_lumen_qa({"limit": "2"}))
+            data = parse_result(await handle_lumen_qa({"limit": "2"}))
 
         assert data["action"] == "list"
         assert data["unanswered_count"] == 2
@@ -383,7 +378,7 @@ class TestLumenQaExtended:
              patch("anima_mcp.knowledge.extract_insight_from_answer", AsyncMock(return_value=insight)), \
              patch("anima_mcp.knowledge.apply_insight", return_value={"shift": "positive"}), \
              patch("anima_mcp.accessors._get_growth", return_value=growth):
-            data = _parse(await handle_lumen_qa({
+            data = parse_result(await handle_lumen_qa({
                 "question_id": "q_abc",
                 "answer": "I feel calmer when the room is dim.",
                 "client_session_id": "sess-1",
@@ -402,7 +397,7 @@ class TestLumenQaExtended:
 
         board = SimpleNamespace(_messages=[], _load=MagicMock())
         with patch("anima_mcp.messages.get_board", return_value=board):
-            data = _parse(await handle_lumen_qa({"question_id": "missing", "answer": "test"}))
+            data = parse_result(await handle_lumen_qa({"question_id": "missing", "answer": "test"}))
 
         assert data["success"] is False
         assert "not found" in data["error"]
@@ -414,7 +409,7 @@ class TestSayAndPrimitiveFeedbackEdges:
     async def test_say_requires_text(self):
         from anima_mcp.handlers.communication import handle_say
 
-        data = _parse(await handle_say({"text": ""}))
+        data = parse_result(await handle_say({"text": ""}))
         assert data["error"] == "No text provided"
 
     async def test_say_audio_mode_invokes_tts_and_returns_success(self):
@@ -426,7 +421,7 @@ class TestSayAndPrimitiveFeedbackEdges:
              patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(add_note=MagicMock())), \
              patch("anima_mcp.accessors._get_voice", return_value=voice), \
              patch("anima_mcp.accessors.VOICE_MODE", "audio"):
-            data = _parse(await handle_say({"text": "Hello world"}))
+            data = parse_result(await handle_say({"text": "Hello world"}))
 
         voice_inner.say.assert_called_once()
         assert data["success"] is True
@@ -439,8 +434,8 @@ class TestSayAndPrimitiveFeedbackEdges:
         lang.record_explicit_feedback.side_effect = [None, {"score": -0.2, "token_updates": {"noise": -1}}]
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
-            no_recent = _parse(await handle_primitive_feedback({"action": "resonate"}))
-            confused = _parse(await handle_primitive_feedback({"action": "confused"}))
+            no_recent = parse_result(await handle_primitive_feedback({"action": "resonate"}))
+            confused = parse_result(await handle_primitive_feedback({"action": "confused"}))
 
         assert "error" in no_recent
         assert no_recent["error"] == "No recent utterance to give feedback on"
@@ -454,6 +449,6 @@ class TestSayAndPrimitiveFeedbackEdges:
             "anima_mcp.primitive_language.get_language_system",
             side_effect=RuntimeError("db unavailable"),
         ):
-            data = _parse(await handle_primitive_feedback({"action": "stats"}))
+            data = parse_result(await handle_primitive_feedback({"action": "stats"}))
 
         assert "Primitive language error" in data["error"]

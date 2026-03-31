@@ -152,8 +152,11 @@ async def test_check_availability_no_url():
 async def test_check_availability_unreachable():
     """Test availability check with unreachable URL."""
     bridge = UnitaresBridge(unitares_url="http://127.0.0.1:99999/sse")
-    available = await bridge.check_availability()
-    assert available is False
+    try:
+        available = await bridge.check_availability()
+        assert available is False
+    finally:
+        await bridge.close()
 
 
 @pytest.mark.asyncio

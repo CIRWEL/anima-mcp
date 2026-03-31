@@ -1,15 +1,10 @@
-import json
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-
-def _parse(result):
-    assert isinstance(result, list)
-    assert len(result) == 1
-    return json.loads(result[0].text)
+from conftest import parse_result
 
 
 @pytest.mark.asyncio
@@ -60,7 +55,7 @@ class TestGetStateExtended:
              patch("anima_mcp.handlers.state_queries.extract_neural_bands", return_value={"alpha": 0.2}), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
              patch("anima_mcp.messages.get_recent_messages", return_value=recent):
-            data = _parse(await handle_get_state({}))
+            data = parse_result(await handle_get_state({}))
 
         assert data["mood"] == "calm"
         assert data["identity"]["name"] == "Lumen"
@@ -75,7 +70,7 @@ class TestGetStateExtended:
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(SimpleNamespace(to_dict=lambda: {}), SimpleNamespace())):
-            data = _parse(await handle_get_state({}))
+            data = parse_result(await handle_get_state({}))
         assert "error" in data
         assert "identity fail" in data["error"]
 
@@ -93,7 +88,7 @@ class TestReadSensorsExtended:
         with patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: True)), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), None)), \
              patch("anima_mcp.accessors._get_shm_client", return_value=shm):
-            data = _parse(await handle_read_sensors({}))
+            data = parse_result(await handle_read_sensors({}))
 
         assert data["source"] == "shared_memory"
         assert "ambient_temp_c" not in data["readings"]  # null suppressed
@@ -108,7 +103,7 @@ class TestReadSensorsExtended:
         with patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: False)), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), None)), \
              patch("anima_mcp.accessors._get_shm_client", return_value=None):
-            data = _parse(await handle_read_sensors({}))
+            data = parse_result(await handle_read_sensors({}))
 
         assert data["source"] == "direct_sensors"
 
@@ -131,7 +126,7 @@ class TestGetIdentityAndCalibrationExtended:
         )
         store = SimpleNamespace(get_identity=lambda: identity, get_session_alive_seconds=lambda: 120)
         with patch("anima_mcp.accessors._get_store", return_value=store):
-            data = _parse(await handle_get_identity({}))
+            data = parse_result(await handle_get_identity({}))
         assert data["name"] == "Lumen"
         assert data["total_awakenings"] == 7
         assert data["session_alive_seconds"] == 120
@@ -148,6 +143,6 @@ class TestGetIdentityAndCalibrationExtended:
             config_path=SimpleNamespace(exists=lambda: False, __str__=lambda self: "/tmp/nope"),
         )
         with patch("anima_mcp.handlers.state_queries.ConfigManager", return_value=manager):
-            data = _parse(await handle_get_calibration({}))
+            data = parse_result(await handle_get_calibration({}))
         assert data["calibration"]["ambient_temp_min"] == 10
         assert data["metadata"]["update_count"] == 0

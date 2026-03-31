@@ -6,12 +6,42 @@ Local fixtures in individual test files override these (pytest convention),
 so existing tests continue to work unchanged.
 """
 
+import json
 import pytest
 from datetime import datetime
 
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.config import NervousSystemCalibration
 from anima_mcp.anima import Anima
+
+
+# ---------------------------------------------------------------------------
+# Neural sensor reset (autouse — runs for every test)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def reset_neural_sensor():
+    """Reset the global neural sensor singleton between tests to avoid EMA bleed."""
+    import anima_mcp.computational_neural as cn
+    cn._sensor = None
+    yield
+    cn._sensor = None
+
+
+# ---------------------------------------------------------------------------
+# MCP handler result parser (plain function, not a fixture)
+# ---------------------------------------------------------------------------
+
+def parse_result(result):
+    """Parse MCP handler TextContent result list into a dict.
+
+    Plain function (not a fixture) for inline use. Importable as:
+
+        from conftest import parse_result
+    """
+    assert isinstance(result, list)
+    assert len(result) == 1
+    return json.loads(result[0].text)
 
 
 # ---------------------------------------------------------------------------
