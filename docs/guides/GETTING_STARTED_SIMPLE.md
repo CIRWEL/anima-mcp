@@ -140,10 +140,9 @@ read_sensors()
 Once you understand the basics:
 
 1. **Explore identity** - `get_identity` (birth, awakenings, name history)
-2. **See the face** - `show_face` (displays Lumen's current expression)
-3. **Check diagnostics** - `diagnostics` (LED status, display, sensors)
-4. **Answer questions** - `lumen_qa` (list or answer Lumen's questions)
-5. **Calibrate** - `get_calibration` / `set_calibration` (adapt to environment)
+2. **Check diagnostics** - `diagnostics` (LED status, display, sensors)
+3. **Answer questions** - `lumen_qa` (list or answer Lumen's questions)
+4. **Calibrate** - `get_calibration` / `set_calibration` (adapt to environment)
 
 **Full tool list:** See `ESSENTIAL_TOOLS.md` in this directory
 
@@ -163,9 +162,6 @@ read_sensors()
 
 # See identity
 get_identity()
-
-# Show face on display
-show_face()
 
 # System diagnostics
 diagnostics()

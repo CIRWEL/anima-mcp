@@ -118,7 +118,7 @@ Use these as templates when calling `process_agent_update`:
 1. **Reproduce** - Understand the issue
 2. **Check logs**:
    ```bash
-   ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83 \
+   ssh -i ~/.ssh/id_ed25519_pi unitares-anima@<tailscale-ip> \
      "sudo journalctl -u anima -n 50"
    ```
 3. **Check docs** - Known issues? Workarounds?
@@ -280,7 +280,7 @@ Don't try:
 
 **Just do:**
 ```bash
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83 \
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@<tailscale-ip> \
   "sudo systemctl restart anima"
 ```
 

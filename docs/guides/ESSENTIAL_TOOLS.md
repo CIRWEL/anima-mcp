@@ -82,11 +82,6 @@ lumen_qa(question_id="abc123", answer="...")  # Answer a question
 **When:** You want to know Lumen's history
 **Returns:** Birth date, awakenings, alive time, name history
 
-### `show_face`
-**What:** Display Lumen's current expression on screen
-**When:** You want to see how Lumen looks
-**Returns:** Face rendered (hardware on Pi, ASCII on Mac)
-
 ### `diagnostics`
 **What:** System health (LEDs, display, sensors)
 **When:** Something seems wrong
@@ -96,14 +91,8 @@ lumen_qa(question_id="abc123", answer="...")  # Answer a question
 
 ## Tier 3: Advanced (Optional)
 
-### `set_name`
-Change Lumen's name
-
 ### `get_calibration` / `set_calibration`
 View/update nervous system calibration
-
-### `test_leds`
-Run LED test sequence
 
 ### `unified_workflow`
 Execute workflows across anima-mcp and unitares-governance
@@ -113,9 +102,9 @@ Execute workflows across anima-mcp and unitares-governance
 ## Tool Count
 
 - **Tier 1 (Essential):** 3 tools
-- **Tier 2 (Useful):** 4 tools (including `lumen_qa`)
-- **Tier 3 (Advanced):** 5 tools
-- **Core Total:** 12 tools
+- **Tier 2 (Useful):** 3 tools (including `lumen_qa`)
+- **Tier 3 (Advanced):** 2 tools
+- **Core Total:** 8 tools
 
 **Extended tools:** Available when optional features are enabled:
 - Display: `switch_screen`, `leave_message`, `leave_agent_note`
@@ -133,7 +122,6 @@ Start → get_state()
   ├─ Want to help? → next_steps()
   ├─ Want raw data? → read_sensors()
   ├─ Want history? → get_identity()
-  ├─ Want to see face? → show_face()
   └─ Something wrong? → diagnostics()
 ```
 

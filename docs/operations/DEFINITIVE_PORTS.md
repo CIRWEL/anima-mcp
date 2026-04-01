@@ -45,7 +45,7 @@ OAuth only enforced when Host = `lumen-anima.ngrok.io`. All other hosts bypass a
 
 ## UNITARES = 8767
 
-- **Pi → Mac:** `UNITARES_URL` in `systemd/anima.service` and `systemd/anima-broker.service` (e.g. `http://100.96.201.46:8767/mcp/`)
+- **Pi → Mac:** `UNITARES_URL` in `systemd/anima.service` and `systemd/anima-broker.service` (e.g. `http://<tailscale-ip>:8767/mcp/` — verify with `tailscale status`)
 - **Cursor:** `~/.cursor/mcp.json` — unitares-governance URL `http://localhost:8767/mcp/`
 
 ---

@@ -61,7 +61,8 @@ curl http://localhost:8766/health
 ### Hardware
 - Raspberry Pi 4 (recommended) or Pi 3B+
 - BrainCraft HAT (optional - for display/LEDs)
-- BME280 sensor (temp/humidity/pressure)
+- AHT20 sensor (temp/humidity)
+- BMP280 sensor (pressure)
 - VEML7700 light sensor
 
 ### Software
@@ -161,13 +162,13 @@ Edit `~/.cursor/mcp.json` or `~/.claude.json`:
   "mcpServers": {
     "anima": {
       "type": "http",
-      "url": "http://100.78.71.1:8766/mcp/"
+      "url": "http://<tailscale-ip>:8766/mcp/"
     }
   }
 }
 ```
 
-Tailscale (no auth required). LAN IP (`http://192.168.1.165:8766/mcp/`) also works.
+Tailscale (no auth required, verify IP with `tailscale status`). LAN IP (`http://192.168.1.165:8766/mcp/`) also works.
 
 ### Claude.ai Web (via ngrok + OAuth 2.1)
 

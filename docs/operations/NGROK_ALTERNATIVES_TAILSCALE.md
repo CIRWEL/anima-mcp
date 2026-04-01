@@ -75,7 +75,7 @@ curl -s -X POST http://192.168.1.165:8766/v1/tools/call \
 
 ## UNITARES Governance over Tailscale
 
-Pi connects to UNITARES on your Mac. The systemd services use `UNITARES_URL=http://100.96.201.46:8767/mcp/` (Mac's Tailscale IP). If your Mac's Tailscale IP changes, update `systemd/anima.service` and `systemd/anima-broker.service`, then on Pi:
+Pi connects to UNITARES on your Mac. The systemd services use `UNITARES_URL=http://<tailscale-ip>:8767/mcp/` (Mac's Tailscale IP — verify with `tailscale status`). If your Mac's Tailscale IP changes, update `systemd/anima.service` and `systemd/anima-broker.service`, then on Pi:
 
 ```bash
 sudo cp ~/anima-mcp/systemd/anima.service /etc/systemd/system/

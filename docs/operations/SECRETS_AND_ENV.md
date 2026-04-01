@@ -50,7 +50,7 @@ ANIMA_GOVERNANCE_INTERVAL_SECONDS=180
 ANIMA_HTTP_API_TOKEN=replace-with-strong-secret
 ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=false
 ANIMA_TRUSTED_PROXY_NETWORKS=127.0.0.1/32,::1/128
-ANIMA_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,100.78.71.1:*,lumen-anima.ngrok.io
+ANIMA_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,<tailscale-ip>:*,lumen-anima.ngrok.io
 ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen-anima.ngrok.io,null
 ```
 

@@ -115,7 +115,7 @@ Runs on **Raspberry Pi 4** with [Adafruit BrainCraft HAT](https://www.adafruit.c
 
 - 240×240 TFT display — 16 screens across 5 groups (home, info, mind, msgs, art)
 - 3 DotStar LEDs mapping to warmth / clarity / stability with a constant "alive" sine pulse
-- BME280 (temp/humidity/pressure), VEML7700 (light)
+- AHT20 (temp/humidity), BMP280 (pressure), VEML7700 (light)
 - 5-way joystick + button for screen navigation
 
 Falls back to mock sensors on Mac/Linux for development.

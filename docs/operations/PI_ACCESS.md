@@ -4,7 +4,7 @@
 ```bash
 ssh lumen.local
 # or via Tailscale (port 22)
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83
+ssh -i ~/.ssh/id_ed25519_pi unitares-anima@<tailscale-ip>
 ```
 
 ## If SSH doesn't work
@@ -12,7 +12,7 @@ If `ssh lumen.local` or port 22 times out or is refused, the Pi may be using **p
 
 ```bash
 # Tailscale IP, port 2222 (works when 22 is blocked)
-ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83
+ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@<tailscale-ip>
 ```
 
 - **Timeout on 22?** Use the Tailscale IP and/or try `-p 2222`.
@@ -21,7 +21,7 @@ ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.79.215.83
 
 ## Details
 - **Hostname**: lumen.local (mDNS) or via Tailscale
-- **IP**: 192.168.1.165 (LAN) or 100.79.215.83 (Tailscale)
+- **IP**: 192.168.1.165 (LAN) or <tailscale-ip> (Tailscale — verify with `tailscale status`)
 - **Port**: 22 (standard); if blocked, Pi may be on 2222
 - **User**: unitares-anima
 - **Key**: ~/.ssh/id_ed25519_pi
@@ -37,7 +37,7 @@ Host pi-anima lumen lumen.local
 
 # Use when port 22 is blocked (Pi on 2222)
 Host lumen-2222
-    HostName 100.79.215.83
+    HostName <tailscale-ip>
     User unitares-anima
     Port 2222
     IdentityFile ~/.ssh/id_ed25519_pi

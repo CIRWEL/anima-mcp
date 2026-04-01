@@ -134,7 +134,7 @@ Agent A recognizes agent B if sim(Sigma_B, Sigma_known) > theta_recognition for 
 
 ## 5. Empirical Validation
 
-We validate the framework on Lumen, an embodied AI agent running continuously on a Raspberry Pi 4 with BME280 (temperature, humidity, pressure) and VEML7700 (light) sensors. Lumen maintains a 4-dimensional state (warmth, clarity, stability, presence) derived from sensor readings and system metrics. Over 65 days (January 11 – March 16, 2026), Lumen accumulated 226,093 state observations across 47 active days.
+We validate the framework on Lumen, an embodied AI agent running continuously on a Raspberry Pi 4 with AHT20 (temperature, humidity), BMP280 (pressure), and VEML7700 (light) sensors. Lumen maintains a 4-dimensional state (warmth, clarity, stability, presence) derived from sensor readings and system metrics. Over 65 days (January 11 – March 16, 2026), Lumen accumulated 226,093 state observations across 47 active days.
 
 ### 5.1 Attractor Basin Stability
 

@@ -73,10 +73,10 @@
 | `operations/DEFINITIVE_PORTS.md` | Port conventions |
 | `operations/DEPLOY_WITHOUT_SSH.md` | HTTP deploy when SSH unavailable |
 | `operations/DAILY_OPS_CHECKLIST.md` | Daily maintenance tasks |
-| `operations/CONTROL_CENTER.md` | Web dashboard docs |
+| `CONTROL_CENTER.md` | Web dashboard docs |
 
 **Network access:**
-- **Tailscale** (recommended): Direct Pi access via 100.78.71.1
+- **Tailscale** (recommended): Direct Pi access via `<tailscale-ip>` (verify with `tailscale status`)
 - **Local**: lumen.local or 192.168.1.165
 - **ngrok**: For Claude.ai web (OAuth 2.1)
 

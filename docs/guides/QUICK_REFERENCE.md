@@ -48,7 +48,7 @@ read_sensors()
 
 ---
 
-## Tools (26 total)
+## Tools (22 total)
 
 **Essential (5):**
 - `get_state` - Current anima + mood + identity
@@ -62,8 +62,7 @@ read_sensors()
 - `post_message` - Leave a message for Lumen
 - `configure_voice` - Voice system status/config
 
-**Display & Feedback (4):**
-- `show_face` - Display face
+**Display & Feedback (3):**
 - `manage_display` - Switch screens, set art era
 - `diagnostics` - System diagnostics
 - `primitive_feedback` - Feedback on Lumen's expressions

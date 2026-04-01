@@ -343,7 +343,7 @@ mcp__anima__git_pull(restart=true)
 
 Or manually:
 ```bash
-ssh unitares-anima@100.78.71.1 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
+ssh unitares-anima@<tailscale-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
 ```
 
 **After restart, wait 2 minutes.** The Pi is slow to boot the service. You will see "SSE server unavailable" or "fetch failed" errors during this window — this is normal and expected. Do NOT panic, do NOT retry rapidly, and do NOT fall back to SSH. Hammering the Pi during restart can crash WiFi and require a reflash. Just wait 2 minutes and try again.
@@ -353,7 +353,7 @@ ssh unitares-anima@100.78.71.1 'cd ~/anima-mcp && git pull && sudo systemctl res
 The **broker** (`stable_creature.py`) is the primary UNITARES caller. It checks in on a configurable cadence (`ANIMA_GOVERNANCE_INTERVAL_SECONDS`, default 180s, minimum 30s) and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM and has a fallback: if no "via unitares" decision arrives for 240s (`SERVER_GOVERNANCE_FALLBACK_SECONDS`), the server calls UNITARES directly using its native async event loop. This fallback exists because the broker's sync+ThreadPoolExecutor+new-event-loop pattern has reliability issues with aiohttp sessions.
 
 ```
-UNITARES_URL=http://100.96.201.46:8767/mcp/
+UNITARES_URL=http://<tailscale-ip>:8767/mcp/  # verify Mac IP with `tailscale status`
 ```
 
 Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
@@ -400,8 +400,8 @@ Things agents keep re-discovering. Read this so you don't waste time.
 | **OAuth env vars** | `ANIMA_OAUTH_ISSUER_URL`, `ANIMA_OAUTH_AUTO_APPROVE`, `ANIMA_OAUTH_SECRET` (optional). Tokens in-memory, reset on restart. See `docs/operations/SECRETS_AND_ENV.md`. |
 | **Ports** | anima-mcp = **8766**, UNITARES governance = **8767**. Never guess. |
 | **Pi restart time** | **2 minutes** after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. Do NOT SSH or retry MCP during this window — it can crash WiFi. |
-| **Tailscale IPs** | Pi: `100.78.71.1`, Mac: `100.96.201.46`. These are stable. |
-| **SSH to Pi** | Port 22 standard. If SSH times out/refused, try port 2222: `ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@100.78.71.1` (see `docs/operations/PI_ACCESS.md`). |
+| **Tailscale IPs** | Verify with `tailscale status`. IPs may change after reinstall. |
+| **SSH to Pi** | Port 22 standard. If SSH times out/refused, try port 2222: `ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@<tailscale-ip>` (see `docs/operations/PI_ACCESS.md`). |
 | **alive_ratio** | `total_alive_seconds / age_seconds`. Lumen is ~15% alive (Pi sleeps/reboots often). This is normal. |
 | **Neural waves** | Computational proprioception from CPU/memory/IO — not real EEG. High delta = stable system, not sleep. |
 | **No client uses /sse** | Claude Code, Claude Desktop, Cursor all connect to `/mcp/`. |

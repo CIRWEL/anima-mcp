@@ -6,15 +6,16 @@
                          THE ACTUAL SYSTEM (Feb 2026)
                          ============================
 
-  Raspberry Pi Zero 2W                              Mac (governance-mcp)
+  Raspberry Pi 4                                    Mac (governance-mcp)
   (anima-mcp, port 8766)                            (port 8767)
   ========================                           ========================
 
-  BME280 ─── temp, humidity, pressure
+  AHT20 ──── temp, humidity
+  BMP280 ─── pressure, temp
   VEML7700 ── light (reads own LEDs)     HTTP POST /mcp/
   CPU stats ── load, memory, freq        ──────────────────►
                     │                    process_agent_update     EISV dynamics
-                    ▼                    (every ~60s)             ┌──────────┐
+                    ▼                    (every ~180s)            ┌──────────┐
            computational_neural.py                               │ dE/dt    │
            (delta/theta/alpha/beta/gamma)                        │ dI/dt    │
                     │                                            │ dS/dt    │
@@ -31,7 +32,7 @@
                     │                    │                  "margin":"comfortable"}
                     │                    ▼
                     │            unitares_bridge.py
-                    │            (check_in every 60s,
+                    │            (check_in every 180s,
                     │             fallback to local
                     │             if Mac unreachable)
                     │
@@ -73,12 +74,12 @@ That's the honest picture. There are **two independent EISV instances**:
 - **Inputs**: Mapped anima state (warmth→E, clarity→I, stability→S, presence→V)
 - **V is standard**: `dV = kappa(E - I)` so V accumulates when energy exceeds integrity
 - **Coherence formula**: Same math, different operating range (V typically [-0.1, 0.1])
-- **Cycle**: Runs when Pi checks in (~60s) → computes margin → returns proceed/pause/halt
+- **Cycle**: Runs when Pi checks in (~180s) → computes margin → returns proceed/pause/halt
 - **This is telemetry**: open-loop, delayed, advisory only (Pi doesn't act on "pause")
 
 ### What Connects Them
 
-**Bridge**: `unitares_bridge.py` calls `process_agent_update` via HTTP every ~60s.
+**Bridge**: `unitares_bridge.py` calls `process_agent_update` via HTTP every ~180s.
 
 **Payload** (Pi → Mac):
 ```
@@ -122,7 +123,7 @@ Verdicts ("proceed", "pause", "halt") can come from different places depending o
 
 | Source | Where | When | Behavior |
 |--------|-------|------|----------|
-| **Mac governance** | `dynamics.py` → `scoring.py` | Mac reachable (~60s cycle) | Full thermodynamic EISV, calibrated thresholds, almost never pauses Lumen |
+| **Mac governance** | `dynamics.py` → `scoring.py` | Mac reachable (~180s cycle) | Full thermodynamic EISV, calibrated thresholds, almost never pauses Lumen |
 | **Local fallback** | `_local_governance()` in `unitares_bridge.py` | Mac unreachable | Simple threshold checks (risk>0.60, coherence<0.40, void>0.15), more trigger-happy |
 | **DrawingEISV** | `screens.py` | Internal to drawing loop | Not a verdict — drives energy drain and save decisions only |
 
@@ -144,9 +145,9 @@ What Lumen actually senses:
 | Sensor | Measures | Reality |
 |--------|----------|---------|
 | VEML7700 (light) | Lux | Reads own LED glow, not ambient. Self-referential. |
-| BME280 (temp) | Celsius | Ambient + CPU heat bleed |
-| BME280 (humidity) | % RH | Genuine environment |
-| BME280 (pressure) | hPa | Genuine (~827 hPa, Colorado altitude) |
+| AHT20 (temp) | Celsius | Ambient + CPU heat bleed |
+| AHT20 (humidity) | % RH | Genuine environment |
+| BMP280 (pressure) | hPa | Genuine (~827 hPa, Colorado altitude) |
 | CPU stats | %, freq, mem | Genuine computational load |
 
 Neural bands derived from CPU/system metrics:
@@ -216,7 +217,7 @@ Pi (anima-mcp)                              Mac (governance-mcp)
 │  ├─ state_history (206K rows)             │  ├─ core.identities          │
 │  ├─ drawing_history       │  HTTP bridge  │  ├─ core.agent_state         │
 │  ├─ memories (8.8K)       │ ──────────►   │  ├─ audit.events             │
-│  ├─ events (3.7K)         │  ~60s         │  ├─ core.discoveries (AGE)   │
+│  ├─ events (3.7K)         │  ~180s        │  ├─ core.discoveries (AGE)   │
 │  ├─ growth tables         │  check-in     │  ├─ dialectic.*              │
 │  ├─ primitives            │               │  ├─ core.calibration         │
 │  └─ trajectory_events     │               │  └─ core.tool_usage          │

@@ -169,7 +169,7 @@
 - Smiles require high wellness + stability + presence + clarity + comfortable warmth
 - Default is neutral
 
-**Neural signals (`neural_sim.py`):**
+**Neural signals (`computational_neural.py`):**
 - Environmental + computational approach
 - Light-based neural state (primary)
 - Temperature comfort (secondary)
