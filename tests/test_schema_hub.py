@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from anima_mcp.schema_hub import SchemaHub, GapDelta
-from anima_mcp.self_schema import SelfSchema, SchemaNode, SchemaEdge
+from anima_mcp.self_schema import SelfSchema, SchemaNode
 
 
 # ---------------------------------------------------------------------------

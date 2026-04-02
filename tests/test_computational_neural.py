@@ -6,12 +6,11 @@ Validates neural band derivation from system metrics.
 
 import pytest
 import time
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 from collections import namedtuple
 
 from anima_mcp.computational_neural import (
     ComputationalNeuralSensor,
-    ComputationalNeuralState,
 )
 
 

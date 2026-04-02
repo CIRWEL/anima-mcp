@@ -6,9 +6,7 @@ Renders messages, questions, visitors screens and handles scroll/expand interact
 
 import sys
 import time
-from typing import Optional, Dict, Any
 
-from .design import COLORS
 
 
 class MessagesMixin:
@@ -63,17 +61,22 @@ class MessagesMixin:
             TITLE   = (100, 200, 240)   # screen title
 
             def _type_colors(msg_type):
-                if msg_type == MESSAGE_TYPE_USER:     return C_USER,  T_USER
-                if msg_type == MESSAGE_TYPE_AGENT:    return C_AGENT, T_AGENT
-                if msg_type == MESSAGE_TYPE_QUESTION: return C_QA,    T_QA
+                if msg_type == MESSAGE_TYPE_USER:
+                    return C_USER, T_USER
+                if msg_type == MESSAGE_TYPE_AGENT:
+                    return C_AGENT, T_AGENT
+                if msg_type == MESSAGE_TYPE_QUESTION:
+                    return C_QA, T_QA
                 return C_OBS, T_OBS
 
             def _dim(color, f):
                 return tuple(int(c * f) for c in color)
 
             def _short_author(msg):
-                if msg.msg_type == MESSAGE_TYPE_OBSERVATION: return "lumen"
-                if msg.msg_type == MESSAGE_TYPE_USER:        return "you"
+                if msg.msg_type == MESSAGE_TYPE_OBSERVATION:
+                    return "lumen"
+                if msg.msg_type == MESSAGE_TYPE_USER:
+                    return "you"
                 if msg.msg_type == MESSAGE_TYPE_QUESTION:
                     return "\u2713 lumen" if getattr(msg, 'answered', False) else "? lumen"
                 a = getattr(msg, 'author', None) or 'agent'
@@ -319,11 +322,13 @@ class MessagesMixin:
                 return tuple(int(c * f) for c in color)
 
             def _type_colors(msg):
-                if msg.msg_type == MESSAGE_TYPE_USER:  return C_USER,  T_USER
+                if msg.msg_type == MESSAGE_TYPE_USER:
+                    return C_USER, T_USER
                 return C_AGENT, T_AGENT  # AGENT (and any other type shown here)
 
             def _short_author(msg):
-                if msg.msg_type == MESSAGE_TYPE_USER: return "you"
+                if msg.msg_type == MESSAGE_TYPE_USER:
+                    return "you"
                 a = getattr(msg, 'author', None) or 'agent'
                 return a[:14]
 
@@ -510,7 +515,7 @@ class MessagesMixin:
     def _render_qa_content(self):
         """Render Q&A screen - Lumen's questions and agent answers with full threading."""
         try:
-            from ..messages import get_board, MESSAGE_TYPE_QUESTION, MESSAGE_TYPE_AGENT
+            from ..messages import get_board, MESSAGE_TYPE_QUESTION
 
             # Cache: check question state + scroll before expensive text wrapping
             board = get_board()

@@ -11,9 +11,8 @@ Design principle: The inner voice is for being. This is for thinking.
 
 import os
 import sys
-import asyncio
 import json
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -177,7 +176,7 @@ class CognitiveInference:
             return None
 
         try:
-            import httpx
+            import httpx  # noqa: F401
         except ImportError:
             print("[CognitiveInference] httpx not installed", file=sys.stderr, flush=True)
             return None

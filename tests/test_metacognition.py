@@ -15,9 +15,7 @@ Covers:
 
 import pytest
 import json
-import math
-from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from datetime import datetime
 
 from anima_mcp.metacognition import (
     MetacognitiveMonitor, Prediction, PredictionError, Reflection,

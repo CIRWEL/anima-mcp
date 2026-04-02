@@ -2,7 +2,6 @@
 Tests for CalibrationDrift integration with anima sensing and schema hub.
 """
 
-import pytest
 from datetime import datetime
 from anima_mcp.calibration_drift import CalibrationDrift
 from anima_mcp.config import NervousSystemCalibration

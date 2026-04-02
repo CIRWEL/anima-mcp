@@ -6,15 +6,9 @@ No real audio devices or external processes are used.
 """
 
 import time
-import queue
-import threading
 import json
-import struct
 import wave
-import io
-import tempfile
-from pathlib import Path
-from unittest.mock import patch, MagicMock, PropertyMock, call
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -23,8 +17,6 @@ from anima_mcp.audio.speaker import Speaker, AudioPlayback
 from anima_mcp.audio.stt import (
     SpeechToText,
     TranscriptionResult,
-    DEFAULT_MODEL_PATH,
-    FALLBACK_MODEL_PATH,
 )
 from anima_mcp.audio.tts import (
     TextToSpeech,

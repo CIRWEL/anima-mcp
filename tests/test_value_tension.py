@@ -1,8 +1,6 @@
-import pytest
 import random
-from datetime import datetime
 from anima_mcp.value_tension import (
-    ValueTensionTracker, ConflictEvent, detect_structural_conflicts
+    ValueTensionTracker, detect_structural_conflicts
 )
 
 

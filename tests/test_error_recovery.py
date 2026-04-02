@@ -7,7 +7,7 @@ from datetime import timedelta
 from anima_mcp.error_recovery import (
     classify_error, retry_with_backoff, safe_call, safe_call_with_timeout,
     CircuitBreaker, RetryConfig, ErrorType,
-    TransientError, PermanentError, HardwareError,
+    TransientError,
 )
 
 # Use fast config to avoid sleeps in tests

@@ -6,12 +6,14 @@ This module handles playing audio through the speaker.
 """
 
 import sys
-import time
 import threading
 import queue
 from pathlib import Path
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from .tts import TextToSpeech
 
 
 @dataclass

@@ -668,7 +668,7 @@ def get_fastmcp() -> "FastMCP":
             # Register with FastMCP using structured_output=False to avoid schema validation
             _fastmcp.tool(description=description, name=tool_name)(wrapper)
 
-        print(f"[FastMCP] All tools registered", file=sys.stderr, flush=True)
+        print("[FastMCP] All tools registered", file=sys.stderr, flush=True)
 
     return _fastmcp
 

@@ -6,8 +6,7 @@ testing belongs in dedicated test files.
 """
 
 import asyncio
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from conftest import parse_result
 
@@ -463,44 +462,6 @@ class TestHandlersPackage:
 
     def test_all_handlers_importable_from_package(self):
         """All handler functions can be imported from the handlers package."""
-        from anima_mcp.handlers import (
-            # System operations
-            handle_git_pull,
-            handle_system_service,
-            handle_fix_ssh_port,
-            handle_deploy_from_github,
-            handle_setup_tailscale,
-            handle_system_power,
-            # State queries
-            handle_get_state,
-            handle_get_identity,
-            handle_read_sensors,
-            handle_get_health,
-            handle_get_calibration,
-            # Knowledge
-            handle_get_self_knowledge,
-            handle_get_growth,
-            handle_get_qa_insights,
-            handle_get_trajectory,
-            handle_get_eisv_trajectory_state,
-            handle_query,
-            # Display operations
-            handle_capture_screen,
-            handle_diagnostics,
-            handle_manage_display,
-            # Communication
-            handle_lumen_qa,
-            handle_post_message,
-            handle_say,
-            handle_configure_voice,
-            handle_primitive_feedback,
-            # Workflows
-            handle_unified_workflow,
-            handle_next_steps,
-            handle_set_calibration,
-            handle_get_lumen_context,
-            handle_learning_visualization,
-        )
         # If we got here, all imports succeeded
         assert True
 

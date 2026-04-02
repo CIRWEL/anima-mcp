@@ -5,10 +5,6 @@ Validates action selection, value learning, and SQLite persistence.
 """
 
 import pytest
-import tempfile
-import os
-from pathlib import Path
-from unittest.mock import patch
 
 from anima_mcp.agency import ActionSelector, ActionType, Action
 

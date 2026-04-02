@@ -5,15 +5,13 @@ Helps diagnose and fix display issues on BrainCraft HAT.
 """
 
 import sys
-from pathlib import Path
-from typing import Optional
 
 # Ensure UTF-8 encoding for emoji support
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8')
 
 try:
-    from PIL import Image, ImageDraw
+    from PIL import Image
     HAS_PIL = True
 except ImportError:
     HAS_PIL = False

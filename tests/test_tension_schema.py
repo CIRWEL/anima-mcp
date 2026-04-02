@@ -1,9 +1,8 @@
 """Tests for value tension node injection into self-schema."""
 
-import pytest
 from datetime import datetime
 from anima_mcp.schema_hub import SchemaHub
-from anima_mcp.self_schema import SelfSchema, SchemaNode, SchemaEdge
+from anima_mcp.self_schema import SelfSchema, SchemaNode
 from anima_mcp.value_tension import ConflictEvent
 
 

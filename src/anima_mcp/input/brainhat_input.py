@@ -24,7 +24,7 @@ except ImportError:
     HAS_GPIO = False
 
 try:
-    from adafruit_seesaw.seesaw import Seesaw
+    from adafruit_seesaw.seesaw import Seesaw  # noqa: F401
     HAS_SEESAW = True
 except ImportError:
     HAS_SEESAW = False

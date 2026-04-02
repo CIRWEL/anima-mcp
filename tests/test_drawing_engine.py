@@ -9,11 +9,10 @@ Covers:
 - DrawingEngine: narrative arc transitions, autonomy checks, era management
 """
 
-import math
 import time
 import json
 import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
+from unittest.mock import patch
 
 from anima_mcp.display.drawing_engine import (
     CanvasState,
@@ -22,7 +21,6 @@ from anima_mcp.display.drawing_engine import (
     DrawingIntent,
     DrawingEngine,
     DrawingEISV,
-    _EISV_PARAMS,
 )
 
 from conftest import make_anima

@@ -5,7 +5,6 @@ Handles observing state/drawing preferences, updating preference values,
 and providing trajectory/dimension preference data.
 """
 
-import re
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 

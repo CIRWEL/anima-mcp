@@ -1,18 +1,15 @@
 """Tests for EISV trajectory awareness integration."""
 
-import json
 import os
 import sqlite3
 import tempfile
-import time
-import pytest
 from anima_mcp.eisv.mapping import (
     anima_to_eisv, compute_trajectory_window, classify_trajectory,
-    TrajectoryShape, compute_derivatives, EISV_DIMS,
+    TrajectoryShape, compute_derivatives,
 )
 from anima_mcp.eisv.expression import (
     ExpressionGenerator, translate_expression, generate_lumen_expression,
-    TOKEN_MAP, ALL_TOKENS, SHAPE_TOKEN_AFFINITY, LUMEN_TOKENS,
+    TOKEN_MAP, ALL_TOKENS, LUMEN_TOKENS,
 )
 from anima_mcp.eisv.awareness import TrajectoryAwareness, compute_expression_coherence
 

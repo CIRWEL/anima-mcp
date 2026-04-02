@@ -1,6 +1,5 @@
 """Tests for grounded self-answer — Lumen answering its own questions from learned data."""
 
-import pytest
 from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
 

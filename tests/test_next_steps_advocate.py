@@ -1,6 +1,5 @@
 """Tests for next_steps_advocate.py — state reporting and drive expression."""
 
-import pytest
 
 from conftest import make_anima, make_readings
 

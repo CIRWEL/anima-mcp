@@ -7,7 +7,6 @@ Messages are stored persistently so they survive reboots.
 import json
 import sys
 import time
-import os
 import uuid
 from typing import List, Dict, Any, Optional
 from dataclasses import dataclass, asdict
@@ -248,7 +247,6 @@ class MessageBoard:
             # Validate that the question exists - require exact match
             question_text = None
             question_context = None
-            question_timestamp = None
             question_found = False
 
             # First try exact match
@@ -257,7 +255,6 @@ class MessageBoard:
                     m.answered = True
                     question_text = m.text
                     question_context = getattr(m, 'context', None)
-                    question_timestamp = m.timestamp
                     question_found = True
                     break
             
@@ -274,7 +271,6 @@ class MessageBoard:
                     q.answered = True
                     question_text = q.text
                     question_context = getattr(q, 'context', None)
-                    question_timestamp = q.timestamp
                     question_found = True
                     # Update responds_to to full ID
                     responds_to = q.message_id
@@ -287,7 +283,6 @@ class MessageBoard:
                     q.answered = True
                     question_text = q.text
                     question_context = getattr(q, 'context', None)
-                    question_timestamp = q.timestamp
                     question_found = True
                     responds_to = q.message_id
             
@@ -315,10 +310,10 @@ class MessageBoard:
                         selector = get_action_selector()
                         selector.record_question_feedback(question_text, feedback)
                         print(f"[Feedback] Question '{question_text[:30]}...' got score {feedback['score']:.2f}", file=sys.stderr, flush=True)
-                    except Exception as e:
+                    except Exception:
                         pass  # Agency not available, that's fine
             elif question_text and agent_name.lower() == "lumen":
-                print(f"[Feedback] Skipping self-answer feedback (circular learning)", file=sys.stderr, flush=True)
+                print("[Feedback] Skipping self-answer feedback (circular learning)", file=sys.stderr, flush=True)
                 # Record self-dialogue topic for self-knowledge tracking
                 try:
                     from .growth import get_growth_system
@@ -346,7 +341,7 @@ class MessageBoard:
                         )
                         print(f"[Knowledge] Learned from Q&A: {insight.text}", file=sys.stderr, flush=True)
                     else:
-                        print(f"[Knowledge] No extractable insight from answer (too short or acknowledgment)", file=sys.stderr, flush=True)
+                        print("[Knowledge] No extractable insight from answer (too short or acknowledgment)", file=sys.stderr, flush=True)
                 except Exception as e:
                     print(f"[Knowledge] Insight extraction failed: {e}", file=sys.stderr, flush=True)
 

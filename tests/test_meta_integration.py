@@ -1,6 +1,5 @@
 """Tests for meta-learning integration into the server loop."""
 
-import pytest
 from anima_mcp.preferences import compute_trajectory_health, meta_learning_update
 
 

@@ -7,7 +7,7 @@ Handles adding, retrieving, and marking curiosities as explored.
 import sys
 import sqlite3
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional
 import random
 
 

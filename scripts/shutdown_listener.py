@@ -10,7 +10,6 @@ Run as root (required for shutdown command).
 
 import time
 import subprocess
-import signal
 import sys
 import os
 

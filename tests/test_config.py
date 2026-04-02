@@ -6,12 +6,10 @@ Run with: pytest tests/test_config.py -v
 
 import pytest
 import yaml
-from pathlib import Path
 
 from anima_mcp.config import (
     NervousSystemCalibration,
     AnimaConfig,
-    DisplayConfig,
     ConfigManager,
 )
 

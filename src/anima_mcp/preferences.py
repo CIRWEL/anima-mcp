@@ -15,16 +15,15 @@ What counts as "positive" or "negative"?
 - Discomfort following extreme states → moderation is valued
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple, Any
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Optional, Dict, Tuple, Any
 from collections import deque
 import json
 import sys
 from pathlib import Path
 
 from .atomic_write import atomic_json_write
-import math
 
 
 @dataclass

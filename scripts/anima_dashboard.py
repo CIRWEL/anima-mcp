@@ -5,15 +5,13 @@ Anima Dashboard - Real-time Visualization of Anima State
 import sys
 import time
 import curses
-import json
-from datetime import datetime
 from pathlib import Path
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.resolve()
 sys.path.append(str(project_root))
 
-from src.anima_mcp.shared_memory import SharedMemoryClient
+from src.anima_mcp.shared_memory import SharedMemoryClient  # noqa: E402
 
 def draw_bar(stdscr, y, x, label, value, max_val=1.0, width=20, color_pair=1):
     """Draw a progress bar."""
@@ -74,8 +72,6 @@ def main(stdscr):
         anima = data.get("anima", {})
         eisv = data.get("eisv", {})
         readings = data.get("readings", {})
-        gov = data.get("governance", {}) # Might be separate
-        
         row = 3
         col1 = 2
         col2 = 40

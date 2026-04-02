@@ -288,7 +288,6 @@ class TestBeliefInsights:
         return mock
 
     def test_well_tested_belief_creates_insight(self, srs):
-        from unittest.mock import PropertyMock
         belief = MagicMock()
         belief.supporting_count = 15
         belief.contradicting_count = 2

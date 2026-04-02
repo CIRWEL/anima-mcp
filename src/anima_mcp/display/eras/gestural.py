@@ -10,7 +10,7 @@ Granular mark-making: small deliberate acts that accumulate into forms.
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..art_era import EraState
@@ -30,11 +30,11 @@ class GesturalState(EraState):
 
         Smooth commitment replaces binary lock contribution.
         """
-        I = 0.15
-        I += 0.55 * self.direction_commitment
+        intentionality_signal = 0.15
+        intentionality_signal += 0.55 * self.direction_commitment
         if self.gesture_remaining > 0:
-            I += min(0.3, self.gesture_remaining / 20.0 * 0.3)
-        return min(1.0, I)
+            intentionality_signal += min(0.3, self.gesture_remaining / 20.0 * 0.3)
+        return min(1.0, intentionality_signal)
 
     def gestures(self) -> List[str]:
         return ["dot", "stroke", "curve", "cluster", "drag"]

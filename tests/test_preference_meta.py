@@ -9,7 +9,6 @@ Covers:
   - meta_learning_update (boost, reduce, floor, conservation)
 """
 
-import pytest
 from anima_mcp.preferences import Preference, PreferenceSystem
 
 

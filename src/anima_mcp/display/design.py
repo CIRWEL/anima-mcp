@@ -7,7 +7,7 @@ Warm, alive, elegant - matching the care in the backend.
 
 import math
 from dataclasses import dataclass
-from typing import Tuple
+from typing import List, Tuple
 
 
 def ease_smooth(t: float) -> float:
@@ -193,8 +193,6 @@ def anima_dimension_color(dimension: str, value: float) -> Tuple[int, int, int]:
 
 # === Gradient System ===
 # Create smooth color transitions for visual richness
-
-from typing import List, Callable
 
 def create_gradient(color1: Tuple[int, int, int], color2: Tuple[int, int, int],
                     steps: int = 10) -> List[Tuple[int, int, int]]:

@@ -12,7 +12,6 @@ Covers:
 """
 
 import pytest
-import sqlite3
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from datetime import datetime as real_datetime

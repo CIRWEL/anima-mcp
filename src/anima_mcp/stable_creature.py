@@ -43,7 +43,6 @@ import concurrent.futures
 import threading
 import psutil
 from datetime import datetime
-from typing import Optional
 from pathlib import Path
 
 # Force UTF-8 for stdout/stderr (prevents crash in systemd service)
@@ -55,7 +54,6 @@ if sys.stdout.encoding != 'utf-8':
         pass # If reconfigure fails (e.g. older python), we might be stuck
 
 from .sensors import get_sensors
-from collections import deque
 from .anima import sense_self, MoodMomentum
 from .inner_life import InnerLife
 from .display.leds.brightness import estimate_instantaneous_brightness
@@ -71,7 +69,7 @@ from .metacognition import get_metacognitive_monitor
 
 # Cognitive inference support (optional - for deeper thinking)
 try:
-    from .cognitive_inference import get_cognitive_inference, InferenceProfile
+    from .cognitive_inference import get_cognitive_inference
     from .unitares_cognitive import get_unitares_cognitive
     COGNITIVE_AVAILABLE = True
 except ImportError:
@@ -357,6 +355,7 @@ def run_creature():
     action_selector = None
     exploration_mgr = None
     memory_retriever = None
+    exp_marks = None
 
     if ENHANCED_LEARNING_AVAILABLE:
         try:
@@ -388,7 +387,6 @@ def run_creature():
     # Initialize Experiential Accumulation (Layer 1-3)
     pathways = None
     exp_filter = None
-    exp_marks = None
     if ENHANCED_LEARNING_AVAILABLE:
         try:
             if _has_module("weighted_pathways"):

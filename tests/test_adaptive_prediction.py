@@ -5,14 +5,11 @@ Validates learned pattern updates, feature extraction, prediction logic,
 observation/surprise detection, and persistence round-trips.
 """
 
-import math
 import pytest
 from datetime import datetime
-from collections import deque
 
 from anima_mcp.adaptive_prediction import (
     LearnedPattern,
-    PatternFeatures,
     AdaptivePredictionModel,
 )
 

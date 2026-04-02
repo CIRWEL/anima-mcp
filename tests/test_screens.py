@@ -10,8 +10,7 @@ Covers:
 
 import time
 import pytest
-from unittest.mock import patch, MagicMock, PropertyMock
-from dataclasses import dataclass
+from unittest.mock import patch, MagicMock
 
 try:
     from PIL import Image, ImageDraw
@@ -26,7 +25,7 @@ from anima_mcp.display.screens import (
     ScreenState,
     ScreenRenderer,
 )
-from anima_mcp.display.renderer import PilRenderer, DisplayConfig
+from anima_mcp.display.renderer import PilRenderer
 from anima_mcp.display.face import FaceState, EyeState, MouthState
 
 

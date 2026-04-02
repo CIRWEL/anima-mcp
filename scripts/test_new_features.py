@@ -55,7 +55,7 @@ def test_next_steps_advocate():
     display_available = display.is_available()
     brain_hat_available = "eeg_af7" in sensors.available_sensors()
     
-    print(f"Current state:")
+    print("Current state:")
     print(f"  Display available: {display_available}")
     print(f"  Brain HAT available: {brain_hat_available}")
     print(f"  Anima: W={anima.warmth:.2f}, C={anima.clarity:.2f}, S={anima.stability:.2f}, P={anima.presence:.2f}")
@@ -64,7 +64,7 @@ def test_next_steps_advocate():
     
     # Get recommendations
     advocate = NextStepsAdvocate()
-    steps = advocate.analyze_current_state(
+    advocate.analyze_current_state(
         anima=anima,
         readings=readings,
         eisv=eisv,
@@ -75,7 +75,7 @@ def test_next_steps_advocate():
     
     summary = advocate.get_next_steps_summary()
     
-    print(f"Next Steps Summary:")
+    print("Next Steps Summary:")
     print(f"  Total steps: {summary['total_steps']}")
     print(f"  Critical: {summary['critical']}")
     print(f"  High: {summary['high']}")

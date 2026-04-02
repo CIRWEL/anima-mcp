@@ -5,7 +5,6 @@ Validates belief updates, predictions, correlation testing, and recovery profile
 """
 
 import pytest
-from datetime import datetime, timedelta
 
 from anima_mcp.self_model import SelfBelief, SelfModel
 

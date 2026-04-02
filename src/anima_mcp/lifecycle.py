@@ -79,13 +79,13 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
             print(f"  Awakening #{identity.total_awakenings}")
             print(f"  Born: {identity.born_at.isoformat()}")
             print(f"  Total alive: {identity.total_alive_seconds:.0f}s")
-            print(f"[Wake] ✓ Identity established - message board will be active", file=sys.stderr, flush=True)
+            print("[Wake] ✓ Identity established - message board will be active", file=sys.stderr, flush=True)
 
             # Initialize growth system for learning, relationships, and goals
             try:
                 _ctx.growth = get_growth_system(db_path=db_path)
                 _ctx.growth.born_at = identity.born_at
-                print(f"[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
+                print("[Wake] ✓ Growth system initialized", file=sys.stderr, flush=True)
             except Exception as ge:
                 import traceback
                 print(f"[Wake] Growth system error (non-fatal): {ge}", file=sys.stderr, flush=True)
@@ -162,7 +162,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 if gap_delta:
                     print(f"[SchemaHub] Woke after {gap_delta.duration_seconds:.0f}s gap", file=sys.stderr, flush=True)
                 else:
-                    print(f"[SchemaHub] Initialized (no previous schema found)", file=sys.stderr, flush=True)
+                    print("[SchemaHub] Initialized (no previous schema found)", file=sys.stderr, flush=True)
 
                 # Seed hub's trajectory from existing trajectory system so
                 # trajectory nodes appear immediately, not after ~7 hours.
@@ -217,13 +217,13 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                         drift.apply_restart_decay(gap_hours)
                         print(f"[CalDrift] Applied restart decay for {gap_hours:.0f}h gap", file=sys.stderr, flush=True)
                 else:
-                    print(f"[CalDrift] Initialized (no prior drift)", file=sys.stderr, flush=True)
+                    print("[CalDrift] Initialized (no prior drift)", file=sys.stderr, flush=True)
             except Exception as cde:
                 print(f"[CalDrift] Init failed (non-fatal): {cde}", file=sys.stderr, flush=True)
 
             # Initialize ValueTensionTracker (transient — no persistence needed)
             _ctx.tension_tracker = ValueTensionTracker()
-            print(f"[Tension] Initialized value tension tracker", file=sys.stderr, flush=True)
+            print("[Tension] Initialized value tension tracker", file=sys.stderr, flush=True)
 
             return  # Success
         except Exception as e:
@@ -241,10 +241,10 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _set_ctx(None)
                 _time.sleep(wait)
             else:
-                print(f"[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
+                print("[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
                 print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
-                print(f"[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
-                print(f"[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
+                print("[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
+                print("[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
                 _set_ctx(None)
                 return
 
@@ -262,7 +262,7 @@ def sleep():
             drift_path.parent.mkdir(parents=True, exist_ok=True)
             _ctx.calibration_drift.save(str(drift_path))
             try:
-                print(f"[Sleep] Calibration drift saved", file=sys.stderr, flush=True)
+                print("[Sleep] Calibration drift saved", file=sys.stderr, flush=True)
             except (ValueError, OSError):
                 pass
         except Exception as e:
@@ -276,7 +276,7 @@ def sleep():
         try:
             if _ctx.schema_hub.persist_schema():
                 try:
-                    print(f"[Sleep] Schema persisted for gap recovery", file=sys.stderr, flush=True)
+                    print("[Sleep] Schema persisted for gap recovery", file=sys.stderr, flush=True)
                 except (ValueError, OSError):
                     pass
         except Exception as e:
@@ -298,7 +298,7 @@ def sleep():
             )
             if save_trajectory(sig):
                 try:
-                    print(f"[Sleep] Trajectory persisted", file=sys.stderr, flush=True)
+                    print("[Sleep] Trajectory persisted", file=sys.stderr, flush=True)
                 except (ValueError, OSError):
                     pass
         except Exception as e:

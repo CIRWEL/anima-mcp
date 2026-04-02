@@ -5,9 +5,8 @@ Validates the G_t self-schema graph: node/edge extraction, serialization,
 VQA ground truth generation, and belief/preference inclusion thresholds.
 """
 
-import pytest
 from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from anima_mcp.self_schema import (
     SchemaNode,

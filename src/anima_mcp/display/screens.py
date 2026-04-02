@@ -8,27 +8,25 @@ Screens can be toggled via joystick:
 - Diagnostics: System health, governance status
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Any, List
 from pathlib import Path
-from datetime import datetime
 import time
 import sys
-import os
-import json
 import math
-import random
 
 from .face import FaceState
-from .design import COLORS, Timing, ease_smooth
+from .design import Timing, ease_smooth
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity
 from ..learning_visualization import LearningVisualizer
 from .drawing_engine import (
-    DrawingEngine, CanvasState, DrawingState, DrawingGoal,
-    DrawingIntent, DrawingEISV, _EISV_PARAMS, _get_canvas_path,
+    DrawingEngine,
+    DrawingEISV as DrawingEISV,
+    DrawingIntent as DrawingIntent,
+    _EISV_PARAMS as _EISV_PARAMS,
 )
 from .screen_home import HomeMixin
 from .screen_info import InfoMixin
@@ -426,7 +424,7 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
                         readings=None, anima=None
                     )
                     self._learning_cache_time = time.time()
-                    print(f"[Learning] Cache pre-warmed successfully", file=sys.stderr, flush=True)
+                    print("[Learning] Cache pre-warmed successfully", file=sys.stderr, flush=True)
                 finally:
                     self._learning_cache_refreshing = False
             except Exception as e:
@@ -697,7 +695,6 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
 
         cx, cy = 120, 110  # Center of screen
         radius = 20
-        import math
         for i in range(8):
             angle = math.radians(i * 45 + angle_offset)
             x = cx + int(radius * math.cos(angle))
@@ -1039,7 +1036,7 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
                         and len(self._canvas.pixels) < 15000):
                     try:
                         self._lumen_draw(anima, draw=None)
-                    except Exception as e:
+                    except Exception:
                         pass  # Don't let background draw break display
             except Exception as e:
                 # Any render error - show default to prevent blank screen

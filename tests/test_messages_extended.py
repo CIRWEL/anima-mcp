@@ -3,7 +3,6 @@
 import time
 import pytest
 
-import anima_mcp.messages as msg_module
 from anima_mcp.messages import (
     Message,
     MessageBoard,

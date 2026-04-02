@@ -84,7 +84,7 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
 
 async def handle_next_steps(arguments: dict) -> list[TextContent]:
     """Get proactive next steps to achieve goals. Safe, never crashes."""
-    from ..accessors import _get_store, _get_sensors, _get_display, _get_readings_and_anima
+    from ..accessors import _get_store, _get_display, _get_readings_and_anima
     from ..next_steps_advocate import get_advocate
     from ..eisv_mapper import anima_to_eisv
 
@@ -94,7 +94,6 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
             "error": "Server not initialized - wake() failed"
         }))]
 
-    sensors = _get_sensors()
     display = _get_display()
 
     # Read from shared memory (broker) or fallback to sensors
@@ -121,9 +120,9 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
             unitares_connected = await bridge.check_availability()
             unitares_status = "connected" if unitares_connected else "unavailable"
             if unitares_connected:
-                print(f"[Diagnostics] UNITARES connected via shared bridge", file=sys.stderr, flush=True)
+                print("[Diagnostics] UNITARES connected via shared bridge", file=sys.stderr, flush=True)
             else:
-                print(f"[Diagnostics] UNITARES URL set but unavailable", file=sys.stderr, flush=True)
+                print("[Diagnostics] UNITARES URL set but unavailable", file=sys.stderr, flush=True)
         else:
             unitares_status = "not_configured"
             print("[Diagnostics] UNITARES_URL not set", file=sys.stderr, flush=True)
@@ -136,7 +135,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
     _shm = _get_last_shm_data()
     _il = (_shm.get("inner_life") or {}) if _shm else {}
     advocate = get_advocate()
-    steps = advocate.analyze_current_state(
+    advocate.analyze_current_state(
         anima=anima,
         readings=readings,
         eisv=eisv,

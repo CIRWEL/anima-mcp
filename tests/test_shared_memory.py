@@ -5,7 +5,7 @@ import os
 import time
 import pytest
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from anima_mcp.shared_memory import SharedMemoryClient
 
@@ -356,7 +356,6 @@ class TestConcurrentAccess:
 
     def test_read_returns_none_when_lock_held_after_retries(self, tmp_path):
         """If lock cannot be acquired after retries, read returns None."""
-        import fcntl
         filepath = tmp_path / "state.json"
         filepath.write_text('{"data": {"ok": true}}')
         lock_path = filepath.with_suffix(".lock")

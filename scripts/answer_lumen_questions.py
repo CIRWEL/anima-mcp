@@ -7,7 +7,6 @@ SSH to Pi and interact with Lumen's message board directly.
 import subprocess
 import json
 import sys
-from pathlib import Path
 
 # SSH connection details
 SSH_HOST = "pi-anima"  # From SSH config, or use "unitares-anima@192.168.1.165"
@@ -97,8 +96,6 @@ print(json.dumps(result))
 def post_answer(question_id: str, answer: str) -> bool:
     """Post an answer to a question on the Pi by writing directly to JSON."""
     import json as json_lib
-    import uuid
-    import time
     
     # Create the answer message
     answer_json = json_lib.dumps(answer)
@@ -236,13 +233,13 @@ def main():
         # Generate answer
         answer = generate_answer(q_text, q_context)
         
-        print(f"      💡 Answering...")
+        print("      💡 Answering...")
         
         # Post answer
         if post_answer(q_id, answer):
-            print(f"      ✅ Answered!")
+            print("      ✅ Answered!")
         else:
-            print(f"      ⚠️  Failed to post answer")
+            print("      ⚠️  Failed to post answer")
         
         print()
     

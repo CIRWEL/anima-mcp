@@ -8,8 +8,8 @@ it should stop being surprised.
 Key insight: Learning happens when predictions fail, not when they succeed.
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional, Dict, List, Tuple, Any
 from collections import defaultdict, deque
 import math
@@ -81,7 +81,6 @@ class LearnedPattern:
 
         # Incremental mean and variance (Welford's algorithm)
         # Guard against numerical instability with epsilon
-        EPSILON = 1e-10
         delta = value - self.mean
         self.mean += delta / max(self.sample_count, 1)
         delta2 = value - self.mean
@@ -269,7 +268,6 @@ class AdaptivePredictionModel:
                 return pattern.mean, pattern.confidence
 
         # Try less specific patterns (just hour + day_type)
-        simple_key = f"{features.hour}:{features.is_weekend}"
         if variable in self._patterns:
             for key, pattern in self._patterns[variable].items():
                 if key.startswith(f"{features.hour}:") and pattern.sample_count >= 5:

@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from anima_mcp.inner_life import InnerLife, DRIVE_COMFORT
+from anima_mcp.inner_life import InnerLife
 
 
 def _make_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5):

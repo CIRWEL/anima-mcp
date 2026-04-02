@@ -5,12 +5,9 @@ follow-up generation, and enriched self_answer prompt.
 Run with: pytest tests/test_robust_self_answer.py -v
 """
 
-import json
 import pytest
-from pathlib import Path
-from unittest.mock import patch, MagicMock
 
-from anima_mcp.knowledge import KnowledgeBase, Insight
+from anima_mcp.knowledge import KnowledgeBase
 
 
 @pytest.fixture

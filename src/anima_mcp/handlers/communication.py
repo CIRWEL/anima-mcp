@@ -216,7 +216,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
                     print(f"[Q&A] Insight behavior application failed (non-fatal): {e}", file=sys.stderr, flush=True)
             else:
                 insight_result = {"skipped": "no meaningful insight extracted"}
-                print(f"[Q&A] No insight extracted", file=sys.stderr, flush=True)
+                print("[Q&A] No insight extracted", file=sys.stderr, flush=True)
         except Exception as e:
             insight_result = {"error": str(e)}
             print(f"[Q&A] Insight extraction failed: {e}", file=sys.stderr, flush=True)
@@ -249,12 +249,10 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
 
     # Otherwise -> list mode
     # Auto-repair orphaned answered questions (answered=True but no actual answer)
-    repaired = board.repair_orphaned_answered()
+    board.repair_orphaned_answered()
 
     # Find questions that have NO actual answer (responds_to link), even if auto-expired
     all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
-    question_ids = {q.message_id for q in all_questions}
-
     # Find which questions have actual answers (agent messages with responds_to)
     agent_msgs = [m for m in board._messages if m.msg_type == "agent"]
     answered_ids = {m.responds_to for m in agent_msgs if m.responds_to}
@@ -294,7 +292,7 @@ async def handle_post_message(arguments: dict) -> list[TextContent]:
     """
     from ..accessors import (
         _get_growth, _get_activity,
-        _get_readings_and_anima, _get_store,
+        _get_readings_and_anima,
     )
     from ..messages import (
         add_user_message, add_agent_message, get_board, MESSAGE_TYPE_QUESTION,
@@ -498,7 +496,7 @@ async def handle_say(arguments: dict) -> list[TextContent]:
         }))]
 
     # Always post to message board (Lumen's text expression)
-    result = add_observation(text, author="lumen")
+    add_observation(text, author="lumen")
 
     # Also show on display notepad
     try:

@@ -10,7 +10,7 @@ Design principle: marks are write-once. The only mutation is earning new ones.
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, List, Any

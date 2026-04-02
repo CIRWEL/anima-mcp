@@ -5,7 +5,6 @@ and to_dict / feeling() structure.
 Run with: pytest tests/test_anima_extended.py -v
 """
 
-import pytest
 from datetime import datetime
 
 from anima_mcp.anima import (

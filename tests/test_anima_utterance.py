@@ -1,6 +1,5 @@
 """Tests for traceable anima self-report (no LLM)."""
 
-import pytest
 from anima_mcp.anima_utterance import anima_to_self_report
 
 

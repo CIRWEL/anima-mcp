@@ -11,7 +11,7 @@ from . import colors as _colors
 from . import dances as _dances
 from . import patterns as _patterns
 from .colors import blend_colors
-from .dances import Dance, DanceType, EVENT_TO_DANCE, render_dance
+from .dances import Dance, DanceType, render_dance
 from .types import LEDState
 
 try:

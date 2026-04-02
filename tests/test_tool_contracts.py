@@ -8,9 +8,7 @@ These catch tool definition drift before it reaches production:
 - Governance bridge uses documented tool names
 """
 
-import json
 
-import pytest
 
 from anima_mcp.tool_registry import TOOLS, HANDLERS
 

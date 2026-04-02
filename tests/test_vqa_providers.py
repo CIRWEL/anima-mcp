@@ -7,7 +7,6 @@ Validates provider selection, API response parsing, and fallback behavior.
 import pytest
 import os
 from unittest.mock import AsyncMock, patch, MagicMock
-from pathlib import Path
 
 from anima_mcp.self_schema_renderer import (
     evaluate_vqa,

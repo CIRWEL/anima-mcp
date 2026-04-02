@@ -13,7 +13,7 @@ import asyncio
 import threading
 import concurrent.futures
 from datetime import datetime, timedelta
-from typing import Optional, Callable, TypeVar, Any
+from typing import Optional, Callable, TypeVar
 from enum import Enum
 from dataclasses import dataclass, field
 
@@ -86,8 +86,6 @@ def classify_error(error: Exception) -> ErrorType:
         ErrorType classification
     """
     error_str = str(error).lower()
-    error_type = type(error).__name__.lower()
-    
     # Hardware errors
     if any(x in error_str for x in ['i2c', 'spi', 'gpio', 'device', 'sensor', 'hardware']):
         return ErrorType.HARDWARE
@@ -290,7 +288,7 @@ class CircuitBreaker:
             
             return result
             
-        except Exception as e:
+        except Exception:
             # Failure - update state
             self.state.failures += 1
             self.state.last_failure_time = datetime.now()

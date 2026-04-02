@@ -78,7 +78,7 @@ class SpeechToText:
             return False  # Don't retry or print warnings again
 
         if self._model_path is None or not self._model_path.exists():
-            print(f"[STT] Model not found. Please download a Vosk model to ~/.anima/models/",
+            print("[STT] Model not found. Please download a Vosk model to ~/.anima/models/",
                   file=sys.stderr, flush=True)
             print("[STT] Small model: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
                   file=sys.stderr, flush=True)

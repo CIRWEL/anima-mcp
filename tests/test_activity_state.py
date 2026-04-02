@@ -11,7 +11,6 @@ from unittest.mock import patch
 from anima_mcp.activity_state import (
     ActivityManager,
     ActivityLevel,
-    ActivityState,
 )
 
 

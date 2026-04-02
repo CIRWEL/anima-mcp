@@ -11,16 +11,14 @@ Loads from ~/.anima/trajectory_last.json (or computes if --compute).
 from __future__ import annotations
 
 import argparse
-import json
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Add project root
 project_root = Path(__file__).parent.parent.resolve()
 sys.path.insert(0, str(project_root))
 
-from anima_mcp.trajectory import (
+from anima_mcp.trajectory import (  # noqa: E402
     TrajectorySignature,
     compute_trajectory_signature,
     load_trajectory,

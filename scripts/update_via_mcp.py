@@ -4,7 +4,6 @@ Update server.py on Pi via MCP connection.
 This script reads the fixed server.py and provides instructions for manual update.
 """
 
-import sys
 import os
 
 # Read the fixed server.py

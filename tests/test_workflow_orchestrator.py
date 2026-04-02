@@ -1,7 +1,7 @@
 """Tests for workflow_orchestrator.py — cross-server workflow coordination."""
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, PropertyMock
+from unittest.mock import MagicMock, AsyncMock, patch
 from datetime import datetime
 from types import SimpleNamespace
 
@@ -11,7 +11,6 @@ from anima_mcp.workflow_orchestrator import (
     WorkflowStep, WorkflowResult, WorkflowStatus,
     UnifiedWorkflowOrchestrator, get_orchestrator,
 )
-from anima_mcp.eisv_mapper import EISVMetrics
 
 
 # ---------------------------------------------------------------------------

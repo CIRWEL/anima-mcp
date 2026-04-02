@@ -126,7 +126,6 @@ def get_drawing_summary() -> Optional[str]:
         conn.close()
         if baseline and baseline["w"] is not None:
             bw = baseline["w"]
-            bc = baseline["c"]
             bs = baseline["s"]
             diffs = []
             if avg_warmth is not None and bw:

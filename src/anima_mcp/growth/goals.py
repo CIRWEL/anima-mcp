@@ -10,9 +10,9 @@ import re
 import json
 import random
 from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, List, Tuple
 
-from .models import Goal, GoalStatus, VisitorFrequency
+from .models import Goal, GoalStatus
 
 
 class GoalsMixin:

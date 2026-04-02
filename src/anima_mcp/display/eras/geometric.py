@@ -12,7 +12,7 @@ was in art_movements/geometric.py (removed, see git history at ed0067d).
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..art_era import EraState
@@ -28,10 +28,10 @@ class GeometricState(EraState):
 
     def intentionality(self) -> float:
         """Shapes are complete forms — high commitment per mark."""
-        I = 0.1
+        intentionality_signal = 0.1
         if self.gesture_remaining > 0:
-            I += 0.5  # Each shape is a committed act
-        return min(1.0, I)
+            intentionality_signal += 0.5  # Each shape is a committed act
+        return min(1.0, intentionality_signal)
 
     def gestures(self) -> List[str]:
         return [

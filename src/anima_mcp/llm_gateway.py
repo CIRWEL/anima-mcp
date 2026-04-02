@@ -13,7 +13,6 @@ Lumen can now genuinely reflect, wonder, and express desires through LLM generat
 
 import os
 import sys
-import asyncio
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
@@ -161,7 +160,7 @@ class LLMGateway:
             return None
 
         try:
-            import httpx
+            import httpx  # noqa: F401
         except ImportError:
             print("[LLMGateway] httpx not installed - pip install httpx", file=sys.stderr, flush=True)
             return None

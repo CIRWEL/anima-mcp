@@ -10,9 +10,6 @@ import json
 import logging
 import os
 from typing import Optional, Dict, Any, TYPE_CHECKING
-from datetime import datetime
-
-logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .identity.store import CreatureIdentity
@@ -27,6 +24,8 @@ from .eisv_mapper import (
 )
 from .anima import Anima
 from .sensors.base import SensorReadings
+
+logger = logging.getLogger(__name__)
 
 
 class _AnimaSnapshot:
@@ -95,7 +94,8 @@ class UnitaresBridge:
         Creates a new session if the event loop has changed (e.g. broker's
         _run_async_in_background creates a fresh loop per call).
         """
-        import asyncio, aiohttp
+        import asyncio
+        import aiohttp
         current_loop = asyncio.get_running_loop()
         # Recreate session if loop changed or session is closed
         if (self._http_session is not None
@@ -913,4 +913,3 @@ async def check_governance(
     """
     bridge = UnitaresBridge(unitares_url=unitares_url)
     return await bridge.check_in(anima, readings, neural_weight, physical_weight)
-

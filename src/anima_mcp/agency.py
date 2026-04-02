@@ -18,7 +18,7 @@ This creates a closed loop: action → consequence → learning → better actio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional, Dict, List, Tuple, Any, Callable
+from typing import Optional, Dict, List, Tuple, Any
 from enum import Enum
 from collections import deque
 import json
@@ -313,7 +313,7 @@ class ActionSelector:
                     Action(
                         ActionType.LED_BRIGHTNESS,
                         {"direction": brightness_change},
-                        motivation=f"Adjusting warmth expression",
+                        motivation="Adjusting warmth expression",
                     ),
                     self._get_action_value("led_brightness") + abs(direction) * 0.4,
                 ))
@@ -358,7 +358,7 @@ class ActionSelector:
                     elif action.action_type == ActionType.FOCUS_ATTENTION and pred_recovery > 0.6:
                         # High predicted recovery → more willing to explore
                         boost = pred_recovery * 0.2
-                        action.motivation += f" (confident in recovery)"
+                        action.motivation += " (confident in recovery)"
                     if boost > 0:
                         candidates[i] = (action, value + boost)
             except Exception:

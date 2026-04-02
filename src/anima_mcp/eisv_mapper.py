@@ -85,9 +85,9 @@ def anima_to_eisv(
         E = pw * anima.warmth + nw * neural_energy
 
     # Integrity (I): Clarity + Alpha power (awareness)
-    I = anima.clarity
+    integrity = anima.clarity
     if has_neural and getattr(readings, 'eeg_alpha_power', None) is not None:
-        I = pw * anima.clarity + nw * readings.eeg_alpha_power
+        integrity = pw * anima.clarity + nw * readings.eeg_alpha_power
     
     # Entropy (S): Inverse of Stability (high stability = low entropy)
     # Stability incorporates Theta/Delta (deep stability)
@@ -105,7 +105,7 @@ def anima_to_eisv(
     # Clamp to [0, 1] range
     return EISVMetrics(
         energy=max(0.0, min(1.0, E)),
-        integrity=max(0.0, min(1.0, I)),
+        integrity=max(0.0, min(1.0, integrity)),
         entropy=max(0.0, min(1.0, S)),
         void=max(0.0, min(1.0, V))
     )
@@ -353,4 +353,3 @@ def compute_confidence(
             confidence -= transition_penalty
 
     return max(0.05, min(1.0, confidence))
-

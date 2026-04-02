@@ -47,12 +47,10 @@ class MindMixin:
             font_medium = fonts['medium']
             font_title = fonts['title']
             font_tiny = fonts['tiny']
-            font_micro = fonts['micro']
 
             from .design import lighten_color, dim_color
 
             DIM = COLORS.TEXT_DIM
-            SECONDARY = COLORS.TEXT_SECONDARY
 
             # Band colors from design system — each band has a distinct identity
             bands = [
@@ -195,7 +193,6 @@ class MindMixin:
             f_title = fonts['title']
             f_small = fonts['small']
             f_tiny = fonts['tiny']
-            f_micro = fonts['micro']
 
             DIM = COLORS.TEXT_DIM
             SECONDARY = COLORS.TEXT_SECONDARY
@@ -373,7 +370,7 @@ class MindMixin:
                                 readings=readings, anima=anima
                             )
                             self._learning_cache_time = time.time()
-                            print(f"[Learning] Background refresh complete", file=sys.stderr, flush=True)
+                            print("[Learning] Background refresh complete", file=sys.stderr, flush=True)
                         finally:
                             self._learning_cache_refreshing = False
                     threading.Thread(target=_bg_refresh, daemon=True).start()
@@ -407,7 +404,6 @@ class MindMixin:
                 return
 
             # Design system palette
-            DIM      = COLORS.TEXT_DIM
             SECOND   = COLORS.TEXT_SECONDARY
             C_OK     = COLORS.SOFT_GREEN
             C_WARN   = COLORS.SOFT_YELLOW
@@ -430,7 +426,6 @@ class MindMixin:
 
             # Get comfort zones from summary
             comfort_zones = summary.get("comfort_zones", [])
-            cal = summary.get("current_calibration", {})
 
             # Find humidity and temp zones
             humidity_zone = next((z for z in comfort_zones if z["sensor"] == "humidity"), None)
@@ -777,12 +772,11 @@ class MindMixin:
             return
 
         try:
-            from .design import lighten_color, blend_color
+            from .design import blend_color
 
             image, draw = self._display._create_canvas(COLORS.BG_DARK)
             fonts = self._get_fonts()
             f_title = fonts['title']
-            f_small = fonts['small']
             f_tiny = fonts['tiny']
             f_micro = fonts['micro']
             DIM = COLORS.TEXT_DIM
@@ -925,7 +919,6 @@ class MindMixin:
             return
 
         try:
-            from .design import lighten_color
 
             image, draw = self._display._create_canvas(COLORS.BG_DARK)
             fonts = self._get_fonts()
@@ -933,7 +926,6 @@ class MindMixin:
             f_small = fonts['small']
             f_tiny = fonts['tiny']
             f_micro = fonts['micro']
-            f_medium = fonts['medium']
             DIM = COLORS.TEXT_DIM
             SECONDARY = COLORS.TEXT_SECONDARY
 

@@ -6,7 +6,6 @@ Replaces fixed calibration midpoints with experience-derived ones.
 a fixed developer constant.
 """
 
-import pytest
 from anima_mcp.calibration_drift import DimensionDrift, CalibrationDrift
 
 

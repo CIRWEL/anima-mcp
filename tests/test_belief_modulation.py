@@ -1,6 +1,5 @@
 """Tests for generalized belief-based sensor-to-anima edge modulation."""
 
-import pytest
 from unittest.mock import MagicMock
 from anima_mcp.self_schema import (
     extract_self_schema,

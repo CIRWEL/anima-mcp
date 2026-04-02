@@ -8,11 +8,9 @@ Falls back to image generation (no display) on Mac.
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional, Tuple
-import io
 import json
 import math
 import sys
-import traceback
 from pathlib import Path
 
 try:
@@ -22,7 +20,7 @@ except ImportError:
     HAS_PIL = False
 
 from .face import FaceState, EyeState, MouthState
-from .design import COLORS, Timing, radial_gradient_color, blend_color
+from .design import Timing, radial_gradient_color
 
 
 # Display dimensions (BrainCraft HAT)

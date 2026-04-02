@@ -2,7 +2,6 @@
 
 from anima_mcp.eisv.expression import (
     ExpressionGenerator,
-    ExpressionPattern,
     StudentExpressionGenerator,
     translate_expression,
     shape_to_lumen_trigger,

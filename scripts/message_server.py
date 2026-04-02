@@ -51,7 +51,7 @@ def http_call_tool(tool_name: str, arguments: dict = None, timeout: int = 10) ->
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             result = json.loads(resp.read().decode())
-            if result.get("success") == False:
+            if not result.get("success"):
                 return False, result.get("error", "Tool call failed")
             return True, json.dumps(result.get("result", result))
     except urllib.error.HTTPError as e:
@@ -640,16 +640,16 @@ print("ok")
 
 
 def main():
-    print(f"╭──────────────────────────────────────────╮")
-    print(f"│  Lumen Control Server                    │")
+    print("╭──────────────────────────────────────────╮")
+    print("│  Lumen Control Server                    │")
     print(f"│  http://localhost:{PORT}                    │")
-    print(f"╰──────────────────────────────────────────╯")
+    print("╰──────────────────────────────────────────╯")
     print()
     if LUMEN_HTTP_URL:
-        print(f"  Mode: HTTP (preferred)")
+        print("  Mode: HTTP (preferred)")
         print(f"  URL:  {LUMEN_HTTP_URL}")
     else:
-        print(f"  Mode: SSH (fallback)")
+        print("  Mode: SSH (fallback)")
     print(f"  SSH:  {PI_USER}@{PI_HOST}")
     print()
     print("Endpoints:")

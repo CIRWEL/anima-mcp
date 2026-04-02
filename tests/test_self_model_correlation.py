@@ -8,12 +8,9 @@ Covers audit findings:
 
 import math
 import pytest
-import tempfile
-import os
-from pathlib import Path
 from datetime import datetime
 
-from anima_mcp.self_model import SelfModel, SelfBelief
+from anima_mcp.self_model import SelfModel
 
 
 @pytest.fixture

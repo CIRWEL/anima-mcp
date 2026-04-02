@@ -6,7 +6,6 @@ Run on Pi to diagnose display loop issues.
 
 import sys
 import os
-import time
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -46,7 +45,7 @@ try:
     readings = sensors.read()
     anima = sense_self(readings)
     
-    print(f"   Anima state:")
+    print("   Anima state:")
     print(f"     warmth={anima.warmth:.3f}")
     print(f"     clarity={anima.clarity:.3f}")
     print(f"     stability={anima.stability:.3f}")
@@ -57,7 +56,7 @@ try:
         anima.stability, anima.presence
     )
     
-    print(f"   LED colors:")
+    print("   LED colors:")
     print(f"     LED 0: {state.led0}")
     print(f"     LED 1: {state.led1}")
     print(f"     LED 2: {state.led2}")

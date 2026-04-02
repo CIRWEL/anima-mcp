@@ -14,7 +14,6 @@ from urllib.parse import urlencode
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationParams,
-    OAuthAuthorizationServerProvider,
     OAuthToken,
 )
 from mcp.shared.auth import OAuthClientInformationFull

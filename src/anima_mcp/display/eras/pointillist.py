@@ -10,7 +10,7 @@ Inspired by Seurat and Signac, adapted for Lumen's 240x240 canvas.
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..art_era import EraState
@@ -31,12 +31,12 @@ class PointillistState(EraState):
 
     def intentionality(self) -> float:
         """Working within a density zone = committed."""
-        I = 0.1
+        intentionality_signal = 0.1
         if self.zone_remaining > 0:
-            I += 0.4  # Zone work is committed
+            intentionality_signal += 0.4  # Zone work is committed
         if self.gesture_remaining > 0:
-            I += min(0.2, self.gesture_remaining / 30.0 * 0.2)
-        return min(1.0, I)
+            intentionality_signal += min(0.2, self.gesture_remaining / 30.0 * 0.2)
+        return min(1.0, intentionality_signal)
 
     def gestures(self) -> List[str]:
         return ["single", "pair", "trio"]

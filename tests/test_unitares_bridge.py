@@ -5,7 +5,6 @@ Validates governance integration and fallback behavior.
 """
 
 import pytest
-import asyncio
 import json
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock

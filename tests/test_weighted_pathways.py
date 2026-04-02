@@ -426,7 +426,7 @@ class TestIntegrationWithActionSelector:
 
     def test_pathway_multiplier_bounds(self, tmp_path):
         """Pathway multiplier is bounded between 0.25 and 4.0."""
-        from anima_mcp.agency import ActionSelector, ActionType
+        from anima_mcp.agency import ActionSelector
 
         db_path = str(tmp_path / "test_bounds.db")
         selector = ActionSelector(db_path=db_path)

@@ -7,10 +7,9 @@ If a pipeline breaks (wrong parameter name, missing kwarg, field rename),
 these tests catch it.
 """
 
-import time
 import pytest
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from conftest import make_anima, make_readings
 
@@ -24,7 +23,7 @@ class TestTrajectoryToPrimitiveLanguageWiring:
 
     def test_student_model_tokens_reach_primitive_selection(self, tmp_path):
         """Student model output actually influences which tokens are selected."""
-        from anima_mcp.eisv.expression import StudentExpressionGenerator, translate_expression
+        from anima_mcp.eisv.expression import translate_expression
         from anima_mcp.primitive_language import PrimitiveLanguageSystem
 
         # Build a trajectory window (5 stable states)
@@ -297,7 +296,7 @@ class TestAnimaToGovernanceWiring:
     @pytest.mark.asyncio
     async def test_bridge_drawing_eisv_reaches_payload(self):
         """drawing_eisv kwarg is included in the UNITARES call payload."""
-        from unittest.mock import AsyncMock, patch
+        from unittest.mock import AsyncMock
         from anima_mcp.unitares_bridge import UnitaresBridge
 
         bridge = UnitaresBridge(unitares_url="http://fake:8767/mcp/")

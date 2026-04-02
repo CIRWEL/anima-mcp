@@ -6,7 +6,6 @@ coherence dynamics in Lumen's drawing system.
 """
 
 import math
-import pytest
 
 from anima_mcp.display.screens import DrawingEISV, DrawingIntent, _EISV_PARAMS
 

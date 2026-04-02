@@ -5,8 +5,7 @@ Renders sensors, identity, diagnostics, and health screens.
 """
 
 import sys
-import time
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 
 from .design import COLORS
 from ..anima import Anima
@@ -82,11 +81,16 @@ class InfoMixin:
 
             temp = readings.ambient_temp_c
             if temp is not None:
-                if temp > 35:   feel, color = "hot",  C_HOT
-                elif temp > 25: feel, color = "warm", C_WARM
-                elif temp < 10: feel, color = "cold", C_COOL
-                elif temp < 18: feel, color = "cool", C_COOL
-                else:           feel, color = "mild", C_OK
+                if temp > 35:
+                    feel, color = "hot", C_HOT
+                elif temp > 25:
+                    feel, color = "warm", C_WARM
+                elif temp < 10:
+                    feel, color = "cold", C_COOL
+                elif temp < 18:
+                    feel, color = "cool", C_COOL
+                else:
+                    feel, color = "mild", C_OK
                 frac = max(0.0, min(1.0, temp / 50.0))
                 env_gauges.append(("temp", f"{temp:.1f}\u00b0C", frac, color, feel))
             else:
@@ -94,9 +98,12 @@ class InfoMixin:
 
             hum = readings.humidity_pct
             if hum is not None:
-                if hum < 30:   feel, color = "dry",  C_WARM
-                elif hum > 70: feel, color = "damp", C_COOL
-                else:          feel, color = "ok",   C_OK
+                if hum < 30:
+                    feel, color = "dry", C_WARM
+                elif hum > 70:
+                    feel, color = "damp", C_COOL
+                else:
+                    feel, color = "ok", C_OK
                 frac = max(0.0, min(1.0, hum / 100.0))
                 env_gauges.append(("humidity", f"{hum:.0f}%", frac, color, feel))
             else:
@@ -104,11 +111,16 @@ class InfoMixin:
 
             light = readings.light_lux
             if light is not None:
-                if light > 1000:  feel, color = "vivid",  C_WARM
-                elif light > 500: feel, color = "bright", C_WARM
-                elif light < 5:   feel, color = "dark",   C_VIO
-                elif light < 50:  feel, color = "dim",    C_VIO
-                else:             feel, color = "soft",   (150, 180, 200)
+                if light > 1000:
+                    feel, color = "vivid", C_WARM
+                elif light > 500:
+                    feel, color = "bright", C_WARM
+                elif light < 5:
+                    feel, color = "dark", C_VIO
+                elif light < 50:
+                    feel, color = "dim", C_VIO
+                else:
+                    feel, color = "soft", (150, 180, 200)
                 frac = max(0.0, min(1.0, light / 2000.0))
                 env_gauges.append(("light", f"{light:.0f} lux", frac, color, feel))
             else:
@@ -273,7 +285,7 @@ class InfoMixin:
             if hasattr(self._display, 'render_colored_text'):
                 self._display.render_colored_text(lines_with_colors, (10, 10))
             else:
-                self._display.render_text("\n".join(l for l, _ in lines_with_colors), (10, 10))
+                self._display.render_text("\n".join(label for label, _ in lines_with_colors), (10, 10))
         else:
             self._display.render_text("sensors\n\nno data", (10, 10), color=COLORS.TEXT_DIM)
 
@@ -446,7 +458,7 @@ class InfoMixin:
         if hasattr(self._display, 'render_colored_text'):
             self._display.render_colored_text(lines_with_colors, (10, 10))
         else:
-            self._display.render_text("\n".join(l for l, _ in lines_with_colors), (10, 10))
+            self._display.render_text("\n".join(label for label, _ in lines_with_colors), (10, 10))
 
     def _render_diagnostics(self, anima: Optional[Anima], readings: Optional[SensorReadings], governance: Optional[Dict[str, Any]]):
         """Render diagnostics screen — anima state, mood, governance, trajectory."""
@@ -676,8 +688,10 @@ class InfoMixin:
             margin = governance.get('margin', '')
             source = governance.get('source', '')
             lines.append(f"gov: {action}")
-            if margin: lines.append(f"margin: {margin}")
-            if source: lines.append(f"source: {source}")
+            if margin:
+                lines.append(f"margin: {margin}")
+            if source:
+                lines.append(f"source: {source}")
             eisv = governance.get('eisv')
             if eisv:
                 lines.append(f"EISV: E={eisv.get('E',0):.0%} I={eisv.get('I',0):.0%} S={eisv.get('S',0):.0%} V={eisv.get('V',0):.0%}")

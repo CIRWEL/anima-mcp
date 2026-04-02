@@ -14,10 +14,9 @@ cannot mask physical tensions that exist in the body.
 
 from __future__ import annotations
 
-import math
 import statistics
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -215,7 +214,6 @@ class ValueTensionTracker:
         if len(history) < 5:
             return 0.01  # conservative default
 
-        mean_g = statistics.mean(history)
         stdev_g = statistics.stdev(history)
         return max(2.0 * stdev_g, 0.005)  # floor to avoid zero threshold
 

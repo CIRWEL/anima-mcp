@@ -8,11 +8,9 @@ Run with: pytest tests/test_memory_consolidation.py -v
 import json
 import pytest
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from anima_mcp.anima_history import (
     AnimaHistory,
-    AnimaSnapshot,
     DaySummary,
 )
 

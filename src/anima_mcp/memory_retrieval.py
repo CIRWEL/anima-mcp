@@ -11,10 +11,9 @@ This module:
 4. Tracks which memories were helpful (for future retrieval)
 """
 
-import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional, Dict, List, Tuple, Any
+from typing import Optional, Dict, List, Any
 from collections import deque
 import json
 from pathlib import Path

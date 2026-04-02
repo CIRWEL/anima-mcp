@@ -6,7 +6,6 @@ Run with: pytest tests/test_circadian_dream.py -v
 """
 
 import time
-import json
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock

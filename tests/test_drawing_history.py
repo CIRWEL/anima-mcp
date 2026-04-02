@@ -1,5 +1,4 @@
 """Tests for drawing_history table in anima.db."""
-import sqlite3
 import pytest
 
 from anima_mcp.identity.store import IdentityStore

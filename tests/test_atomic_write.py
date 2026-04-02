@@ -1,7 +1,6 @@
 """Tests for atomic JSON write utility."""
 
 import json
-import os
 import pytest
 from pathlib import Path
 from unittest.mock import patch

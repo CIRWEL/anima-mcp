@@ -17,10 +17,6 @@ from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.display.face import (
     derive_face_state, face_to_ascii, FaceState,
     EyeState, MouthState,
-    WARMTH_FREEZING, WARMTH_COLD, WARMTH_COOL, WARMTH_COMFORTABLE, WARMTH_HOT,
-    CLARITY_FOGGY, CLARITY_DROWSY, CLARITY_CLEAR, CLARITY_ALERT,
-    STABILITY_DISTRESSED, STABILITY_UNSTABLE, STABILITY_STABLE, STABILITY_GROUNDED,
-    WELLNESS_GOOD, WELLNESS_OK,
 )
 
 

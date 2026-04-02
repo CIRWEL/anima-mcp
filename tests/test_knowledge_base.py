@@ -5,9 +5,7 @@ categorization, extraction, and insight summary.
 Run with: pytest tests/test_knowledge_base.py -v
 """
 
-import time
 import pytest
-from pathlib import Path
 
 from anima_mcp.knowledge import (
     KnowledgeBase, Insight,

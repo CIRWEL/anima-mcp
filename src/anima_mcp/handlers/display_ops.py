@@ -4,7 +4,6 @@ Handlers: capture_screen, show_face, diagnostics, manage_display.
 """
 
 import json
-import sys
 
 from mcp.types import TextContent, ImageContent
 
@@ -75,11 +74,10 @@ async def handle_capture_screen(arguments: dict) -> list[TextContent | ImageCont
 
 async def handle_show_face(arguments: dict) -> list[TextContent]:
     """Show face on display (or return ASCII art if no display). Safe, never crashes."""
-    from ..accessors import _get_store, _get_sensors, _get_display, _get_readings_and_anima
+    from ..accessors import _get_store, _get_display, _get_readings_and_anima
     from ..display import derive_face_state, face_to_ascii
 
     store = _get_store()
-    sensors = _get_sensors()
     display = _get_display()
 
     # Read from shared memory (broker) or fallback to sensors

@@ -6,7 +6,6 @@ Run with: pytest tests/test_growth_gaps.py -v
 """
 
 import pytest
-from datetime import datetime
 
 from anima_mcp.growth import GrowthSystem
 

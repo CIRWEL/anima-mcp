@@ -1,7 +1,7 @@
 """Tests for AnimaOAuthProvider — in-memory OAuth 2.1 provider."""
 import time
 import pytest
-from anima_mcp.oauth_provider import AnimaOAuthProvider, AuthCodeEntry
+from anima_mcp.oauth_provider import AnimaOAuthProvider
 from mcp.shared.auth import OAuthClientInformationFull
 
 

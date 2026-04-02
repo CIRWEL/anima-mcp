@@ -11,7 +11,7 @@ Organic, flowing compositions that emerge from the underlying mathematics.
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple
 
 from ..art_era import EraState
@@ -34,14 +34,14 @@ class FieldState(EraState):
 
     def intentionality(self) -> float:
         """Following a flow line = committed."""
-        I = 0.1
+        intentionality_signal = 0.1
         if self.flow_steps > 0 and self.flow_max > 0:
             # Deeper into a flow line = more committed
             progress = self.flow_steps / max(self.flow_max, 1)
-            I += 0.4 * min(1.0, progress)
+            intentionality_signal += 0.4 * min(1.0, progress)
         if self.gesture_remaining > 0:
-            I += min(0.2, self.gesture_remaining / 25.0 * 0.2)
-        return min(1.0, I)
+            intentionality_signal += min(0.2, self.gesture_remaining / 25.0 * 0.2)
+        return min(1.0, intentionality_signal)
 
     def gestures(self) -> List[str]:
         return ["flow_dot", "flow_dash", "flow_strand"]

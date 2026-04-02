@@ -1,6 +1,5 @@
 """Tests for brightness simplification (Lighthouse LED plan Task 2)."""
 
-import pytest
 
 from anima_mcp.display.leds import brightness as brightness_mod
 from anima_mcp.display.leds.types import LEDState

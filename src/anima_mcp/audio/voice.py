@@ -16,10 +16,9 @@ import time
 import threading
 from typing import Optional, Callable, List
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .mic import MicCapture
-from .stt import SpeechToText, TranscriptionResult
+from .stt import SpeechToText
 from .tts import TextToSpeech
 from .speaker import Speaker
 

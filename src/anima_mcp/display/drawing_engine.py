@@ -11,7 +11,7 @@ and delegates to ArtEra instances.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Tuple, List
+from typing import Optional, Dict, Tuple, List
 from pathlib import Path
 from datetime import datetime
 import time
@@ -244,7 +244,7 @@ class CanvasState:
 
         # Validate data is a dict
         if not isinstance(data, dict):
-            print(f"[Canvas] Invalid canvas data (not a dict), starting fresh", file=sys.stderr, flush=True)
+            print("[Canvas] Invalid canvas data (not a dict), starting fresh", file=sys.stderr, flush=True)
             try:
                 path.unlink()
             except Exception:
@@ -479,7 +479,7 @@ class DrawingState:
     """
     # EISV core (preserved)
     E: float = 0.4    # Drawing energy (now derived from attention)
-    I: float = 0.2    # Intentionality (proprioceptive: locks, orbits, gesture runs)
+    I: float = 0.2    # noqa: E741 - EISV intentionality symbol
     S: float = 0.5    # Behavioral entropy (gesture variety)
     V: float = 0.0    # Accumulated I-E imbalance
     gesture_history: List[str] = field(default_factory=list)
@@ -913,8 +913,6 @@ class DrawingEngine:
         # (e.g. geometric with gesture_remaining=1) report their in-gesture value.
         I_signal = era_state.intentionality() if era_state else 0.1
 
-        # Detect gesture switch for fatigue tracking
-        old_gesture = era_state.gesture
         self.active_era.place_mark(
             era_state, self.canvas,
             self.intent.focus_x, self.intent.focus_y,
@@ -992,7 +990,6 @@ class DrawingEngine:
                     intentionality=I_signal,
                 )
             except Exception as e:
-                import sys
                 print(f"[DrawingEngine] record_drawing_state failed: {e}", file=sys.stderr, flush=True)
 
     def _eisv_step(self) -> Tuple[float, float, float]:
@@ -1337,7 +1334,7 @@ class DrawingEngine:
         self.intent.era_state = self.active_era.create_state()
         if persist:
             self.canvas.save_to_disk()
-        print(f"[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
+        print("[Canvas] Cleared - pausing drawing for 5s", file=sys.stderr, flush=True)
 
         # Generate drawing goal for next canvas
         try:

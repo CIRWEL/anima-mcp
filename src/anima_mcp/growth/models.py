@@ -4,7 +4,6 @@ Growth System data models - dataclasses and enums.
 All shared types used across the growth package.
 """
 
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum

@@ -19,9 +19,7 @@ Covers:
 """
 
 import json
-import os
 import signal
-import sys
 import time
 import asyncio
 import concurrent.futures
@@ -30,13 +28,13 @@ import pytest
 from datetime import datetime
 from pathlib import Path
 from unittest.mock import (
-    MagicMock, AsyncMock, patch, PropertyMock, call,
+    MagicMock, AsyncMock, patch,
 )
 
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.anima import Anima, MoodMomentum
 from anima_mcp.inner_life import InnerLife
-from anima_mcp.eisv_mapper import anima_to_eisv, EISVMetrics
+from anima_mcp.eisv_mapper import anima_to_eisv
 from anima_mcp.metacognition import (
     MetacognitiveMonitor, Prediction, PredictionError,
 )

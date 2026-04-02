@@ -1,6 +1,5 @@
 """Tests for OAuth wiring in tool_registry.py."""
 import os
-import pytest
 from unittest.mock import patch
 
 

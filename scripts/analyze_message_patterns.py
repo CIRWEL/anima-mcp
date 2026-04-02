@@ -13,11 +13,10 @@ Usage:
 """
 
 import json
-import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from collections import Counter
-from typing import List, Dict, Any
+from typing import List, Dict
 
 
 def load_messages() -> List[Dict]:
@@ -205,9 +204,9 @@ def correlate_with_shutdowns(messages: List[Dict]):
         after_text = gap_info["after"]["text"][:40]
         
         if before_text == after_text:
-            print(f"    Same feeling before/after ← State persisted")
+            print("    Same feeling before/after ← State persisted")
         else:
-            print(f"    Different feeling after ← State changed")
+            print("    Different feeling after ← State changed")
         print()
     
     # Check if message content changes after shutdowns

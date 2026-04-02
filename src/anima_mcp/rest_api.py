@@ -675,7 +675,7 @@ async def rest_layers(request):
     try:
         from .accessors import (
             _get_readings_and_anima, _get_store, _get_last_governance_decision,
-            _get_activity, _get_schema_hub,
+            _get_schema_hub,
         )
 
         readings, anima = _get_readings_and_anima()
@@ -807,7 +807,6 @@ async def rest_schema_data(request):
         if schema is None:
             try:
                 from .self_schema import get_current_schema
-                from .growth import get_growth_system
                 from .self_model import get_self_model
                 store = _get_store()
                 identity = store.get_identity() if store else None

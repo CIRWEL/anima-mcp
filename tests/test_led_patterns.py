@@ -1,7 +1,6 @@
 """Tests for pattern changes — warm-only signals (Lighthouse LED plan Task 3)."""
 
 import time
-import pytest
 
 from anima_mcp.display.leds.patterns import detect_state_change, get_pattern_colors
 from anima_mcp.display.leds.types import LEDState

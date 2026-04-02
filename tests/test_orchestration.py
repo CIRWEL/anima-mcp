@@ -4,15 +4,10 @@ Verifies the wake → main loop → sleep lifecycle works correctly with
 all subsystems mocked. Each test is isolated (fresh temp dir, fresh DB).
 """
 
-import asyncio
-import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, AsyncMock
 
-import pytest
 
 import anima_mcp.server as server
 import anima_mcp.accessors as accessors
@@ -143,7 +138,6 @@ def test_wake_handles_db_lock(tmp_path, monkeypatch):
     call_count = 0
 
     original_init = None
-    from anima_mcp.identity import IdentityStore
 
     class LockingStore:
         def __init__(self, *args, **kwargs):

@@ -174,7 +174,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
     try:
         # Stash local changes if requested (only when .git exists)
         if stash:
-            stash_result = subprocess.run(
+            subprocess.run(
                 ["git", "stash", "push", "-m", "Auto-stash before git_pull"],
                 cwd=repo_root,
                 capture_output=True,

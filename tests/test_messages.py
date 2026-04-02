@@ -2,13 +2,12 @@
 
 import time
 import pytest
-from unittest.mock import patch
 
 import anima_mcp.messages as msg_module
 from anima_mcp.messages import (
     MessageBoard, Message,
     MESSAGE_TYPE_OBSERVATION, MESSAGE_TYPE_QUESTION,
-    MESSAGE_TYPE_USER, MESSAGE_TYPE_AGENT,
+    MESSAGE_TYPE_USER,
 )
 
 

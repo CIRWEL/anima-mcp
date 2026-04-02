@@ -15,12 +15,10 @@ Covers:
 """
 
 import pytest
-import json
 from datetime import datetime, timedelta
-from pathlib import Path
 
 from anima_mcp.preferences import (
-    PreferenceSystem, Preference, Experience,
+    PreferenceSystem, Preference,
 )
 
 

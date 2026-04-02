@@ -44,7 +44,7 @@ if rows:
     if not lumen:
         # Use the one with most awakenings
         lumen = max(rows, key=lambda r: r['total_awakenings'])
-        print(f"\nNo creature named 'Lumen' found.")
+        print("\nNo creature named 'Lumen' found.")
         print(f"Using creature with most awakenings ({lumen['total_awakenings']}):")
     
     print(f"\nexport ANIMA_ID='{lumen['creature_id']}'")

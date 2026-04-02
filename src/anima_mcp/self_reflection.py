@@ -18,7 +18,7 @@ import sqlite3
 import json
 import sys
 from collections import namedtuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
@@ -948,11 +948,9 @@ class SelfReflectionSystem:
 
         # Detect sensor and dimension from keywords
         sensor_key = None
-        sensor_name = None
         for key, keywords in _SENSOR_KEYWORDS.items():
             if any(kw in text_lower for kw in keywords):
                 sensor_key = key
-                sensor_name = key  # used in log
                 break
 
         dimension = None
@@ -988,8 +986,6 @@ class SelfReflectionSystem:
                                       detail=f"insufficient data ({len(rows)} rows)")
 
         # Extract per-dimension correlations using existing machinery
-        pattern = self._analyze_sensor_correlation(rows, sensor_key, sensor_key)
-
         # _analyze_sensor_correlation returns None if <10 readings with that sensor,
         # or if no dimension has |diff| >= 0.1. We need finer granularity:
         # compute the specific dimension's diff ourselves.

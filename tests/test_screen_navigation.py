@@ -6,7 +6,6 @@ next_in_group, previous_in_group, and verifies msgs group cycling behavior.
 
 import pytest
 from unittest.mock import MagicMock, patch
-from pathlib import Path
 
 from anima_mcp.display.screens import ScreenRenderer, ScreenMode
 

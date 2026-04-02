@@ -12,7 +12,7 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 try:
-    from anima_mcp.display.leds import get_led_display, LEDDisplay
+    from anima_mcp.display.leds import get_led_display
     
     print("=" * 60)
     print("LED Display Diagnostic Test")

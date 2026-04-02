@@ -12,10 +12,9 @@ Usage:
 """
 
 import json
-import sys
 import sqlite3
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 
 
 def check_message_board():
@@ -275,7 +274,7 @@ def check_anima_state():
             print("   Lumen hasn't recorded any states yet")
             return
         
-        print(f"Recent anima states (last 10):")
+        print("Recent anima states (last 10):")
         print()
         
         for row in rows:

@@ -56,7 +56,6 @@ class MemoriesMixin:
         if not identity or not anima:
             return None
 
-        now = datetime.now()
         messages = []
 
         # Check age milestones

@@ -3,7 +3,7 @@
 import time
 import pytest
 
-from anima_mcp.identity.store import IdentityStore, CreatureIdentity
+from anima_mcp.identity.store import IdentityStore
 
 CREATURE_ID = "test-creature-001"
 

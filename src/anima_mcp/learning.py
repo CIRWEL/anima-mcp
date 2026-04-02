@@ -13,7 +13,6 @@ import sqlite3
 from pathlib import Path
 
 from .config import NervousSystemCalibration, ConfigManager
-from .sensors.base import SensorReadings
 
 
 class AdaptiveLearner:

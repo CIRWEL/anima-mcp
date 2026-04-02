@@ -78,7 +78,7 @@ else:
     try:
         sensors = get_sensors()
         readings = sensors.read()
-        print(f"   ✓ Direct sensor read successful")
+        print("   ✓ Direct sensor read successful")
         print(f"   Available sensors: {sensors.available_sensors()}")
         print(f"   Is Pi: {sensors.is_pi()}")
         print(f"   Readings: temp={readings.ambient_temp_c}°C, humidity={readings.humidity_pct}%, light={readings.light_lux}lx")

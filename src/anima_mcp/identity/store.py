@@ -502,7 +502,7 @@ class IdentityStore:
 
     def record_drawing_state(
         self,
-        E: float, I: float, S: float, V: float, C: float,
+        E: float, I: float, S: float, V: float, C: float,  # noqa: E741 - EISV symbols
         marks: int, phase: str | None, era: str | None,
         energy: float, curiosity: float, engagement: float, fatigue: float,
         arc_phase: str | None, gesture_entropy: float,

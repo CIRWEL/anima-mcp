@@ -18,8 +18,7 @@ import pytest
 from datetime import datetime, timedelta
 
 from anima_mcp.primitive_language import (
-    PrimitiveLanguageSystem, PRIMITIVES, TokenCategory,
-    PrimitiveToken, Utterance,
+    PrimitiveLanguageSystem, PRIMITIVES, Utterance,
 )
 
 

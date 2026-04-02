@@ -9,7 +9,6 @@ import json
 import time
 import pytest
 from datetime import datetime
-from unittest.mock import patch
 
 from anima_mcp.experiential_filter import (
     ExperientialFilter,
@@ -17,11 +16,10 @@ from anima_mcp.experiential_filter import (
     DIMENSIONS,
     SALIENCE_MAX,
     SALIENCE_MIN,
-    SOURCE_TO_DIM,
     PREF_TO_SENSOR,
     get_experiential_filter,
 )
-from anima_mcp.anima import sense_self, _sense_warmth, _sense_clarity
+from anima_mcp.anima import sense_self
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.config import NervousSystemCalibration
 

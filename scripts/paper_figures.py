@@ -12,8 +12,6 @@ import json
 import math
 import sqlite3
 import sys
-from collections import defaultdict
-from datetime import datetime
 from pathlib import Path
 
 # Paths

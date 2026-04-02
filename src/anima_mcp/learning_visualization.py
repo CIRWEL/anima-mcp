@@ -11,7 +11,7 @@ Shows:
 
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import sqlite3
 from pathlib import Path
 import json

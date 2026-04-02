@@ -9,8 +9,7 @@ Enables cross-server workflows and orchestration.
 """
 
 import asyncio
-import json
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
 
@@ -149,7 +148,7 @@ class UnifiedWorkflowOrchestrator:
                 anima = sense_self(readings, calibration)
                 
                 return readings, anima
-            except Exception as e:
+            except Exception:
                 # Fall through to direct sensor access
                 pass
         

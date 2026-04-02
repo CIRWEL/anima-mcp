@@ -13,7 +13,6 @@ import json
 import os
 import sqlite3
 import random
-import math
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
@@ -856,7 +855,7 @@ class AssociativeMemory:
             return anticipation
 
         try:
-            from .knowledge import get_relevant_insights, get_knowledge
+            from .knowledge import get_relevant_insights
 
             # Build query from anticipated state
             state_words = []

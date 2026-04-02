@@ -13,7 +13,7 @@ The creature knows "I feel warm" not "E=0.4"
 
 import math
 from copy import copy
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Dict, Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
 from .config import get_calibration, NervousSystemCalibration

@@ -9,8 +9,7 @@ Eras READ coherence and energy from the engine. They do NOT modify EISV math.
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple, Protocol
 
 
@@ -35,10 +34,10 @@ class EraState:
         Base: gesture run length contributes up to 0.3.
         Subclasses add era-specific signals (locks, orbits, grids, etc.).
         """
-        I = 0.1  # baseline
+        intentionality_signal = 0.1
         if self.gesture_remaining > 0:
-            I += min(0.3, self.gesture_remaining / 20.0 * 0.3)
-        return min(1.0, I)
+            intentionality_signal += min(0.3, self.gesture_remaining / 20.0 * 0.3)
+        return min(1.0, intentionality_signal)
 
     def gestures(self) -> List[str]:
         """Return gesture vocabulary for this era (used for entropy normalization)."""

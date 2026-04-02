@@ -28,6 +28,9 @@ __all__ = [
     "blend_colors",
     "derive_led_state",
     "get_shape_color_bias",
+    "transition_color",
     "get_led_display",
     "HAS_DOTSTAR",
+    "EVENT_TO_DANCE",
+    "render_dance",
 ]

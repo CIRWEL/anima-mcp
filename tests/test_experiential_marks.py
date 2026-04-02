@@ -10,8 +10,6 @@ import sqlite3
 from anima_mcp.experiential_marks import (
     ExperientialMarks,
     MARK_CATALOG,
-    MarkDefinition,
-    EarnedMark,
 )
 
 

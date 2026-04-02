@@ -14,9 +14,9 @@ Damping stack (mood vs temperament vs neural): CLAUDE.md "Identity, Continuity, 
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 from .anima import Anima
 from .atomic_write import atomic_json_write

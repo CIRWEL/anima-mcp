@@ -7,9 +7,6 @@ Covers audit findings:
 """
 
 import pytest
-import tempfile
-import os
-from datetime import datetime
 
 from anima_mcp.growth import GrowthSystem
 

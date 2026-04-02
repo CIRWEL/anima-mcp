@@ -16,6 +16,7 @@ import sys
 import psutil
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 from .base import SensorBackend, SensorReadings
 
 
@@ -220,9 +221,9 @@ class PiSensors(SensorBackend):
                 self._aht = result
                 self._failure_counts[sensor_name] = 0
                 self._reinit_attempts[sensor_name] = 0
-                print(f"[PiSensors] AHT20 re-initialized successfully", file=sys.stderr, flush=True)
+                print("[PiSensors] AHT20 re-initialized successfully", file=sys.stderr, flush=True)
             else:
-                print(f"[PiSensors] AHT20 re-init failed", file=sys.stderr, flush=True)
+                print("[PiSensors] AHT20 re-init failed", file=sys.stderr, flush=True)
 
         elif sensor_name == "veml7700":
             def init_light():
@@ -240,9 +241,9 @@ class PiSensors(SensorBackend):
                 self._light_sensor = result
                 self._failure_counts[sensor_name] = 0
                 self._reinit_attempts[sensor_name] = 0
-                print(f"[PiSensors] VEML7700 re-initialized successfully", file=sys.stderr, flush=True)
+                print("[PiSensors] VEML7700 re-initialized successfully", file=sys.stderr, flush=True)
             else:
-                print(f"[PiSensors] VEML7700 re-init failed", file=sys.stderr, flush=True)
+                print("[PiSensors] VEML7700 re-init failed", file=sys.stderr, flush=True)
 
         elif sensor_name == "bmp280":
             def init_bmp():
@@ -259,9 +260,9 @@ class PiSensors(SensorBackend):
                 self._bmp280 = result
                 self._failure_counts[sensor_name] = 0
                 self._reinit_attempts[sensor_name] = 0
-                print(f"[PiSensors] BMP280 re-initialized successfully", file=sys.stderr, flush=True)
+                print("[PiSensors] BMP280 re-initialized successfully", file=sys.stderr, flush=True)
             else:
-                print(f"[PiSensors] BMP280 re-init failed", file=sys.stderr, flush=True)
+                print("[PiSensors] BMP280 re-init failed", file=sys.stderr, flush=True)
 
     def _read_cpu_temp(self) -> float | None:
         """Read Pi CPU temperature from sysfs with retry."""

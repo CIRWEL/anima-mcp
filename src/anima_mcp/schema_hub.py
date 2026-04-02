@@ -11,7 +11,7 @@ See: docs/plans/2026-02-22-schema-hub-design.md
 """
 
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Deque, Dict, List, Optional, TYPE_CHECKING
@@ -24,7 +24,6 @@ if TYPE_CHECKING:
     from .identity.store import CreatureIdentity
     from .growth import GrowthSystem
     from .self_model import SelfModel
-    from .anima_history import AnimaHistory
     from .trajectory import TrajectorySignature
 
 

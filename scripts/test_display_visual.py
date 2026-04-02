@@ -44,7 +44,7 @@ if __name__ == "__main__":
     
     print(f"✅ Saved to: {output_path}")
     print(f"   Size: {WIDTH}x{HEIGHT}")
-    print(f"   Border: 2px, color (25, 35, 45)")
-    print(f"   Background: Black (0, 0, 0)")
+    print("   Border: 2px, color (25, 35, 45)")
+    print("   Background: Black (0, 0, 0)")
     print("\nThis shows what the Pi display will look like instead of grey!")
     print("The border is subtle but visible - confirming the display works.")

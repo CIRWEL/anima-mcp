@@ -17,12 +17,11 @@ This creates a more natural, lifelike presence.
 import json
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple, List
-import math
 
 
 class ActivityLevel(Enum):
@@ -297,8 +296,6 @@ class ActivityManager:
 
     def get_led_settings(self) -> dict:
         """Get LED-specific settings for current state."""
-        settings = self._level_settings[self._current_level]
-
         if self._current_level == ActivityLevel.ACTIVE:
             return {
                 "brightness_override": None,  # Use normal brightness

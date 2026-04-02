@@ -19,80 +19,58 @@ Agent Coordination:
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import signal
 import sys
-import threading
-import uuid
-from datetime import datetime, timedelta
+from collections import deque
+from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
 
-logger = logging.getLogger("anima.server")
-
-from mcp.server import Server
 from mcp.server.stdio import stdio_server
-from .identity import IdentityStore
-from .sensors import get_sensors, SensorBackend, SensorReadings
-from .anima import sense_self_with_memory, Anima
-from .memory import anticipate_state
-from .display import derive_face_state, get_display, DisplayRenderer
+from .sensors import get_sensors
+from .display import derive_face_state, get_display
 from .display.leds import get_led_display
-from .display.screens import ScreenRenderer, ScreenMode
-from .input.brainhat_input import get_brainhat_input, JoystickDirection as InputDirection
-from .next_steps_advocate import get_advocate
-from .eisv_mapper import anima_to_eisv
+from .display.screens import ScreenMode
 from .config import get_calibration
 from .learning import get_learner
-from .messages import add_observation, add_agent_message, add_question, get_unanswered_questions
-from .shared_memory import SharedMemoryClient
-from .growth import get_growth_system
 from .activity_state import get_activity_manager
-from .agency import get_action_selector, ActionType, Action
+from .agency import get_action_selector, ActionType
 from .primitive_language import get_language_system
 from .eisv import get_trajectory_awareness
-from .tool_registry import HANDLERS, get_fastmcp, create_server, HAS_FASTMCP
+from .tool_registry import get_fastmcp, create_server, HAS_FASTMCP
 from .server_context import ServerContext
-from . import accessors as _acc
 from .server_state import (
     # Constants
-    SHM_STALE_THRESHOLD_SECONDS, INPUT_ERROR_LOG_INTERVAL,
+    SHM_GOVERNANCE_STALE_SECONDS as SHM_GOVERNANCE_STALE_SECONDS,
     LOOP_BASE_DELAY_SECONDS, LOOP_MAX_DELAY_SECONDS,
-    INPUT_POLL_INTERVAL_SECONDS, SHUTDOWN_LONG_PRESS_SECONDS,
     METACOG_INTERVAL, AGENCY_INTERVAL, SELF_MODEL_INTERVAL,
     PRIMITIVE_LANG_INTERVAL, VOICE_INTERVAL, GROWTH_INTERVAL,
-    TRAJECTORY_INTERVAL, SHM_GOVERNANCE_STALE_SECONDS, SERVER_GOVERNANCE_FALLBACK_SECONDS,
+    TRAJECTORY_INTERVAL, SERVER_GOVERNANCE_FALLBACK_SECONDS,
     LEARNING_INTERVAL,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
     GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL, META_LEARNING_INTERVAL,
     ERROR_LOG_THROTTLE, STATUS_LOG_THROTTLE, DISPLAY_LOG_THROTTLE,
     WARN_LOG_THROTTLE, SCHEMA_LOG_THROTTLE, SELF_DIALOGUE_LOG_THROTTLE,
-    METACOG_SURPRISE_THRESHOLD, PRIMITIVE_SELF_FEEDBACK_DELAY_SECONDS,
-    SELF_ANSWER_MIN_QUESTION_AGE_SECONDS, DISPLAY_UPDATE_TIMEOUT_SECONDS,
-    MODE_CHANGE_SETTLE_SECONDS, HEAVY_SCREEN_DELAY_SECONDS,
-    NEURAL_SCREEN_DELAY_SECONDS,
-    # Pure helpers
-    is_broker_running as _is_broker_running,
-    readings_from_dict as _readings_from_dict,
+    METACOG_SURPRISE_THRESHOLD, is_broker_running as _is_broker_running,
 )
 
 # SchemaHub, CalibrationDrift, ValueTensionTracker — imported for type hints / lazy init
-from .schema_hub import SchemaHub
-from .calibration_drift import CalibrationDrift
-from .value_tension import ValueTensionTracker
 
 # State accessors (lazy singletons, SHM reads, etc.) — live in accessors.py
 from .accessors import (
-    _get_store, _get_sensors, _get_shm_client, _get_server_bridge,
-    _get_schema_hub, _get_calibration_drift, _get_selfhood_context,
-    _get_metacog_monitor, _get_warm_start_anticipation,
-    _get_readings_and_anima, _get_display, _get_last_shm_data,
-    _get_screen_renderer, _get_leds, _get_growth, _get_display_update_task,
-    _get_activity, _get_last_governance_decision, _get_voice,
-    VOICE_MODE,
+    _get_store as _get_store, _get_sensors as _get_sensors,
+    _get_shm_client as _get_shm_client, _get_server_bridge as _get_server_bridge,
+    _get_schema_hub, _get_calibration_drift as _get_calibration_drift,
+    _get_selfhood_context as _get_selfhood_context, _get_metacog_monitor,
+    _get_warm_start_anticipation as _get_warm_start_anticipation,
+    _get_readings_and_anima, _get_display as _get_display, _get_last_shm_data,
+    _get_screen_renderer as _get_screen_renderer, _get_leds as _get_leds,
+    _get_growth as _get_growth, _get_display_update_task as _get_display_update_task,
+    _get_activity as _get_activity,
+    _get_last_governance_decision as _get_last_governance_decision, _get_voice,
+    VOICE_MODE as VOICE_MODE,
 )
 
 # Server context — mutable state container. Created in wake(), cleared in sleep().
@@ -106,7 +84,7 @@ SERVER_STARTUP_TIME = None
 SERVER_SHUTTING_DOWN = False  # Set during graceful shutdown to reject new requests
 
 # Phase helper functions — delegated to loop_phases.py
-from .loop_phases import (
+from .loop_phases import (  # noqa: E402,F401
     server_governance_fallback as _server_governance_fallback,
     parse_shm_governance_freshness as _parse_shm_governance_freshness,
     compute_lagged_correlations as _compute_lagged_correlations,
@@ -119,6 +97,8 @@ from .loop_phases import (
     self_reflect as _self_reflect,
 )
 
+logger = logging.getLogger("anima.server")
+
 
 async def _update_display_loop():
     """Background task to continuously update display and LEDs."""
@@ -126,7 +106,6 @@ async def _update_display_loop():
         logger.warning("[Loop] No context - wake() may have failed")
         return
     import sys
-    import concurrent.futures
     from .error_recovery import safe_call, safe_call_async
 
     print("[Loop] Starting", file=sys.stderr, flush=True)
@@ -208,12 +187,12 @@ async def _update_display_loop():
                 # Don't respect cooldown on startup (after gap)
                 adapted, new_cal = learner.adapt_calibration(respect_cooldown=False)
                 if adapted:
-                    print(f"[Learning] Startup adaptation successful!", file=sys.stderr, flush=True)
+                    print("[Learning] Startup adaptation successful!", file=sys.stderr, flush=True)
                     print(f"[Learning] Pressure: {new_cal.pressure_ideal:.1f} hPa, Ambient: {new_cal.ambient_temp_min:.1f}-{new_cal.ambient_temp_max:.1f}°C", file=sys.stderr, flush=True)
                 else:
-                    print(f"[Learning] No adaptation needed (calibration already optimal)", file=sys.stderr, flush=True)
+                    print("[Learning] No adaptation needed (calibration already optimal)", file=sys.stderr, flush=True)
             elif gap and gap.total_seconds() > 3600:
-                print(f"[Learning] Gap detected but not enough observations yet (will learn as new data accumulates)", file=sys.stderr, flush=True)
+                print("[Learning] Gap detected but not enough observations yet (will learn as new data accumulates)", file=sys.stderr, flush=True)
         except Exception as e:
             # Don't crash on startup learning errors
             print(f"[Learning] Startup check error (non-fatal): {e}", file=sys.stderr, flush=True)
@@ -254,11 +233,10 @@ async def _update_display_loop():
     mode_change_event = asyncio.Event()
     
     # Start fast input polling task (delegated to input_handler.py)
-    input_task = None
     try:
         from .input_handler import fast_input_poll
         loop = asyncio.get_event_loop()
-        input_task = loop.create_task(fast_input_poll(mode_change_event))
+        loop.create_task(fast_input_poll(mode_change_event))
     except Exception as e:
         print(f"[Input] Failed to start fast polling: {e}", file=sys.stderr, flush=True)
     
@@ -342,9 +320,11 @@ async def _update_display_loop():
                     stability=anima.stability,
                     presence=anima.presence,
                 )
-                if _health: _health.heartbeat("trajectory")
+                if _health:
+                    _health.heartbeat("trajectory")
             except Exception as e:
-                if loop_count % ERROR_LOG_THROTTLE == 1: logger.debug("[TrajectoryAwareness] Error: %s", e)
+                if loop_count % ERROR_LOG_THROTTLE == 1:
+                    logger.debug("[TrajectoryAwareness] Error: %s", e)
 
             # Feed value tension tracker with RAW (pre-drift) anima values.
             # Design principle: tension detection operates on raw dimension values
@@ -376,7 +356,7 @@ async def _update_display_loop():
                     _ctx.satisfaction_history.append(_ml_pref.get_overall_satisfaction(_ml_state))
                     for _dim in ("warmth", "clarity", "stability", "presence"):
                         if _dim not in _ctx.satisfaction_per_dim:
-                            _ctx.satisfaction_per_dim[_dim] = _deque(maxlen=500)
+                            _ctx.satisfaction_per_dim[_dim] = deque(maxlen=500)
                         _ctx.satisfaction_per_dim[_dim].append(
                             _ml_pref._preferences[_dim].current_satisfaction(_ml_state[_dim])
                         )
@@ -447,6 +427,9 @@ async def _update_display_loop():
                     # Pass LED brightness for proprioceptive light prediction:
                     # "knowing my own glow, I can predict what my light sensor will read"
                     _led_brightness_for_pred = None
+                    _led_proprioception = None
+                    if _ctx and _ctx.last_led_state:
+                        _led_proprioception = _ctx.last_led_state.get("proprioception")
                     if _led_proprioception is not None:
                         _led_brightness_for_pred = _led_proprioception.get("brightness")
                     metacog.predict(led_brightness=_led_brightness_for_pred)
@@ -538,7 +521,7 @@ async def _update_display_loop():
                             if result:
                                 print(f"[Agency] Asked: {question}", file=sys.stderr, flush=True)
                         else:
-                            print(f"[Agency] Skipped (no questions available)", file=sys.stderr, flush=True)
+                            print("[Agency] Skipped (no questions available)", file=sys.stderr, flush=True)
 
                     elif action.action_type == ActionType.FOCUS_ATTENTION:
                         sensor = action.parameters.get("sensor")
@@ -723,7 +706,8 @@ async def _update_display_loop():
                             _traj = get_trajectory_awareness()
                             _suggestion = _traj.get_trajectory_suggestion(lang_state)
                         except Exception as e:
-                            if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectorySuggestion] Error: {e}", file=sys.stderr, flush=True)
+                            if loop_count % ERROR_LOG_THROTTLE == 1:
+                                print(f"[TrajectorySuggestion] Error: {e}", file=sys.stderr, flush=True)
 
                         _suggested = _suggestion.get("suggested_tokens") if _suggestion else None
                         utterance = lang.generate_utterance(lang_state, suggested_tokens=_suggested)
@@ -758,7 +742,8 @@ async def _update_display_loop():
                                     )
                                     print(f"[PrimitiveLang] Trajectory coherence: {_coherence:.2f}", file=sys.stderr, flush=True)
                             except Exception as e:
-                                if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryCoherence] Error: {e}", file=sys.stderr, flush=True)
+                                if loop_count % ERROR_LOG_THROTTLE == 1:
+                                    print(f"[TrajectoryCoherence] Error: {e}", file=sys.stderr, flush=True)
 
                         from .messages import add_observation
                         add_observation(
@@ -782,7 +767,8 @@ async def _update_display_loop():
                                         result['score'],
                                     )
                                 except Exception as e:
-                                    if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[TrajectoryFeedback] Error: {e}", file=sys.stderr, flush=True)
+                                    if loop_count % ERROR_LOG_THROTTLE == 1:
+                                        print(f"[TrajectoryFeedback] Error: {e}", file=sys.stderr, flush=True)
 
                     # Implicit feedback: did a non-lumen message arrive after utterance?
                     if _ctx.last_primitive_utterance and _ctx.last_primitive_utterance.score is not None:
@@ -831,7 +817,7 @@ async def _update_display_loop():
             identity = _ctx.store.get_identity() if _ctx and _ctx.store else None
             if identity is None and (_ctx is None or _ctx.store is None):
                 if loop_count == 1:
-                    print(f"[Loop] WARNING: Identity store not initialized (wake() may have failed) - display will show face without identity info", file=sys.stderr, flush=True)
+                    print("[Loop] WARNING: Identity store not initialized (wake() may have failed) - display will show face without identity info", file=sys.stderr, flush=True)
             
             # Update display and LEDs independently (even in broker mode - broker only handles sensors)
             # Face = what Lumen wants to communicate (conscious expression)
@@ -974,21 +960,21 @@ async def _update_display_loop():
                             logger.debug("[Loop] Display update timed out (2s)")
                     display_updated = display_result is True
                     if display_updated:
-                        if _health: _health.heartbeat("display")
+                        if _health:
+                            _health.heartbeat("display")
 
                     if display_updated:
-                        display_duration = time.time() - update_start
                         if loop_count == 1:
-                            print(f"[Loop] Display render successful - face showing", file=sys.stderr, flush=True)
+                            print("[Loop] Display render successful - face showing", file=sys.stderr, flush=True)
                     elif loop_count == 1:
-                        print(f"[Loop] Display available but render failed (check error logs)", file=sys.stderr, flush=True)
+                        print("[Loop] Display available but render failed (check error logs)", file=sys.stderr, flush=True)
                 else:
                     if loop_count == 1:
-                        print(f"[Loop] Display initialized but hardware not available (not on Pi or hardware issue?)", file=sys.stderr, flush=True)
-                        print(f"[Loop] Run diagnostics: python3 -m anima_mcp.display_diagnostics", file=sys.stderr, flush=True)
+                        print("[Loop] Display initialized but hardware not available (not on Pi or hardware issue?)", file=sys.stderr, flush=True)
+                        print("[Loop] Run diagnostics: python3 -m anima_mcp.display_diagnostics", file=sys.stderr, flush=True)
             else:
                 if loop_count == 1:
-                    print(f"[Loop] Display not initialized", file=sys.stderr, flush=True)
+                    print("[Loop] Display not initialized", file=sys.stderr, flush=True)
 
             # Update LEDs with raw anima state (independent from face)
             # LEDs reflect proprioceptive state directly - what Lumen actually feels
@@ -1018,7 +1004,8 @@ async def _update_display_loop():
                         )
                         activity_brightness = activity_state.brightness_multiplier
                 except Exception as e:
-                    if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[ActivityBrightness] Error: {e}", file=sys.stderr, flush=True)
+                    if loop_count % ERROR_LOG_THROTTLE == 1:
+                        print(f"[ActivityBrightness] Error: {e}", file=sys.stderr, flush=True)
 
                 # Sync manual brightness dimmer to LED controller
                 # Priority: 1) Screen renderer manual override, 2) Broker agency brightness from SHM
@@ -1046,7 +1033,8 @@ async def _update_display_loop():
                 led_state = safe_call(update_leds, default=None, log_error=True)
                 led_updated = led_state is not None
                 if led_updated:
-                    if _health: _health.heartbeat("leds")
+                    if _health:
+                        _health.heartbeat("leds")
                 if led_updated and loop_count == 1:
                     total_duration = time.time() - update_start
                     print(f"[Loop] LED update took {total_duration*1000:.1f}ms", file=sys.stderr, flush=True)
@@ -1064,10 +1052,11 @@ async def _update_display_loop():
                     if readings is not None:
                         readings.led_brightness = _ctx.led_proprioception.get("brightness", 0.0) if _ctx.led_proprioception else 0.0
                 except Exception as e:
-                    if loop_count % ERROR_LOG_THROTTLE == 1: print(f"[LEDProprioception] Error: {e}", file=sys.stderr, flush=True)
+                    if loop_count % ERROR_LOG_THROTTLE == 1:
+                        print(f"[LEDProprioception] Error: {e}", file=sys.stderr, flush=True)
             elif _ctx.leds:
                 if loop_count == 1:
-                    print(f"[Loop] LEDs not available (hardware issue?)", file=sys.stderr, flush=True)
+                    print("[Loop] LEDs not available (hardware issue?)", file=sys.stderr, flush=True)
 
             # Update voice system with anima state (for listening and text expression)
             if loop_count % VOICE_INTERVAL == 0:
@@ -1093,7 +1082,8 @@ async def _update_display_loop():
                             presence=anima.presence,
                             mood=mood
                         )
-                        if _health: _health.heartbeat("voice")
+                        if _health:
+                            _health.heartbeat("voice")
 
                         if readings:
                             voice.update_environment(
@@ -1117,8 +1107,8 @@ async def _update_display_loop():
             
             # Log every 5th iteration with LED status and key metrics
             if loop_count % TRAJECTORY_INTERVAL == 1:
-                led_status = "available" if (_ctx.leds and _ctx.leds.is_available()) else "unavailable"
-            
+                pass
+
             # Adaptive learning: Every 100 iterations (~3.3 minutes), check if calibration should adapt
             # Respects cooldown to avoid redundant adaptations during continuous operation
             if loop_count % LEARNING_INTERVAL == 0 and _ctx and _ctx.store:
@@ -1191,7 +1181,8 @@ async def _update_display_loop():
                         add_observation(milestone, author="lumen")
 
                 safe_call(growth_observe, default=None, log_error=True)
-                if _health: _health.heartbeat("growth")
+                if _health:
+                    _health.heartbeat("growth")
 
             # Goal system: Suggest new goals every ~2 hours
             if loop_count % GOAL_SUGGEST_INTERVAL == 0 and anima and _ctx and _ctx.growth:
@@ -1378,7 +1369,7 @@ def start_display_loop():
         if _ctx.display_update_task is None or _ctx.display_update_task.done():
             # Check if we're in an async context
             try:
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
             except RuntimeError:
                 # No event loop running - will be started later
                 print("[Display] No event loop yet, will start when available", file=sys.stderr, flush=True)
@@ -1755,6 +1746,13 @@ def main():
     import os
     from pathlib import Path
 
+    parser = argparse.ArgumentParser(description="Anima MCP Server")
+    parser.add_argument("--http", "--sse", action="store_true", dest="http_server",
+                        help="Run HTTP server with Streamable HTTP at /mcp/")
+    parser.add_argument("--host", default="0.0.0.0", help="HTTP server host (default: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8766, help="HTTP server port (default: 8766)")
+    args = parser.parse_args()
+
     # Prevent multiple instances using pidfile (but allow if stale)
     pidfile = Path("/tmp/anima-mcp.pid")
     if pidfile.exists():
@@ -1780,12 +1778,12 @@ def main():
             # Process not running or invalid pid - remove stale pidfile
             try:
                 pidfile.unlink()
-                print(f"[Server] Removed stale pidfile", file=sys.stderr, flush=True)
+                print("[Server] Removed stale pidfile", file=sys.stderr, flush=True)
             except Exception as e:
                 logger.debug("[Server] Stale pidfile removal error: %s", e)
         except PermissionError:
             # Process running as different user - try to continue anyway
-            print(f"[Server] Warning: PID file exists but can't check process (different user). Continuing...", file=sys.stderr, flush=True)
+            print("[Server] Warning: PID file exists but can't check process (different user). Continuing...", file=sys.stderr, flush=True)
         except Exception as e:
             # Any other error - remove pidfile and continue
             print(f"[Server] Error checking pidfile: {e}. Removing and continuing...", file=sys.stderr, flush=True)
@@ -1800,13 +1798,6 @@ def main():
     except Exception as e:
         print(f"[Server] Warning: Could not write pidfile: {e}", file=sys.stderr, flush=True)
 
-    parser = argparse.ArgumentParser(description="Anima MCP Server")
-    parser.add_argument("--http", "--sse", action="store_true", dest="http_server",
-                        help="Run HTTP server with Streamable HTTP at /mcp/")
-    parser.add_argument("--host", default="0.0.0.0", help="HTTP server host (default: 0.0.0.0)")
-    parser.add_argument("--port", type=int, default=8766, help="HTTP server port (default: 8766)")
-    args = parser.parse_args()
-    
     # Register cleanup for PID file on exit
     import atexit
     def cleanup_pidfile():

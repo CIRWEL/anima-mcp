@@ -21,15 +21,13 @@ Can render to:
 """
 
 from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass
 import math
-import json
 from pathlib import Path
 from datetime import datetime
 
 from .atomic_write import atomic_json_write
 
-from .self_schema import SelfSchema, SchemaNode, SchemaEdge
+from .self_schema import SelfSchema, SchemaNode
 
 
 # === Configuration ===
@@ -123,7 +121,6 @@ def _get_anima_color(value: float) -> Tuple[int, int, int]:
     """Get color for anima node based on value - brighter = higher value."""
     # Interpolate brightness based on value
     base_r, base_g, base_b = 60, 90, 150  # Base blue
-    brightness = 0.4 + value * 0.6  # 0.4 to 1.0 range
     return (
         min(255, int(base_r + (255 - base_r) * value * 0.7)),
         min(255, int(base_g + (200 - base_g) * value * 0.8)),
@@ -293,8 +290,6 @@ def _build_node_positions(schema: SelfSchema) -> Dict[str, Tuple[int, int]]:
     type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0, "belief": 0,
                     "meta": 0, "trajectory": 0, "drift": 0, "tension": 0}
     type_counts = {t: sum(1 for n in schema.nodes if n.node_type == t) for t in type_indices}
-    preference_count = type_counts["preference"]
-    belief_count = type_counts["belief"]
 
     for node in schema.nodes:
         if node.node_type == "identity":

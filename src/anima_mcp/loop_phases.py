@@ -223,9 +223,7 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
         logger.debug("[Lumen/Unified] Wake-up summary error: %s", e)
 
     # === 2. Gather context (template path works without LLM) ===
-    advocate_feeling = None
     advocate_desire = None
-    advocate_reason = None
     try:
         from .accessors import _get_last_shm_data
         advocate = get_advocate()
@@ -245,29 +243,19 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
             strongest_drive=_strongest,
         )
         if steps:
-            advocate_feeling = steps[0].feeling
             advocate_desire = steps[0].desire
-            advocate_reason = steps[0].reason
     except Exception as e:
         logger.debug("[Lumen/Unified] Advocate error: %s", e)
 
-    # Knowledge: things Lumen has learned
-    learned_insights = None
     try:
         from .knowledge import get_insights
-        insights = get_insights(limit=5)
-        if insights:
-            learned_insights = [i.text for i in insights]
+        get_insights(limit=5)
     except Exception as e:
         logger.debug("[Lumen/Unified] Knowledge error: %s", e)
 
-    # Growth: confident preferences
-    confident_preferences = None
     if _ctx and _ctx.growth:
         try:
-            prefs = [p.description for p in _ctx.growth._preferences.values() if p.confidence >= 0.5]
-            if prefs:
-                confident_preferences = prefs[:3]
+            [p.description for p in _ctx.growth._preferences.values() if p.confidence >= 0.5]
         except Exception as e:
             logger.debug("[Lumen/Unified] Growth preferences error: %s", e)
 
@@ -311,8 +299,6 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
         logger.debug("[Lumen/Unified] Activity state error: %s", e)
 
     # Time alive
-    time_alive = identity.total_alive_seconds / 3600.0
-
     # Trigger description
     trigger_parts = []
     wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0

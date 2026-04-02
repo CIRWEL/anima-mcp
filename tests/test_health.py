@@ -1,7 +1,6 @@
 """Tests for subsystem health monitoring."""
 
 import time
-from unittest.mock import patch
 
 from anima_mcp.health import HealthRegistry, SubsystemHealth, HEARTBEAT_STALE_SECONDS
 

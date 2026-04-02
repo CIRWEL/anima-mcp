@@ -16,7 +16,6 @@ Usage:
 
 from __future__ import annotations
 
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional, Any

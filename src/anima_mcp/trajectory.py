@@ -27,7 +27,7 @@ from .atomic_write import atomic_json_write
 
 # Optional numpy for advanced computations
 try:
-    import numpy as np
+    import numpy as np  # noqa: F401
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False

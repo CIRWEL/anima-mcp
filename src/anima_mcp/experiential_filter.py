@@ -11,7 +11,7 @@ nervous system learns which signals matter most.
 
 import json
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional
 

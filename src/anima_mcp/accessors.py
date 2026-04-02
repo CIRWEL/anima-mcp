@@ -15,7 +15,7 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from .sensors import get_sensors, SensorBackend, SensorReadings
 from .anima import sense_self_with_memory, Anima
@@ -23,7 +23,6 @@ from .memory import anticipate_state
 from .display import get_display, DisplayRenderer
 from .shared_memory import SharedMemoryClient
 from .config import get_calibration
-from .server_context import ServerContext
 from .server_state import (
     SHM_STALE_THRESHOLD_SECONDS,
     is_broker_running as _is_broker_running,
@@ -36,7 +35,7 @@ from .calibration_drift import CalibrationDrift
 
 # ctx_ref is the single source of truth for _ctx
 from . import ctx_ref as _cr
-from .ctx_ref import set_ctx  # re-exported for lifecycle.py and tests
+from .ctx_ref import set_ctx as set_ctx  # re-exported for lifecycle.py and tests
 
 logger = logging.getLogger("anima.server")
 
@@ -270,7 +269,6 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
 
             # Reconstruct Anima from shared memory (but we need readings object)
             # The anima dict has warmth/clarity/stability/presence, but we need to create Anima with readings
-            anima_dict = shm_data["anima"]
             calibration = get_calibration()
 
             # Use warm start anticipation (first sense after wake) or memory

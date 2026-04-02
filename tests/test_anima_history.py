@@ -12,7 +12,6 @@ import anima_mcp.anima_history
 from anima_mcp.anima_history import (
     AnimaSnapshot,
     AnimaHistory,
-    reset_anima_history,
 )
 
 
