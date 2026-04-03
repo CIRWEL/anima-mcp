@@ -48,6 +48,8 @@ from .server_state import (
     PRIMITIVE_LANG_INTERVAL, VOICE_INTERVAL, GROWTH_INTERVAL,
     TRAJECTORY_INTERVAL, SERVER_GOVERNANCE_FALLBACK_SECONDS,
     LEARNING_INTERVAL,
+    SYSTEM_METRICS_RECORD_INTERVAL, SYSTEM_METRICS_PRUNE_INTERVAL,
+    SYSTEM_METRICS_RETENTION_HOURS,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
     EXPRESSION_INTERVAL, UNIFIED_REFLECTION_INTERVAL, SELF_ANSWER_INTERVAL,
     GOAL_SUGGEST_INTERVAL, GOAL_CHECK_INTERVAL, META_LEARNING_INTERVAL,
@@ -1108,6 +1110,22 @@ async def _update_display_loop():
             # Log every 5th iteration with LED status and key metrics
             if loop_count % TRAJECTORY_INTERVAL == 1:
                 pass
+
+            # System metrics persistence: Every 15 iterations (~30s), record to SQLite
+            if loop_count % SYSTEM_METRICS_RECORD_INTERVAL == 0 and readings and _ctx and _ctx.store:
+                try:
+                    _ctx.store.record_system_metrics(readings)
+                except Exception:
+                    pass  # Non-fatal — don't disrupt main loop
+
+            # System metrics pruning: Every 1800 iterations (~1h), delete old rows
+            if loop_count % SYSTEM_METRICS_PRUNE_INTERVAL == 0 and loop_count > 0 and _ctx and _ctx.store:
+                try:
+                    _pruned = _ctx.store.prune_system_metrics(SYSTEM_METRICS_RETENTION_HOURS)
+                    if _pruned > 0:
+                        logger.debug("[Metrics] Pruned %d old system_metrics rows", _pruned)
+                except Exception:
+                    pass
 
             # Adaptive learning: Every 100 iterations (~3.3 minutes), check if calibration should adapt
             # Respects cooldown to avoid redundant adaptations during continuous operation

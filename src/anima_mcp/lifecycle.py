@@ -113,18 +113,18 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                                 pass
                         return True  # Data exists but no timestamp — assume ok
                     return False
-                _health.register("sensors", probe=_sensor_probe)
-                _health.register("display", probe=lambda: _get_ctx() and _get_ctx().display is not None and _get_ctx().display.is_available())
-                _health.register("leds", probe=lambda: _get_ctx() and _get_ctx().leds is not None and _get_ctx().leds.is_available())
+                _health.register("sensors", probe=_sensor_probe, debounce_seconds=6.0)
+                _health.register("display", probe=lambda: _get_ctx() and _get_ctx().display is not None and _get_ctx().display.is_available(), debounce_seconds=6.0)
+                _health.register("leds", probe=lambda: _get_ctx() and _get_ctx().leds is not None and _get_ctx().leds.is_available(), debounce_seconds=6.0)
                 _health.register("growth", probe=lambda: _get_ctx() and _get_ctx().growth is not None, stale_threshold=90.0)
                 def _gov_probe():
                     shm = _get_last_shm_data()
                     return bool(shm and "governance" in shm and isinstance(shm.get("governance"), dict))
                 _health.register("governance", probe=_gov_probe, stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
-                _health.register("drawing", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and hasattr(_get_ctx().screen_renderer, '_canvas'))
+                _health.register("drawing", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and hasattr(_get_ctx().screen_renderer, '_canvas'), debounce_seconds=6.0)
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
-                _health.register("voice", probe=lambda: _get_ctx() and _get_ctx().voice_instance is not None)
-                _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None)
+                _health.register("voice", probe=lambda: _get_ctx() and _get_ctx().voice_instance is not None, debounce_seconds=6.0)
+                _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None, debounce_seconds=6.0)
                 print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
             except Exception as he:
                 print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)

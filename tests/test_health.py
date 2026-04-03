@@ -87,6 +87,70 @@ class TestSubsystemHealth:
         d = sub.to_dict()
         assert "probe" not in d
 
+    # --- Debounce tests ---
+
+    def test_debounce_suppresses_transient_bad_status(self):
+        """Bad status within debounce window should report 'ok'."""
+        sub = SubsystemHealth(name="test", debounce_seconds=6.0)
+        sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        # First check: starts grace period, reports ok
+        assert sub.get_status() == "ok"
+        assert sub._first_bad_at > 0
+
+    def test_debounce_reports_bad_after_expiry(self):
+        """Bad status persisting beyond debounce_seconds should be reported."""
+        sub = SubsystemHealth(name="test", debounce_seconds=0.05)
+        sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        # Start grace period
+        sub.get_status()
+        time.sleep(0.06)
+        # Grace period expired
+        assert sub.get_status() == "stale"
+
+    def test_debounce_resets_on_recovery(self):
+        """Recovery to 'ok' during grace period resets debounce."""
+        sub = SubsystemHealth(name="test", debounce_seconds=6.0)
+        sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        # Start grace period
+        assert sub.get_status() == "ok"
+        assert sub._first_bad_at > 0
+        # Recover
+        sub.heartbeat()
+        assert sub.get_status() == "ok"
+        assert sub._first_bad_at == 0.0
+
+    def test_debounce_zero_is_backward_compatible(self):
+        """debounce_seconds=0 means instant transitions (no grace period)."""
+        sub = SubsystemHealth(name="test", debounce_seconds=0.0)
+        sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        assert sub.get_status() == "stale"
+
+    def test_to_dict_includes_debouncing_flag(self):
+        """to_dict() should include 'debouncing: True' during grace period."""
+        sub = SubsystemHealth(name="test", debounce_seconds=6.0)
+        sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        sub.get_status()  # start grace period
+        d = sub.to_dict()
+        assert d["status"] == "ok"
+        assert d.get("debouncing") is True
+
+    def test_to_dict_no_debouncing_when_healthy(self):
+        """to_dict() should not include 'debouncing' when status is genuinely ok."""
+        sub = SubsystemHealth(name="test", debounce_seconds=6.0)
+        sub.heartbeat()
+        d = sub.to_dict()
+        assert "debouncing" not in d
+
+    def test_is_debouncing_property(self):
+        """is_debouncing should be True only during grace period."""
+        sub = SubsystemHealth(name="test", debounce_seconds=6.0)
+        sub.heartbeat()
+        assert sub.is_debouncing is False
+        # Make it stale
+        sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        sub.get_status()  # trigger grace period
+        assert sub.is_debouncing is True
+
 
 class TestHealthRegistry:
     """Tests for the central health registry."""
@@ -169,3 +233,20 @@ class TestHealthRegistry:
     def test_get_subsystem_returns_none_for_unknown(self):
         reg = HealthRegistry()
         assert reg.get_subsystem("nonexistent") is None
+
+    def test_register_with_debounce(self):
+        reg = HealthRegistry()
+        reg.register("fast", debounce_seconds=6.0)
+        sub = reg.get_subsystem("fast")
+        assert sub.debounce_seconds == 6.0
+
+    def test_overall_ok_during_debounce_grace(self):
+        """System should report ok while subsystem is debouncing."""
+        reg = HealthRegistry()
+        reg.register("a", debounce_seconds=6.0)
+        reg.register("b")
+        reg.heartbeat("b")
+        # Make 'a' stale — but within debounce grace
+        sub_a = reg.get_subsystem("a")
+        sub_a.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
+        assert reg.overall() == "ok"  # debounce suppresses 'a'

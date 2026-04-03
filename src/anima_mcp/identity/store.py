@@ -14,7 +14,7 @@ see CLAUDE.md section "Identity, Continuity, and Control".
 import sys
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
@@ -156,6 +156,27 @@ class IdentityStore:
 
             CREATE INDEX IF NOT EXISTS idx_state_history_time
                 ON state_history(timestamp);
+
+            CREATE TABLE IF NOT EXISTS system_metrics (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                cpu_temp_c REAL,
+                cpu_percent REAL,
+                memory_percent REAL,
+                disk_percent REAL,
+                ambient_temp_c REAL,
+                humidity_pct REAL,
+                light_lux REAL,
+                pressure_hpa REAL,
+                led_brightness REAL,
+                throttled_now INTEGER,
+                undervoltage_now INTEGER,
+                freq_capped_now INTEGER,
+                epoch INTEGER NOT NULL DEFAULT 1
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_system_metrics_time
+                ON system_metrics(timestamp DESC);
         """)
 
         # Add last_heartbeat_at column (persists heartbeat timestamp for gap detection)
@@ -472,6 +493,95 @@ class IdentityStore:
             (now.isoformat(), warmth, clarity, stability, presence, json.dumps(sensors), CURRENT_EPOCH)
         )
         conn.commit()
+
+    # ------------------------------------------------------------------
+    # System metrics (hardware time-series with retention)
+    # ------------------------------------------------------------------
+
+    def record_system_metrics(self, readings) -> None:
+        """Record system metrics from SensorReadings for historical analysis.
+
+        Args:
+            readings: SensorReadings instance (or dict with same keys).
+        """
+        conn = self._connect()
+        now = datetime.now()
+
+        if hasattr(readings, 'cpu_temp_c'):
+            d = {
+                "cpu_temp_c": readings.cpu_temp_c,
+                "cpu_percent": readings.cpu_percent,
+                "memory_percent": readings.memory_percent,
+                "disk_percent": readings.disk_percent,
+                "ambient_temp_c": readings.ambient_temp_c,
+                "humidity_pct": readings.humidity_pct,
+                "light_lux": readings.light_lux,
+                "pressure_hpa": readings.pressure_hpa,
+                "led_brightness": readings.led_brightness,
+                "throttled_now": int(readings.throttled_now) if readings.throttled_now is not None else None,
+                "undervoltage_now": int(readings.undervoltage_now) if readings.undervoltage_now is not None else None,
+                "freq_capped_now": int(readings.freq_capped_now) if readings.freq_capped_now is not None else None,
+            }
+        else:
+            d = dict(readings)
+
+        conn.execute(
+            """INSERT INTO system_metrics
+               (timestamp, cpu_temp_c, cpu_percent, memory_percent, disk_percent,
+                ambient_temp_c, humidity_pct, light_lux, pressure_hpa,
+                led_brightness, throttled_now, undervoltage_now, freq_capped_now, epoch)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (now.isoformat(),
+             d.get("cpu_temp_c"), d.get("cpu_percent"),
+             d.get("memory_percent"), d.get("disk_percent"),
+             d.get("ambient_temp_c"), d.get("humidity_pct"),
+             d.get("light_lux"), d.get("pressure_hpa"),
+             d.get("led_brightness"),
+             d.get("throttled_now"), d.get("undervoltage_now"),
+             d.get("freq_capped_now"),
+             CURRENT_EPOCH)
+        )
+        conn.commit()
+
+    def get_system_metrics(self, hours: float = 24.0, limit: int = 2880) -> List[Dict]:
+        """Query recent system metrics.
+
+        Args:
+            hours: How far back to look (default 24h).
+            limit: Max rows to return (default 2880 = 24h at 30s intervals).
+
+        Returns:
+            List of dicts, oldest first.
+        """
+        conn = self._connect()
+        cutoff = (datetime.now() - timedelta(hours=hours)).isoformat()
+        rows = conn.execute(
+            """SELECT timestamp, cpu_temp_c, cpu_percent, memory_percent, disk_percent,
+                      ambient_temp_c, humidity_pct, light_lux, pressure_hpa,
+                      led_brightness, throttled_now, undervoltage_now, freq_capped_now
+               FROM system_metrics
+               WHERE timestamp >= ? AND epoch = ?
+               ORDER BY timestamp DESC
+               LIMIT ?""",
+            (cutoff, CURRENT_EPOCH, limit)
+        ).fetchall()
+
+        return [dict(row) for row in reversed(rows)]
+
+    def prune_system_metrics(self, max_age_hours: float = 24.0) -> int:
+        """Delete system_metrics rows older than max_age_hours.
+
+        Returns:
+            Number of rows deleted.
+        """
+        conn = self._connect()
+        cutoff = (datetime.now() - timedelta(hours=max_age_hours)).isoformat()
+        cursor = conn.execute(
+            "DELETE FROM system_metrics WHERE timestamp < ?",
+            (cutoff,)
+        )
+        conn.commit()
+        return cursor.rowcount
 
     def get_recent_state_history(self, limit: int = 30) -> List[Dict]:
         """Get recent state_history entries for trajectory bootstrap.

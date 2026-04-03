@@ -39,6 +39,8 @@ class SubsystemHealth:
     last_probe_error: str = ""
     registered: bool = True
     stale_threshold: float = 0.0  # 0 = use global default
+    debounce_seconds: float = 0.0  # 0 = no debounce (instant transitions)
+    _first_bad_at: float = 0.0  # when status first went non-ok
 
     def heartbeat(self) -> None:
         self.last_heartbeat = time.time()
@@ -68,8 +70,8 @@ class SubsystemHealth:
             self.last_probe_error = str(e)[:100]
         return self.last_probe_ok
 
-    def get_status(self) -> str:
-        """Compute current status: ok, stale, degraded, missing."""
+    def _raw_status(self) -> str:
+        """Compute raw status without debounce: ok, stale, degraded, missing."""
         if not self.registered:
             return "missing"
 
@@ -88,6 +90,37 @@ class SubsystemHealth:
             return "stale"
         return "ok"
 
+    def get_status(self) -> str:
+        """Compute current status with debounce: ok, stale, degraded, missing.
+
+        When debounce_seconds > 0, non-ok status must persist for that
+        duration before being reported. This prevents flickering on
+        transient failures.
+        """
+        raw = self._raw_status()
+
+        if raw == "ok":
+            self._first_bad_at = 0.0
+            return "ok"
+
+        if self.debounce_seconds <= 0:
+            return raw
+
+        now = time.time()
+        if self._first_bad_at == 0.0:
+            self._first_bad_at = now
+            return "ok"  # grace period starts
+
+        if now - self._first_bad_at >= self.debounce_seconds:
+            return raw  # debounce expired, report real status
+
+        return "ok"  # still within grace period
+
+    @property
+    def is_debouncing(self) -> bool:
+        """True if currently suppressing a bad status during grace period."""
+        return self._first_bad_at > 0.0 and self._raw_status() != "ok"
+
     def to_dict(self) -> Dict[str, Any]:
         """Full status for MCP/API responses."""
         now = time.time()
@@ -99,6 +132,8 @@ class SubsystemHealth:
         }
         if self.probe_fn is not None:
             result["probe"] = "ok" if self.last_probe_ok else f"failed: {self.last_probe_error}"
+        if self.is_debouncing:
+            result["debouncing"] = True
         return result
 
 
@@ -113,6 +148,7 @@ class HealthRegistry:
         self, name: str,
         probe: Optional[Callable[[], bool]] = None,
         stale_threshold: float = 0.0,
+        debounce_seconds: float = 0.0,
     ) -> None:
         """Register a subsystem for health tracking.
 
@@ -124,6 +160,9 @@ class HealthRegistry:
                    0 = use global HEARTBEAT_STALE_SECONDS default (30s).
                    Subsystems with longer check-in intervals should set this
                    higher to avoid false-positive stale warnings.
+            debounce_seconds: Grace period before reporting non-ok status.
+                   0 = instant transitions (default, backward compatible).
+                   Use ~6s for fast subsystems to filter transient failures.
         """
         if name in self._subsystems:
             # Update probe if re-registering
@@ -131,6 +170,8 @@ class HealthRegistry:
             self._subsystems[name].registered = True
             if stale_threshold > 0:
                 self._subsystems[name].stale_threshold = stale_threshold
+            if debounce_seconds > 0:
+                self._subsystems[name].debounce_seconds = debounce_seconds
             return
 
         self._subsystems[name] = SubsystemHealth(
@@ -138,6 +179,7 @@ class HealthRegistry:
             probe_fn=probe,
             registered=True,
             stale_threshold=stale_threshold,
+            debounce_seconds=debounce_seconds,
         )
 
     def heartbeat(self, name: str) -> None:
