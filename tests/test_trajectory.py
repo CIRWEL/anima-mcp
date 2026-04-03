@@ -10,6 +10,7 @@ Tests the core trajectory identity framework:
 
 import pytest
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from anima_mcp.trajectory import (
@@ -21,6 +22,9 @@ from anima_mcp.trajectory import (
     save_trajectory,
     load_trajectory,
     GENESIS_MIN_OBSERVATIONS,
+    bhattacharyya_similarity,
+    homeostatic_similarity,
+    VIABILITY_BOUNDS,
 )
 
 
@@ -924,6 +928,258 @@ class TestLastTrajectoryPersistence:
     def test_load_nonexistent_returns_none(self, tmp_path):
         """Loading from nonexistent path should return None."""
         assert load_trajectory(path=tmp_path / "nonexistent.json") is None
+
+
+# =============================================================================
+# Test: Bhattacharyya Similarity
+# =============================================================================
+
+class TestBhattacharyyaSimilarity:
+    """Tests for bhattacharyya_similarity()."""
+
+    def test_identical_distributions_returns_near_one(self):
+        """Same mu and covariance should give similarity ~1.0."""
+        mu = [0.5, 0.6, 0.7, 0.4]
+        cov = [[0.01, 0, 0, 0], [0, 0.02, 0, 0], [0, 0, 0.01, 0], [0, 0, 0, 0.02]]
+        result = bhattacharyya_similarity(mu, cov, mu, cov)
+        assert result > 0.99
+
+    def test_distant_centers_low_similarity(self):
+        """Far apart centers should give low similarity."""
+        mu1 = [0.1, 0.2, 0.3, 0.1]
+        mu2 = [0.9, 0.8, 0.7, 0.9]
+        cov = [[0.01, 0, 0, 0], [0, 0.01, 0, 0], [0, 0, 0.01, 0], [0, 0, 0, 0.01]]
+        result = bhattacharyya_similarity(mu1, cov, mu2, cov)
+        assert result < 0.3
+
+    def test_different_covariances_affects_similarity(self):
+        """Same center but different spread should not be 1.0."""
+        mu = [0.5, 0.5, 0.5, 0.5]
+        cov_tight = [[0.001, 0, 0, 0], [0, 0.001, 0, 0], [0, 0, 0.001, 0], [0, 0, 0, 0.001]]
+        cov_wide = [[0.1, 0, 0, 0], [0, 0.1, 0, 0], [0, 0, 0.1, 0], [0, 0, 0, 0.1]]
+        result = bhattacharyya_similarity(mu, cov_tight, mu, cov_wide)
+        # Same center but different spread: should be notably less than 1
+        assert result < 0.95
+        assert result > 0.0
+
+    def test_similarity_is_symmetric(self):
+        """sim(A, B) should equal sim(B, A)."""
+        mu1, mu2 = [0.3, 0.4, 0.5, 0.6], [0.5, 0.6, 0.7, 0.4]
+        cov1 = [[0.02, 0, 0, 0], [0, 0.01, 0, 0], [0, 0, 0.03, 0], [0, 0, 0, 0.01]]
+        cov2 = [[0.01, 0, 0, 0], [0, 0.03, 0, 0], [0, 0, 0.01, 0], [0, 0, 0, 0.02]]
+        ab = bhattacharyya_similarity(mu1, cov1, mu2, cov2)
+        ba = bhattacharyya_similarity(mu2, cov2, mu1, cov1)
+        assert ab == pytest.approx(ba, abs=0.001)
+
+    def test_result_in_range(self):
+        """Result should always be in [0, 1]."""
+        import random
+        random.seed(42)
+        for _ in range(10):
+            mu1 = [random.random() for _ in range(4)]
+            mu2 = [random.random() for _ in range(4)]
+            cov = [[0.05 if i == j else 0.0 for j in range(4)] for i in range(4)]
+            result = bhattacharyya_similarity(mu1, cov, mu2, cov)
+            assert 0.0 <= result <= 1.0
+
+    def test_attractor_similarity_uses_bhattacharyya(self):
+        """Signature similarity should use Bhattacharyya when covariance present."""
+        cov = [[0.01, 0, 0, 0], [0, 0.01, 0, 0], [0, 0, 0.01, 0], [0, 0, 0, 0.01]]
+        sig1 = TrajectorySignature(
+            attractor={"center": [0.5, 0.5, 0.5, 0.5], "covariance": cov},
+        )
+        sig2 = TrajectorySignature(
+            attractor={"center": [0.5, 0.5, 0.5, 0.5], "covariance": cov},
+        )
+        sim = sig1.similarity(sig2)
+        assert sim > 0.99
+
+    def test_falls_back_without_covariance(self):
+        """Without covariance, should fall back to center-only distance."""
+        sig1 = TrajectorySignature(
+            attractor={"center": [0.5, 0.5, 0.5, 0.5]},
+        )
+        sig2 = TrajectorySignature(
+            attractor={"center": [0.5, 0.5, 0.5, 0.5]},
+        )
+        sim = sig1.similarity(sig2)
+        assert sim > 0.99
+
+
+# =============================================================================
+# Test: Homeostatic (Eta) Similarity
+# =============================================================================
+
+class TestHomeostaticSimilarity:
+    """Tests for homeostatic_similarity() and Eta integration."""
+
+    def test_identical_eta_returns_near_one(self):
+        """Same eta should give similarity ~1.0."""
+        eta = {
+            "set_point": [0.5, 0.6, 0.3, 0.1],
+            "basin_shape": [[0.01, 0, 0, 0], [0, 0.01, 0, 0],
+                            [0, 0, 0.01, 0], [0, 0, 0, 0.01]],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        result = homeostatic_similarity(eta, eta)
+        assert result > 0.99
+
+    def test_different_setpoints_lower_similarity(self):
+        """Different set-points should lower similarity."""
+        eta1 = {
+            "set_point": [0.5, 0.6, 0.3, 0.0],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        eta2 = {
+            "set_point": [0.2, 0.9, 0.1, -0.1],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        result = homeostatic_similarity(eta1, eta2)
+        assert result < 0.9
+
+    def test_different_tau_lower_similarity(self):
+        """Different recovery dynamics should lower similarity."""
+        eta1 = {
+            "set_point": [0.5, 0.6, 0.3, 0.0],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        eta2 = {
+            "set_point": [0.5, 0.6, 0.3, 0.0],
+            "recovery_tau": 15.0,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        result = homeostatic_similarity(eta1, eta2)
+        assert result < 0.95
+
+    def test_margin_safety_affects_score(self):
+        """Agent near viability edge should score differently than centered agent."""
+        eta_centered = {
+            "set_point": [0.5, 0.65, 0.3, 0.0],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        eta_edge = {
+            "set_point": [0.15, 0.35, 0.55, 0.1],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        result = homeostatic_similarity(eta_centered, eta_edge)
+        assert result < 0.95
+
+    def test_missing_eta_skipped_in_similarity(self):
+        """Signatures without Eta should still compare via other components."""
+        sig1 = TrajectorySignature(
+            beliefs={"values": [0.5, 0.6, 0.7, 0.8]},
+            homeostatic=None,
+        )
+        sig2 = TrajectorySignature(
+            beliefs={"values": [0.5, 0.6, 0.7, 0.8]},
+            homeostatic=None,
+        )
+        sim = sig1.similarity(sig2)
+        assert sim > 0.99
+
+    def test_eta_in_full_similarity(self):
+        """Eta should contribute to overall similarity when present."""
+        cov = [[0.01, 0, 0, 0], [0, 0.01, 0, 0], [0, 0, 0.01, 0], [0, 0, 0, 0.01]]
+        eta = {
+            "set_point": [0.5, 0.6, 0.3, 0.0],
+            "basin_shape": cov,
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        sig1 = TrajectorySignature(
+            preferences={"vector": [0.7, 0.3, 0.5, 0.8]},
+            beliefs={"values": [0.8, 0.6, 0.7, 0.5]},
+            attractor={"center": [0.6, 0.5, 0.7, 0.6], "covariance": cov},
+            recovery={"tau_estimate": 3.5},
+            relational={"valence_tendency": 0.3},
+            homeostatic=eta,
+        )
+        sig2 = TrajectorySignature(
+            preferences={"vector": [0.7, 0.3, 0.5, 0.8]},
+            beliefs={"values": [0.8, 0.6, 0.7, 0.5]},
+            attractor={"center": [0.6, 0.5, 0.7, 0.6], "covariance": cov},
+            recovery={"tau_estimate": 3.5},
+            relational={"valence_tendency": 0.3},
+            homeostatic=eta,
+        )
+        sim = sig1.similarity(sig2)
+        # All components identical — should be very high
+        assert sim > 0.99
+
+    def test_eta_serialization_roundtrip(self):
+        """Homeostatic should survive to_dict/from_dict."""
+        eta = {
+            "set_point": [0.5, 0.6, 0.3, 0.0],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        sig = TrajectorySignature(homeostatic=eta, observation_count=50)
+        d = sig.to_dict()
+        assert d["homeostatic"] == eta
+        restored = TrajectorySignature.from_dict(d)
+        assert restored.homeostatic == eta
+
+    def test_old_signature_without_eta_loads(self):
+        """Signatures without homeostatic key should deserialize with None."""
+        data = {
+            "preferences": {},
+            "beliefs": {},
+            "attractor": None,
+            "recovery": {},
+            "relational": {},
+            "computed_at": datetime.now().isoformat(),
+            "observation_count": 10,
+        }
+        sig = TrajectorySignature.from_dict(data)
+        assert sig.homeostatic is None
+
+    def test_compute_trajectory_builds_eta(self):
+        """compute_trajectory_signature should build Eta when attractor and recovery exist."""
+        import anima_mcp.trajectory as tmod
+        tmod._cached_genesis = None
+
+        mock_history = MagicMock()
+        mock_history.get_attractor_basin.return_value = {
+            "center": [0.5, 0.6, 0.3, 0.4],
+            "covariance": [[0.01, 0, 0, 0], [0, 0.01, 0, 0],
+                           [0, 0, 0.01, 0], [0, 0, 0, 0.01]],
+            "n_observations": 50,
+        }
+        mock_model = MagicMock()
+        mock_model.get_belief_signature.return_value = {"values": [0.5]}
+        mock_model.get_recovery_profile.return_value = {
+            "tau_estimate": 3.5,
+            "confidence": 0.7,
+        }
+
+        with patch.object(tmod, '_GENESIS_PATH', Path("/nonexistent")):
+            sig = compute_trajectory_signature(
+                self_model=mock_model, anima_history=mock_history
+            )
+
+        assert sig.homeostatic is not None
+        assert sig.homeostatic["set_point"] == [0.5, 0.6, 0.3, 0.4]
+        assert sig.homeostatic["recovery_tau"] == 3.5
+        assert sig.homeostatic["viability_bounds"] == VIABILITY_BOUNDS
+
+    def test_compare_signatures_includes_homeostatic(self):
+        """compare_signatures should include homeostatic in component breakdown."""
+        eta = {
+            "set_point": [0.5, 0.6, 0.3, 0.0],
+            "recovery_tau": 3.5,
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+        sig1 = TrajectorySignature(homeostatic=eta)
+        sig2 = TrajectorySignature(homeostatic=eta)
+        result = compare_signatures(sig1, sig2)
+        assert "homeostatic" in result["components"]
+        assert result["components"]["homeostatic"] > 0.99
 
 
 if __name__ == "__main__":

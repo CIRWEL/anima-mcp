@@ -25,12 +25,254 @@ import sys
 
 from .atomic_write import atomic_json_write
 
+import math
+
 # Optional numpy for advanced computations
 try:
     import numpy as np  # noqa: F401
     HAS_NUMPY = True
 except ImportError:
     HAS_NUMPY = False
+
+# Paper Definition 2.2: Viability Envelope
+# Bounds are in EISV space for homeostatic identity comparison
+VIABILITY_BOUNDS = {
+    "E": (0.1, 0.9),
+    "I": (0.3, 1.0),
+    "S": (0.0, 0.6),
+    "V": (-0.2, 0.15),
+}
+
+
+def bhattacharyya_similarity(
+    mu1: List[float], cov1: List[List[float]],
+    mu2: List[float], cov2: List[List[float]],
+) -> float:
+    """Bhattacharyya coefficient between two Gaussian distributions.
+
+    Returns similarity in [0, 1] where 1 = identical distributions.
+    Paper reference: Section 4.2
+
+    D_B = (1/8)(mu1-mu2)^T Sigma_avg^{-1} (mu1-mu2)
+        + (1/2) ln(|Sigma_avg| / sqrt(|Sigma1| * |Sigma2|))
+    sim = exp(-D_B)
+    """
+    if HAS_NUMPY:
+        return _bhattacharyya_numpy(mu1, cov1, mu2, cov2)
+    return _bhattacharyya_pure(mu1, cov1, mu2, cov2)
+
+
+def _bhattacharyya_numpy(
+    mu1: List[float], cov1: List[List[float]],
+    mu2: List[float], cov2: List[List[float]],
+) -> float:
+    """Bhattacharyya coefficient using numpy."""
+    m1 = np.array(mu1, dtype=float)
+    m2 = np.array(mu2, dtype=float)
+    s1 = np.array(cov1, dtype=float)
+    s2 = np.array(cov2, dtype=float)
+    n = len(mu1)
+
+    # Average covariance with epsilon regularization
+    s_avg = (s1 + s2) / 2.0 + np.eye(n) * 1e-6
+
+    try:
+        s_avg_inv = np.linalg.inv(s_avg)
+        det_avg = np.linalg.det(s_avg)
+        det1 = np.linalg.det(s1 + np.eye(n) * 1e-6)
+        det2 = np.linalg.det(s2 + np.eye(n) * 1e-6)
+    except np.linalg.LinAlgError:
+        # Singular matrix — fall back to center distance
+        dist = float(np.linalg.norm(m1 - m2))
+        return math.exp(-dist * 2)
+
+    if det_avg <= 0 or det1 <= 0 or det2 <= 0:
+        dist = float(np.linalg.norm(m1 - m2))
+        return math.exp(-dist * 2)
+
+    diff = m1 - m2
+    # Mahalanobis term: (1/8)(mu1-mu2)^T Sigma_avg^{-1} (mu1-mu2)
+    mahal = float(diff @ s_avg_inv @ diff) / 8.0
+    # Determinant term: (1/2) ln(|Sigma_avg| / sqrt(|Sigma1|*|Sigma2|))
+    det_term = 0.5 * math.log(det_avg / math.sqrt(det1 * det2))
+
+    d_b = mahal + det_term
+    return max(0.0, min(1.0, math.exp(-d_b)))
+
+
+def _bhattacharyya_pure(
+    mu1: List[float], cov1: List[List[float]],
+    mu2: List[float], cov2: List[List[float]],
+) -> float:
+    """Bhattacharyya coefficient using pure Python (4x4 matrices)."""
+    n = len(mu1)
+
+    # Average covariance with epsilon
+    s_avg = [[(cov1[i][j] + cov2[i][j]) / 2.0 + (1e-6 if i == j else 0.0)
+              for j in range(n)] for i in range(n)]
+
+    det_avg = _det4(s_avg) if n == 4 else _det_generic(s_avg)
+    s1_reg = [[cov1[i][j] + (1e-6 if i == j else 0.0) for j in range(n)] for i in range(n)]
+    s2_reg = [[cov2[i][j] + (1e-6 if i == j else 0.0) for j in range(n)] for i in range(n)]
+    det1 = _det4(s1_reg) if n == 4 else _det_generic(s1_reg)
+    det2 = _det4(s2_reg) if n == 4 else _det_generic(s2_reg)
+
+    if det_avg <= 0 or det1 <= 0 or det2 <= 0:
+        dist = sum((a - b)**2 for a, b in zip(mu1, mu2)) ** 0.5
+        return math.exp(-dist * 2)
+
+    inv_avg = _inv4(s_avg) if n == 4 else None
+    if inv_avg is None:
+        dist = sum((a - b)**2 for a, b in zip(mu1, mu2)) ** 0.5
+        return math.exp(-dist * 2)
+
+    diff = [a - b for a, b in zip(mu1, mu2)]
+    # Mahalanobis: diff^T @ inv_avg @ diff
+    mahal = 0.0
+    for i in range(n):
+        for j in range(n):
+            mahal += diff[i] * inv_avg[i][j] * diff[j]
+    mahal /= 8.0
+
+    det_term = 0.5 * math.log(det_avg / math.sqrt(det1 * det2))
+    d_b = mahal + det_term
+    return max(0.0, min(1.0, math.exp(-d_b)))
+
+
+def _det4(m: List[List[float]]) -> float:
+    """Determinant of 4x4 matrix via cofactor expansion along first row."""
+    def _det3(a):
+        return (a[0][0] * (a[1][1]*a[2][2] - a[1][2]*a[2][1])
+              - a[0][1] * (a[1][0]*a[2][2] - a[1][2]*a[2][0])
+              + a[0][2] * (a[1][0]*a[2][1] - a[1][1]*a[2][0]))
+
+    result = 0.0
+    for col in range(4):
+        minor = [[m[r][c] for c in range(4) if c != col] for r in range(1, 4)]
+        sign = 1 if col % 2 == 0 else -1
+        result += sign * m[0][col] * _det3(minor)
+    return result
+
+
+def _det_generic(m: List[List[float]]) -> float:
+    """Determinant for any square matrix via LU-style elimination."""
+    n = len(m)
+    mat = [row[:] for row in m]
+    det = 1.0
+    for i in range(n):
+        if abs(mat[i][i]) < 1e-12:
+            for j in range(i + 1, n):
+                if abs(mat[j][i]) > 1e-12:
+                    mat[i], mat[j] = mat[j], mat[i]
+                    det *= -1
+                    break
+            else:
+                return 0.0
+        det *= mat[i][i]
+        for j in range(i + 1, n):
+            factor = mat[j][i] / mat[i][i]
+            for k in range(i, n):
+                mat[j][k] -= factor * mat[i][k]
+    return det
+
+
+def _inv4(m: List[List[float]]) -> Optional[List[List[float]]]:
+    """Inverse of 4x4 matrix via Gauss-Jordan elimination."""
+    n = 4
+    aug = [m[i][:] + [1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+
+    for col in range(n):
+        # Partial pivoting
+        max_row = col
+        for row in range(col + 1, n):
+            if abs(aug[row][col]) > abs(aug[max_row][col]):
+                max_row = row
+        if max_row != col:
+            aug[col], aug[max_row] = aug[max_row], aug[col]
+
+        pivot = aug[col][col]
+        if abs(pivot) < 1e-12:
+            return None
+
+        for j in range(2 * n):
+            aug[col][j] /= pivot
+
+        for row in range(n):
+            if row != col:
+                factor = aug[row][col]
+                for j in range(2 * n):
+                    aug[row][j] -= factor * aug[col][j]
+
+    return [[aug[i][j + n] for j in range(n)] for i in range(n)]
+
+
+def homeostatic_similarity(eta1: Dict[str, Any], eta2: Dict[str, Any]) -> float:
+    """Compute Eta (Homeostatic Identity) similarity (paper Section 3.6).
+
+    Combines:
+    1. Set-point proximity (weight 0.4): Bhattacharyya if covariance available
+    2. Recovery dynamics (weight 0.3): log-ratio of tau
+    3. Viability margin (weight 0.3): how safely centered within bounds
+    """
+    scores = []
+    weights = []
+
+    # Sub-component 1: Set-point similarity
+    sp1 = eta1.get("set_point")
+    sp2 = eta2.get("set_point")
+    if sp1 and sp2 and len(sp1) == len(sp2):
+        bs1 = eta1.get("basin_shape")
+        bs2 = eta2.get("basin_shape")
+        if bs1 and bs2:
+            scores.append(bhattacharyya_similarity(sp1, bs1, sp2, bs2))
+        else:
+            dist = sum((a - b)**2 for a, b in zip(sp1, sp2)) ** 0.5
+            scores.append(math.exp(-dist * 2))
+        weights.append(0.4)
+
+    # Sub-component 2: Recovery dynamics similarity
+    tau1 = eta1.get("recovery_tau")
+    tau2 = eta2.get("recovery_tau")
+    if tau1 and tau2 and tau1 > 0 and tau2 > 0:
+        log_ratio = abs(math.log(tau1 / tau2))
+        scores.append(math.exp(-log_ratio))
+        weights.append(0.3)
+
+    # Sub-component 3: Viability margin similarity
+    bounds1 = eta1.get("viability_bounds", VIABILITY_BOUNDS)
+    bounds2 = eta2.get("viability_bounds", VIABILITY_BOUNDS)
+    if sp1 and sp2:
+        margin1 = _viability_margin(sp1, bounds1)
+        margin2 = _viability_margin(sp2, bounds2)
+        if margin1 is not None and margin2 is not None:
+            # Compare margin profiles: 1 - |m1 - m2|
+            scores.append(1.0 - abs(margin1 - margin2))
+            weights.append(0.3)
+
+    if not scores:
+        return 0.5
+    total = sum(weights)
+    return sum(s * w for s, w in zip(scores, weights)) / total
+
+
+def _viability_margin(set_point: List[float], bounds: Dict[str, Any]) -> Optional[float]:
+    """How safely centered is the set-point within viability bounds.
+
+    Per-dimension: min(mu - lo, hi - mu) / (hi - lo), averaged.
+    Returns value in [0, 0.5] where 0.5 = perfectly centered.
+    """
+    dim_keys = list(bounds.keys())
+    if len(set_point) != len(dim_keys):
+        return None
+    margins = []
+    for i, key in enumerate(dim_keys):
+        lo, hi = bounds[key]
+        span = hi - lo
+        if span <= 0:
+            continue
+        margin = min(set_point[i] - lo, hi - set_point[i]) / span
+        margins.append(max(0.0, margin))
+    return sum(margins) / len(margins) if margins else None
 
 # Type hints without circular imports
 if TYPE_CHECKING:
@@ -63,6 +305,7 @@ class TrajectorySignature:
     attractor: Optional[Dict[str, Any]] = None                  # Α
     recovery: Dict[str, Any] = field(default_factory=dict)      # Ρ
     relational: Dict[str, Any] = field(default_factory=dict)    # Δ
+    homeostatic: Optional[Dict[str, Any]] = None                # Η
 
     # Metadata
     computed_at: datetime = field(default_factory=datetime.now)
@@ -114,15 +357,19 @@ class TrajectorySignature:
                 weights.append(0.15)
 
         # --- Attractor Similarity (Α) ---
-        # Distance between attractor centers
+        # Bhattacharyya coefficient when covariance available, else center distance
         if self.attractor and other.attractor:
             c1 = self.attractor.get("center")
             c2 = other.attractor.get("center")
             if c1 and c2:
-                dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
-                # Exponential decay: sim = e^(-k*dist)
-                center_sim = 2.71828 ** (-dist * 2)
-                scores.append(center_sim)
+                cov1 = self.attractor.get("covariance")
+                cov2 = other.attractor.get("covariance")
+                if cov1 and cov2 and len(cov1) == len(c1) and len(cov2) == len(c2):
+                    alpha_sim = bhattacharyya_similarity(c1, cov1, c2, cov2)
+                else:
+                    dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
+                    alpha_sim = math.exp(-dist * 2)
+                scores.append(alpha_sim)
                 weights.append(0.25)
 
         # --- Recovery Similarity (Ρ) ---
@@ -130,7 +377,6 @@ class TrajectorySignature:
         t1 = self.recovery.get("tau_estimate")
         t2 = other.recovery.get("tau_estimate")
         if t1 and t2 and t1 > 0 and t2 > 0:
-            import math
             log_ratio = abs(math.log(t1 / t2))
             tau_sim = math.exp(-log_ratio)
             scores.append(tau_sim)
@@ -145,6 +391,12 @@ class TrajectorySignature:
             valence_sim = 1 - abs(v1 - v2) / 2
             scores.append(valence_sim)
             weights.append(0.10)
+
+        # --- Homeostatic Similarity (Η) ---
+        if self.homeostatic and other.homeostatic:
+            eta_sim = homeostatic_similarity(self.homeostatic, other.homeostatic)
+            scores.append(eta_sim)
+            weights.append(0.15)
 
         # --- Compute weighted average ---
         if not scores:
@@ -192,6 +444,7 @@ class TrajectorySignature:
                 "attractor": 0.25,
                 "recovery": 0.20,
                 "relational": 0.10,
+                "homeostatic": 0.15,
             }
 
         # Need at least 5 observations per component for variance
@@ -262,13 +515,17 @@ class TrajectorySignature:
             c1 = self.attractor.get("center")
             c2 = other.attractor.get("center")
             if c1 and c2:
-                dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
-                component_scores["attractor"] = 2.71828 ** (-dist * 2)
+                cov1 = self.attractor.get("covariance")
+                cov2 = other.attractor.get("covariance")
+                if cov1 and cov2 and len(cov1) == len(c1) and len(cov2) == len(c2):
+                    component_scores["attractor"] = bhattacharyya_similarity(c1, cov1, c2, cov2)
+                else:
+                    dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
+                    component_scores["attractor"] = math.exp(-dist * 2)
 
         t1 = self.recovery.get("tau_estimate")
         t2 = other.recovery.get("tau_estimate")
         if t1 and t2 and t1 > 0 and t2 > 0:
-            import math
             log_ratio = abs(math.log(t1 / t2))
             component_scores["recovery"] = math.exp(-log_ratio)
 
@@ -276,6 +533,11 @@ class TrajectorySignature:
         v2 = other.relational.get("valence_tendency")
         if v1 is not None and v2 is not None:
             component_scores["relational"] = 1 - abs(v1 - v2) / 2
+
+        if self.homeostatic and other.homeostatic:
+            component_scores["homeostatic"] = homeostatic_similarity(
+                self.homeostatic, other.homeostatic
+            )
 
         # Update history if requested
         if update_history:
@@ -469,6 +731,7 @@ class TrajectorySignature:
             "attractor": self.attractor,
             "recovery": self.recovery,
             "relational": self.relational,
+            "homeostatic": self.homeostatic,
             "computed_at": self.computed_at.isoformat(),
             "observation_count": self.observation_count,
             "stability_score": round(self.get_stability_score(), 3),
@@ -495,6 +758,7 @@ class TrajectorySignature:
             attractor=data.get("attractor"),
             recovery=data.get("recovery", {}),
             relational=data.get("relational", {}),
+            homeostatic=data.get("homeostatic"),
             computed_at=computed_at,
             observation_count=data.get("observation_count", 0),
         )
@@ -593,12 +857,23 @@ def compute_trajectory_signature(
         except Exception as e:
             print(f"[Trajectory] Could not get relational: {e}", file=sys.stderr)
 
+    # Η: Homeostatic Identity (Definition 3.6)
+    homeostatic = None
+    if attractor and recovery:
+        homeostatic = {
+            "set_point": attractor.get("center"),
+            "basin_shape": attractor.get("covariance"),
+            "recovery_tau": recovery.get("tau_estimate"),
+            "viability_bounds": VIABILITY_BOUNDS,
+        }
+
     sig = TrajectorySignature(
         preferences=preferences,
         beliefs=beliefs,
         attractor=attractor,
         recovery=recovery,
         relational=relational,
+        homeostatic=homeostatic,
         observation_count=observation_count,
     )
 
@@ -645,19 +920,23 @@ def compare_signatures(sig1: TrajectorySignature, sig2: TrajectorySignature) -> 
         if sim:
             components["beliefs"] = round((sim + 1) / 2, 4)
 
-    # Attractor
+    # Attractor (Bhattacharyya when covariance available)
     if sig1.attractor and sig2.attractor:
         c1 = sig1.attractor.get("center")
         c2 = sig2.attractor.get("center")
         if c1 and c2:
-            dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
-            components["attractor"] = round(2.71828 ** (-dist * 2), 4)
+            cov1 = sig1.attractor.get("covariance")
+            cov2 = sig2.attractor.get("covariance")
+            if cov1 and cov2 and len(cov1) == len(c1) and len(cov2) == len(c2):
+                components["attractor"] = round(bhattacharyya_similarity(c1, cov1, c2, cov2), 4)
+            else:
+                dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
+                components["attractor"] = round(math.exp(-dist * 2), 4)
 
     # Recovery
     t1 = sig1.recovery.get("tau_estimate")
     t2 = sig2.recovery.get("tau_estimate")
     if t1 and t2 and t1 > 0 and t2 > 0:
-        import math
         log_ratio = abs(math.log(t1 / t2))
         components["recovery"] = round(math.exp(-log_ratio), 4)
 
@@ -666,6 +945,12 @@ def compare_signatures(sig1: TrajectorySignature, sig2: TrajectorySignature) -> 
     v2 = sig2.relational.get("valence_tendency")
     if v1 is not None and v2 is not None:
         components["relational"] = round(1 - abs(v1 - v2) / 2, 4)
+
+    # Homeostatic (Eta)
+    if sig1.homeostatic and sig2.homeostatic:
+        components["homeostatic"] = round(
+            homeostatic_similarity(sig1.homeostatic, sig2.homeostatic), 4
+        )
 
     return {
         "overall_similarity": round(overall, 4),
