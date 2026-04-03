@@ -1,8 +1,10 @@
-"""Tests for system_metrics persistence in IdentityStore."""
+"""Tests for system_metrics persistence and rate-of-change probes."""
 
 import sqlite3
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -189,3 +191,117 @@ class TestPruneSystemMetrics:
     def test_prune_returns_zero_when_empty(self, store):
         deleted = store.prune_system_metrics(max_age_hours=24.0)
         assert deleted == 0
+
+
+class TestThermalRateProbe:
+    """Test the thermal_trend probe logic (metrics → health bridge)."""
+
+    def _make_probe(self, store):
+        """Build the thermal rate probe with a mock ctx pointing to store."""
+        from anima_mcp.server_state import THERMAL_RATE_THRESHOLD
+
+        def probe():
+            try:
+                rows = store.get_system_metrics(hours=1.0/12, limit=20)
+                if len(rows) < 3:
+                    return True
+                first, last = rows[0], rows[-1]
+                t0 = datetime.fromisoformat(first["timestamp"])
+                t1 = datetime.fromisoformat(last["timestamp"])
+                minutes = (t1 - t0).total_seconds() / 60.0
+                if minutes < 0.5:
+                    return True
+                temp0 = first.get("cpu_temp_c")
+                temp1 = last.get("cpu_temp_c")
+                if temp0 is None or temp1 is None:
+                    return True
+                rate = (temp1 - temp0) / minutes
+                return rate <= THERMAL_RATE_THRESHOLD
+            except Exception:
+                return True
+        return probe
+
+    def _insert_with_timestamps(self, store, temps, interval_seconds=30):
+        """Insert metrics rows with controlled timestamps."""
+        conn = store._connect()
+        now = datetime.now()
+        for i, temp in enumerate(temps):
+            ts = (now - timedelta(seconds=interval_seconds * (len(temps) - 1 - i))).isoformat()
+            conn.execute(
+                "INSERT INTO system_metrics (timestamp, cpu_temp_c, epoch) VALUES (?, ?, 1)",
+                (ts, temp)
+            )
+        conn.commit()
+
+    def test_healthy_when_no_data(self, store):
+        probe = self._make_probe(store)
+        assert probe() is True
+
+    def test_healthy_when_insufficient_rows(self, store):
+        store.record_system_metrics(FakeReadings(cpu_temp_c=50.0))
+        store.record_system_metrics(FakeReadings(cpu_temp_c=55.0))
+        probe = self._make_probe(store)
+        assert probe() is True  # Only 2 rows, need 3
+
+    def test_healthy_with_stable_temp(self, store):
+        # 5 rows over 2 minutes, stable at 55°C
+        self._insert_with_timestamps(store, [55.0, 55.1, 54.9, 55.0, 55.1])
+        probe = self._make_probe(store)
+        assert probe() is True
+
+    def test_degraded_with_rapid_rise(self, store):
+        # 5 rows over 2 minutes, rising 10°C/min (50 → 70 in 2 min)
+        self._insert_with_timestamps(store, [50.0, 55.0, 60.0, 65.0, 70.0])
+        probe = self._make_probe(store)
+        assert probe() is False
+
+    def test_healthy_with_gradual_rise(self, store):
+        # 5 rows over 2 minutes, rising 2.5°C/min (50 → 55 in 2 min) — below threshold
+        self._insert_with_timestamps(store, [50.0, 51.25, 52.5, 53.75, 55.0])
+        probe = self._make_probe(store)
+        assert probe() is True
+
+    def test_healthy_with_cooling(self, store):
+        # Temperature falling — always ok
+        self._insert_with_timestamps(store, [70.0, 65.0, 60.0, 55.0, 50.0])
+        probe = self._make_probe(store)
+        assert probe() is True
+
+
+class TestMemoryPressureProbe:
+    """Test the memory_pressure probe logic."""
+
+    def _make_probe(self, store):
+        from anima_mcp.server_state import MEMORY_PRESSURE_THRESHOLD
+
+        def probe():
+            try:
+                rows = store.get_system_metrics(hours=1.0/60, limit=3)
+                if not rows:
+                    return True
+                mem = rows[-1].get("memory_percent")
+                if mem is None:
+                    return True
+                return mem < MEMORY_PRESSURE_THRESHOLD
+            except Exception:
+                return True
+        return probe
+
+    def test_healthy_when_no_data(self, store):
+        probe = self._make_probe(store)
+        assert probe() is True
+
+    def test_healthy_with_normal_memory(self, store):
+        store.record_system_metrics(FakeReadings(memory_percent=45.0))
+        probe = self._make_probe(store)
+        assert probe() is True
+
+    def test_degraded_with_high_memory(self, store):
+        store.record_system_metrics(FakeReadings(memory_percent=95.0))
+        probe = self._make_probe(store)
+        assert probe() is False
+
+    def test_healthy_at_boundary(self, store):
+        store.record_system_metrics(FakeReadings(memory_percent=89.9))
+        probe = self._make_probe(store)
+        assert probe() is True

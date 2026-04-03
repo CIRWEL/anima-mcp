@@ -44,7 +44,10 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         _get_schema_hub, _get_calibration_drift,
         _get_readings_and_anima, _get_last_shm_data,
     )
-    from .server_state import SHM_STALE_THRESHOLD_SECONDS, SHM_GOVERNANCE_STALE_SECONDS
+    from .server_state import (
+        SHM_STALE_THRESHOLD_SECONDS, SHM_GOVERNANCE_STALE_SECONDS,
+        THERMAL_RATE_THRESHOLD, MEMORY_PRESSURE_THRESHOLD,
+    )
 
     max_attempts = 5
     for attempt in range(1, max_attempts + 1):
@@ -125,6 +128,52 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
                 _health.register("voice", probe=lambda: _get_ctx() and _get_ctx().voice_instance is not None, debounce_seconds=6.0)
                 _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None, debounce_seconds=6.0)
+
+                # Rate-of-change probes — bridge system_metrics → health
+                def _thermal_rate_probe():
+                    """Check CPU temp isn't rising dangerously fast."""
+                    ctx = _get_ctx()
+                    if not ctx or not ctx.store:
+                        return True  # No store yet — can't check
+                    try:
+                        rows = ctx.store.get_system_metrics(hours=1.0/12, limit=20)  # last 5 min
+                        if len(rows) < 3:
+                            return True  # Not enough data yet
+                        from datetime import datetime
+                        first, last = rows[0], rows[-1]
+                        t0 = datetime.fromisoformat(first["timestamp"])
+                        t1 = datetime.fromisoformat(last["timestamp"])
+                        minutes = (t1 - t0).total_seconds() / 60.0
+                        if minutes < 0.5:
+                            return True  # Window too short
+                        temp0 = first.get("cpu_temp_c")
+                        temp1 = last.get("cpu_temp_c")
+                        if temp0 is None or temp1 is None:
+                            return True
+                        rate = (temp1 - temp0) / minutes  # °C/min
+                        return rate <= THERMAL_RATE_THRESHOLD
+                    except Exception:
+                        return True  # Fail open
+
+                def _memory_pressure_probe():
+                    """Check memory isn't critically high."""
+                    ctx = _get_ctx()
+                    if not ctx or not ctx.store:
+                        return True
+                    try:
+                        rows = ctx.store.get_system_metrics(hours=1.0/60, limit=3)  # last 1 min
+                        if not rows:
+                            return True
+                        mem = rows[-1].get("memory_percent")
+                        if mem is None:
+                            return True
+                        return mem < MEMORY_PRESSURE_THRESHOLD
+                    except Exception:
+                        return True
+
+                _health.register("thermal_trend", probe=_thermal_rate_probe, debounce_seconds=10.0)
+                _health.register("memory_pressure", probe=_memory_pressure_probe, debounce_seconds=10.0)
+
                 print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
             except Exception as he:
                 print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
