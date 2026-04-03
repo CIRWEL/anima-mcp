@@ -171,8 +171,8 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                     except Exception:
                         return True
 
-                _health.register("thermal_trend", probe=_thermal_rate_probe, debounce_seconds=10.0)
-                _health.register("memory_pressure", probe=_memory_pressure_probe, debounce_seconds=10.0)
+                _health.register("thermal_trend", probe=_thermal_rate_probe, stale_threshold=3600.0, debounce_seconds=10.0)
+                _health.register("memory_pressure", probe=_memory_pressure_probe, stale_threshold=3600.0, debounce_seconds=10.0)
 
                 print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
             except Exception as he:
