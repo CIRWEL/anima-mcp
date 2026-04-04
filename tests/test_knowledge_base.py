@@ -61,6 +61,20 @@ class TestAddInsight:
         # Fetch the stored insight
         assert kb._insights[0].confidence > 0.5
 
+    def test_semantic_overlap_consolidates_not_second_row(self, kb):
+        """Similar insight (high word overlap, not identical) merges into one row."""
+        first = (
+            "one two three four five six seven eight distinct words here"
+        )
+        second = (
+            "one two three four five six seven nine distinct words here"
+        )
+        a = _add(kb, first)
+        b = _add(kb, second)
+        assert a.insight_id == b.insight_id
+        assert kb.count() == 1
+        assert kb._insights[0].references >= 1
+
     def test_overflow_trims_to_max_keeping_best(self, kb):
         """When exceeding MAX_INSIGHTS, least important are dropped."""
         kb.MAX_INSIGHTS = 5
