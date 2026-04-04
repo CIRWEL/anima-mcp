@@ -67,7 +67,7 @@ Handler modules import state accessors from `accessors.py` (e.g., `from ..access
 
 ### Health Monitoring
 
-`health.py` tracks 9 subsystems with heartbeats + functional probes. Rendered on LCD health screen.
+`health.py` tracks 11 subsystems with heartbeats + functional probes. Rendered on LCD health screen.
 
 | Status | Color | Meaning |
 |--------|-------|---------|
@@ -220,7 +220,7 @@ Goals are **data-grounded** — they emerge from Lumen's actual experience:
 
 ### Self-Reflection & Self-Knowledge
 
-`self_reflection.py` runs during the `reflect()` cycle (`REFLECTION_INTERVAL = 720` iter, ~24min). It discovers insights from multiple sources:
+`self_reflection.py` runs during the `reflect()` cycle (`UNIFIED_REFLECTION_INTERVAL = 900` iter, ~30min). It discovers insights from multiple sources:
 
 | Analyzer | Source | Example Insight |
 |----------|--------|----------------|
