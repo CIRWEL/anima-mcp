@@ -766,37 +766,14 @@ class DrawingEngine:
         self.intent.state.i_momentum = self.canvas.i_momentum
         self.intent.state.drawing_start_time = self.canvas.drawing_start_time or time.time()
 
-        # Health check: detect stuck drawings from previous sessions
         if self.canvas.pixels and self.canvas.last_clear_time > 0:
             age = time.time() - self.canvas.last_clear_time
-            if age > 21600:  # Drawing older than 6 hours
-                print(f"[Canvas] Stale drawing detected ({age/3600:.1f}h old, "
-                      f"{len(self.canvas.pixels)}px, fatigue={self.canvas.fatigue:.2f}). "
-                      f"Saving and clearing for fresh start.", file=sys.stderr, flush=True)
-                # Save the drawing before clearing — it's still Lumen's work
-                if len(self.canvas.pixels) >= 50:
-                    try:
-                        from PIL import Image
-                        from datetime import datetime
-                        drawings_dir = Path.home() / ".anima" / "drawings"
-                        drawings_dir.mkdir(parents=True, exist_ok=True)
-                        img = Image.new("RGB", (self.canvas.width, self.canvas.height), (0, 0, 0))
-                        for (x, y), color in self.canvas.pixels.items():
-                            if 0 <= x < self.canvas.width and 0 <= y < self.canvas.height:
-                                img.putpixel((x, y), color)
-                        era_tag = f"_{self.canvas._era_name}" if self.canvas._era_name else ""
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"lumen_drawing_{timestamp}{era_tag}_stale.png"
-                        filepath = drawings_dir / filename
-                        img.save(filepath)
-                        self.canvas.drawings_saved += 1
-                        print(f"[Canvas] Saved stale drawing: {filepath} ({len(self.canvas.pixels)}px)",
-                              file=sys.stderr, flush=True)
-                    except Exception as e:
-                        print(f"[Canvas] Could not save stale drawing: {e}", file=sys.stderr, flush=True)
-                self.canvas.clear()
-                self.intent.reset()
-                self.canvas.save_to_disk()
+            print(
+                f"[Canvas] Resuming persisted drawing ({age/3600:.1f}h since clear, "
+                f"{len(self.canvas.pixels)}px, fatigue={self.canvas.fatigue:.2f})",
+                file=sys.stderr,
+                flush=True,
+            )
 
         # Load active art era
         from .eras import get_era
@@ -806,9 +783,26 @@ class DrawingEngine:
         self._db_path = db_path or "anima.db"
         self._identity_store = identity_store
         self._last_persist_time = 0.0  # Rate-limit canvas persistence
+        self._last_persist_mark_count = self.canvas.mark_count
         self._behavioral_C = 0.5  # Behavioral coherence (EMA-smoothed)
         # Initialize expression mood tracker
         self._mood_tracker = ExpressionMoodTracker(identity_store=identity_store)
+
+    def _persist_canvas_progress(self, now: Optional[float] = None, *, force: bool = False):
+        """Persist unfinished drawing progress with a shorter crash-loss window."""
+        if not self.canvas.pixels:
+            return
+
+        now = time.time() if now is None else now
+        marks_since_persist = self.intent.mark_count - self._last_persist_mark_count
+        time_since_persist = now - self._last_persist_time
+
+        if not force and marks_since_persist < 5 and time_since_persist < 15.0:
+            return
+
+        self.canvas.save_to_disk()
+        self._last_persist_time = now
+        self._last_persist_mark_count = self.intent.mark_count
 
     def set_drives(self, drives: dict):
         """Update drawing state with inner life drives (from SHM)."""
@@ -957,6 +951,7 @@ class DrawingEngine:
         self.canvas.coherence_history = state.coherence_history.copy()
         self.canvas.i_momentum = state.i_momentum
         self.canvas.drawing_start_time = state.drawing_start_time
+        self._persist_canvas_progress()
 
         # --- Record for mood tracker ---
         try:
@@ -1672,9 +1667,6 @@ class DrawingEngine:
         # No arbitrary mark limit -- fatigue accumulates (0.0005/mark + 0.005/switch)
         # so attention exhausts naturally. Canvas pixel limit (15000) is the only hard cap.
 
-        # Periodically persist canvas state (every 60s)
-        if pixel_count > 0 and now - self._last_persist_time > 60.0:
-            self.canvas.save_to_disk()
-            self._last_persist_time = now
+        self._persist_canvas_progress(now)
 
         return None

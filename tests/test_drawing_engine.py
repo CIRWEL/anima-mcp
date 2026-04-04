@@ -225,7 +225,7 @@ class TestCanvasCompositionalSatisfaction:
             canvas.draw_pixel(i % 100 + 130, (i * 3) % 100 + 130, (255, 255, 255))
 
         # Without coherence history
-        sat_no_coh = canvas.compositional_satisfaction()
+        canvas.compositional_satisfaction()
 
         # With high coherence history
         canvas.coherence_history = [0.9] * 10
@@ -949,6 +949,45 @@ class TestDrawingEngineAttention:
         assert state.fatigue < 0.502  # Only a tiny increase due to second wind
 
 
+class TestDrawingEngineRecovery:
+    """Test restart recovery and crash-resilient persistence."""
+
+    def test_restart_keeps_old_unfinished_canvas(self, tmp_path):
+        canvas_file = tmp_path / "canvas.json"
+        old_time = time.time() - 30000  # > 8 hours
+        data = {
+            "pixels": {"10,20": [255, 128, 0]},
+            "mark_count": 12,
+            "last_clear_time": old_time,
+            "drawing_start_time": old_time,
+            "fatigue": 0.4,
+            "arc_phase": "developing",
+        }
+        canvas_file.write_text(json.dumps(data))
+
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path", return_value=canvas_file):
+            engine = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+
+        assert engine.canvas.pixels == {(10, 20): (255, 128, 0)}
+        assert engine.intent.mark_count == 12
+        assert engine.intent.state.arc_phase == "developing"
+
+    def test_draw_persists_after_mark_batch(self, tmp_path):
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path", return_value=tmp_path / "canvas.json"):
+            engine = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+
+        anima = make_anima()
+        engine._last_persist_time = time.time()
+
+        with patch("anima_mcp.display.drawing_engine.random.random", return_value=0.0), \
+             patch.object(engine.canvas, "save_to_disk") as save_to_disk:
+            for _ in range(5):
+                engine.draw(anima)
+
+        assert engine.intent.mark_count == 5
+        save_to_disk.assert_called_once()
+
+
 class TestDrawingEngineCoherenceTracking:
     """Test _update_coherence_tracking."""
 
@@ -1134,7 +1173,7 @@ class TestDrawingEngineSetEra:
 
     def test_set_era_clears_pending(self, engine):
         engine.canvas.pending_era_switch = "geometric"
-        result = engine.set_era("pointillist")
+        engine.set_era("pointillist")
         assert engine.canvas.pending_era_switch is None
 
 
