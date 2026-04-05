@@ -8,9 +8,13 @@ and self-reflection cycles.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Dict, Optional
 
 logger = logging.getLogger("anima.server")
+
+# Skip stale messages on startup — only reflect on messages posted after boot
+_last_seen_msg_timestamp: float = time.time()
 
 
 async def server_governance_fallback(anima, readings):
@@ -282,9 +286,13 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
         else:
             novelty_level = "developing"
 
-    # Messages and questions
-    recent = get_messages_for_lumen(limit=5)
+    # Messages and questions — only new messages since last reflection
+    # On first call after restart, skip stale messages to avoid "X is here" ghosts
+    global _last_seen_msg_timestamp
+    recent = get_messages_for_lumen(since_timestamp=_last_seen_msg_timestamp, limit=5)
     recent_msgs = [{"author": m.author, "text": m.text} for m in recent]
+    if recent:
+        _last_seen_msg_timestamp = max(m.timestamp for m in recent)
     unanswered = get_unanswered_questions(5)
     unanswered_texts = [q.text for q in unanswered]
 
