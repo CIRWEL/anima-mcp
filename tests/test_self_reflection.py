@@ -118,6 +118,53 @@ class TestInsightPersistence:
         assert srs._insights["dedup_test"].description == "version 2"
 
 
+class TestReflectionEpisodePersistence:
+    """Test reflection episode persistence and broker drain idempotency."""
+
+    def test_broker_drain_is_idempotent_and_persists_watermark(self, tmp_path):
+        db = str(tmp_path / "reflection.db")
+        shm_event = {
+            "timestamp": "2026-04-05T12:00:00",
+            "metacognition": {
+                "last_reflection": {
+                    "event_id": "broker-metacog:2026-04-05T12:00:00",
+                    "timestamp": "2026-04-05T12:00:00",
+                    "kind": "metacog",
+                    "source": "broker",
+                    "trigger": "high_surprise",
+                    "topic_tags": ["warmth"],
+                    "observation": "Felt warmth differed from expected",
+                    "surprise": 0.52,
+                    "discrepancy": 0.18,
+                    "belief_snapshot": {"warmth_baseline_low": {"value": 0.4, "confidence": 0.6}},
+                    "preference_snapshot": {"warmth": {"valence": 0.5, "confidence": 0.5, "influence_weight": 1.0}},
+                },
+            },
+        }
+
+        srs1 = SelfReflectionSystem(db_path=db)
+        assert srs1.drain_broker_reflection(shm_event) is True
+        assert srs1.drain_broker_reflection(shm_event) is False
+        count = srs1._connect().execute("SELECT COUNT(*) AS c FROM reflection_episodes").fetchone()["c"]
+        assert count == 1
+        srs1.close()
+
+        srs2 = SelfReflectionSystem(db_path=db)
+        assert srs2.drain_broker_reflection(shm_event) is False
+        count = srs2._connect().execute("SELECT COUNT(*) AS c FROM reflection_episodes").fetchone()["c"]
+        assert count == 1
+        srs2.close()
+
+    def test_reflect_records_analytic_episode(self, srs):
+        with patch("anima_mcp.growth.get_growth_system", return_value=MagicMock(_preferences={}, _drawings_observed=0)), \
+             patch("anima_mcp.self_model.get_self_model", return_value=MagicMock(beliefs={})):
+            srs.reflect()
+
+        episodes = srs.get_recent_reflection_episodes(limit=5, kind="analytic")
+        assert episodes
+        assert episodes[0].kind == "analytic"
+
+
 # ==================== should_reflect ====================
 
 class TestShouldReflect:
@@ -381,6 +428,205 @@ class TestReflect:
         # Should mention the new insight
         if result:
             assert "noticed" in result.lower() or "night" in result.lower() or "know" in result.lower()
+
+
+class TestReflectionDynamics:
+    """Test same-kind rumination/update detection and summary behavior."""
+
+    @staticmethod
+    def _record_episode(srs, *, kind, timestamp, topics, surprise, discrepancy, belief_value, pref_value):
+        srs.record_episode(
+            kind=kind,
+            source="test",
+            trigger="unit",
+            event_timestamp=timestamp,
+            topic_tags=topics,
+            observation="test reflection",
+            surprise=surprise,
+            discrepancy=discrepancy,
+            belief_snapshot={"warmth_baseline_low": {"value": belief_value, "confidence": 0.6}},
+            preference_snapshot={"warmth": {"valence": pref_value, "confidence": 0.5, "influence_weight": 1.0}},
+        )
+
+    def test_same_kind_rumination_detected(self, srs):
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        self._record_episode(srs, kind="metacog", timestamp=base, topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.4, pref_value=0.4)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=1), topics=["warmth"], surprise=0.58, discrepancy=0.24, belief_value=0.4, pref_value=0.4)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=2), topics=["warmth"], surprise=0.56, discrepancy=0.22, belief_value=0.4, pref_value=0.4)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert any("without updating" in insight.description.lower() for insight in new_insights)
+
+        summary = srs.get_reflection_summary()
+        assert summary["dominant_focus"]["tag"] == "warmth"
+        assert summary["rumination"]["count"] == 2
+
+    def test_cross_kind_overlap_does_not_count_as_rumination(self, srs):
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        self._record_episode(srs, kind="metacog", timestamp=base, topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.4, pref_value=0.4)
+        self._record_episode(srs, kind="analytic", timestamp=base + timedelta(seconds=1), topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.4, pref_value=0.4)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert new_insights == []
+
+    def test_rumination_window_ignores_old_same_kind_episode(self, srs):
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        self._record_episode(srs, kind="metacog", timestamp=base, topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.4, pref_value=0.4)
+        for idx in range(10):
+            self._record_episode(
+                srs,
+                kind="metacog",
+                timestamp=base + timedelta(seconds=idx + 1),
+                topics=[f"other_{idx}"],
+                surprise=0.3,
+                discrepancy=0.1,
+                belief_value=0.4,
+                pref_value=0.4,
+            )
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=20), topics=["warmth"], surprise=0.56, discrepancy=0.21, belief_value=0.4, pref_value=0.4)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert new_insights == []
+
+    def test_similarity_epsilon_blocks_false_rumination(self, srs):
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        self._record_episode(srs, kind="metacog", timestamp=base, topics=["warmth"], surprise=0.2, discrepancy=0.1, belief_value=0.4, pref_value=0.4)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=1), topics=["warmth"], surprise=0.35, discrepancy=0.25, belief_value=0.4, pref_value=0.4)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=2), topics=["warmth"], surprise=0.5, discrepancy=0.4, belief_value=0.4, pref_value=0.4)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert new_insights == []
+
+    def test_productive_update_detected(self, srs):
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        self._record_episode(srs, kind="metacog", timestamp=base, topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.3, pref_value=0.3)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=1), topics=["warmth"], surprise=0.54, discrepancy=0.21, belief_value=0.45, pref_value=0.45)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=2), topics=["warmth"], surprise=0.53, discrepancy=0.19, belief_value=0.6, pref_value=0.6)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert any("change what i know" in insight.description.lower() for insight in new_insights)
+
+    @staticmethod
+    def _record_analytic(srs, *, timestamp, topics, belief_value, pref_value):
+        """Analytic episodes have no surprise/discrepancy — they're interval-driven summaries."""
+        srs.record_episode(
+            kind="analytic",
+            source="self_reflection",
+            trigger="interval",
+            event_timestamp=timestamp,
+            topic_tags=topics,
+            observation="periodic reflection",
+            belief_snapshot={"warmth_baseline_low": {"value": belief_value, "confidence": 0.6}},
+            preference_snapshot={"warmth": {"valence": pref_value, "confidence": 0.5, "influence_weight": 1.0}},
+        )
+
+    def test_analytic_overlap_does_not_trigger_rumination(self, srs):
+        """Regression: analytic episodes with overlapping tags and stable beliefs must NOT be
+        flagged as rumination.
+
+        Analytic reflection is interval-driven pattern summarization. In a healthy stable
+        system the same patterns recur every cycle with unchanged beliefs — that's normal,
+        not rumination. Before this fix, `_intensity_is_similar` returned True vacuously
+        for analytic (no surprise/discrepancy data) and the detector labeled every stable
+        analytic cycle as rumination. Rumination classification is now scoped to metacog.
+        """
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        # Three analytic episodes, same topic, stable beliefs — the exact steady-state case
+        self._record_analytic(srs, timestamp=base, topics=["warmth"], belief_value=0.4, pref_value=0.4)
+        self._record_analytic(srs, timestamp=base + timedelta(seconds=1), topics=["warmth"], belief_value=0.4, pref_value=0.4)
+        self._record_analytic(srs, timestamp=base + timedelta(seconds=2), topics=["warmth"], belief_value=0.4, pref_value=0.4)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert all(
+            "without updating" not in insight.description.lower()
+            and "keep reflecting" not in insight.description.lower()
+            for insight in new_insights
+        ), f"analytic episodes were incorrectly flagged as rumination: {[i.description for i in new_insights]}"
+
+        summary = srs.get_reflection_summary()
+        # Overlap is still counted as "repeated" so the summary stays honest about recurrence,
+        # but it must not roll up into rumination.
+        assert summary["rumination"]["count"] == 0
+        assert summary["learning_yield"]["repeated"] == 2  # 2 repeat pairs across 3 episodes
+
+    def test_productive_dominance_suppresses_rumination_insight(self, srs):
+        """When a topic bucket has both productive and rumination pairs in the window,
+        the dominant signal wins. Productive-dominant → only the learning insight fires,
+        the rumination insight is suppressed.
+        """
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        # First pair: stable beliefs (ruminative)
+        self._record_episode(srs, kind="metacog", timestamp=base, topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.4, pref_value=0.4)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=1), topics=["warmth"], surprise=0.56, discrepancy=0.21, belief_value=0.4, pref_value=0.4)
+        # Next three pairs: belief/pref movement (productive)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=2), topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.55, pref_value=0.55)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=3), topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.7, pref_value=0.7)
+        self._record_episode(srs, kind="metacog", timestamp=base + timedelta(seconds=4), topics=["warmth"], surprise=0.55, discrepancy=0.2, belief_value=0.85, pref_value=0.85)
+
+        new_insights = srs._analyze_reflection_episode_insights()
+
+        # Productive count (3) > rumination count (1), so only the learning insight should fire
+        rumination_insights = [i for i in new_insights if "without updating" in i.description.lower()]
+        productive_insights = [i for i in new_insights if "change what i know" in i.description.lower()]
+        assert len(productive_insights) == 1
+        assert len(rumination_insights) == 0, (
+            f"productive-dominant bucket should suppress rumination insight; "
+            f"got: {[i.description for i in new_insights]}"
+        )
+
+    def test_rumination_and_server_broker_share_bucket(self, srs):
+        """Server-origin and broker-origin metacog episodes on the same topic must
+        bucket together (same kind) and contribute to the same rumination count.
+
+        This is the regression guard for the server-side recording hook at
+        server.py:392. Before that hook existed, server reflections never made it
+        into the table; now they do, and the detector must treat them as same-kind
+        peers of broker events.
+        """
+        base = datetime(2026, 4, 5, 12, 0, 0)
+        # Mixed source, same kind, same topic, stable beliefs
+        srs.record_episode(
+            kind="metacog", source="broker", trigger="high_surprise",
+            event_timestamp=base,
+            topic_tags=["warmth"],
+            observation="broker reflection",
+            surprise=0.55, discrepancy=0.2,
+            belief_snapshot={"warmth_baseline_low": {"value": 0.4, "confidence": 0.6}},
+            preference_snapshot={"warmth": {"valence": 0.4, "confidence": 0.5, "influence_weight": 1.0}},
+            event_id="broker-metacog:1",
+        )
+        srs.record_episode(
+            kind="metacog", source="server", trigger="high_surprise",
+            event_timestamp=base + timedelta(seconds=1),
+            topic_tags=["warmth"],
+            observation="server reflection",
+            surprise=0.56, discrepancy=0.21,
+            belief_snapshot={"warmth_baseline_low": {"value": 0.4, "confidence": 0.6}},
+            preference_snapshot={"warmth": {"valence": 0.4, "confidence": 0.5, "influence_weight": 1.0}},
+            event_id="server-metacog:1",
+        )
+        srs.record_episode(
+            kind="metacog", source="broker", trigger="high_surprise",
+            event_timestamp=base + timedelta(seconds=2),
+            topic_tags=["warmth"],
+            observation="broker reflection",
+            surprise=0.55, discrepancy=0.2,
+            belief_snapshot={"warmth_baseline_low": {"value": 0.4, "confidence": 0.6}},
+            preference_snapshot={"warmth": {"valence": 0.4, "confidence": 0.5, "influence_weight": 1.0}},
+            event_id="broker-metacog:2",
+        )
+
+        summary = srs.get_reflection_summary()
+        # Three episodes, same kind (metacog), same topic, stable beliefs → 2 ruminative pairs
+        assert summary["learning_yield"]["repeated"] == 2
+        assert summary["rumination"]["count"] == 2
+        assert summary["dominant_focus"]["tag"] == "warmth"
+        assert summary["dominant_focus"]["kind"] == "metacog"
+
+        new_insights = srs._analyze_reflection_episode_insights()
+        assert any("without updating" in i.description.lower() for i in new_insights), (
+            "mixed broker/server metacog episodes on same topic should fire rumination"
+        )
 
 
 # ==================== get_insights ====================

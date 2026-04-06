@@ -6,7 +6,7 @@ Nodes:
 - 4 anima dimensions (warmth, clarity, stability, presence)
 - 4 physical sensors (light, temp, humidity, pressure)
 - 3 resources (memory, cpu, disk)
-- Optional: preference, belief, tension nodes
+- Optional: preference, belief, reflection, tension, drift, trajectory, mark, experiential nodes
 
 Edges derived from NervousSystemCalibration weights.
 Identity connects to all anima dimensions (structural "I am" edges).
@@ -46,7 +46,7 @@ BELIEF_SENSITIVITY_MODULATIONS: Dict[str, str] = {
 class SchemaNode:
     """A node in Lumen's self-schema graph."""
     node_id: str
-    node_type: str  # "identity", "anima", "sensor", "resource", "preference", "belief", "tension"
+    node_type: str  # "identity", "anima", "sensor", "resource", "preference", "belief", "reflection", ...
     label: str
     value: float  # Normalized 0-1 for display
     raw_value: Any = None  # Original value before normalization

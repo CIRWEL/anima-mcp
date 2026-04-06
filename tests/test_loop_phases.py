@@ -855,6 +855,7 @@ class TestSelfReflect:
         ctx = make_ctx()
         ctx.store = MagicMock()
         ctx.store.db_path = ":memory:"
+        ctx.last_shm_data = {"metacognition": {"last_reflection": {"event_id": "broker-metacog:test"}}}
 
         with patch("anima_mcp.self_reflection.get_reflection_system") as mock_refl, \
              patch("anima_mcp.messages.add_observation", return_value=MagicMock()) as mock_obs:
@@ -864,6 +865,7 @@ class TestSelfReflect:
 
             await self_reflect()
 
+        system.drain_broker_reflection.assert_called_once_with(ctx.last_shm_data)
         mock_obs.assert_called_once_with("I notice I am calmer at night", author="lumen")
 
     @pytest.mark.asyncio
@@ -882,6 +884,7 @@ class TestSelfReflect:
 
             await self_reflect()
 
+        system.drain_broker_reflection.assert_called_once_with(None)
         mock_obs.assert_not_called()
 
     @pytest.mark.asyncio
@@ -901,6 +904,7 @@ class TestSelfReflect:
 
             await self_reflect()
 
+        system.drain_broker_reflection.assert_called_once_with(None)
         mock_obs.assert_not_called()
 
     @pytest.mark.asyncio
@@ -929,3 +933,4 @@ class TestSelfReflect:
             await self_reflect()
 
         mock_refl.assert_called_once_with(db_path="anima.db")
+        system.drain_broker_reflection.assert_called_once_with(None)

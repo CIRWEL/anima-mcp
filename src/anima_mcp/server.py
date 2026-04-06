@@ -391,6 +391,43 @@ async def _update_display_loop():
                         if should_reflect:
                             reflection = metacog.reflect(prediction_error, anima, readings, trigger=reason)
 
+                            # Persist as a reflection_episode so the rumination/learning
+                            # detector can see server-origin reflections. The broker path
+                            # goes through SHM drain; this is the server-side direct write.
+                            # Tagged source='server' + distinct event_id prefix so it never
+                            # collides with broker-origin events on the PRIMARY KEY.
+                            try:
+                                from .self_reflection import (
+                                    get_reflection_system,
+                                    REFLECTION_KIND_METACOG,
+                                )
+                                _db_path = (
+                                    _ctx.store.db_path
+                                    if _ctx and _ctx.store
+                                    else "anima.db"
+                                )
+                                get_reflection_system(db_path=_db_path).record_episode(
+                                    kind=REFLECTION_KIND_METACOG,
+                                    source="server",
+                                    trigger=reason,
+                                    topic_tags=[
+                                        str(t).lower()
+                                        for t in (prediction_error.surprise_sources or [])
+                                    ],
+                                    observation=reflection.observation or "",
+                                    surprise=prediction_error.surprise,
+                                    discrepancy=reflection.discrepancy,
+                                    event_timestamp=reflection.timestamp,
+                                    event_id=f"server-metacog:{reflection.timestamp.isoformat()}",
+                                    metadata={
+                                        "felt_state": reflection.felt_state or {},
+                                        "sensor_state": reflection.sensor_state or {},
+                                        "discrepancy_description": reflection.discrepancy_description,
+                                    },
+                                )
+                            except Exception as _re:
+                                logger.debug("[Metacog] reflection episode record failed: %s", _re)
+
                             curiosity_question = metacog.generate_curiosity_question(prediction_error)
                             if curiosity_question:
                                 from .messages import add_question

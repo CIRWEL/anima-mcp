@@ -523,9 +523,13 @@ async def extract_and_validate_schema(anima, readings, identity):
 
         # Compose G_t via SchemaHub (includes trajectory feedback, gap texture, identity enrichment)
         from .self_model import get_self_model as _get_sm
+        from .self_reflection import get_reflection_system
         from .value_tension import detect_structural_conflicts
         hub = _get_schema_hub()
         drift = _get_calibration_drift()
+        reflection_system = get_reflection_system(
+            db_path=(_ctx.store.db_path if _ctx and _ctx.store else "anima.db")
+        )
 
         # Gather tension conflicts (structural + transient)
         _tension_conflicts = list(detect_structural_conflicts())
@@ -540,6 +544,7 @@ async def extract_and_validate_schema(anima, readings, identity):
             self_model=_get_sm(),
             drift_offsets=drift.get_offsets(),
             tension_conflicts=_tension_conflicts,
+            reflection_summary=reflection_system.get_reflection_summary(),
         )
 
         # Update calibration drift with current attractor center
@@ -589,10 +594,12 @@ async def self_reflect():
     _ctx = get_ctx()
 
     try:
+        from .accessors import _get_last_shm_data
         from .self_reflection import get_reflection_system
         from .messages import add_observation
 
         reflection_system = get_reflection_system(db_path=(_ctx.store.db_path if _ctx and _ctx.store else "anima.db"))
+        reflection_system.drain_broker_reflection(_get_last_shm_data())
 
         # Check if it's time to reflect
         if reflection_system.should_reflect():

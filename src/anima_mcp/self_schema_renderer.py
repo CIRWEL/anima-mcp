@@ -42,7 +42,7 @@ CENTER = (WIDTH // 2, HEIGHT // 2)
 # Ring 1: anima
 # Ring 2: sensor + resource
 # Ring 3: preference + belief
-# Ring 4: meta + trajectory + drift + tension
+# Ring 4: meta + trajectory + drift + tension + reflection
 RING_1_RADIUS = 30        # Anima dimensions
 RING_2_RADIUS = 55        # Physical sensors
 RING_2B_RADIUS = 55       # System resources (same ring as sensors)
@@ -52,6 +52,7 @@ RING_META_RADIUS = 104    # Identity texture (outer ring)
 RING_TRAJ_RADIUS = 104    # Trajectory (outer ring)
 RING_DRIFT_RADIUS = 104   # Calibration drift (outer ring)
 RING_TENSION_RADIUS = 104 # Value tensions (outer ring)
+RING_REFLECTION_RADIUS = 104  # Reflection summaries (outer ring)
 
 # Node sizes (radius)
 IDENTITY_RADIUS = 12
@@ -64,6 +65,7 @@ META_RADIUS = 4
 TRAJECTORY_RADIUS = 4
 DRIFT_RADIUS = 4
 TENSION_RADIUS = 4
+REFLECTION_RADIUS = 4
 
 # Colors (RGB)
 COLORS = {
@@ -79,6 +81,7 @@ COLORS = {
     "trajectory": (180, 220, 140),    # Soft lime for trajectory
     "drift": (220, 140, 140),         # Soft red for drift
     "tension": (220, 180, 100),       # Amber for tension
+    "reflection": (140, 210, 220),    # Cool aqua for reflection summaries
     "edge_positive": (100, 150, 100), # Green-gray for positive edges
     "edge_negative": (150, 100, 100), # Red-gray for negative edges
     "background": (20, 20, 30),       # Dark background
@@ -281,6 +284,14 @@ def _get_node_position(node: SchemaNode, index_in_ring: int, total_in_ring: int)
         y = cy + int(RING_TENSION_RADIUS * math.sin(angle_rad))
         return x, y
 
+    elif node.node_type == "reflection":
+        angle_step = 360.0 / total_in_ring if total_in_ring > 0 else 90
+        angle = 60 + angle_step * index_in_ring
+        angle_rad = math.radians(angle)
+        x = cx + int(RING_REFLECTION_RADIUS * math.cos(angle_rad))
+        y = cy + int(RING_REFLECTION_RADIUS * math.sin(angle_rad))
+        return x, y
+
     return cx, cy
 
 
@@ -288,7 +299,7 @@ def _build_node_positions(schema: SelfSchema) -> Dict[str, Tuple[int, int]]:
     """Build position lookup for all nodes in the schema."""
     node_positions: Dict[str, Tuple[int, int]] = {}
     type_indices = {"anima": 0, "sensor": 0, "resource": 0, "preference": 0, "belief": 0,
-                    "meta": 0, "trajectory": 0, "drift": 0, "tension": 0}
+                    "meta": 0, "trajectory": 0, "drift": 0, "tension": 0, "reflection": 0}
     type_counts = {t: sum(1 for n in schema.nodes if n.node_type == t) for t in type_indices}
 
     for node in schema.nodes:
@@ -453,6 +464,8 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             _draw_glow(pixels, x, y, DRIFT_RADIUS, COLORS["drift"], node.value)
         elif node.node_type == "tension":
             _draw_glow(pixels, x, y, TENSION_RADIUS, COLORS["tension"], node.value)
+        elif node.node_type == "reflection":
+            _draw_glow(pixels, x, y, REFLECTION_RADIUS, COLORS["reflection"], node.value)
 
     # Draw nodes
     for node in schema.nodes:
@@ -484,6 +497,8 @@ def render_schema_to_pixels(schema: SelfSchema) -> Dict[Tuple[int, int], Tuple[i
             _draw_filled_circle(pixels, x, y, DRIFT_RADIUS, COLORS["drift"])
         elif node.node_type == "tension":
             _draw_filled_circle(pixels, x, y, TENSION_RADIUS, COLORS["tension"])
+        elif node.node_type == "reflection":
+            _draw_filled_circle(pixels, x, y, REFLECTION_RADIUS, COLORS["reflection"])
 
     return pixels
 
@@ -603,6 +618,18 @@ def compute_visual_integrity_stub(
             expected_pixels += int(math.pi * RESOURCE_RADIUS ** 2)
         elif node.node_type == "preference":
             expected_pixels += int(math.pi * PREFERENCE_RADIUS ** 2)
+        elif node.node_type == "belief":
+            expected_pixels += int(math.pi * BELIEF_RADIUS ** 2)
+        elif node.node_type == "meta":
+            expected_pixels += int(math.pi * META_RADIUS ** 2)
+        elif node.node_type == "trajectory":
+            expected_pixels += int(math.pi * TRAJECTORY_RADIUS ** 2)
+        elif node.node_type == "drift":
+            expected_pixels += int(math.pi * DRIFT_RADIUS ** 2)
+        elif node.node_type == "tension":
+            expected_pixels += int(math.pi * TENSION_RADIUS ** 2)
+        elif node.node_type == "reflection":
+            expected_pixels += int(math.pi * REFLECTION_RADIUS ** 2)
 
     # Add ~10% for edges
     expected_pixels = int(expected_pixels * 1.1)

@@ -79,6 +79,7 @@ class SchemaHub:
         self_model: Optional['SelfModel'] = None,
         drift_offsets: Optional[Dict[str, float]] = None,
         tension_conflicts: Optional[list] = None,
+        reflection_summary: Optional[Dict[str, Any]] = None,
     ) -> SelfSchema:
         """
         Compose unified schema from all source systems.
@@ -132,6 +133,9 @@ class SchemaHub:
 
         # 9. Inject experiential accumulation nodes
         schema = self._inject_experiential_accumulation(schema)
+
+        # 10. Inject bounded reflection summary nodes
+        schema = self._inject_reflection_summary(schema, reflection_summary)
 
         return schema
 
@@ -736,5 +740,100 @@ class SchemaHub:
                 ))
         except Exception:
             pass
+
+        return schema
+
+    @staticmethod
+    def _reflection_topic_to_node_id(topic: Optional[str]) -> Optional[str]:
+        """Map reflection topics back onto existing schema nodes where possible."""
+        if not topic:
+            return None
+        normalized = topic.split(":", 1)[-1]
+        if normalized in {"warmth", "clarity", "stability", "presence"}:
+            return f"anima_{normalized}"
+        sensor_map = {
+            "light": "sensor_light",
+            "ambient_temp": "sensor_temp",
+            "humidity": "sensor_humidity",
+            "pressure": "sensor_pressure",
+        }
+        return sensor_map.get(normalized)
+
+    @staticmethod
+    def _reflection_topic_label(topic: str) -> str:
+        """Humanize a reflection topic for node labels."""
+        return topic.split(":", 1)[-1].replace("_", " ")
+
+    def _inject_reflection_summary(
+        self,
+        schema: SelfSchema,
+        reflection_summary: Optional[Dict[str, Any]],
+    ) -> SelfSchema:
+        """Inject bounded reflection summary nodes, not raw reflection episodes."""
+        if not reflection_summary or not reflection_summary.get("recent_count"):
+            return schema
+
+        recent_count = int(reflection_summary.get("recent_count", 0))
+        schema.nodes.append(SchemaNode(
+            node_id="reflection_activity",
+            node_type="reflection",
+            label=f"Reflect {recent_count}",
+            value=min(1.0, recent_count / 10.0),
+            raw_value=reflection_summary,
+        ))
+
+        dominant_focus = reflection_summary.get("dominant_focus") or {}
+        focus_tag = dominant_focus.get("tag")
+        if focus_tag:
+            focus_node_id = "reflection_focus"
+            schema.nodes.append(SchemaNode(
+                node_id=focus_node_id,
+                node_type="reflection",
+                label=f"Focus {self._reflection_topic_label(focus_tag)}",
+                value=min(1.0, dominant_focus.get("count", 1) / 5.0),
+                raw_value=dominant_focus,
+            ))
+            target_id = dominant_focus.get("target_node_id") or self._reflection_topic_to_node_id(focus_tag)
+            if target_id:
+                schema.edges.append(SchemaEdge(
+                    source_id=focus_node_id,
+                    target_id=target_id,
+                    weight=max(0.2, min(1.0, dominant_focus.get("count", 1) / 5.0)),
+                ))
+
+        learning_yield = reflection_summary.get("learning_yield") or {}
+        learning_ratio = learning_yield.get("ratio")
+        if learning_ratio is not None:
+            schema.nodes.append(SchemaNode(
+                node_id="reflection_learning_yield",
+                node_type="reflection",
+                label=f"Learn {learning_ratio:.0%}",
+                value=max(0.0, min(1.0, learning_ratio)),
+                raw_value=learning_yield,
+            ))
+
+        rumination = reflection_summary.get("rumination") or {}
+        rumination_count = int(rumination.get("count", 0))
+        if rumination_count > 0:
+            rumination_node = rumination.get("dominant_topic") or {}
+            rumination_tag = rumination_node.get("tag")
+            schema.nodes.append(SchemaNode(
+                node_id="reflection_rumination",
+                node_type="reflection",
+                label=f"Ruminate {rumination.get('ratio', 0.0):.0%}",
+                value=max(0.0, min(1.0, float(rumination.get("ratio", 0.0)))),
+                raw_value=rumination,
+            ))
+            target_id = (
+                rumination_node.get("target_node_id")
+                if isinstance(rumination_node, dict)
+                else None
+            ) or self._reflection_topic_to_node_id(rumination_tag)
+            if target_id:
+                schema.edges.append(SchemaEdge(
+                    source_id="reflection_rumination",
+                    target_id=target_id,
+                    weight=max(0.2, min(1.0, float(rumination.get("ratio", 0.0)))),
+                ))
 
         return schema

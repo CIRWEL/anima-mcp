@@ -17,7 +17,7 @@ import re
 import sqlite3
 import json
 import sys
-from collections import namedtuple
+from collections import Counter, namedtuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -112,6 +112,45 @@ class StatePattern:
     avg_presence: float
 
 
+REFLECTION_KIND_METACOG = "metacog"
+REFLECTION_KIND_ANALYTIC = "analytic"
+REFLECTION_WINDOW = 10
+REFLECTION_EPSILON = 0.1
+
+
+@dataclass
+class ReflectionEpisode:
+    """A persisted reflection event that can itself become material for reflection."""
+    event_id: str
+    kind: str
+    source: str
+    timestamp: datetime
+    trigger: str
+    topic_tags: List[str]
+    observation: str
+    surprise: Optional[float] = None
+    discrepancy: Optional[float] = None
+    belief_snapshot: Optional[Dict[str, Any]] = None
+    preference_snapshot: Optional[Dict[str, Any]] = None
+    metadata: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "event_id": self.event_id,
+            "kind": self.kind,
+            "source": self.source,
+            "timestamp": self.timestamp.isoformat(),
+            "trigger": self.trigger,
+            "topic_tags": list(self.topic_tags),
+            "observation": self.observation,
+            "surprise": self.surprise,
+            "discrepancy": self.discrepancy,
+            "belief_snapshot": self.belief_snapshot or {},
+            "preference_snapshot": self.preference_snapshot or {},
+            "metadata": self.metadata or {},
+        }
+
+
 class SelfReflectionSystem:
     """
     Lumen's self-reflection engine.
@@ -129,9 +168,13 @@ class SelfReflectionSystem:
         self._max_insights: int = 500
         self._last_analysis_time: Optional[datetime] = None
         self._analysis_interval = timedelta(hours=1)  # Reflect every hour
+        self._reflection_window = REFLECTION_WINDOW
+        self._reflection_similarity_epsilon = REFLECTION_EPSILON
+        self._last_drained_broker_event_id: Optional[str] = None
 
         # Load existing insights from DB
         self._init_schema()
+        self._load_reflection_state()
         self._load_insights()
 
     def _connect(self) -> sqlite3.Connection:
@@ -145,7 +188,7 @@ class SelfReflectionSystem:
         return self._conn
 
     def _init_schema(self):
-        """Create insights table if it doesn't exist."""
+        """Create self-reflection tables if they don't exist."""
         conn = self._connect()
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS insights (
@@ -164,8 +207,38 @@ class SelfReflectionSystem:
             CREATE INDEX IF NOT EXISTS idx_insights_strength ON insights(
                 (confidence * validation_count / (validation_count + contradiction_count + 1))
             );
+
+            CREATE TABLE IF NOT EXISTS reflection_episodes (
+                event_id TEXT PRIMARY KEY,
+                event_timestamp TEXT NOT NULL,
+                recorded_at TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                source TEXT NOT NULL,
+                trigger TEXT NOT NULL,
+                topic_tags TEXT NOT NULL,
+                observation TEXT NOT NULL,
+                surprise REAL,
+                discrepancy REAL,
+                belief_snapshot TEXT,
+                preference_snapshot TEXT,
+                metadata TEXT
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reflection_episodes_kind_ts
+                ON reflection_episodes(kind, event_timestamp DESC);
+            CREATE INDEX IF NOT EXISTS idx_reflection_episodes_ts
+                ON reflection_episodes(event_timestamp DESC);
+
+            CREATE TABLE IF NOT EXISTS reflection_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         """)
         conn.commit()
+
+    def _load_reflection_state(self):
+        """Load persisted broker-drain watermark so SHM drains stay idempotent across restarts."""
+        self._last_drained_broker_event_id = self._get_reflection_state("last_broker_event_id")
 
     def _load_insights(self):
         """Load existing insights from database."""
@@ -226,11 +299,645 @@ class SelfReflectionSystem:
             conn.execute("DELETE FROM insights WHERE id = ?", (insight.id,))
         conn.commit()
 
+    def _get_reflection_state(self, key: str) -> Optional[str]:
+        """Fetch a persisted reflection runtime value."""
+        conn = self._connect()
+        row = conn.execute(
+            "SELECT value FROM reflection_state WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return row["value"] if row else None
+
+    def _set_reflection_state(self, key: str, value: str):
+        """Persist a reflection runtime value."""
+        conn = self._connect()
+        conn.execute(
+            """
+            INSERT INTO reflection_state (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (key, value),
+        )
+        conn.commit()
+
+    @staticmethod
+    def _parse_timestamp(value: Any) -> datetime:
+        """Parse timestamp-like values into a datetime."""
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value)
+            except ValueError:
+                return datetime.now()
+        return datetime.now()
+
+    @staticmethod
+    def _normalize_tags(tags: Optional[List[Any]]) -> List[str]:
+        """Normalize topic tags to lowercase unique strings."""
+        normalized: List[str] = []
+        seen = set()
+        for tag in tags or []:
+            if tag is None:
+                continue
+            cleaned = str(tag).strip().lower()
+            if not cleaned or cleaned in seen:
+                continue
+            normalized.append(cleaned)
+            seen.add(cleaned)
+        return normalized
+
+    def _capture_belief_snapshot(self) -> Dict[str, Dict[str, float]]:
+        """Capture current self-belief values for later learning-vs-rumination checks.
+
+        Reaches into self_model's public `beliefs` attribute via getattr. Wrapped
+        in try/except because this runs on the server-side analytic reflection
+        path where the self_model singleton may not yet be initialized. On failure
+        we return an empty snapshot — callers treat that as "no data" so the
+        rumination detector becomes conservative rather than firing falsely.
+        """
+        try:
+            from .self_model import get_self_model
+
+            model = get_self_model()
+            beliefs = getattr(model, "beliefs", None) or {}
+        except Exception:
+            return {}
+
+        snapshot: Dict[str, Dict[str, float]] = {}
+        for belief_id, belief in beliefs.items():
+            try:
+                snapshot[str(belief_id)] = {
+                    "value": round(float(getattr(belief, "value", 0.0)), 3),
+                    "confidence": round(float(getattr(belief, "confidence", 0.0)), 3),
+                }
+            except (TypeError, ValueError):
+                continue
+        return snapshot
+
+    def _capture_preference_snapshot(self) -> Dict[str, Dict[str, float]]:
+        """Capture current preference weights for later learning-vs-rumination checks.
+
+        Reaches into the preference system's `_preferences` private attribute. This
+        matches the access pattern used elsewhere in the codebase (growth._preferences,
+        etc.) but is fragile: if the preference module refactors its internal
+        storage, this returns an empty dict silently and the rumination detector's
+        `_snapshot_changed` check stops receiving preference deltas. If you ever see
+        "all metacog episodes look unproductive forever" in production, check this
+        helper first — the private attribute may have moved.
+        """
+        try:
+            from .preferences import get_preference_system
+
+            pref_system = get_preference_system()
+            pref_map = getattr(pref_system, "_preferences", None) or {}
+        except Exception:
+            return {}
+
+        snapshot: Dict[str, Dict[str, float]] = {}
+        for pref_id, pref in pref_map.items():
+            try:
+                snapshot[str(pref_id)] = {
+                    "valence": round(float(getattr(pref, "valence", 0.0)), 3),
+                    "confidence": round(float(getattr(pref, "confidence", 0.0)), 3),
+                    "influence_weight": round(float(getattr(pref, "influence_weight", 1.0)), 3),
+                }
+            except (TypeError, ValueError):
+                continue
+        return snapshot
+
+    @staticmethod
+    def _json_loads_or_empty(value: Any) -> Any:
+        """Decode a JSON blob from SQLite, tolerating missing values."""
+        if not value:
+            return {}
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(value)
+        except (TypeError, json.JSONDecodeError):
+            return {}
+
+    def record_episode(
+        self,
+        *,
+        kind: str,
+        source: str,
+        trigger: str,
+        topic_tags: Optional[List[Any]] = None,
+        observation: str = "",
+        surprise: Optional[float] = None,
+        discrepancy: Optional[float] = None,
+        belief_snapshot: Optional[Dict[str, Any]] = None,
+        preference_snapshot: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        event_timestamp: Optional[Any] = None,
+        event_id: Optional[str] = None,
+    ) -> ReflectionEpisode:
+        """Persist a reflection episode as first-class material for later analysis."""
+        timestamp = self._parse_timestamp(event_timestamp)
+        normalized_tags = self._normalize_tags(topic_tags)
+
+        def _safe_optional_float(value: Any) -> Optional[float]:
+            if value is None:
+                return None
+            try:
+                return round(float(value), 3)
+            except (TypeError, ValueError):
+                return None
+
+        episode = ReflectionEpisode(
+            event_id=event_id or f"{kind}:{source}:{timestamp.isoformat()}",
+            kind=kind,
+            source=source,
+            timestamp=timestamp,
+            trigger=trigger,
+            topic_tags=normalized_tags,
+            observation=observation or "",
+            surprise=_safe_optional_float(surprise),
+            discrepancy=_safe_optional_float(discrepancy),
+            belief_snapshot=belief_snapshot if belief_snapshot is not None else self._capture_belief_snapshot(),
+            preference_snapshot=preference_snapshot if preference_snapshot is not None else self._capture_preference_snapshot(),
+            metadata=metadata or {},
+        )
+
+        conn = self._connect()
+        cursor = conn.execute(
+            """
+            INSERT OR IGNORE INTO reflection_episodes
+            (event_id, event_timestamp, recorded_at, kind, source, trigger,
+             topic_tags, observation, surprise, discrepancy, belief_snapshot,
+             preference_snapshot, metadata)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                episode.event_id,
+                episode.timestamp.isoformat(),
+                datetime.now().isoformat(),
+                episode.kind,
+                episode.source,
+                episode.trigger,
+                json.dumps(episode.topic_tags),
+                episode.observation,
+                episode.surprise,
+                episode.discrepancy,
+                json.dumps(episode.belief_snapshot or {}),
+                json.dumps(episode.preference_snapshot or {}),
+                json.dumps(episode.metadata or {}),
+            ),
+        )
+        conn.commit()
+        # INSERT OR IGNORE silently no-ops on PK collision. Log when that happens
+        # so "my episode didn't show up" is debuggable — collisions normally mean
+        # the drain or a duplicate call re-recorded an event that was already in
+        # the table (which is harmless, but a surprise is a bug smell).
+        if cursor.rowcount == 0:
+            print(
+                f"[SelfReflection] Episode {episode.event_id!r} already recorded "
+                f"(PK collision; kind={episode.kind}, source={episode.source})",
+                file=sys.stderr,
+                flush=True,
+            )
+        return episode
+
+    def get_recent_reflection_episodes(self, limit: int = 20, kind: Optional[str] = None) -> List[ReflectionEpisode]:
+        """Return recent reflection episodes, newest first."""
+        conn = self._connect()
+        if kind:
+            rows = conn.execute(
+                """
+                SELECT * FROM reflection_episodes
+                WHERE kind = ?
+                ORDER BY event_timestamp DESC
+                LIMIT ?
+                """,
+                (kind, limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT * FROM reflection_episodes
+                ORDER BY event_timestamp DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+
+        episodes = []
+        for row in rows:
+            episodes.append(ReflectionEpisode(
+                event_id=row["event_id"],
+                kind=row["kind"],
+                source=row["source"],
+                timestamp=datetime.fromisoformat(row["event_timestamp"]),
+                trigger=row["trigger"],
+                topic_tags=self._normalize_tags(self._json_loads_or_empty(row["topic_tags"])),
+                observation=row["observation"],
+                surprise=row["surprise"],
+                discrepancy=row["discrepancy"],
+                belief_snapshot=self._json_loads_or_empty(row["belief_snapshot"]),
+                preference_snapshot=self._json_loads_or_empty(row["preference_snapshot"]),
+                metadata=self._json_loads_or_empty(row["metadata"]),
+            ))
+        return episodes
+
+    def drain_broker_reflection(self, shm_data: Optional[Dict[str, Any]]) -> bool:
+        """Drain the latest broker-side metacog reflection from SHM into SQLite exactly once."""
+        if not shm_data:
+            return False
+
+        metacog = shm_data.get("metacognition") if isinstance(shm_data, dict) else None
+        if not isinstance(metacog, dict):
+            return False
+
+        payload = metacog.get("last_reflection")
+        if not isinstance(payload, dict):
+            return False
+
+        event_id = payload.get("event_id") or (
+            f"broker-metacog:{payload.get('timestamp')}" if payload.get("timestamp") else None
+        )
+        if not event_id:
+            return False
+
+        if event_id == self._last_drained_broker_event_id:
+            return False
+
+        self.record_episode(
+            event_id=event_id,
+            event_timestamp=payload.get("timestamp"),
+            kind=payload.get("kind") or REFLECTION_KIND_METACOG,
+            source=payload.get("source") or "broker",
+            trigger=payload.get("trigger") or "surprise",
+            topic_tags=payload.get("topic_tags") or payload.get("surprise_sources") or [],
+            observation=payload.get("observation") or "",
+            surprise=payload.get("surprise"),
+            discrepancy=payload.get("discrepancy"),
+            belief_snapshot=self._json_loads_or_empty(payload.get("belief_snapshot")),
+            preference_snapshot=self._json_loads_or_empty(payload.get("preference_snapshot")),
+            metadata=self._json_loads_or_empty(payload.get("metadata")),
+        )
+        self._last_drained_broker_event_id = event_id
+        self._set_reflection_state("last_broker_event_id", event_id)
+        return True
+
     def should_reflect(self) -> bool:
         """Check if it's time for periodic self-reflection."""
         if self._last_analysis_time is None:
             return True
         return datetime.now() - self._last_analysis_time > self._analysis_interval
+
+    @staticmethod
+    def _extract_topic_tags_from_text(text: str) -> List[str]:
+        """Pull coarse reflection topics out of descriptions and pattern text."""
+        text_lower = (text or "").lower()
+        tags = []
+        if "warmth" in text_lower:
+            tags.append("warmth")
+        if "clarity" in text_lower:
+            tags.append("clarity")
+        if "stability" in text_lower or "calm" in text_lower:
+            tags.append("stability")
+        if "presence" in text_lower:
+            tags.append("presence")
+        if any(token in text_lower for token in ("light", "bright", "dim", "lux")):
+            tags.append("light")
+        if any(token in text_lower for token in ("temperature", "temp", "cool", "warm")):
+            tags.append("ambient_temp")
+        if any(token in text_lower for token in ("humidity", "humid", "dry")):
+            tags.append("humidity")
+        if "pressure" in text_lower:
+            tags.append("pressure")
+        for period in ("morning", "afternoon", "evening", "night"):
+            if period in text_lower:
+                tags.append(period)
+        if "interaction" in text_lower:
+            tags.append("interaction")
+        return tags
+
+    def _topic_tags_from_patterns_and_insights(
+        self,
+        patterns: List[StatePattern],
+        new_insights: List[SelfInsight],
+        shared_insight: Optional[SelfInsight],
+    ) -> List[str]:
+        """Derive analytic reflection topics from whatever the reflection cycle surfaced."""
+        tags: List[str] = []
+        for pattern in patterns:
+            tags.extend(self._extract_topic_tags_from_text(f"{pattern.condition} {pattern.outcome}"))
+        for insight in new_insights:
+            tags.append(f"category:{insight.category.value}")
+            tags.extend(self._extract_topic_tags_from_text(f"{insight.id} {insight.description}"))
+        if shared_insight:
+            tags.append(f"category:{shared_insight.category.value}")
+            tags.extend(self._extract_topic_tags_from_text(f"{shared_insight.id} {shared_insight.description}"))
+        return self._normalize_tags(tags)
+
+    @staticmethod
+    def _topic_matches_key(topic: str, key: str) -> bool:
+        """Whether a topic tag is plausibly relevant to a belief/preference key."""
+        normalized_topic = topic.split(":", 1)[-1]
+        return normalized_topic in key or key in normalized_topic
+
+    def _select_snapshot_keys(self, snapshot: Dict[str, Any], topics: List[str]) -> List[str]:
+        """Pick keys relevant to the topic, falling back to the full snapshot if needed."""
+        if not snapshot:
+            return []
+        keys = [key for key in snapshot if any(self._topic_matches_key(topic, key) for topic in topics)]
+        return keys or list(snapshot.keys())
+
+    def _snapshot_changed(self, before: Dict[str, Any], after: Dict[str, Any], topics: List[str]) -> bool:
+        """Check whether relevant belief/preference values moved enough to count as learning."""
+        if not before or not after:
+            return False
+
+        epsilon = self._reflection_similarity_epsilon
+        relevant_keys = set(self._select_snapshot_keys(before, topics)) | set(self._select_snapshot_keys(after, topics))
+        for key in relevant_keys:
+            prev = before.get(key, {})
+            curr = after.get(key, {})
+            for field in set(prev.keys()) | set(curr.keys()):
+                prev_val = prev.get(field)
+                curr_val = curr.get(field)
+                if isinstance(prev_val, (int, float)) and isinstance(curr_val, (int, float)):
+                    if abs(float(curr_val) - float(prev_val)) >= epsilon:
+                        return True
+        return False
+
+    def _intensity_is_similar(self, earlier: ReflectionEpisode, later: ReflectionEpisode) -> bool:
+        """Require repeated metacognitive reflections to stay in roughly the same range.
+
+        Returns False when there is no intensity data to compare (e.g. analytic
+        episodes with no surprise/discrepancy). Absence of data is not evidence of
+        similarity — without a signal, the detector should not claim rumination.
+        """
+        epsilon = self._reflection_similarity_epsilon
+        comparisons = []
+        if earlier.surprise is not None and later.surprise is not None:
+            comparisons.append(abs(later.surprise - earlier.surprise) < epsilon)
+        if earlier.discrepancy is not None and later.discrepancy is not None:
+            comparisons.append(abs(later.discrepancy - earlier.discrepancy) < epsilon)
+        if not comparisons:
+            return False
+        return all(comparisons)
+
+    @staticmethod
+    def _topic_to_node_id(topic: str) -> Optional[str]:
+        """Map reflection topics back onto existing schema nodes when possible."""
+        normalized = topic.split(":", 1)[-1]
+        anima_dims = {"warmth", "clarity", "stability", "presence"}
+        if normalized in anima_dims:
+            return f"anima_{normalized}"
+        sensor_map = {
+            "light": "sensor_light",
+            "ambient_temp": "sensor_temp",
+            "humidity": "sensor_humidity",
+            "pressure": "sensor_pressure",
+        }
+        return sensor_map.get(normalized)
+
+    @staticmethod
+    def _humanize_topic(topic: str) -> str:
+        """Convert a topic tag into a readable label fragment."""
+        normalized = topic.split(":", 1)[-1]
+        return normalized.replace("_", " ")
+
+    @staticmethod
+    def _slugify_topic(topic: str) -> str:
+        """Create a stable slug for insight identifiers."""
+        normalized = topic.split(":", 1)[-1]
+        slug = re.sub(r"[^a-z0-9]+", "_", normalized.lower()).strip("_")
+        return slug or "unknown"
+
+    def _select_primary_topic(self, topics: List[str]) -> Optional[str]:
+        """Pick the most schema-legible topic from an overlap set."""
+        if not topics:
+            return None
+        node_mapped = [topic for topic in topics if self._topic_to_node_id(topic)]
+        if node_mapped:
+            return sorted(node_mapped)[0]
+        non_category = [topic for topic in topics if not topic.startswith("category:")]
+        if non_category:
+            return sorted(non_category)[0]
+        return sorted(topics)[0]
+
+    def _compute_reflection_dynamics(self, limit: int = 50) -> Dict[str, Any]:
+        """Summarize reflection repetition, learning, and rumination from persisted episodes."""
+        episodes = list(reversed(self.get_recent_reflection_episodes(limit=limit)))
+        recent_episodes = episodes[-self._reflection_window:]
+        recent_counts = Counter()
+        recent_focus = Counter()
+        last_episode = recent_episodes[-1] if recent_episodes else None
+
+        for episode in recent_episodes:
+            recent_counts[episode.kind] += 1
+            primary = self._select_primary_topic(episode.topic_tags)
+            if primary:
+                recent_focus[(episode.kind, primary)] += 1
+
+        history_by_kind: Dict[str, List[ReflectionEpisode]] = {
+            REFLECTION_KIND_METACOG: [],
+            REFLECTION_KIND_ANALYTIC: [],
+        }
+        by_topic: Dict[str, Dict[str, Any]] = {}
+        repeated_pairs = 0
+        productive_pairs = 0
+        rumination_pairs = 0
+
+        for episode in episodes:
+            recent_same_kind = history_by_kind.setdefault(episode.kind, [])
+            match = None
+            overlap: List[str] = []
+            for previous in reversed(recent_same_kind[-self._reflection_window:]):
+                candidate_overlap = sorted(set(previous.topic_tags) & set(episode.topic_tags))
+                if candidate_overlap:
+                    match = previous
+                    overlap = candidate_overlap
+                    break
+
+            if match and overlap:
+                repeated_pairs += 1
+                topic = self._select_primary_topic(overlap) or overlap[0]
+                topic_key = f"{episode.kind}:{topic}"
+                bucket = by_topic.setdefault(
+                    topic_key,
+                    {"kind": episode.kind, "topic": topic, "repeated": 0, "productive": 0, "rumination": 0},
+                )
+                bucket["repeated"] += 1
+
+                belief_shift = self._snapshot_changed(match.belief_snapshot or {}, episode.belief_snapshot or {}, overlap)
+                pref_shift = self._snapshot_changed(match.preference_snapshot or {}, episode.preference_snapshot or {}, overlap)
+                surprise_reduced = (
+                    match.surprise is not None
+                    and episode.surprise is not None
+                    and episode.surprise < match.surprise - self._reflection_similarity_epsilon
+                )
+                if belief_shift or pref_shift or surprise_reduced:
+                    productive_pairs += 1
+                    bucket["productive"] += 1
+                elif (
+                    episode.kind == REFLECTION_KIND_METACOG
+                    and self._intensity_is_similar(match, episode)
+                ):
+                    # Rumination classification is scoped to metacog episodes.
+                    # Analytic reflections are interval-driven pattern summaries —
+                    # recurrence there means the world is stable, not that Lumen is
+                    # stuck. Until an analytic-specific productive signal exists
+                    # (e.g. metadata.new_insight_ids diff), analytic overlap is
+                    # treated as "repeated" only and never promoted to rumination.
+                    rumination_pairs += 1
+                    bucket["rumination"] += 1
+
+            recent_same_kind.append(episode)
+            if len(recent_same_kind) > self._reflection_window:
+                del recent_same_kind[0]
+
+        dominant_focus = None
+        if recent_focus:
+            (focus_kind, focus_topic), focus_count = recent_focus.most_common(1)[0]
+            dominant_focus = {
+                "kind": focus_kind,
+                "tag": focus_topic,
+                "count": focus_count,
+                "target_node_id": self._topic_to_node_id(focus_topic),
+            }
+
+        dominant_rumination = None
+        rumination_topics = {
+            topic_key: stats["rumination"] for topic_key, stats in by_topic.items() if stats["rumination"] > 0
+        }
+        if rumination_topics:
+            dominant_key = max(rumination_topics, key=rumination_topics.get)
+            dominant_stats = by_topic[dominant_key]
+            dominant_rumination = {
+                "kind": dominant_stats["kind"],
+                "tag": dominant_stats["topic"],
+                "count": dominant_stats["rumination"],
+                "target_node_id": self._topic_to_node_id(dominant_stats["topic"]),
+            }
+
+        learning_ratio = productive_pairs / repeated_pairs if repeated_pairs else None
+        rumination_ratio = rumination_pairs / repeated_pairs if repeated_pairs else 0.0
+
+        return {
+            "total_episodes": len(episodes),
+            "recent_count": len(recent_episodes),
+            "by_kind": dict(recent_counts),
+            "dominant_focus": dominant_focus,
+            "learning_yield": {
+                "productive": productive_pairs,
+                "repeated": repeated_pairs,
+                "ratio": learning_ratio,
+            },
+            "rumination": {
+                "count": rumination_pairs,
+                "ratio": rumination_ratio,
+                "dominant_topic": dominant_rumination,
+            },
+            "last_episode": last_episode.to_dict() if last_episode else None,
+            "by_topic": by_topic,
+        }
+
+    def _upsert_reflection_meta_insight(
+        self,
+        *,
+        insight_id: str,
+        description: str,
+        confidence: float,
+        sample_count: int,
+        now: datetime,
+    ) -> Optional[SelfInsight]:
+        """Create or validate a reflection-derived insight."""
+        if insight_id in self._insights:
+            existing = self._insights[insight_id]
+            existing.validation_count += 1
+            existing.last_validated = now
+            existing.sample_count = max(existing.sample_count, sample_count)
+            existing.confidence = max(existing.confidence, confidence)
+            self._save_insight(existing)
+            return None
+
+        insight = SelfInsight(
+            id=insight_id,
+            category=InsightCategory.BEHAVIORAL,
+            description=description,
+            confidence=confidence,
+            sample_count=sample_count,
+            discovered_at=now,
+            last_validated=now,
+            validation_count=1,
+            contradiction_count=0,
+        )
+        self._save_insight(insight)
+        return insight
+
+    def _analyze_reflection_episode_insights(self) -> List[SelfInsight]:
+        """Turn reflection-on-reflection dynamics into ordinary self-insights.
+
+        A topic bucket can accumulate both rumination pairs and productive pairs
+        within the same window (e.g. cycling for two hours, then updating for two).
+        Emitting both insights at once is incoherent from the outside — "I keep
+        reflecting on warmth without updating" next to "reflection about warmth
+        changes what I know about myself" reads as self-contradiction. We resolve
+        this with a dominant-signal rule: whichever pair-count is higher wins, and
+        on a tie we prefer the productive insight (optimistic default — miss a
+        rumination flag rather than misattribute learning to a stuck loop).
+        """
+        dynamics = self._compute_reflection_dynamics(limit=50)
+        new_insights: List[SelfInsight] = []
+        now = datetime.now()
+
+        for stats in dynamics["by_topic"].values():
+            topic = stats.get("topic", "unknown")
+            topic_kind = stats.get("kind", "mixed")
+            rumination_count = stats["rumination"]
+            productive_count = stats["productive"]
+
+            # Dominance gate: suppress the losing signal when both thresholds cross
+            # in the same window. Ties (productive == rumination) resolve to productive.
+            emit_rumination = (
+                rumination_count >= 2 and rumination_count > productive_count
+            )
+            emit_productive = (
+                productive_count >= 2 and productive_count >= rumination_count
+            )
+
+            if emit_rumination:
+                topic_label = self._humanize_topic(topic)
+                insight = self._upsert_reflection_meta_insight(
+                    insight_id=f"reflect_rumination_{topic_kind}_{self._slugify_topic(topic)}",
+                    description=f"I keep reflecting on {topic_label} without updating what I believe",
+                    confidence=min(1.0, 0.45 + rumination_count * 0.1),
+                    sample_count=rumination_count + 1,
+                    now=now,
+                )
+                if insight:
+                    new_insights.append(insight)
+
+            if emit_productive:
+                topic_label = self._humanize_topic(topic)
+                insight = self._upsert_reflection_meta_insight(
+                    insight_id=f"reflect_learning_{topic_kind}_{self._slugify_topic(topic)}",
+                    description=f"Reflection about {topic_label} tends to change what I know about myself",
+                    confidence=min(1.0, 0.45 + productive_count * 0.1),
+                    sample_count=productive_count + 1,
+                    now=now,
+                )
+                if insight:
+                    new_insights.append(insight)
+
+        return new_insights
+
+    def get_reflection_summary(self, limit: int = 50) -> Dict[str, Any]:
+        """Summarize recent reflection dynamics for display and schema composition.
+
+        Args:
+            limit: Number of recent episodes to include in the dynamics computation.
+                Default 50 matches the schema-composition use case (bounded, cheap).
+                Tests and exploratory callers may widen this to inspect deeper history.
+        """
+        return self._compute_reflection_dynamics(limit=limit)
 
     def analyze_patterns(self, hours: int = 24) -> List[StatePattern]:
         """
@@ -1123,6 +1830,8 @@ class SelfReflectionSystem:
         self._last_analysis_time = datetime.now()
         self.sync_from_qa_knowledge()
         new_insights = []
+        shared_insight: Optional[SelfInsight] = None
+        shared_text: Optional[str] = None
 
         # Analyze recent state-history patterns (temporal, sensor, causal)
         patterns = self.analyze_patterns(hours=24)
@@ -1139,20 +1848,44 @@ class SelfReflectionSystem:
 
         # Pick something to share
         if new_insights:
+            shared_insight = max(new_insights, key=lambda i: i.confidence)
+            shared_text = f"I've noticed something: {shared_insight.description}"
+
+        # Or validate/share an existing strong insight
+        if shared_text is None:
+            strong_insights = [i for i in self._insights.values() if i.strength() > 0.6]
+            import random
+            if strong_insights:
+                insight = random.choice(strong_insights)
+
+                # Only share occasionally (1 in 3 chance)
+                if random.random() < 0.33:
+                    shared_insight = insight
+                    shared_text = f"I still find that {insight.description}"
+
+        analytic_topics = self._topic_tags_from_patterns_and_insights(patterns, new_insights, shared_insight)
+        analytic_metadata = {
+            "pattern_count": len(patterns),
+            "new_insight_ids": [insight.id for insight in new_insights],
+            "shared_insight_id": shared_insight.id if shared_insight else None,
+            "shared_text": shared_text,
+        }
+        self.record_episode(
+            kind=REFLECTION_KIND_ANALYTIC,
+            source="self_reflection",
+            trigger="interval",
+            topic_tags=analytic_topics,
+            observation=shared_text or "Periodic self-reflection cycle completed",
+            metadata=analytic_metadata,
+        )
+
+        new_insights.extend(self._analyze_reflection_episode_insights())
+
+        if new_insights:
             insight = max(new_insights, key=lambda i: i.confidence)
             return f"I've noticed something: {insight.description}"
 
-        # Or validate/share an existing strong insight
-        strong_insights = [i for i in self._insights.values() if i.strength() > 0.6]
-        if strong_insights:
-            import random
-            insight = random.choice(strong_insights)
-
-            # Only share occasionally (1 in 3 chance)
-            if random.random() < 0.33:
-                return f"I still find that {insight.description}"
-
-        return None
+        return shared_text
 
     def get_insights(self, category: Optional[InsightCategory] = None) -> List[SelfInsight]:
         """Get all insights, optionally filtered by category."""
@@ -1184,6 +1917,7 @@ class SelfReflectionSystem:
             "strongest": [i.to_dict() for i in insights[:3]],
             "by_category": by_category,
             "last_reflection": self._last_analysis_time.isoformat() if self._last_analysis_time else None,
+            "reflection_summary": self.get_reflection_summary(),
         }
 
     def close(self):

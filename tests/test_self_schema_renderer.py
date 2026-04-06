@@ -312,9 +312,11 @@ class TestBuildNodePositions:
         schema = make_schema()
         schema.nodes.append(SchemaNode("pref_warmth", "preference", "Pref warmth", 0.6, 0.6))
         schema.nodes.append(SchemaNode("belief_light_sensitive", "belief", "Light sensitive", 0.5, 0.5))
+        schema.nodes.append(SchemaNode("reflection_focus", "reflection", "Focus warmth", 0.7, {"tag": "warmth"}))
         positions = _build_node_positions(schema)
         assert "pref_warmth" in positions
         assert "belief_light_sensitive" in positions
+        assert "reflection_focus" in positions
         assert len(positions) == len(schema.nodes)
 
     def test_empty_schema(self):
@@ -375,6 +377,16 @@ class TestRenderSchemaToPixels:
         px_no = render_schema_to_pixels(schema_no_edge)
         px_yes = render_schema_to_pixels(schema_with_edge)
         assert len(px_yes) >= len(px_no)
+
+    def test_reflection_node_renders_with_reflection_color(self):
+        schema = SelfSchema(
+            timestamp=datetime.now(),
+            nodes=[SchemaNode("reflection_focus", "reflection", "Focus warmth", 0.8, {"tag": "warmth"})],
+            edges=[],
+        )
+        positions = _build_node_positions(schema)
+        pixels = render_schema_to_pixels(schema)
+        assert pixels[positions["reflection_focus"]] == COLORS["reflection"]
 
 
 # --- 10. compute_visual_integrity_stub ---

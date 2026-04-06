@@ -83,6 +83,70 @@ _LEARNING_MODULES: dict = {}
 def _has_module(name: str) -> bool:
     return _LEARNING_MODULES.get(name, False)
 
+
+def _snapshot_self_beliefs(self_model) -> dict:
+    """Capture lightweight self-belief state for reflection episode persistence."""
+    if not self_model:
+        return {}
+
+    beliefs = getattr(self_model, "beliefs", None) or {}
+    snapshot = {}
+    for belief_id, belief in beliefs.items():
+        try:
+            snapshot[str(belief_id)] = {
+                "value": round(float(getattr(belief, "value", 0.0)), 3),
+                "confidence": round(float(getattr(belief, "confidence", 0.0)), 3),
+            }
+        except (TypeError, ValueError):
+            continue
+    return snapshot
+
+
+def _snapshot_preferences(preferences) -> dict:
+    """Capture lightweight preference weights for reflection episode persistence."""
+    if not preferences:
+        return {}
+
+    pref_map = getattr(preferences, "_preferences", None) or {}
+    snapshot = {}
+    for pref_id, pref in pref_map.items():
+        try:
+            snapshot[str(pref_id)] = {
+                "valence": round(float(getattr(pref, "valence", 0.0)), 3),
+                "confidence": round(float(getattr(pref, "confidence", 0.0)), 3),
+                "influence_weight": round(float(getattr(pref, "influence_weight", 1.0)), 3),
+            }
+        except (TypeError, ValueError):
+            continue
+    return snapshot
+
+
+def _build_broker_reflection_event(reflection, error, self_model=None, preferences=None, reflect_reason: str = "") -> dict:
+    """Serialize a metacognitive reflection for broker->server SHM propagation."""
+    event_ts = reflection.timestamp.isoformat()
+    topic_tags = [str(tag).lower() for tag in (error.surprise_sources or []) if tag]
+
+    return {
+        "event_id": f"broker-metacog:{event_ts}",
+        "timestamp": event_ts,
+        "kind": "metacog",
+        "source": "broker",
+        "trigger": reflection.trigger,
+        "topic_tags": topic_tags,
+        "observation": reflection.observation,
+        "surprise": round(float(error.surprise), 3),
+        "discrepancy": round(float(reflection.discrepancy), 3),
+        "discrepancy_description": reflection.discrepancy_description,
+        "belief_snapshot": _snapshot_self_beliefs(self_model),
+        "preference_snapshot": _snapshot_preferences(preferences),
+        "metadata": {
+            "reflect_reason": reflect_reason,
+            "surprise_sources": topic_tags,
+            "felt_state": reflection.felt_state or {},
+            "sensor_state": reflection.sensor_state or {},
+        },
+    }
+
 try:
     from .adaptive_prediction import get_adaptive_prediction_model
     _LEARNING_MODULES["adaptive_prediction"] = True
@@ -414,6 +478,10 @@ def run_creature():
     last_decision_checked_at = None
     first_check_in = True  # Track first governance check to sync identity
     last_dialectic_time = 0  # Rate limit dialectic synthesis
+    # Most recent metacognitive reflection serialized for SHM propagation. The
+    # server-side reflection_episodes drain picks it up each tick. Latest-record
+    # semantics: overwritten on each new reflection; the server dedupes on event_id.
+    _last_reflection_event = None
     # Rate limit governance check-ins so they carry meaningful signal.
     # Override with ANIMA_GOVERNANCE_INTERVAL_SECONDS if needed.
     DEFAULT_GOVERNANCE_INTERVAL = 180.0
@@ -596,6 +664,13 @@ def run_creature():
                 print(f"[Metacog] REFLECTION ({reflect_reason}): {reflection.observation}", file=sys.stderr, flush=True)
                 if reflection.discrepancy_description:
                     print(f"[Metacog] DISCREPANCY: {reflection.discrepancy_description}", file=sys.stderr, flush=True)
+                _last_reflection_event = _build_broker_reflection_event(
+                    reflection,
+                    pred_error,
+                    self_model=self_model,
+                    preferences=preferences,
+                    reflect_reason=reflect_reason,
+                )
 
                 # Dialectic synthesis for high surprise (rate limited to once per 60s)
                 # Runs in background thread to avoid blocking the sensor loop
@@ -1012,8 +1087,10 @@ def run_creature():
                     "surprise_sources": pred_error.surprise_sources,
                     "cumulative_surprise": metacog._cumulative_surprise,
                     "prediction_confidence": prediction.confidence,
-                }
+                },
             }
+            if _last_reflection_event:
+                shm_data["metacognition"]["last_reflection"] = _last_reflection_event
             if last_decision:
                 shm_data["governance"] = {
                     **last_decision,

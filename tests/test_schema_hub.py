@@ -660,7 +660,60 @@ class TestInjectTrajectoryFeedback:
 
 
 # ---------------------------------------------------------------------------
-# 9. SchemaHub._compute_trajectory_from_history()
+# 9. SchemaHub._inject_reflection_summary()
+# ---------------------------------------------------------------------------
+
+class TestInjectReflectionSummary:
+    """Test reflection summary node injection."""
+
+    def test_empty_summary_returns_unchanged(self):
+        hub = SchemaHub()
+        schema = make_schema()
+        result = hub._inject_reflection_summary(schema, {})
+        assert result is schema
+        assert all(node.node_type != "reflection" for node in result.nodes)
+
+    def test_summary_adds_reflection_nodes_and_focus_edge(self):
+        hub = SchemaHub()
+        schema = make_schema()
+        summary = {
+            "recent_count": 4,
+            "dominant_focus": {
+                "kind": "metacog",
+                "tag": "warmth",
+                "count": 3,
+                "target_node_id": "anima_warmth",
+            },
+            "learning_yield": {"productive": 2, "repeated": 3, "ratio": 2 / 3},
+            "rumination": {
+                "count": 1,
+                "ratio": 1 / 3,
+                "dominant_topic": {
+                    "kind": "metacog",
+                    "tag": "warmth",
+                    "count": 1,
+                    "target_node_id": "anima_warmth",
+                },
+            },
+        }
+
+        result = hub._inject_reflection_summary(schema, summary)
+        reflection_nodes = [n for n in result.nodes if n.node_type == "reflection"]
+        assert {n.node_id for n in reflection_nodes} >= {
+            "reflection_activity",
+            "reflection_focus",
+            "reflection_learning_yield",
+            "reflection_rumination",
+        }
+        focus_edges = [
+            e for e in result.edges
+            if e.source_id == "reflection_focus" and e.target_id == "anima_warmth"
+        ]
+        assert len(focus_edges) == 1
+
+
+# ---------------------------------------------------------------------------
+# 10. SchemaHub._compute_trajectory_from_history()
 # ---------------------------------------------------------------------------
 
 class TestComputeTrajectoryFromHistory:
