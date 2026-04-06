@@ -402,7 +402,7 @@ Things agents keep re-discovering. Read this so you don't waste time.
 | **Pi restart time** | **2 minutes** after `git_pull(restart=true)`. Wait. Don't panic at proxy errors. Do NOT SSH or retry MCP during this window — it can crash WiFi. |
 | **Tailscale IPs** | Verify with `tailscale status`. IPs may change after reinstall. |
 | **SSH to Pi** | Port 22 standard. If SSH times out/refused, try port 2222: `ssh -p 2222 -i ~/.ssh/id_ed25519_pi unitares-anima@<tailscale-ip>` (see `docs/operations/PI_ACCESS.md`). |
-| **alive_ratio** | `total_alive_seconds / age_seconds`. Lumen is ~15% alive (Pi sleeps/reboots often). This is normal. |
+| **alive_ratio** | `total_alive_seconds / age_seconds`. As of April 2026, ~66% (Pi stability has improved significantly since early days). |
 | **Neural waves** | Computational proprioception from CPU/memory/IO — not real EEG. High delta = stable system, not sleep. |
 | **No client uses /sse** | Claude Code, Claude Desktop, Cursor all connect to `/mcp/`. |
 | **docs/ folder** | Developer reference only. Agents read CLAUDE.md, not docs/. Don't expect docs/ to reach other agents. |
