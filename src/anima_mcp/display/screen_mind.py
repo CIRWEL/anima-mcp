@@ -881,6 +881,7 @@ class MindMixin:
 
         last_motivation = None
         last_reward = None
+        prev_action_values = getattr(self, '_prev_agency_values', {})
         try:
             from ..agency import get_action_selector
             selector = get_action_selector()
@@ -975,17 +976,25 @@ class MindMixin:
                         draw.text((10, y), f'"{mot}"', fill=DIM, font=f_micro)
                     y += 12
 
-                if last_reward is not None:
-                    if last_reward > 0:
-                        reward_color = COLORS.SOFT_GREEN
-                        reward_str = f"reward: +{last_reward:.2f}"
-                    elif last_reward < 0:
-                        reward_color = COLORS.SOFT_CORAL
-                        reward_str = f"reward: {last_reward:.2f}"
+                # Show value trend for last action instead of raw reward
+                if last_action_type and last_action_type in action_values:
+                    cur_val = action_values[last_action_type]
+                    prev_val = prev_action_values.get(last_action_type)
+                    if prev_val is not None:
+                        delta = cur_val - prev_val
+                        if delta > 0.005:
+                            trend_str = f"value rising ({cur_val:.2f})"
+                            trend_color = COLORS.SOFT_GREEN
+                        elif delta < -0.005:
+                            trend_str = f"value falling ({cur_val:.2f})"
+                            trend_color = COLORS.SOFT_ORANGE
+                        else:
+                            trend_str = f"value steady ({cur_val:.2f})"
+                            trend_color = DIM
                     else:
-                        reward_color = DIM
-                        reward_str = "reward: 0.00"
-                    draw.text((10, y), reward_str, fill=reward_color, font=f_tiny)
+                        trend_str = f"value: {cur_val:.2f}"
+                        trend_color = DIM
+                    draw.text((10, y), trend_str, fill=trend_color, font=f_tiny)
                     y += 14
             else:
                 draw.text((10, y), "none yet", fill=DIM, font=f_small)
@@ -1041,6 +1050,9 @@ class MindMixin:
 
             self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, self._state.mode)
+
+            # Store current values for trend detection on next render
+            self._prev_agency_values = dict(action_values)
 
             self._store_screen_cache("agency", cache_key, image)
             if hasattr(self._display, '_image'):

@@ -455,28 +455,31 @@ class ActionSelector:
         )
 
         # Compute reward
-        # Positive reward for: increased satisfaction, achieved goal, moderate surprise
-        # Design principle: engagement is intrinsically valuable. Staying quiet has
-        # an opportunity cost — choosing not to learn when you could.
+        # Design principle: engagement is intrinsically rewarding, but silence
+        # is a legitimate choice — not penalized. Asymmetric: doing things can
+        # earn a bonus, choosing not to simply earns nothing extra.
         reward = 0.0
 
         # Preference satisfaction is primary reward
         reward += outcome.preference_satisfaction_change * 2.0
 
-        # Moderate surprise is interesting (too much or too little is bad)
-        optimal_surprise = 0.2
-        surprise_reward = -abs(surprise_after - optimal_surprise)
-        reward += surprise_reward * 0.5
+        # Curiosity bonus: moderate surprise is interesting.
+        # Reward peaks at ~0.2 surprise and tapers to zero (never negative).
+        # High surprise (overwhelm) and zero surprise (boredom) simply
+        # don't get the curiosity bonus — they aren't punished for it.
+        if surprise_after > 0.02:
+            curiosity_bonus = max(0.0, 0.15 - abs(surprise_after - 0.2) * 0.5)
+            reward += curiosity_bonus
 
         # Engagement bonus: actions that interact with the world get a small
-        # intrinsic reward for trying, regardless of outcome. This prevents
-        # TD-learning from converging on passive safety.
+        # intrinsic reward for trying. This makes engagement attractive without
+        # needing to punish stillness.
         ENGAGEMENT_ACTIONS = {
             ActionType.ASK_QUESTION, ActionType.FOCUS_ATTENTION,
             ActionType.SPEAK, ActionType.EXPLORE, ActionType.REQUEST_REFLECTION,
         }
         if action.action_type in ENGAGEMENT_ACTIONS:
-            reward += 0.05  # Small intrinsic value of engagement
+            reward += 0.05
 
         # Specific action goals
         if action.action_type == ActionType.ASK_QUESTION:
@@ -490,11 +493,6 @@ class ActionSelector:
             if surprise_after < state_before.get("last_surprise", 1.0):
                 reward += 0.3
                 outcome.goal_achieved = True
-
-        elif action.action_type == ActionType.STAY_QUIET:
-            # Opportunity cost: choosing not to engage is mildly penalized.
-            # This prevents "quiet is safe" convergence in TD-learning.
-            reward -= 0.05
 
         outcome.reward = reward
         self._outcome_history.append(outcome)
