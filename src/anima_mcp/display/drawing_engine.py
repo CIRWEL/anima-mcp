@@ -766,7 +766,13 @@ class DrawingEngine:
         self.intent.state.i_momentum = self.canvas.i_momentum
         self.intent.state.drawing_start_time = self.canvas.drawing_start_time or time.time()
 
+        # Grace period: only when resuming a persisted drawing, suppress
+        # autonomy checks for 60s so Lumen can actually draw before the
+        # stale-duration heuristic judges the drawing as "done."
+        self._autonomy_ready_time = 0.0
+
         if self.canvas.pixels and self.canvas.last_clear_time > 0:
+            self._autonomy_ready_time = time.time() + 60.0
             age = time.time() - self.canvas.last_clear_time
             print(
                 f"[Canvas] Resuming persisted drawing ({age/3600:.1f}h since clear, "
@@ -1584,6 +1590,10 @@ class DrawingEngine:
         - No arbitrary mark limit -- fatigue accumulates naturally
         """
         if anima is None:
+            return None
+
+        # Grace period after restart — let Lumen resume drawing before judging
+        if time.time() < getattr(self, '_autonomy_ready_time', 0):
             return None
 
         # Update narrative arc phase
