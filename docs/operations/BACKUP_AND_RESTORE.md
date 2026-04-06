@@ -197,26 +197,9 @@ sqlite3 ~/.anima/anima.db "SELECT name, creature_id, born_at FROM identity LIMIT
 
 ## SD Card Data Recovery
 
-When WiFi is dead and Pi is unreachable but you need data from the SD card:
+In practice, `~/backups/lumen/` (hourly automated backups) should have recent data. Check there first: `ls -lt ~/backups/lumen/anima_*.db | head -5`.
 
-1. Pull SD card from Pi, insert into Mac via reader
-2. Boot partition auto-mounts as `/Volumes/bootfs`
-3. Linux ext4 partition does NOT mount natively on macOS
-4. Install ext4fuse or use a Linux machine to mount the root partition:
-
-```bash
-# Option A: ext4fuse on macOS (brew install ext4fuse)
-mkdir -p /tmp/pi_root
-ext4fuse /dev/disk4s2 /tmp/pi_root -o allow_other
-cp -a /tmp/pi_root/home/unitares-anima/.anima/* ~/backups/lumen/anima_data/
-umount /tmp/pi_root
-
-# Option B: dd image + mount on any Linux box
-sudo dd if=/dev/disk4s2 of=/tmp/pi_root.img bs=4m status=progress
-sudo mount -o ro,loop /tmp/pi_root.img /mnt
-cp -a /mnt/home/unitares-anima/.anima/* ~/backups/lumen/anima_data/
-sudo umount /mnt && rm /tmp/pi_root.img
-```
+If you truly need to read the ext4 root partition from the SD card on macOS, there is no reliable tool — macOS cannot mount ext4 natively. Use a Linux machine or boot a Linux USB to mount the card and copy `/home/unitares-anima/.anima/`.
 
 ---
 
