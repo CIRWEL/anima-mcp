@@ -142,10 +142,7 @@ chmod +x ~/monitor_health.sh
 
 ### Network Access (Optional)
 
-**Ngrok tunnel:**
-```bash
-ngrok http 8766 --url=your-custom-domain.ngrok.io
-```
+**Cloudflare tunnel:** Managed by `cloudflared-lumen.service` (systemd). Routes `lumen.cirwel.org` → `localhost:8766`.
 
 See `SECRETS_AND_ENV.md` and `DEFINITIVE_PORTS.md` for OAuth and port details.
 
@@ -170,14 +167,14 @@ Edit `~/.cursor/mcp.json` or `~/.claude.json`:
 
 Tailscale (no auth required, verify IP with `tailscale status`). LAN IP (`http://192.168.1.165:8766/mcp/`) also works.
 
-### Claude.ai Web (via ngrok + OAuth 2.1)
+### Claude.ai Web (via Cloudflare tunnel + OAuth 2.1)
 
-- URL: `https://lumen-anima.ngrok.io/mcp/`
+- URL: `https://lumen.cirwel.org/mcp/`
 - Auth: OAuth 2.1 (PKCE, auto-approve)
 
 Required env vars in `~/.anima/anima.env`:
 ```bash
-ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
+ANIMA_OAUTH_ISSUER_URL=https://lumen.cirwel.org
 ANIMA_OAUTH_AUTO_APPROVE=true
 ```
 
@@ -248,7 +245,7 @@ sudo ufw enable
 ```
 
 - Service runs as `unitares-anima` (non-root, no sudo)
-- OAuth 2.1 protects `/mcp/` via ngrok; LAN/Tailscale are open
+- OAuth 2.1 protects `/mcp/` via Cloudflare tunnel; LAN/Tailscale are open
 - Tokens are in-memory, reset on restart
 
 ---

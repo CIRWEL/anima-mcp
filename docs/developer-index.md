@@ -78,15 +78,13 @@
 **Network access:**
 - **Tailscale** (recommended): Direct Pi access via `<tailscale-ip>` (verify with `tailscale status`)
 - **Local**: lumen.local or 192.168.1.165
-- **ngrok**: For Claude.ai web (OAuth 2.1)
+- **Cloudflare Tunnel**: `lumen.cirwel.org` for Claude.ai web (OAuth 2.1)
 
 **Troubleshooting:**
 | Doc | When you need it |
 |-----|------------------|
 | `operations/SSH_TIMEOUT_FIX.md` | SSH timeout workarounds (port 2222) |
 | `operations/FIX_GIT_PULL_ON_PI.md` | Git pull failures |
-| `operations/NGROK_ALTERNATIVES_TAILSCALE.md` | Tailscale when ngrok hits limits |
-| `operations/MULTIPLE_TUNNELS_SETUP.md` | Multi-tunnel ngrok configuration |
 
 ## Features
 

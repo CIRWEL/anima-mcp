@@ -23,7 +23,7 @@
 - **Scripts:** Any script that builds the Pi URL (e.g. `alert_check.sh`, `message_server.py`, `monitor_health_pi.sh`, `deploy_via_http.sh`, `call_git_pull_via_http.py`) — use 8766 or reference this doc
 
 **Endpoints on 8766:**
-- `/mcp/` — Streamable HTTP MCP transport (OAuth 2.1 required via ngrok; open on LAN/Tailscale)
+- `/mcp/` — Streamable HTTP MCP transport (OAuth 2.1 required via Cloudflare tunnel; open on LAN/Tailscale)
 - `/health`, `/health/detailed` — Health checks
 - `/dashboard`, `/gallery-page`, `/architecture` — Web UI pages
 - `/state`, `/qa`, `/answer`, `/message`, `/messages`, `/learning`, `/voice` — REST API
@@ -39,7 +39,7 @@
 - `/token` — Token exchange
 - `/revoke` — Token revocation
 
-OAuth only enforced when Host = `lumen-anima.ngrok.io`. All other hosts bypass auth.
+OAuth only enforced when Host = `lumen.cirwel.org`. All other hosts bypass auth.
 
 ---
 

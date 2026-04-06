@@ -93,7 +93,7 @@ ssh -i ~/.ssh/id_ed25519_pi unitares-anima@lumen.local \
 The restore script copies `anima.env.example` to `~/.anima/anima.env` on the Pi. Edit it to add:
 - `GROQ_API_KEY` -- LLM (from groq.com, free)
 - `UNITARES_AUTH` -- governance BASIC auth
-- `ANIMA_OAUTH_ISSUER_URL` -- ngrok URL (e.g. `https://lumen-anima.ngrok.io`)
+- `ANIMA_OAUTH_ISSUER_URL` -- Cloudflare tunnel URL (e.g. `https://lumen.cirwel.org`)
 - `ANIMA_OAUTH_AUTO_APPROVE=true`
 
 See `SECRETS_AND_ENV.md` for details.

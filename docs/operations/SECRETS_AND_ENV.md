@@ -30,28 +30,28 @@ sudo systemctl restart anima
 |----------|---------|----------|
 | `GROQ_API_KEY` | LLM (VQA, self-answering) | [groq.com](https://groq.com) (free) |
 | `UNITARES_AUTH` | Governance BASIC auth | Your UNITARES setup |
-| `ANIMA_OAUTH_ISSUER_URL` | OAuth 2.1 issuer (enables OAuth for Claude.ai web) | Your ngrok URL (e.g. `https://lumen-anima.ngrok.io`) |
+| `ANIMA_OAUTH_ISSUER_URL` | OAuth 2.1 issuer (enables OAuth for Claude.ai web) | Your Cloudflare tunnel URL (e.g. `https://lumen.cirwel.org`) |
 | `ANIMA_OAUTH_AUTO_APPROVE` | Skip consent screen (single-user) | Set to `true` |
 | `ANIMA_OAUTH_SECRET` | OAuth signing secret (optional — auto-generated if unset) | Any random string |
 | `ANIMA_GOVERNANCE_INTERVAL_SECONDS` | Broker UNITARES check-in cadence in seconds (default `180`, minimum `30`) | Set in env/service |
 | `ANIMA_HTTP_API_TOKEN` | Bearer token for REST API auth on untrusted networks | Set in env/service |
 | `ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN` | Legacy compatibility for REST auth without token (`false` default, secure) | Set `true` only during migration |
 | `ANIMA_TRUSTED_PROXY_NETWORKS` | Comma-separated CIDRs allowed to supply `X-Forwarded-For` | Example: `127.0.0.1/32,::1/128` |
-| `ANIMA_ALLOWED_HOSTS` | Comma-separated MCP transport host allowlist override | Optional; defaults to built-in local/LAN/Tailscale/ngrok list |
-| `ANIMA_ALLOWED_ORIGINS` | Comma-separated MCP transport origin allowlist override | Optional; defaults to built-in localhost/LAN/ngrok list |
+| `ANIMA_ALLOWED_HOSTS` | Comma-separated MCP transport host allowlist override | Optional; defaults to built-in local/LAN/Tailscale/Cloudflare tunnel list |
+| `ANIMA_ALLOWED_ORIGINS` | Comma-separated MCP transport origin allowlist override | Optional; defaults to built-in localhost/LAN/Cloudflare tunnel list |
 
 **Example:**
 ```bash
 GROQ_API_KEY=gsk_xxxxxxxxxxxx
 UNITARES_AUTH=unitares:your-password
-ANIMA_OAUTH_ISSUER_URL=https://lumen-anima.ngrok.io
+ANIMA_OAUTH_ISSUER_URL=https://lumen.cirwel.org
 ANIMA_OAUTH_AUTO_APPROVE=true
 ANIMA_GOVERNANCE_INTERVAL_SECONDS=180
 ANIMA_HTTP_API_TOKEN=replace-with-strong-secret
 ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=false
 ANIMA_TRUSTED_PROXY_NETWORKS=127.0.0.1/32,::1/128
-ANIMA_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,<tailscale-ip>:*,lumen-anima.ngrok.io
-ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen-anima.ngrok.io,null
+ANIMA_ALLOWED_HOSTS=127.0.0.1:*,localhost:*,[::1]:*,<tailscale-ip>:*,lumen.cirwel.org
+ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen.cirwel.org,null
 ```
 
 **REST auth notes:**
@@ -62,7 +62,7 @@ ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen-anima.
 - `X-Forwarded-For` is ignored unless the immediate peer IP is in `ANIMA_TRUSTED_PROXY_NETWORKS`.
 
 **OAuth notes:**
-- OAuth is only required for Claude.ai web connections via ngrok.
+- OAuth is only required for Claude.ai web connections via Cloudflare tunnel.
 - LAN, Tailscale, and localhost connections bypass OAuth entirely.
 - Tokens are in-memory — reset on service restart. Clients re-authenticate automatically.
 - If `ANIMA_OAUTH_ISSUER_URL` is not set, OAuth is disabled and all connections are open.

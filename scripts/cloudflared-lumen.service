@@ -1,0 +1,14 @@
+[Unit]
+Description=Cloudflare Tunnel for Lumen (anima-mcp)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=unitares-anima
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate run --token eyJhIjoiYzZkNmJhYzYzMGQzOGZiNmYyNjIwN2Y2NzhjN2FmYTkiLCJ0IjoiZGQzZjlhMWYtMTgyNy00MTRmLWJiYmUtYTg2ZDhhMzcxOTMxIiwicyI6Ii9QUTFDM1ZzaXZqME42bTJBSDJEbE5OOG5hRVNtMFF4YUNBTGJmVDFjR2xxdkM5dHVyc2VoekNmWHVIVTI1eW5HbzZYZ3p2ZFNEdTM3cDZSWHo2bmFBPT0ifQ==
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
