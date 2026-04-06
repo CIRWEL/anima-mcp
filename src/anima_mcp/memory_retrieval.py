@@ -199,32 +199,8 @@ class MemoryRetriever:
         return matches
 
     async def _search_unitares(self, query: str) -> List[RetrievedMemory]:
-        """Search UNITARES knowledge graph."""
-        memories = []
-
-        try:
-            from .unitares_cognitive import get_unitares_cognitive
-
-            cognitive = get_unitares_cognitive()
-            if not cognitive.enabled:
-                return []
-
-            results = await cognitive.search_knowledge(query, tags=["lumen"], limit=10)
-
-            if results:
-                for r in results:
-                    memories.append(RetrievedMemory(
-                        memory_id=r.get("entry_id", r.get("id", "unknown")),
-                        summary=r.get("summary", ""),
-                        source="unitares",
-                        relevance_score=r.get("score", 0.5),
-                        tags=r.get("tags", []),
-                        content=r.get("content"),
-                    ))
-        except Exception as e:
-            print(f"[MemoryRetrieval] UNITARES error: {e}")
-
-        return memories
+        """UNITARES knowledge graph search — removed (was never active on Pi)."""
+        return []
 
     def _search_local_knowledge(self, terms: List[str]) -> List[RetrievedMemory]:
         """Search local knowledge store."""

@@ -67,14 +67,6 @@ from .shared_memory import SharedMemoryClient
 from .eisv_mapper import anima_to_eisv
 from .metacognition import get_metacognitive_monitor
 
-# Cognitive inference support (optional - for deeper thinking)
-try:
-    from .cognitive_inference import get_cognitive_inference
-    from .unitares_cognitive import get_unitares_cognitive
-    COGNITIVE_AVAILABLE = True
-except ImportError:
-    COGNITIVE_AVAILABLE = False
-    print("[StableCreature] Cognitive inference not available")
 
 # Enhanced learning systems (optional - for genuine agency)
 # Each module imported independently so one failure doesn't disable all 8.
@@ -377,7 +369,7 @@ def run_creature():
 
     threading.Thread(target=_bg_loop_thread, daemon=True, name="creature-async").start()
 
-    # Background thread executor for non-blocking governance/cognitive calls.
+    # Background thread executor for non-blocking governance/memory calls.
     # Single worker prevents concurrency issues; the main loop submits work
     # and checks results on the next iteration instead of blocking.
     _bg_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="creature-bg")
@@ -393,24 +385,11 @@ def run_creature():
 
     # Track background futures so the main loop can skip if still running
     _governance_future = None   # type: Optional[concurrent.futures.Future]
-    _cognitive_future = None    # type: Optional[concurrent.futures.Future]
     _memory_future = None       # type: Optional[concurrent.futures.Future]
 
     # Initialize Metacognition Monitor
     metacog = get_metacognitive_monitor()
     print("[StableCreature] Metacognition active - Lumen monitors its own predictions")
-
-    # Initialize Cognitive Inference (for dialectic thinking)
-    cognitive = None
-    unitares_cog = None
-    if COGNITIVE_AVAILABLE:
-        cognitive = get_cognitive_inference()
-        if cognitive.enabled:
-            print("[StableCreature] Cognitive inference active - Lumen can think dialectically")
-        unitares_cog = get_unitares_cognitive()
-        if unitares_cog.enabled:
-            unitares_cog.set_agent_id(identity.creature_id)
-            print("[StableCreature] UNITARES knowledge graph connected")
 
     # Initialize Enhanced Learning Systems (genuine agency)
     adaptive_model = None
@@ -477,7 +456,6 @@ def run_creature():
     last_decision = None
     last_decision_checked_at = None
     first_check_in = True  # Track first governance check to sync identity
-    last_dialectic_time = 0  # Rate limit dialectic synthesis
     # Most recent metacognitive reflection serialized for SHM propagation. The
     # server-side reflection_episodes drain picks it up each tick. Latest-record
     # semantics: overwritten on each new reflection; the server dedupes on event_id.
@@ -510,7 +488,6 @@ def run_creature():
             flush=True,
         )
     last_governance_time = 0
-    _last_memory_context = None  # Retrieved memories for dialectic synthesis (past informs present)
     last_action = None  # Track last action for outcome recording
     _last_pw_ctx = None  # Track pathway context for outcome reinforcement
     last_state_for_action = None  # State before action for learning
@@ -609,24 +586,11 @@ def run_creature():
                     continue
 
             # 2b-pre. Collect results from background futures (non-blocking)
-            if _cognitive_future is not None and _cognitive_future.done():
-                try:
-                    cog_result = _cognitive_future.result()
-                    if cog_result and "synthesis" in cog_result:
-                        print(f"[Cognitive] SYNTHESIS: {cog_result['synthesis']}", file=sys.stderr, flush=True)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
-                    pass
-                except Exception as e:
-                    print(f"[Cognitive] Error: {e}", file=sys.stderr, flush=True)
-                _cognitive_future = None
-
             if _memory_future is not None and _memory_future.done():
                 try:
                     mem_result = _memory_future.result()
                     if mem_result:
                         relevant_memories = mem_result
-                        if memory_retriever:
-                            _last_memory_context = memory_retriever.format_for_context(relevant_memories)
                         print(f"[Memory] Retrieved: {len(relevant_memories)} relevant memories", file=sys.stderr, flush=True)
                 except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
@@ -671,41 +635,6 @@ def run_creature():
                     preferences=preferences,
                     reflect_reason=reflect_reason,
                 )
-
-                # Dialectic synthesis for high surprise (rate limited to once per 60s)
-                # Runs in background thread to avoid blocking the sensor loop
-                current_time = time.time()
-                if cognitive and cognitive.enabled and pred_error.surprise > 0.3:
-                    if current_time - last_dialectic_time > 60 and _cognitive_future is None:
-                        last_dialectic_time = current_time
-                        # Build thesis from the surprise
-                        _cog_thesis = f"I expected {', '.join(pred_error.surprise_sources or ['stability'])} but experienced significant deviation"
-                        _cog_context = f"Current state: warmth={anima.warmth:.2f}, clarity={anima.clarity:.2f}, surprise={pred_error.surprise:.0%}"
-                        if _last_memory_context:
-                            _cog_context += f"\n\nRelevant past experience:\n{_last_memory_context}"
-                            _last_memory_context = None  # Use once, avoid stale context
-                        _cog_sources = list(pred_error.surprise_sources or [])
-
-                        def _do_cognitive():
-                            synthesis = _run_async_in_background(
-                                cognitive.dialectic_synthesis(_cog_thesis, context=_cog_context),
-                                timeout=5.0
-                            )
-                            if synthesis and "synthesis" in synthesis:
-                                # Store insight in UNITARES knowledge graph
-                                if unitares_cog and unitares_cog.enabled:
-                                    _run_async_in_background(
-                                        unitares_cog.store_knowledge(
-                                            summary=synthesis.get("synthesis", ""),
-                                            discovery_type="insight",
-                                            tags=["lumen", "dialectic", "surprise"] + _cog_sources,
-                                            content={"thesis": _cog_thesis, "full_synthesis": synthesis}
-                                        ),
-                                        timeout=3.0
-                                    )
-                            return synthesis
-
-                        _cognitive_future = _bg_executor.submit(_do_cognitive)
 
             # ==================== ENHANCED LEARNING INTEGRATION ====================
 

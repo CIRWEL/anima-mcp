@@ -360,7 +360,7 @@ TOOLS = [
     ),
     Tool(
         name="setup_tailscale",
-        description="Install and activate Tailscale on Pi (ngrok alternative, no usage limits). Call via HTTP. Requires auth_key.",
+        description="Install and activate Tailscale on Pi for direct VPN access. Call via HTTP. Requires auth_key.",
         inputSchema={
             "type": "object",
             "properties": {

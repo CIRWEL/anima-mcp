@@ -518,7 +518,7 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
 
 async def handle_setup_tailscale(arguments: dict) -> list[TextContent]:
     """
-    Install and activate Tailscale on Pi (ngrok alternative — no usage limits).
+    Install and activate Tailscale on Pi for direct VPN access.
     Call via HTTP when SSH unavailable. Requires auth_key for headless.
     Get key: https://login.tailscale.com/admin/settings/keys
     """

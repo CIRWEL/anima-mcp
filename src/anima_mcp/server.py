@@ -1764,7 +1764,7 @@ def run_http_server(host: str, port: int):
                 log_level="info",
                 limit_concurrency=100,
                 timeout_keep_alive=5,
-                proxy_headers=True,          # Trust X-Forwarded-Proto from ngrok
+                proxy_headers=True,          # Trust X-Forwarded-Proto from cloudflared
                 forwarded_allow_ips="*",     # Allow proxy headers from any IP
             )
             server = uvicorn.Server(config)

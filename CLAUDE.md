@@ -100,10 +100,7 @@ These modules also run in `server.py` (not broker-only):
 |--------|---------|
 | `growth/` | Preferences, goals, memories, autobiography (package with mixins) |
 | `self_reflection.py` | Insight discovery from preferences, beliefs, drawing patterns |
-| `llm_gateway.py` | LLM reflections, self-answers, questions (Groq/Llama) |
-| `knowledge.py` | Q&A-derived insights from answered questions |
-
-**Do NOT delete these files based on import analysis of server.py alone.**
+| `knowledge.py` | Q&A-derived insights from answered questions (rule-based) |
 
 ### Neural System
 
@@ -229,7 +226,7 @@ Goals are **data-grounded** — they emerge from Lumen's actual experience:
 | `_analyze_belief_insights()` | Self-model beliefs (confidence > 0.7, 10+ evidence) | "i am fairly confident that light affects my warmth" |
 | `_analyze_drawing_insights()` | Drawing preferences (5+ drawings) | "i tend to draw at night", "drawing seems to help me feel better" |
 
-Insights persist in SQLite (`insights` table), validated/contradicted on each cycle. Strongest 5 insights are injected into LLM prompts as "Things I've learned about myself" — grounding all reflections, self-answers, and observations in actual self-knowledge.
+Insights persist in SQLite (`insights` table), validated/contradicted on each cycle. Strongest 5 insights are used in grounded self-answers and observations as "Things I've learned about myself."
 
 **Insight categories:** ENVIRONMENT, TEMPORAL, BEHAVIORAL, WELLNESS, SOCIAL
 

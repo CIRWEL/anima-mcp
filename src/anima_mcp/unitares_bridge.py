@@ -80,7 +80,7 @@ class UnitaresBridge:
         self._prev_anima = None        # Previous Anima snapshot (warmth, clarity, stability, presence)
         self._prev_readings = None     # Previous sensor readings
         self._prev_complexity = None   # Previous complexity value
-        # Basic auth for ngrok tunnels (format: "user:password")
+        # Basic auth for remote tunnels (format: "user:password")
         self._basic_auth = None
         auth_str = os.environ.get("UNITARES_AUTH")
         if auth_str and ":" in auth_str:

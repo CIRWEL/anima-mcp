@@ -404,76 +404,20 @@ async def extract_insight_from_answer(
     author: str
 ) -> Optional[Insight]:
     """
-    Extract a key insight from a Q&A pair.
-    Uses LLM if available, falls back to rule-based extraction.
+    Extract a key insight from a Q&A pair using rule-based extraction.
     Returns None if no meaningful insight can be extracted.
     """
     try:
-        from .llm_gateway import get_gateway
-
-        gateway = get_gateway()
-        if not gateway.enabled:
-            # Fallback: use rule-based extraction
-            insight_text = _extract_simple_insight(question, answer)
-            if insight_text:
-                category = _categorize_text(insight_text + " " + answer)
-                return add_insight(
-                    text=insight_text,
-                    source_question=question,
-                    source_answer=answer,
-                    source_author=author,
-                    category=category
-                )
-            return None
-
-        # Use LLM to extract insight
-        prompt = f"""Extract one key insight from this Q&A that Lumen should remember.
-
-Question Lumen asked: "{question}"
-Answer received: "{answer}"
-
-Rules:
-- Extract the core truth or lesson in 1 short sentence
-- Start with "I learned that..." or "I now know that..." or similar
-- Keep it specific and factual — reference actual sensors, mechanisms, or measurable patterns
-- Reject vague philosophy: if the insight is just "everything is connected" or "I am both X and Y" without specifics, respond with "NONE"
-- If the answer is just acknowledgment or doesn't teach anything concrete, respond with "NONE"
-
-Insight:"""
-
-        import httpx
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Try Groq first (fast)
-            if gateway.groq_key:
-                response = await client.post(
-                    gateway.GROQ_API_URL,
-                    headers={
-                        "Authorization": f"Bearer {gateway.groq_key}",
-                        "Content-Type": "application/json",
-                    },
-                    json={
-                        "model": "llama-3.1-8b-instant",
-                        "messages": [{"role": "user", "content": prompt}],
-                        "max_tokens": 50,
-                        "temperature": 0.3,
-                    }
-                )
-                if response.status_code == 200:
-                    data = response.json()
-                    insight_text = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-
-                    if insight_text and insight_text.upper() != "NONE" and len(insight_text) > 10:
-                        # Categorize the insight using shared function
-                        category = _categorize_text(insight_text)
-
-                        return add_insight(
-                            text=insight_text,
-                            source_question=question,
-                            source_answer=answer,
-                            source_author=author,
-                            category=category
-                        )
-
+        insight_text = _extract_simple_insight(question, answer)
+        if insight_text:
+            category = _categorize_text(insight_text + " " + answer)
+            return add_insight(
+                text=insight_text,
+                source_question=question,
+                source_answer=answer,
+                source_author=author,
+                category=category
+            )
     except Exception as e:
         print(f"[Knowledge] Insight extraction failed: {e}", file=sys.stderr, flush=True)
 
