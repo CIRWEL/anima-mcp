@@ -202,21 +202,20 @@ When WiFi is dead and Pi is unreachable but you need data from the SD card:
 1. Pull SD card from Pi, insert into Mac via reader
 2. Boot partition auto-mounts as `/Volumes/bootfs`
 3. Linux ext4 partition does NOT mount natively on macOS
-4. Use `dd` to image the partition, then mount in Docker:
+4. Install ext4fuse or use a Linux machine to mount the root partition:
 
 ```bash
+# Option A: ext4fuse on macOS (brew install ext4fuse)
+mkdir -p /tmp/pi_root
+ext4fuse /dev/disk4s2 /tmp/pi_root -o allow_other
+cp -a /tmp/pi_root/home/unitares-anima/.anima/* ~/backups/lumen/anima_data/
+umount /tmp/pi_root
+
+# Option B: dd image + mount on any Linux box
 sudo dd if=/dev/disk4s2 of=/tmp/pi_root.img bs=4m status=progress
-docker run --rm --privileged \
-  -v /tmp/pi_root.img:/pi.img:ro \
-  -v ~/backups/lumen:/backup \
-  ubuntu bash -c "
-    mkdir -p /mnt/pi
-    losetup /dev/loop0 /pi.img
-    mount -o ro /dev/loop0 /mnt/pi
-    cp -a /mnt/pi/home/unitares-anima/.anima/* /backup/anima_data/
-    echo Done
-  "
-rm /tmp/pi_root.img
+sudo mount -o ro,loop /tmp/pi_root.img /mnt
+cp -a /mnt/home/unitares-anima/.anima/* ~/backups/lumen/anima_data/
+sudo umount /mnt && rm /tmp/pi_root.img
 ```
 
 ---

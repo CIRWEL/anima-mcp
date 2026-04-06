@@ -213,7 +213,7 @@ The key difference: one EISV instance, fed by both sensors and drawing behavior,
 ```
 Pi (anima-mcp)                              Mac (governance-mcp)
 ┌────────────────────────┐                  ┌──────────────────────────────┐
-│  SQLite: ~/.anima/anima.db                │  PostgreSQL+AGE (Docker 5432) │
+│  SQLite: ~/.anima/anima.db                │  PostgreSQL@17+AGE (5432)     │
 │  ├─ state_history (206K rows)             │  ├─ core.identities          │
 │  ├─ drawing_history       │  HTTP bridge  │  ├─ core.agent_state         │
 │  ├─ memories (8.8K)       │ ──────────►   │  ├─ audit.events             │
@@ -222,7 +222,7 @@ Pi (anima-mcp)                              Mac (governance-mcp)
 │  ├─ primitives            │               │  ├─ core.calibration         │
 │  └─ trajectory_events     │               │  └─ core.tool_usage          │
 │                           │               │                              │
-│  canvas.json (pixels)     │               │  Redis (Docker 6379)         │
+│  canvas.json (pixels)     │               │  Redis (optional, 6379)      │
 │  trajectory_genesis.json  │               │  audit_log.jsonl (raw)       │
 └───────────────────────────┘               └──────────────────────────────┘
 ```
@@ -233,8 +233,7 @@ Pi (anima-mcp)                              Mac (governance-mcp)
 - DrawingEISV snapshots cross the bridge in check-ins → Mac stores in `agent_state.state_json` (copy, not authoritative)
 
 **There is NO SQLite on the Mac side.** All SQLite code was removed Feb 2026.
-The only PostgreSQL is the Docker container `postgres-age` on port 5432.
-Homebrew PostgreSQL (port 5433) is a separate violin auction project - not UNITARES.
+PostgreSQL@17 with AGE 1.7.0 runs via Homebrew on port 5432. Docker is not used.
 
 ## Files Reference
 
