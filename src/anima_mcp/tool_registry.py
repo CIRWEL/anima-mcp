@@ -489,7 +489,7 @@ _DEFAULT_ALLOWED_HOSTS = [
     "192.168.1.165:*",
     "192.168.1.151:*",
     "100.78.71.1:*",
-    "lumen-anima.ngrok.io",
+    "lumen.cirwel.org",
     "0.0.0.0:*",
 ]
 
@@ -499,7 +499,7 @@ _DEFAULT_ALLOWED_ORIGINS = [
     "http://[::1]:*",
     "http://192.168.1.165:*",
     "http://192.168.1.151:*",
-    "https://lumen-anima.ngrok.io",
+    "https://lumen.cirwel.org",
     "null",
 ]
 

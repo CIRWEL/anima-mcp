@@ -1639,9 +1639,9 @@ def run_http_server(host: str, port: int):
             from mcp.server.auth.routes import build_resource_metadata_url
             resource_metadata_url = build_resource_metadata_url(mcp.settings.auth.resource_server_url)
 
-            # Require OAuth only for external (ngrok) requests.
+            # Require OAuth only for external (Cloudflare tunnel) requests.
             # Local and Tailscale clients (Cursor, Claude Code) skip auth.
-            _EXTERNAL_HOSTS = {"lumen-anima.ngrok.io"}
+            _EXTERNAL_HOSTS = {"lumen.cirwel.org"}
             _auth_protected = _AuthMW(
                 _AuthCtx(
                     RequireAuthMiddleware(
@@ -1694,8 +1694,8 @@ def run_http_server(host: str, port: int):
 
         # Wrap app to rewrite /mcp → /mcp/ at the ASGI level.
         # Starlette's Mount issues a 307 redirect for missing trailing slash,
-        # but behind ngrok the redirect uses http:// (wrong scheme) which
-        # breaks Claude.ai's MCP client. This avoids the redirect entirely.
+        # but behind a reverse proxy the redirect uses http:// (wrong scheme)
+        # which breaks Claude.ai's MCP client. This avoids the redirect entirely.
         async def _rewrite_mcp_slash(scope, receive, send):
             if scope.get("type") == "http" and scope.get("path") == "/mcp":
                 scope = dict(scope)
