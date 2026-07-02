@@ -20,12 +20,24 @@ defmodule AnimaBroker.Application do
         AnimaBroker.State.Store,
         AnimaBroker.Sensors.Supervisor,
         AnimaBroker.Shm.Writer
-      ] ++ tick_child()
+      ] ++ tick_child() ++ governance_child()
 
     Supervisor.start_link(children, strategy: :one_for_one, name: AnimaBroker.Supervisor)
   end
 
   defp tick_child do
     if Application.get_env(:anima_broker, :autostart, true), do: [AnimaBroker.Tick], else: []
+  end
+
+  # Phase-2 governance client (shadow soak). Only starts when a tools URL is
+  # configured (UNITARES_TOOLS_URL) — unset (dev/CI/test) means no child, the
+  # same gating pattern as the I2C sensors. Crash-isolated by :one_for_one: a
+  # dying governance client never takes the sensor GenServers with it.
+  defp governance_child do
+    if Application.get_env(:anima_broker, :governance_tools_url) do
+      [{AnimaBroker.Governance.Client, []}]
+    else
+      []
+    end
   end
 end
