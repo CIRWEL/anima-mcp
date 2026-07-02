@@ -18,7 +18,9 @@ defmodule AnimaBroker.MixProject do
   # OTP application. AnimaBroker.Application boots the supervision tree.
   def application do
     [
-      extra_applications: [:logger],
+      # :inets/:ssl for the governance client's :httpc REST calls (stdlib —
+      # deliberately no HTTP dep; one small POST every ~180s).
+      extra_applications: [:logger, :inets, :ssl],
       mod: {AnimaBroker.Application, []}
     ]
   end

@@ -113,6 +113,13 @@ carries the client must preserve:
    scratch governance identity (no double-counting of Lumen's cadence or
    trajectory pollution); a short final pre-cutover window exercises the real
    identity handshake (Lumen's UUID + session echo) to prove the path.
-3. **Phase 2 waits for Phase-1 stability** — build starts no earlier than
-   ~2026-07-08, contingent on a clean week from `anima-broker-ex.service`
-   (no crash-restarts, env channels fresh, issue #86's 24h acceptance passed).
+3. **The clean-Phase-1-week gate applies to the CUTOVER, not the build**
+   (re-scoped 2026-07-02, operator: "why wait"). Decision 2 already makes the
+   build + soak inert to the creature — scratch identity, shadow-only writes,
+   passthrough flag off — so they run concurrently with the Phase-1 stability
+   window. The passthrough flag may not flip before ~2026-07-08, and only with
+   a clean week from `anima-broker-ex.service` (no crash-restarts, env
+   channels fresh, issue #86's 24h acceptance passed). Residual shared-VM
+   risk (a crashing governance client destabilizing the BEAM that carries
+   live sensors) is bounded by OTP supervision and is exactly what the soak
+   observes.
