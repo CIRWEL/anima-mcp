@@ -14,7 +14,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from anima_mcp.unitares_bridge import IdentityRefusedError, UnitaresBridge
-from tests.test_unitares_bridge import _mock_http_response, create_test_anima, create_test_readings
+# Sibling test module — pytest rootdir-inserts tests/ on sys.path (no tests/ package)
+from test_unitares_bridge import _mock_http_response, create_test_anima, create_test_readings
 
 ANIMA_ID = "49e14444-b59e-48f1-83b8-b36a988c9975"
 GOV_UUID = "69a1a4f7-a30f-4f4a-bcf9-2de8606fb819"
