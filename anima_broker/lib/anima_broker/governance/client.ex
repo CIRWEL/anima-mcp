@@ -18,7 +18,48 @@ defmodule AnimaBroker.Governance.Client do
   gate (a transport-injected CSID does not). For the short pre-cutover
   window, set `:gov_client_session_id` (env `ANIMA_GOV_EX_CSID`) to Lumen's
   substrate CSID literal to exercise the real handshake — that mode skips
-  onboard entirely.
+  onboard entirely. The CSID must be a key with a live PG session row
+  (`core.sessions`); the row renews +24h on every check-in, which IS the
+  binding's durability (the server writes it at onboard via
+  `bound_via=onboard_stable_session`).
+
+  Binding durability + refusal detection (addendum amendment 2026-07-02,
+  anima-mcp #97/#98/#99/#100 — cutover REQUIREMENTS):
+
+    * a typed strict refusal (`status=identity_required`,
+      `error_code=SESSION_ERROR`, `error_category=auth_error`) carries
+      NEITHER `success:false` NOR an `action`, so an unguarded parse writes
+      it as a silent default-"proceed" — exactly how canonical Lumen stayed
+      governance-dark ~3 days after the 2026-06-30 Redis wipe. This client
+      classifies it distinctly and NEVER writes the governance slice for it:
+      letting `governance_at` go stale is the honest alarm channel.
+
+    * recovery anchor: HARVEST `{agent_uuid, continuity_token}` while the
+      binding is healthy (at onboard, refreshed daily via `identity()`),
+      SPEND it on an `identity(resume=true)` verification when a check-in is
+      identity-refused (rate-limited, uuid-mismatch-refusing). Per the
+      settled ontology (3 live acceptance tests, 2026-07-03): a Redis-only
+      wipe self-heals server-side via the PG session row with zero client
+      action; `identity(resume=true)` RESOLVES but never WRITES a binding —
+      so reaching the spend path means BOTH stores lost the binding, which
+      is operator territory BY DESIGN. The client verifies its identity,
+      adopts the server-canonical session key, and logs OPERATOR RECOVERY
+      REQUIRED naming the runbook. It must alarm loudly — never silently
+      local-fallback forever.
+
+    * the anchor/id file (`ANIMA_GOV_EX_ID_FILE`) is the operator lever for
+      re-pointing the echoed key. In fixed-CSID (substrate) mode a
+      `"mode":"substrate"` anchor's canonical key is preferred over the env
+      literal (#99: echo what the server actually bound); delete the file to
+      restart from the env-declared key. A `"mode":"scratch"` anchor is
+      ignored in substrate mode so a soak identity can never shadow the
+      operator's declared substrate key.
+
+  Acceptance (pre-cutover, per the amended addendum): delete ONLY the Redis
+  session key while the client runs → the next check-in must land unaided
+  (PATH2, PG row). Delete both stores → the client must log OPERATOR
+  RECOVERY REQUIRED (runbook: `unitares scripts/ops/rebind-resident-session.sh
+  <uuid> <key>`), not silently proceed.
 
   Failure posture (lessons imported from the fleet):
     * circuit breaker matching the Python bridge — 2 consecutive failures
@@ -36,11 +77,16 @@ defmodule AnimaBroker.Governance.Client do
 
   @onboard_timeout_ms 15_000
   @checkin_timeout_ms 20_000
+  @identity_timeout_ms 15_000
   @onboard_retry_base_ms 5_000
   @onboard_retry_cap_ms 60_000
   @breaker_threshold 2
   @breaker_base_s 15
   @breaker_cap_s 120
+  @reanchor_cooldown_ms 600_000
+  @anchor_refresh_s 86_400
+
+  @operator_runbook "unitares scripts/ops/rebind-resident-session.sh"
 
   def start_link(opts),
     do: GenServer.start_link(__MODULE__, opts, name: opts[:name] || __MODULE__)
@@ -56,6 +102,8 @@ defmodule AnimaBroker.Governance.Client do
       fixed_csid: opts[:fixed_csid] || Application.get_env(:anima_broker, :gov_client_session_id),
       live_state_opts: opts[:live_state_opts] || [],
       identity: nil,
+      anchor: nil,
+      reanchor_last_ms: nil,
       prev_anima: nil,
       prev_readings: nil,
       failures: 0,
@@ -72,9 +120,21 @@ defmodule AnimaBroker.Governance.Client do
         :ignore
 
       state.fixed_csid ->
-        # Pre-cutover window: real substrate identity, no onboard.
+        # Pre-cutover window: real substrate identity, no onboard. A prior
+        # substrate anchor's canonical key beats the env literal (#99); a
+        # scratch anchor from the soak must never shadow the operator's key.
+        anchor = load_anchor(state.id_file)
+        anchor = if anchor && anchor["mode"] == "substrate", do: anchor, else: nil
+        csid = (anchor && anchor["client_session_id"]) || state.fixed_csid
+
+        identity = %{
+          csid: csid,
+          agent_uuid: anchor && anchor["agent_uuid"],
+          mode: :substrate
+        }
+
         schedule_checkin(state.interval_ms)
-        {:ok, %{state | identity: %{csid: state.fixed_csid, agent_uuid: nil, mode: :substrate}}}
+        {:ok, %{state | identity: identity, anchor: anchor}}
 
       true ->
         send(self(), :onboard)
@@ -103,10 +163,24 @@ defmodule AnimaBroker.Governance.Client do
           mode: :scratch
         }
 
-        persist_identity(state.id_file, identity)
+        # Harvest the recovery anchor directly from the onboard response —
+        # the binding is PG-durable server-side the moment onboard returns
+        # (bound_via=onboard_stable_session), and the continuity_token is the
+        # client's half of the both-store-loss alarm path.
+        anchor = %{
+          "agent_uuid" => identity.agent_uuid,
+          "client_session_id" => identity.csid,
+          "continuity_token" => result["continuity_token"],
+          "saved_at" => System.system_time(:second),
+          "mode" => "scratch"
+        }
+
+        persist_anchor(state.id_file, anchor)
         Logger.info("[Governance.Client] onboarded scratch identity #{identity.agent_uuid}")
         schedule_checkin(5_000)
-        {:noreply, %{state | identity: identity, onboard_retry_ms: @onboard_retry_base_ms}}
+
+        {:noreply,
+         %{state | identity: identity, anchor: anchor, onboard_retry_ms: @onboard_retry_base_ms}}
 
       {:error, reason} ->
         Logger.warning(
@@ -137,7 +211,7 @@ defmodule AnimaBroker.Governance.Client do
       true ->
         case LiveState.read(state.live_state_opts) do
           {:ok, %{"anima" => anima, "readings" => readings}} ->
-            attempt_checkin(state, anima, readings)
+            attempt_checkin(state, anima, readings, _may_reanchor? = true)
 
           {:error, reason} ->
             Logger.warning("[Governance.Client] live envelope unavailable (#{reason}); skipping")
@@ -146,7 +220,7 @@ defmodule AnimaBroker.Governance.Client do
     end
   end
 
-  defp attempt_checkin(state, anima, readings) do
+  defp attempt_checkin(state, anima, readings, may_reanchor?) do
     eisv = EisvMapper.anima_to_eisv(anima, readings)
 
     args =
@@ -169,7 +243,7 @@ defmodule AnimaBroker.Governance.Client do
       |> maybe_put("agent_id", state.identity.agent_uuid)
 
     case call_tool(state, "process_agent_update", args, @checkin_timeout_ms) do
-      {:ok, result} ->
+      {:ok, %{"action" => _} = result} ->
         write_governance(result, eisv, state.identity)
 
         %{
@@ -179,6 +253,19 @@ defmodule AnimaBroker.Governance.Client do
             failures: 0,
             breaker_backoff_s: @breaker_base_s
         }
+        |> maybe_refresh_anchor()
+
+      {:ok, other} ->
+        # A success-shaped payload WITHOUT an action is not a verdict. The
+        # known such shape (typed refusal) is classified in decode_envelope;
+        # anything else is treated as a failure — never defaulted to
+        # "proceed" (the 2026-06-30 outage mechanism).
+        Logger.warning(
+          "[Governance.Client] check-in returned no action " <>
+            "(keys: #{inspect(Map.keys(other))}); treating as failure"
+        )
+
+        trip_breaker(state, {:unexpected_checkin_shape, Map.keys(other)})
 
       {:error, {:agent_paused, detail}} ->
         # A pause is a governance verdict, not a transport failure: record it
@@ -187,6 +274,9 @@ defmodule AnimaBroker.Governance.Client do
         Logger.warning("[Governance.Client] agent paused: #{inspect(detail)}")
         write_governance(%{"action" => "pause", "reason" => "agent_paused"}, eisv, state.identity)
         %{state | prev_anima: anima, prev_readings: readings}
+
+      {:error, {:identity_refused, hint}} ->
+        handle_identity_refusal(state, anima, readings, hint, may_reanchor?)
 
       {:error, reason} ->
         trip_breaker(state, reason)
@@ -219,10 +309,176 @@ defmodule AnimaBroker.Governance.Client do
     end
   end
 
+  # -- identity refusal / recovery anchor (#97, addendum amendment) ----------
+
+  defp handle_identity_refusal(state, anima, readings, hint, may_reanchor?) do
+    Logger.error(
+      "[Governance.Client] IDENTITY REFUSED for #{state.identity.csid}: #{hint} — " <>
+        "typed strict refusal (unguarded parses read this as silent \"proceed\"). " <>
+        "Governance slice deliberately NOT written; staleness is the alarm channel."
+    )
+
+    if may_reanchor? do
+      case try_reanchor(state) do
+        {:ok, state2} ->
+          # Retry ONCE this cycle with the (possibly re-pointed) identity.
+          attempt_checkin(state2, anima, readings, false)
+
+        {:skip, state2} ->
+          trip_breaker(state2, :identity_refused)
+      end
+    else
+      trip_breaker(state, :identity_refused)
+    end
+  end
+
+  defp try_reanchor(state) do
+    # Re-read the anchor file first: it is the operator lever for re-pointing
+    # the echoed key, and may have been rotated since boot.
+    anchor = load_anchor(state.id_file) || state.anchor
+    now_ms = System.monotonic_time(:millisecond)
+
+    cond do
+      anchor == nil or anchor["agent_uuid"] == nil or anchor["continuity_token"] == nil ->
+        Logger.error(
+          "[Governance.Client] identity refused and NO usable recovery anchor at " <>
+            "#{state.id_file || "(no id_file)"} — cannot self-recover. " <>
+            "OPERATOR RECOVERY REQUIRED: run #{@operator_runbook} <uuid> #{state.identity.csid}"
+        )
+
+        {:skip, %{state | anchor: anchor}}
+
+      is_integer(state.reanchor_last_ms) and
+          now_ms - state.reanchor_last_ms < @reanchor_cooldown_ms ->
+        {:skip, %{state | anchor: anchor}}
+
+      true ->
+        spend_anchor(%{state | anchor: anchor, reanchor_last_ms: now_ms})
+    end
+  end
+
+  defp spend_anchor(state) do
+    anchor = state.anchor
+
+    args = %{
+      "agent_uuid" => anchor["agent_uuid"],
+      "continuity_token" => anchor["continuity_token"],
+      "client_session_id" => state.identity.csid,
+      "resume" => true,
+      "response_mode" => "minimal"
+    }
+
+    case call_tool(state, "identity", args, @identity_timeout_ms) do
+      {:ok, resp} ->
+        got = resp["uuid"] || get_in(resp, ["bound_identity", "uuid"])
+
+        if got == anchor["agent_uuid"] do
+          # Settled ontology (2026-07-03 acceptance tests): identity(resume)
+          # RESOLVES this call but never WRITES a binding, and no sanctioned
+          # call can (S1-c, S21-a — these gates ARE the phantom-mint fix).
+          # A Redis-only wipe never reaches this code (PATH2 self-heals via
+          # the PG row); being refused means BOTH stores lost the binding.
+          bound_key = resp["client_session_id"] || state.identity.csid
+
+          new_anchor = %{
+            anchor
+            | "continuity_token" => resp["continuity_token"] || anchor["continuity_token"],
+              "client_session_id" => bound_key,
+              "saved_at" => System.system_time(:second)
+          }
+
+          persist_anchor(state.id_file, new_anchor)
+
+          Logger.error(
+            "[Governance.Client] identity VERIFIED (uuid=#{String.slice(got, 0, 8)}) but the " <>
+              "session binding is gone from BOTH stores — a client cannot recreate it by " <>
+              "design. OPERATOR RECOVERY REQUIRED: run #{@operator_runbook} #{got} #{bound_key}"
+          )
+
+          {:ok,
+           %{
+             state
+             | anchor: new_anchor,
+               identity: %{state.identity | csid: bound_key, agent_uuid: got}
+           }}
+        else
+          Logger.error(
+            "[Governance.Client] re-anchor resolved to #{String.slice(got || "nothing", 0, 8)}, " <>
+              "expected #{String.slice(anchor["agent_uuid"], 0, 8)} — refusing mismatched binding"
+          )
+
+          {:skip, state}
+        end
+
+      {:error, reason} ->
+        Logger.error("[Governance.Client] re-anchor attempt failed: #{inspect(reason)}")
+        {:skip, state}
+    end
+  end
+
+  # While the binding is healthy, keep the recovery anchor fresh (daily) so a
+  # future store wipe is recoverable/diagnosable. Best-effort — failures only
+  # log at debug, exactly like the Python bridge's _harvest_anchor.
+  defp maybe_refresh_anchor(state) do
+    if anchor_fresh?(state.anchor) do
+      state
+    else
+      args = %{"client_session_id" => state.identity.csid, "response_mode" => "minimal"}
+
+      case call_tool(state, "identity", args, @identity_timeout_ms) do
+        {:ok, resp} ->
+          uuid = resp["uuid"] || get_in(resp, ["bound_identity", "uuid"])
+          token = resp["continuity_token"]
+
+          if uuid && token do
+            # Adopt the server-canonical session key (#99): recovery only
+            # converges when we echo what the server actually bound.
+            bound_key = resp["client_session_id"] || state.identity.csid
+
+            anchor = %{
+              "agent_uuid" => uuid,
+              "client_session_id" => bound_key,
+              "continuity_token" => token,
+              "saved_at" => System.system_time(:second),
+              "mode" => to_string(state.identity.mode)
+            }
+
+            persist_anchor(state.id_file, anchor)
+
+            %{
+              state
+              | anchor: anchor,
+                identity: %{state.identity | csid: bound_key, agent_uuid: uuid}
+            }
+          else
+            Logger.debug("[Governance.Client] anchor harvest: identity() returned no uuid/token")
+            state
+          end
+
+        {:error, reason} ->
+          Logger.debug(
+            "[Governance.Client] anchor harvest failed (non-fatal): #{inspect(reason)}"
+          )
+
+          state
+      end
+    end
+  end
+
+  defp anchor_fresh?(nil), do: false
+
+  defp anchor_fresh?(anchor) do
+    anchor["continuity_token"] != nil and anchor["agent_uuid"] != nil and
+      is_number(anchor["saved_at"]) and
+      System.system_time(:second) - anchor["saved_at"] < @anchor_refresh_s
+  end
+
   defp write_governance(result, eisv, identity) do
     AnimaBroker.State.Store.merge(%{
       "governance" => %{
-        "action" => Map.get(result, "action", "proceed"),
+        # No "proceed" default — callers guarantee an action is present, and
+        # a shape without one must never be written as a verdict (#97).
+        "action" => Map.fetch!(result, "action"),
         "margin" => Map.get(result, "margin", "comfortable"),
         "reason" => Map.get(result, "reason"),
         "eisv" => eisv,
@@ -249,13 +505,21 @@ defmodule AnimaBroker.Governance.Client do
   defp decode_envelope(raw) do
     case Jason.decode(raw) do
       {:ok, %{"success" => true, "result" => result}} ->
-        {:ok, normalize_result(result)}
+        result = normalize_result(result)
+
+        case refusal_hint(result) do
+          nil -> {:ok, result}
+          hint -> {:error, {:identity_refused, hint}}
+        end
 
       {:ok, %{"success" => false, "error_code" => "AGENT_PAUSED"} = err} ->
         {:error, {:agent_paused, err["error"] || err["detail"]}}
 
       {:ok, %{"success" => false} = err} ->
-        {:error, {:tool_error, err["error_code"] || err["error"]}}
+        case refusal_hint(err) do
+          nil -> {:error, {:tool_error, err["error_code"] || err["error"]}}
+          hint -> {:error, {:identity_refused, hint}}
+        end
 
       {:ok, other} ->
         {:error, {:unexpected_envelope, other}}
@@ -264,6 +528,24 @@ defmodule AnimaBroker.Governance.Client do
         {:error, :bad_json}
     end
   end
+
+  # The #425 typed strict refusal is a structured SUCCESS-shape (no
+  # success:false, no action) — single-sourced server-side in
+  # strict_identity_refusal_payload and returned identically by the REST
+  # gate, the MCP dispatch middleware, and the process_agent_update Path-C
+  # refusal. Without this classification it parses as a silent
+  # default-"proceed" (the 2026-06-30→07-02 outage mechanism, anima-mcp #97).
+  defp refusal_hint(%{"status" => status} = r)
+       when status in ["identity_required", "lineage_declaration_required"],
+       do: r["hint"] || r["error"] || "session binding unresolved (status=#{status})"
+
+  defp refusal_hint(%{"error_code" => "SESSION_ERROR"} = r),
+    do: r["hint"] || r["error"] || "SESSION_ERROR"
+
+  defp refusal_hint(%{"error_category" => "auth_error"} = r),
+    do: r["hint"] || r["error"] || "auth_error"
+
+  defp refusal_hint(_), do: nil
 
   # The bridge sometimes returns the tool result as a JSON string rather than
   # an object (dispatch_beam handles the same).
@@ -297,31 +579,38 @@ defmodule AnimaBroker.Governance.Client do
     end
   end
 
-  # -- identity persistence (parent chaining across restarts) ----------------
-
-  defp load_prior_uuid(nil), do: nil
+  # -- anchor persistence (parent chaining + recovery, one file) --------------
 
   defp load_prior_uuid(path) do
+    case load_anchor(path) do
+      %{"agent_uuid" => uuid} when is_binary(uuid) -> uuid
+      _ -> nil
+    end
+  end
+
+  defp load_anchor(nil), do: nil
+
+  defp load_anchor(path) do
     with {:ok, raw} <- File.read(Path.expand(path)),
-         {:ok, %{"agent_uuid" => uuid}} when is_binary(uuid) <- Jason.decode(raw) do
-      uuid
+         {:ok, %{} = data} <- Jason.decode(raw) do
+      # Accept the Python anchor's "uuid" key too — the file is an operator
+      # lever and a hand-edit must not fail on naming.
+      Map.put_new(data, "agent_uuid", data["uuid"])
     else
       _ -> nil
     end
   end
 
-  defp persist_identity(nil, _identity), do: :ok
+  defp persist_anchor(nil, _anchor), do: :ok
 
-  defp persist_identity(path, identity) do
+  defp persist_anchor(path, anchor) do
     path = Path.expand(path)
     File.mkdir_p!(Path.dirname(path))
-
-    File.write!(
-      path,
-      Jason.encode!(%{"agent_uuid" => identity.agent_uuid, "client_session_id" => identity.csid})
-    )
+    tmp = path <> ".tmp"
+    File.write!(tmp, Jason.encode!(anchor))
+    File.rename!(tmp, path)
   rescue
-    e -> Logger.warning("[Governance.Client] could not persist identity: #{inspect(e)}")
+    e -> Logger.warning("[Governance.Client] could not persist anchor: #{inspect(e)}")
   end
 
   defp agent_name(%{mode: :substrate}), do: "Lumen"

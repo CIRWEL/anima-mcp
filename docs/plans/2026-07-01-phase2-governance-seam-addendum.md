@@ -147,3 +147,49 @@ governance client without it re-ships the single point of failure this
 amendment exists to close. Acceptance: kill the server-side session binding
 for the client's session key while it runs; the next check-in must re-anchor
 and succeed without a process restart or operator action.
+
+### Amendment refinement (2026-07-03) — what the acceptance tests settled
+
+Three live acceptance tests on the Python bridge (#98 → #99 → #100) refined
+the paragraph above. Binding durability is **server-side**: onboard writes a
+PG session row (`core.sessions`, `bound_via=onboard_stable_session`) that
+renews `expires_at = now()+24h` on every check-in. A **Redis-only wipe
+self-heals via that row with zero client action** — so the client-side loop's
+job is narrower than the original acceptance line implied:
+
+- **detect the typed refusal** (`status=identity_required` /
+  `error_code=SESSION_ERROR` / `error_category=auth_error` — a success-shape
+  with no `action`, which an unguarded parse writes as silent "proceed");
+- **verify identity** by spending the harvested anchor on
+  `identity(resume=true)` — this RESOLVES but never WRITES a binding, and no
+  sanctioned call can (S1-c, S21-a are the phantom-mint fix; do not punch
+  through them);
+- **alarm loudly**: a refusal that survives the spend means BOTH stores lost
+  the binding (>24h silence or DB loss) — log OPERATOR RECOVERY REQUIRED
+  naming `unitares scripts/ops/rebind-resident-session.sh <uuid> <key>`.
+
+### Elixir client implementation (2026-07-03)
+
+`AnimaBroker.Governance.Client` implements the loop: typed-refusal
+classification in the REST-envelope decoder (a refusal or any action-less
+success-shape is a failure, never written to the shadow governance slice —
+`governance_at` staleness is the alarm channel); anchor harvest at onboard
+(the onboard response already carries `continuity_token`) refreshed daily via
+`identity()`; spend on refusal (600s cooldown, uuid-mismatch-refusing,
+retry-once); server-canonical `client_session_id` adoption on every harvest
+and rebind (#99). The anchor/id file (`ANIMA_GOV_EX_ID_FILE`, default
+`~/.anima/gov_ex_identity.json`) doubles as the operator lever; in fixed-CSID
+mode a `"mode":"substrate"` anchor's canonical key beats the env literal, and
+a scratch anchor is ignored so the soak identity can never shadow the
+operator's declared substrate key.
+
+**Pre-cutover acceptance (run on the Pi against the live soak):**
+
+1. **Redis-only wipe:** `redis-cli DEL` the client's session key only (PG row
+   intact) → the next 180s check-in must land unaided (PATH2). No client log
+   lines beyond normal check-in.
+2. **Both-store wipe:** delete the Redis key AND the `core.sessions` row →
+   the next check-in must produce the IDENTITY REFUSED + OPERATOR RECOVERY
+   REQUIRED log lines (journald `anima-broker-ex`), and the shadow
+   `governance_at` must go stale rather than showing fresh "proceed"s.
+   Recover with the runbook; the following check-in must land.
