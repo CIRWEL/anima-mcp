@@ -452,18 +452,27 @@ class UnitaresBridge:
             })
             got = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
             if got == self._anchor["uuid"]:
-                # ADOPT the key the server actually bound (#97 acceptance-test
-                # finding): resume rebinds the canonical agent-<uuid12> key, not
-                # a caller-supplied bespoke one. Retrying with the old key would
-                # loop refused forever — the adopted key is what converges.
+                # Acceptance-testing #97 (2026-07-03) bottomed out the ontology:
+                # identity(resume) RESOLVES this call but never WRITES a
+                # transport binding, and no sanctioned call can (S1-c retired
+                # cross-process token resume; bind_session is fail-closed on
+                # unknown keys — by design, these gates are the F3 fix).
+                # Binding durability is server-side: the PG session row renews
+                # +24h on every check-in, so a Redis wipe self-heals via PATH2
+                # with no client action. Reaching THIS code means the PG row is
+                # gone too (>24h outage or DB loss) — that is operator
+                # territory, and the only honest move is to say so loudly.
                 bound_key = resp.get("client_session_id") or self._client_session_id()
-                logger.warning(
-                    "Governance binding RE-ANCHORED to %s; adopting session key %s",
-                    got[:8], bound_key,
-                )
                 self._save_anchor(
                     got, resp.get("continuity_token") or self._anchor["continuity_token"],
                     bound_key,
+                )
+                logger.error(
+                    "Governance identity VERIFIED (uuid=%s) but the session "
+                    "binding is gone from both stores — a client cannot "
+                    "recreate it by design. OPERATOR RECOVERY REQUIRED: run "
+                    "unitares scripts/ops/rebind-resident-session.sh %s %s",
+                    got[:8], got, bound_key,
                 )
                 return True
             logger.error("Re-anchor resolved to %s, expected %s — refusing mismatched binding",
@@ -630,7 +639,7 @@ class UnitaresBridge:
             # client_session_id is the #1 priority for identity resolution in UNITARES,
             # ensuring stable binding across service restarts regardless of HTTP fingerprint
             update_arguments = {
-                "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
+                "client_session_id": self._client_session_id(),
                 "agent_name": "Lumen",  # cosmetic display label only — server-side name-claim recovery was removed (no-lookup-by-label invariant)
                 "complexity": complexity,
                 "confidence": confidence,
@@ -956,7 +965,7 @@ class UnitaresBridge:
                 "params": {
                     "name": "identity",
                     "arguments": {
-                        "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
+                        "client_session_id": self._client_session_id(),
                         "name": name
                     }
                 }
@@ -1023,7 +1032,7 @@ class UnitaresBridge:
                     "name": "update_agent_metadata",
                     "arguments": {
                         # client_session_id ensures stable identity binding across restarts
-                        "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
+                        "client_session_id": self._client_session_id(),
                         "purpose": f"{creature_name} - embodied digital creature (creature_id: {creature_id[:8]}...)",
                         "tags": [creature_name.lower(), "anima", "creature", "embodied", "autonomous"],
                         "preferences": metadata,
@@ -1091,7 +1100,7 @@ class UnitaresBridge:
 
         try:
             arguments = {
-                "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
+                "client_session_id": self._client_session_id(),
                 "outcome_type": outcome_type,
             }
             if outcome_score is not None:
