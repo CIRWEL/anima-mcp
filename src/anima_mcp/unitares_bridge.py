@@ -337,6 +337,15 @@ class UnitaresBridge:
     # ------------------------------------------------------------------
 
     def _client_session_id(self) -> str:
+        # Prefer the SERVER-ISSUED canonical key (agent-<uuid12> prefix echo —
+        # the fleet-standard write path) once the anchor holds one. The legacy
+        # deterministic lumen-<anima-id> key is only the bootstrap identity
+        # hint: acceptance-testing #97 showed identity(resume=true) rebinds the
+        # canonical key, NOT a caller-supplied bespoke key, so recovery only
+        # converges if the bridge echoes what the server actually bound.
+        anchored = (self._anchor or {}).get("client_session_id")
+        if anchored:
+            return anchored
         return f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima"
 
     def _load_anchor(self) -> Optional[Dict[str, Any]]:
@@ -348,13 +357,13 @@ class UnitaresBridge:
             pass
         return None
 
-    def _save_anchor(self, uuid: str, token: str) -> None:
+    def _save_anchor(self, uuid: str, token: str, client_session_id: Optional[str] = None) -> None:
         try:
             self._anchor_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "uuid": uuid,
                 "continuity_token": token,
-                "client_session_id": self._client_session_id(),
+                "client_session_id": client_session_id or self._client_session_id(),
                 "saved_at": time.time(),
             }
             tmp = self._anchor_path.with_suffix(".tmp")
@@ -411,7 +420,7 @@ class UnitaresBridge:
             uuid = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
             token = resp.get("continuity_token")
             if uuid and token:
-                self._save_anchor(uuid, token)
+                self._save_anchor(uuid, token, resp.get("client_session_id"))
             else:
                 logger.debug("Anchor harvest: identity() returned no uuid/token")
         except Exception as e:
@@ -420,6 +429,9 @@ class UnitaresBridge:
     async def _try_reanchor(self) -> bool:
         """Spend the stored anchor on a resume=true rebind after an identity
         refusal. Rate-limited; returns True when the server re-bound us."""
+        # Re-read the file first: broker and server share the anchor, and a
+        # sibling process may have already healed + rotated it.
+        self._anchor = self._load_anchor() or self._anchor
         if not self._anchor:
             logger.error(
                 "Governance identity refused and NO anchor at %s — cannot "
@@ -440,13 +452,19 @@ class UnitaresBridge:
             })
             got = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
             if got == self._anchor["uuid"]:
+                # ADOPT the key the server actually bound (#97 acceptance-test
+                # finding): resume rebinds the canonical agent-<uuid12> key, not
+                # a caller-supplied bespoke one. Retrying with the old key would
+                # loop refused forever — the adopted key is what converges.
+                bound_key = resp.get("client_session_id") or self._client_session_id()
                 logger.warning(
-                    "Governance binding RE-ANCHORED to %s after identity refusal "
-                    "(server-side session store lost the binding)", got[:8]
+                    "Governance binding RE-ANCHORED to %s; adopting session key %s",
+                    got[:8], bound_key,
                 )
-                new_token = resp.get("continuity_token")
-                if new_token:
-                    self._save_anchor(got, new_token)
+                self._save_anchor(
+                    got, resp.get("continuity_token") or self._anchor["continuity_token"],
+                    bound_key,
+                )
                 return True
             logger.error("Re-anchor resolved to %s, expected %s — refusing mismatched binding",
                          (got or "nothing")[:8], self._anchor["uuid"][:8])

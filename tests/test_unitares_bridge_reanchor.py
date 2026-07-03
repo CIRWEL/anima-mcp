@@ -99,7 +99,8 @@ async def test_refusal_with_anchor_reanchors_and_retries(tmp_path):
     ok = {"action": "proceed", "margin": "comfortable", "reason": "ok",
           "eisv": {}, "source": "unitares", "unitares_agent_id": GOV_UUID, "raw_response": {}}
     call_unitares = AsyncMock(side_effect=[IdentityRefusedError("refused"), ok])
-    reanchor_resp = {"uuid": GOV_UUID, "continuity_token": "v1.fresh"}
+    reanchor_resp = {"uuid": GOV_UUID, "continuity_token": "v1.fresh",
+                     "client_session_id": "agent-69a1a4f7-a30"}
     with patch.object(bridge, "_call_unitares", call_unitares), \
          patch.object(bridge, "_call_identity_tool", AsyncMock(return_value=reanchor_resp)) as ident:
         result = await bridge.check_in(create_test_anima(), create_test_readings())
@@ -109,8 +110,11 @@ async def test_refusal_with_anchor_reanchors_and_retries(tmp_path):
     assert args["agent_uuid"] == GOV_UUID
     assert args["resume"] is True
     assert args["client_session_id"] == f"lumen-{ANIMA_ID}"
-    # fresh token persisted
+    # fresh token persisted AND the server-bound canonical key ADOPTED (#97
+    # acceptance-test finding: resume rebinds agent-<uuid12>, not bespoke keys)
     assert bridge._anchor["continuity_token"] == "v1.fresh"
+    assert bridge._anchor["client_session_id"] == "agent-69a1a4f7-a30"
+    assert bridge._client_session_id() == "agent-69a1a4f7-a30"
 
 
 @pytest.mark.asyncio
@@ -191,3 +195,25 @@ def test_corrupt_anchor_ignored(tmp_path):
     with patch.dict("os.environ", {"ANIMA_GOV_ANCHOR_PATH": str(anchor_path)}):
         bridge = UnitaresBridge(unitares_url="http://test:8767/mcp/", agent_id=ANIMA_ID)
     assert bridge._anchor is None
+
+
+@pytest.mark.asyncio
+async def test_reanchor_rereads_sibling_healed_anchor(tmp_path):
+    """Broker and server share the anchor file — if a sibling process already
+    healed and rotated it, _try_reanchor must pick up the rotated creds."""
+    bridge, anchor_path = _flow_bridge(tmp_path, with_anchor=True)
+    anchor_path.write_text(json.dumps({
+        "uuid": GOV_UUID, "continuity_token": "v1.sibling-rotated",
+        "client_session_id": "agent-69a1a4f7-a30", "saved_at": time.time(),
+    }))
+    with patch.object(bridge, "_call_identity_tool",
+                      AsyncMock(return_value={"uuid": GOV_UUID})) as ident:
+        assert await bridge._try_reanchor() is True
+    assert ident.call_args[0][0]["continuity_token"] == "v1.sibling-rotated"
+
+
+def test_bootstrap_key_before_anchor_adopted_after(tmp_path):
+    bridge, _ = make_bridge(tmp_path, with_anchor=False)
+    assert bridge._client_session_id() == f"lumen-{ANIMA_ID}"
+    bridge._save_anchor(GOV_UUID, "v1.t", "agent-69a1a4f7-a30")
+    assert bridge._client_session_id() == "agent-69a1a4f7-a30"
