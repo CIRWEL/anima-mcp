@@ -193,3 +193,15 @@ operator's declared substrate key.
    REQUIRED log lines (journald `anima-broker-ex`), and the shadow
    `governance_at` must go stale rather than showing fresh "proceed"s.
    Recover with the runbook; the following check-in must land.
+
+### Echo-only correction (2026-07-03, follow-up to the implementation)
+
+The first live Redis-wipe acceptance run exposed that the Elixir client was
+sending `agent_id` (the governance UUID) on every check-in — the dispatch_beam
+pattern, but a violation of this addendum's "same identity material as the
+Python bridge" constraint. A declared `agent_id` makes the REST strict gate
+skip its refusal entirely, so the post-wipe check-in resolved by uuid
+passthrough (observable: no PG `expires_at` renewal, no Redis re-cache — PATH2
+never ran) and the refusal-detection/anchor loop was unreachable in practice.
+The client now sends csid-echo only; binding loss is falsifiable again, and
+the acceptance tests test what they claim.

@@ -239,8 +239,15 @@ defmodule AnimaBroker.Governance.Client do
             Map.take(readings, ["ambient_temp_c", "humidity_pct", "light_lux", "pressure_hpa"])
         },
         "response_mode" => "minimal"
+        # Deliberately NO "agent_id": the addendum requires presenting the
+        # same identity material as the Python bridge (csid echo only). A
+        # declared agent_id makes the REST strict gate skip its refusal
+        # entirely, so binding loss becomes unobservable — check-ins resolve
+        # by uuid passthrough (no PG renewal, no Redis re-cache) and the
+        # refusal-detection/anchor loop this client exists to prove never
+        # fires. Found live 2026-07-03: the Redis-wipe acceptance test passed
+        # WITHOUT touching PATH2 until this key was dropped.
       }
-      |> maybe_put("agent_id", state.identity.agent_uuid)
 
     case call_tool(state, "process_agent_update", args, @checkin_timeout_ms) do
       {:ok, %{"action" => _} = result} ->
