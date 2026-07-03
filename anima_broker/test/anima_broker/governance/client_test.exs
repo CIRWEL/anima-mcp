@@ -529,7 +529,9 @@ defmodule AnimaBroker.Governance.ClientTest do
 
     assert_receive {:post, %{"name" => "process_agent_update", "arguments" => args}}, 2_000
     assert args["client_session_id"] == "agent-lumen-canon"
-    assert args["agent_id"] == "lumen-real-uuid-2522"
+    # Echo-only identity material: no agent_id even when the uuid is known —
+    # a declared agent_id would make the strict gate skip refusals entirely.
+    refute Map.has_key?(args, "agent_id")
   end
 
   test "substrate mode ignores a scratch anchor (soak identity must not shadow the operator key)" do
