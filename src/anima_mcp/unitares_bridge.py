@@ -9,6 +9,8 @@ import asyncio
 import json
 import logging
 import os
+import time
+from pathlib import Path
 from typing import Optional, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -33,6 +35,19 @@ class _AnimaSnapshot:
     __slots__ = ('warmth', 'clarity', 'stability', 'presence')
     def __init__(self, w, c, s, p):
         self.warmth, self.clarity, self.stability, self.presence = w, c, s, p
+
+
+class IdentityRefusedError(Exception):
+    """UNITARES refused the check-in for identity reasons (typed strict refusal).
+
+    Raised when the response says the session binding no longer resolves
+    (status=identity_required / SESSION_ERROR). Distinct from transport errors
+    so check_in can attempt the sanctioned re-anchor instead of just falling
+    back to local governance. Found 2026-07-02 (anima-mcp #97): the typed
+    refusal payload carries neither success:false nor an action, so it
+    previously parsed as a silent default-"proceed" — the bridge never knew
+    the server had stopped attributing its check-ins.
+    """
 
 
 class UnitaresBridge:
@@ -87,6 +102,22 @@ class UnitaresBridge:
             import aiohttp
             user, password = auth_str.split(":", 1)
             self._basic_auth = aiohttp.BasicAuth(user, password)
+        # Governance identity anchor (anima-mcp #97). The bridge is echo-only —
+        # it presents a deterministic client_session_id and never re-onboards —
+        # so a server-side session-store wipe (2026-06-30 Redis restart) left it
+        # permanently refused while every token-holding resident self-healed.
+        # The anchor is the same sanctioned rescue the SDK residents use:
+        # HARVEST {uuid, continuity_token} from identity() while healthy, SPEND
+        # them on a resume=true rebind when a check-in is identity-refused.
+        # Binding refresh, not re-onboard (Phase-2 addendum constraint intact).
+        self._anchor_path = Path(
+            os.environ.get("ANIMA_GOV_ANCHOR_PATH",
+                           str(Path.home() / ".anima" / "gov_identity.json"))
+        )
+        self._anchor: Optional[Dict[str, Any]] = self._load_anchor()
+        self._reanchor_last_attempt = 0.0
+        self._reanchor_cooldown_s = 600.0
+        self._anchor_refresh_s = 24 * 3600.0
 
     async def _get_session(self):
         """Get or create reusable HTTP session (event-loop aware).
@@ -301,6 +332,129 @@ class UnitaresBridge:
                 self._circuit_current_backoff * 2, self._circuit_backoff_max
             )
     
+    # ------------------------------------------------------------------
+    # Governance identity anchor (anima-mcp #97)
+    # ------------------------------------------------------------------
+
+    def _client_session_id(self) -> str:
+        return f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima"
+
+    def _load_anchor(self) -> Optional[Dict[str, Any]]:
+        try:
+            data = json.loads(self._anchor_path.read_text())
+            if data.get("uuid") and data.get("continuity_token"):
+                return data
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def _save_anchor(self, uuid: str, token: str) -> None:
+        try:
+            self._anchor_path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "uuid": uuid,
+                "continuity_token": token,
+                "client_session_id": self._client_session_id(),
+                "saved_at": time.time(),
+            }
+            tmp = self._anchor_path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(payload, indent=2))
+            tmp.replace(self._anchor_path)
+            self._anchor = payload
+            logger.info("Governance anchor saved (uuid=%s)", uuid[:8])
+        except OSError as e:
+            logger.warning("Could not persist governance anchor: %s", e)
+
+    async def _call_identity_tool(self, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Call the UNITARES `identity` tool; return the unwrapped payload dict."""
+        mcp_request = {
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {"name": "identity", "arguments": arguments},
+        }
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "X-Session-ID": self._session_id or "anima-creature",
+        }
+        session = await self._get_session()
+        async with session.post(self._get_mcp_url(), json=mcp_request, headers=headers) as response:
+            if response.status != 200:
+                raise Exception(f"identity call HTTP {response.status}")
+            payload = self._parse_mcp_response(
+                await response.text(), response.headers.get("Content-Type", "")
+            )
+            result = (payload or {}).get("result") or {}
+            if result.get("isError"):
+                raise Exception("identity call returned isError")
+            content = (result.get("content") or [{}])[0]
+            if content.get("type") == "text" and content.get("text"):
+                try:
+                    return json.loads(content["text"])
+                except json.JSONDecodeError:
+                    pass
+            return result if isinstance(result, dict) else {}
+
+    async def _harvest_anchor(self) -> None:
+        """While the binding is healthy, capture {uuid, continuity_token} from
+        identity() so a future store-wipe is recoverable. Cheap, best-effort,
+        refreshed daily so the stored token stays recent."""
+        fresh = (
+            self._anchor is not None
+            and (time.time() - float(self._anchor.get("saved_at", 0))) < self._anchor_refresh_s
+        )
+        if fresh:
+            return
+        try:
+            resp = await self._call_identity_tool(
+                {"client_session_id": self._client_session_id()}
+            )
+            uuid = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
+            token = resp.get("continuity_token")
+            if uuid and token:
+                self._save_anchor(uuid, token)
+            else:
+                logger.debug("Anchor harvest: identity() returned no uuid/token")
+        except Exception as e:
+            logger.debug("Anchor harvest failed (non-fatal): %s", e)
+
+    async def _try_reanchor(self) -> bool:
+        """Spend the stored anchor on a resume=true rebind after an identity
+        refusal. Rate-limited; returns True when the server re-bound us."""
+        if not self._anchor:
+            logger.error(
+                "Governance identity refused and NO anchor at %s — cannot "
+                "self-recover; operator recovery required (anima-mcp #97)",
+                self._anchor_path,
+            )
+            return False
+        now = time.time()
+        if (now - self._reanchor_last_attempt) < self._reanchor_cooldown_s:
+            return False
+        self._reanchor_last_attempt = now
+        try:
+            resp = await self._call_identity_tool({
+                "agent_uuid": self._anchor["uuid"],
+                "continuity_token": self._anchor["continuity_token"],
+                "client_session_id": self._client_session_id(),
+                "resume": True,
+            })
+            got = resp.get("uuid") or (resp.get("bound_identity") or {}).get("uuid")
+            if got == self._anchor["uuid"]:
+                logger.warning(
+                    "Governance binding RE-ANCHORED to %s after identity refusal "
+                    "(server-side session store lost the binding)", got[:8]
+                )
+                new_token = resp.get("continuity_token")
+                if new_token:
+                    self._save_anchor(got, new_token)
+                return True
+            logger.error("Re-anchor resolved to %s, expected %s — refusing mismatched binding",
+                         (got or "nothing")[:8], self._anchor["uuid"][:8])
+            return False
+        except Exception as e:
+            logger.error("Re-anchor attempt failed: %s", e)
+            return False
+
     async def check_in(
         self,
         anima: Anima,
@@ -359,11 +513,27 @@ class UnitaresBridge:
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 self._circuit_failures = 0  # Success resets circuit
                 self._circuit_current_backoff = self._circuit_backoff_base
+                # Healthy binding — keep the recovery anchor fresh (#97).
+                await self._harvest_anchor()
                 return result
+            except IdentityRefusedError as e:
+                # Server-side binding lost (e.g. session-store wipe). Spend the
+                # anchor on a resume=true rebind, then retry ONCE this cycle.
+                logger.warning("Identity refused — attempting re-anchor: %s", e)
+                if await self._try_reanchor():
+                    try:
+                        result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv, experiential_summary=experiential_summary)
+                        self._circuit_failures = 0
+                        self._circuit_current_backoff = self._circuit_backoff_base
+                        return result
+                    except Exception as retry_err:
+                        logger.warning("Post-re-anchor retry failed: %s", retry_err)
+                self._circuit_failures += 1
+                self._maybe_open_circuit(time.time())
+                return self._local_governance(anima, readings, eisv, error=str(e))
             except Exception as e:
                 # Fallback to local governance on error
                 logger.warning("UNITARES error, falling back to local: %s", e)
-                import time
                 self._circuit_failures += 1
                 self._maybe_open_circuit(time.time())
                 # Rebuild the session so the next check-in re-resolves DNS (self-heal)
@@ -443,7 +613,7 @@ class UnitaresBridge:
             # ensuring stable binding across service restarts regardless of HTTP fingerprint
             update_arguments = {
                 "client_session_id": f"lumen-{self._agent_id}" if self._agent_id else "lumen-anima",
-                "agent_name": "Lumen",  # Enables name-claim identity recovery after session key change
+                "agent_name": "Lumen",  # cosmetic display label only — server-side name-claim recovery was removed (no-lookup-by-label invariant)
                 "complexity": complexity,
                 "confidence": confidence,
                 "ethical_drift": ethical_drift,
@@ -544,6 +714,21 @@ class UnitaresBridge:
                                 except json.JSONDecodeError:
                                     pass  # Keep original if not JSON
 
+                        # Typed identity refusal (STRICT_IDENTITY_REQUIRED). This
+                        # payload carries NEITHER success:false NOR an action, so
+                        # without this check it parses as a silent default
+                        # "proceed" — exactly how the 2026-06-30→07-02 outage
+                        # stayed invisible bridge-side (anima-mcp #97).
+                        if (
+                            governance_result.get("status") == "identity_required"
+                            or governance_result.get("error_code") == "SESSION_ERROR"
+                            or governance_result.get("error_category") == "auth_error"
+                        ):
+                            raise IdentityRefusedError(
+                                f"UNITARES refused identity for {self._client_session_id()}: "
+                                f"{governance_result.get('hint') or governance_result.get('error') or 'session binding unresolved'}"
+                            )
+
                         # Check application-level error (success: false)
                         if governance_result.get("success") is False:
                             error_code = governance_result.get("error_code", "UNKNOWN")
@@ -579,6 +764,8 @@ class UnitaresBridge:
             raise Exception("aiohttp not installed - cannot connect to UNITARES")
         except asyncio.TimeoutError:
             raise Exception("Timeout connecting to UNITARES server")
+        except IdentityRefusedError:
+            raise  # typed — check_in attempts the re-anchor rescue
         except Exception as e:
             raise Exception(f"Error calling UNITARES: {e}")
     

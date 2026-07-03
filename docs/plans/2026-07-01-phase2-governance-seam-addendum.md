@@ -123,3 +123,27 @@ carries the client must preserve:
    risk (a crashing governance client destabilizing the BEAM that carries
    live sensors) is bounded by OTP supervision and is exactly what the soak
    observes.
+
+## Amendment (2026-07-02) — binding recovery is a cutover REQUIREMENT (#97)
+
+The 2026-06-30 incident proved the echo-only identity design has a single
+point of failure: a server-side session-store wipe (Redis restart, AOF off)
+erased the bridge's binding, and because the client never re-onboards it was
+permanently refused — canonical Lumen went governance-dark for ~3 days while
+every token-holding resident self-healed. Worse, the typed strict refusal
+carries neither `success:false` nor an `action`, so the Python bridge parsed
+it as a silent default-"proceed".
+
+The Python bridge now carries the sanctioned rescue (`unitares_bridge.py`,
+anchor at `~/.anima/gov_identity.json`): **harvest** `{uuid, continuity_token}`
+from `identity()` while the binding is healthy (refreshed daily), **spend** it
+on an `identity(agent_uuid, continuity_token, resume=true)` rebind when a
+check-in is identity-refused (rate-limited, uuid-mismatch-refusing). This is a
+binding REFRESH, not a re-onboard — the same-UUID / session-echo / no-force_new
+constraints above are intact.
+
+**The Elixir client MUST implement the same loop before its cutover.** A
+governance client without it re-ships the single point of failure this
+amendment exists to close. Acceptance: kill the server-side session binding
+for the client's session key while it runs; the next check-in must re-anchor
+and succeed without a process restart or operator action.
