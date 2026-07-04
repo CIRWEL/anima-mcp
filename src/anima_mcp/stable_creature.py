@@ -63,6 +63,11 @@ from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from .identity import IdentityStore
 from .unitares_bridge import UnitaresBridge
+from .governance_passthrough import (
+    passthrough_path_from_env,
+    read_shadow_governance,
+    stale_seconds_from_env,
+)
 from .shared_memory import SharedMemoryClient
 from .eisv_mapper import anima_to_eisv
 from .metacognition import get_metacognitive_monitor
@@ -317,7 +322,21 @@ def run_creature():
     
     unitares_url = os.environ.get("UNITARES_URL")
     bridge = UnitaresBridge(unitares_url=unitares_url) if unitares_url else None
-    
+
+    # Phase-2 Elixir broker cutover (Option A, addendum 2026-07-01): when set,
+    # the Elixir broker owns the UNITARES governance client and this broker
+    # copies the governance slice from the shadow envelope instead of making
+    # its own check-ins. The bridge object is kept constructed so unsetting
+    # the flag and restarting is a complete rollback.
+    gov_shadow_path = passthrough_path_from_env()
+    gov_shadow_stale_s = stale_seconds_from_env()
+    if gov_shadow_path:
+        print(
+            f"[StableCreature] governance from SHM shadow: {gov_shadow_path} "
+            f"(own UNITARES check-ins disabled; slices older than "
+            f"{gov_shadow_stale_s:.0f}s ignored)"
+        )
+
     # Initialize Shared Memory (Broker Mode)
     # Using file backend for maximum stability (Redis caused hangs)
     try:
@@ -967,7 +986,8 @@ def run_creature():
                     pass
 
             # Submit new governance check-in if due and no background task running
-            if bridge and should_check_governance and _governance_future is None:
+            # (never under SHM passthrough — the Elixir broker owns the client)
+            if bridge and gov_shadow_path is None and should_check_governance and _governance_future is None:
                 # Capture current values for the closure (avoid stale references)
                 _gov_anima = anima
                 _gov_readings = readings
@@ -1021,7 +1041,14 @@ def run_creature():
             }
             if _last_reflection_event:
                 shm_data["metacognition"]["last_reflection"] = _last_reflection_event
-            if last_decision:
+            if gov_shadow_path is not None:
+                # Phase-2 passthrough: the slice carries its own governance_at;
+                # stale/missing yields nothing this tick and the MCP server's
+                # 240s fallback covers — same contract as bridge-down.
+                _shadow_gov = read_shadow_governance(gov_shadow_path, gov_shadow_stale_s)
+                if _shadow_gov:
+                    shm_data["governance"] = _shadow_gov
+            elif last_decision:
                 shm_data["governance"] = {
                     **last_decision,
                     "governance_at": last_decision_checked_at or datetime.now().isoformat(),
