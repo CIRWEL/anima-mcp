@@ -153,8 +153,11 @@ sudo nmcli connection modify "preconfigured" connection.autoconnect-retries 0 2>
 # Force 2.4 GHz (more stable through walls than 5 GHz)
 sudo nmcli connection modify "preconfigured" 802-11-wireless.band bg 2>/dev/null || true
 
-# Disable IPv6 (reduces WiFi stack load)
-printf "net.ipv6.conf.all.disable_ipv6 = 1\nnet.ipv6.conf.default.disable_ipv6 = 1\n" | sudo tee /etc/sysctl.d/90-disable-ipv6.conf >/dev/null
+# IPv6 must stay ENABLED. Disabling it caused a total internet outage on
+# 2026-07-23: the router's IPv4 WAN died (IPv6-only WAN), and the Pi — v6
+# disabled — lost pypi, GitHub, and the Tailscale control plane ("logged out"
+# for weeks). The WiFi-stack-load win is not worth losing the only WAN path.
+sudo rm -f /etc/sysctl.d/90-disable-ipv6.conf
 sudo sysctl --system >/dev/null 2>&1
 WIFI_EOF
 log "  brcmfmac, NM power save, IPv6 fixes deployed"
