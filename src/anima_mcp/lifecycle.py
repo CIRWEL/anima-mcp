@@ -29,11 +29,112 @@ def _set_ctx(ctx):
     server._ctx = ctx  # bridge: server.py still reads _ctx directly in ~30 places
 
 
+def _register_health_probes():
+    """Register subsystem health probes. Shared by the normal wake() path and
+    the degraded (store-failed) path — health visibility matters MOST when the
+    identity store is down, so this must not depend on the store existing.
+    Store-dependent probes fail open on ctx.store is None."""
+    from .health import get_health_registry
+    from .eisv import get_trajectory_awareness
+    from .accessors import _get_last_shm_data
+    from .server_state import (
+        SHM_STALE_THRESHOLD_SECONDS, SHM_GOVERNANCE_STALE_SECONDS,
+        THERMAL_RATE_THRESHOLD, MEMORY_PRESSURE_THRESHOLD,
+    )
+
+    _health = get_health_registry()
+
+    def _sensor_probe():
+        ctx = _get_ctx()
+        if ctx and ctx.sensors is not None:
+            return True
+        shm = _get_last_shm_data()
+        if shm and "readings" in shm:
+            ts = shm.get("timestamp")
+            if ts:
+                from datetime import datetime
+                try:
+                    t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    age = (datetime.now(t.tzinfo) - t).total_seconds()
+                    return age < SHM_STALE_THRESHOLD_SECONDS * 2  # 30s grace
+                except (ValueError, AttributeError):
+                    pass
+            return True  # Data exists but no timestamp — assume ok
+        return False
+
+    _health.register("sensors", probe=_sensor_probe, debounce_seconds=6.0)
+    _health.register("display", probe=lambda: _get_ctx() and _get_ctx().display is not None and _get_ctx().display.is_available(), debounce_seconds=6.0)
+    _health.register("leds", probe=lambda: _get_ctx() and _get_ctx().leds is not None and _get_ctx().leds.is_available(), debounce_seconds=6.0)
+    _health.register("growth", probe=lambda: _get_ctx() and _get_ctx().growth is not None, stale_threshold=90.0)
+
+    def _gov_probe():
+        shm = _get_last_shm_data()
+        return bool(shm and "governance" in shm and isinstance(shm.get("governance"), dict))
+
+    _health.register("governance", probe=_gov_probe, stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
+    _health.register("drawing", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and hasattr(_get_ctx().screen_renderer, '_canvas'), debounce_seconds=6.0)
+    _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
+    _health.register("voice", probe=lambda: _get_ctx() and _get_ctx().voice_instance is not None, debounce_seconds=6.0)
+    _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None, debounce_seconds=6.0)
+
+    # Rate-of-change probes — bridge system_metrics → health
+    def _thermal_rate_probe():
+        """Check CPU temp isn't rising dangerously fast."""
+        ctx = _get_ctx()
+        if not ctx or not ctx.store:
+            return True  # No store yet — can't check
+        try:
+            rows = ctx.store.get_system_metrics(hours=1.0/12, limit=20)  # last 5 min
+            if len(rows) < 3:
+                return True  # Not enough data yet
+            from datetime import datetime
+            first, last = rows[0], rows[-1]
+            t0 = datetime.fromisoformat(first["timestamp"])
+            t1 = datetime.fromisoformat(last["timestamp"])
+            minutes = (t1 - t0).total_seconds() / 60.0
+            if minutes < 0.5:
+                return True  # Window too short
+            temp0 = first.get("cpu_temp_c")
+            temp1 = last.get("cpu_temp_c")
+            if temp0 is None or temp1 is None:
+                return True
+            rate = (temp1 - temp0) / minutes  # °C/min
+            return rate <= THERMAL_RATE_THRESHOLD
+        except Exception:
+            return True  # Fail open
+
+    def _memory_pressure_probe():
+        """Check memory isn't critically high."""
+        ctx = _get_ctx()
+        if not ctx or not ctx.store:
+            return True
+        try:
+            rows = ctx.store.get_system_metrics(hours=1.0/60, limit=3)  # last 1 min
+            if not rows:
+                return True
+            mem = rows[-1].get("memory_percent")
+            if mem is None:
+                return True
+            return mem < MEMORY_PRESSURE_THRESHOLD
+        except Exception:
+            return True
+
+    _health.register("thermal_trend", probe=_thermal_rate_probe, stale_threshold=3600.0, debounce_seconds=10.0)
+    _health.register("memory_pressure", probe=_memory_pressure_probe, stale_threshold=3600.0, debounce_seconds=10.0)
+
+    print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
+
+
 def wake(db_path: str = "anima.db", anima_id: str | None = None):
     """
     Wake up. Call before starting server. Safe, never crashes.
 
     Retries on SQLite lock errors (e.g. old process still shutting down).
+
+    On unrecoverable identity-store failure (e.g. corrupt anima.db), enters
+    DEGRADED mode: a ServerContext with store=None is kept so the display
+    loop, sensors, and LEDs still run. The 2026-07 outage (#106) was 19 days
+    of dark screen because this path used to discard the whole context.
 
     Args:
         db_path: Path to SQLite database
@@ -103,84 +204,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
 
             # Register subsystems with health monitoring
             try:
-                from .health import get_health_registry
-                _health = get_health_registry()
-                def _sensor_probe():
-                    ctx = _get_ctx()
-                    if ctx and ctx.sensors is not None:
-                        return True
-                    shm = _get_last_shm_data()
-                    if shm and "readings" in shm:
-                        ts = shm.get("timestamp")
-                        if ts:
-                            from datetime import datetime
-                            try:
-                                t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                                age = (datetime.now(t.tzinfo) - t).total_seconds()
-                                return age < SHM_STALE_THRESHOLD_SECONDS * 2  # 30s grace
-                            except (ValueError, AttributeError):
-                                pass
-                        return True  # Data exists but no timestamp — assume ok
-                    return False
-                _health.register("sensors", probe=_sensor_probe, debounce_seconds=6.0)
-                _health.register("display", probe=lambda: _get_ctx() and _get_ctx().display is not None and _get_ctx().display.is_available(), debounce_seconds=6.0)
-                _health.register("leds", probe=lambda: _get_ctx() and _get_ctx().leds is not None and _get_ctx().leds.is_available(), debounce_seconds=6.0)
-                _health.register("growth", probe=lambda: _get_ctx() and _get_ctx().growth is not None, stale_threshold=90.0)
-                def _gov_probe():
-                    shm = _get_last_shm_data()
-                    return bool(shm and "governance" in shm and isinstance(shm.get("governance"), dict))
-                _health.register("governance", probe=_gov_probe, stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
-                _health.register("drawing", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and hasattr(_get_ctx().screen_renderer, '_canvas'), debounce_seconds=6.0)
-                _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
-                _health.register("voice", probe=lambda: _get_ctx() and _get_ctx().voice_instance is not None, debounce_seconds=6.0)
-                _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None, debounce_seconds=6.0)
-
-                # Rate-of-change probes — bridge system_metrics → health
-                def _thermal_rate_probe():
-                    """Check CPU temp isn't rising dangerously fast."""
-                    ctx = _get_ctx()
-                    if not ctx or not ctx.store:
-                        return True  # No store yet — can't check
-                    try:
-                        rows = ctx.store.get_system_metrics(hours=1.0/12, limit=20)  # last 5 min
-                        if len(rows) < 3:
-                            return True  # Not enough data yet
-                        from datetime import datetime
-                        first, last = rows[0], rows[-1]
-                        t0 = datetime.fromisoformat(first["timestamp"])
-                        t1 = datetime.fromisoformat(last["timestamp"])
-                        minutes = (t1 - t0).total_seconds() / 60.0
-                        if minutes < 0.5:
-                            return True  # Window too short
-                        temp0 = first.get("cpu_temp_c")
-                        temp1 = last.get("cpu_temp_c")
-                        if temp0 is None or temp1 is None:
-                            return True
-                        rate = (temp1 - temp0) / minutes  # °C/min
-                        return rate <= THERMAL_RATE_THRESHOLD
-                    except Exception:
-                        return True  # Fail open
-
-                def _memory_pressure_probe():
-                    """Check memory isn't critically high."""
-                    ctx = _get_ctx()
-                    if not ctx or not ctx.store:
-                        return True
-                    try:
-                        rows = ctx.store.get_system_metrics(hours=1.0/60, limit=3)  # last 1 min
-                        if not rows:
-                            return True
-                        mem = rows[-1].get("memory_percent")
-                        if mem is None:
-                            return True
-                        return mem < MEMORY_PRESSURE_THRESHOLD
-                    except Exception:
-                        return True
-
-                _health.register("thermal_trend", probe=_thermal_rate_probe, stale_threshold=3600.0, debounce_seconds=10.0)
-                _health.register("memory_pressure", probe=_memory_pressure_probe, stale_threshold=3600.0, debounce_seconds=10.0)
-
-                print(f"[Wake] ✓ Health monitoring registered ({len(_health.subsystem_names())} subsystems)", file=sys.stderr, flush=True)
+                _register_health_probes()
             except Exception as he:
                 print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
 
@@ -299,8 +323,20 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                 print("[Wake] ❌ ERROR: Identity store failed!", file=sys.stderr, flush=True)
                 print(f"[Wake] Error details: {e}", file=sys.stderr, flush=True)
                 print("[Wake] Impact: Message board will NOT post, identity features unavailable", file=sys.stderr, flush=True)
-                print("[Server] Display will work but without identity/messages", file=sys.stderr, flush=True)
-                _set_ctx(None)
+                # DEGRADED mode (#106): keep a context with store=None so the
+                # display loop, sensors, and LEDs still run. Discarding the
+                # whole context here left the TFT dark for 19 days in Jul 2026
+                # while the log promised "display will work".
+                _ctx = ServerContext()
+                _ctx.store = None
+                _ctx.anima_id = anima_id  # env-provided id if any; DB one unavailable
+                _ctx.tension_tracker = ValueTensionTracker()
+                _set_ctx(_ctx)
+                try:
+                    _register_health_probes()
+                except Exception as he:
+                    print(f"[Wake] Health monitoring setup error (non-fatal): {he}", file=sys.stderr, flush=True)
+                print("[Wake] ⚠ DEGRADED MODE: display/sensors/LEDs will run; identity, message board, growth, schema disabled until the store recovers (restart after repairing anima.db)", file=sys.stderr, flush=True)
                 return
 
 

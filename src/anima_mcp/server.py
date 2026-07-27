@@ -1355,6 +1355,9 @@ def start_display_loop():
     """Start continuous display update loop."""
     try:
         if _ctx is None:
+            # Never bail silently: this exact silence hid a 19-day dark screen
+            # (#106) — wake() failed, no loop, and no line saying why.
+            print("[Display] NOT starting display loop: no server context (wake() failed?)", file=sys.stderr, flush=True)
             return
         if _ctx.display_update_task is None or _ctx.display_update_task.done():
             # Check if we're in an async context

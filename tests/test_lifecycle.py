@@ -262,19 +262,25 @@ class TestWake:
         mock_sleep.assert_any_call(2)  # attempt 1: 1 * 2
         mock_sleep.assert_any_call(4)  # attempt 2: 2 * 2
 
-    def test_wake_gives_up_on_non_lock_error(self):
-        """wake() gives up immediately on errors that aren't database lock."""
+    def test_wake_degrades_on_non_lock_error(self):
+        """wake() enters DEGRADED mode (ctx kept, store=None) on non-lock
+        store errors — discarding the context left the display dark for 19
+        days in Jul 2026 (#106)."""
         from anima_mcp.lifecycle import wake
 
         with patch("anima_mcp.identity.IdentityStore", side_effect=RuntimeError("some other error")):
             # Should not crash -- wake is "safe, never crashes"
             wake(db_path=":memory:", anima_id="test-id")
 
-        # Context cleared on failure
-        assert ctx_ref._ctx is None
+        # Context KEPT so the display loop can run; store absent
+        assert ctx_ref._ctx is not None
+        assert ctx_ref._ctx.store is None
+        assert ctx_ref._ctx.anima_id == "test-id"
+        assert ctx_ref._ctx.tension_tracker is not None
 
-    def test_wake_gives_up_after_max_attempts_on_lock(self):
-        """wake() stops retrying after 5 database lock failures."""
+    def test_wake_degrades_after_max_attempts_on_lock(self):
+        """wake() stops retrying after 5 database lock failures, then enters
+        DEGRADED mode instead of discarding the context (#106)."""
         from anima_mcp.lifecycle import wake
 
         with patch("anima_mcp.identity.IdentityStore",
@@ -284,7 +290,19 @@ class TestWake:
 
         # 5 attempts total, 4 sleeps (no sleep on last failure)
         assert mock_sleep.call_count == 4
-        assert ctx_ref._ctx is None
+        assert ctx_ref._ctx is not None
+        assert ctx_ref._ctx.store is None
+
+    def test_wake_degraded_registers_health_probes(self):
+        """DEGRADED mode still registers health probes — visibility matters
+        most when the store is down."""
+        from anima_mcp.lifecycle import wake
+
+        with patch("anima_mcp.identity.IdentityStore", side_effect=RuntimeError("corrupt db")), \
+             patch("anima_mcp.lifecycle._register_health_probes") as mock_reg:
+            wake(db_path=":memory:", anima_id="test-id")
+
+        mock_reg.assert_called_once()
 
     def test_wake_growth_failure_is_non_fatal(self):
         """If growth system fails, wake() continues (growth set to None)."""

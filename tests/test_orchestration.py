@@ -151,8 +151,10 @@ def test_wake_handles_db_lock(tmp_path, monkeypatch):
     try:
         server.wake(db_path=db_path)
 
-        # Should have retried and given up
-        assert server._ctx is None, "Failed wake should clear _ctx"
+        # Should have retried, then entered DEGRADED mode (#106): context
+        # kept with store=None so the display loop still runs.
+        assert server._ctx is not None, "Failed wake should keep a degraded ctx"
+        assert server._ctx.store is None, "Degraded ctx must have no store"
         assert call_count == 5, f"Should retry 5 times, got {call_count}"
 
     finally:
