@@ -70,7 +70,12 @@ def parse_shm_governance_freshness(
 
     current_ts = _time.time() if now_ts is None else now_ts
     is_fresh = current_ts - gov_ts < SHM_GOVERNANCE_STALE_SECONDS
-    is_unitares = shm_gov.get("source") == "unitares"
+    # "unitares" = Python bridge; "unitares_ex" = Elixir broker (owns
+    # check-ins since the 2026-07-09 cutover). Exact-matching "unitares"
+    # here made every Elixir-sourced decision read as non-UNITARES: the
+    # stale flag lied, the screen showed governance disconnected, and the
+    # server fallback fired every 60s into the hijack guard.
+    is_unitares = str(shm_gov.get("source") or "").startswith("unitares")
     return is_fresh, is_unitares, gov_ts
 
 

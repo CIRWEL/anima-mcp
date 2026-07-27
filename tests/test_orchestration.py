@@ -265,6 +265,25 @@ def test_parse_shm_governance_freshness():
     assert unitares
     assert ts is not None
 
+    # Fresh Elixir-broker governance — "unitares_ex" owns check-ins since the
+    # 2026-07-09 cutover. Exact-matching "unitares" here made the server treat
+    # every Elixir decision as non-UNITARES: stale flag lied, screen showed
+    # governance disconnected, server fallback fired into the hijack guard.
+    fresh, unitares, ts = parse_shm_governance_freshness(
+        {"governance_at": now_iso, "source": "unitares_ex"},
+        now_ts=time.time()
+    )
+    assert fresh
+    assert unitares
+
+    # Local fallback decisions are NOT unitares-sourced
+    fresh, unitares, ts = parse_shm_governance_freshness(
+        {"governance_at": now_iso, "source": "local"},
+        now_ts=time.time()
+    )
+    assert fresh
+    assert not unitares
+
     # Stale governance (1 hour old)
     old_iso = datetime(2020, 1, 1, 0, 0, 0).isoformat()
     fresh, unitares, ts = parse_shm_governance_freshness(
