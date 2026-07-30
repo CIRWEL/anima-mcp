@@ -589,7 +589,8 @@ class TestObserveDrawing:
         """First drawing (count becomes 1) records memory with 'Saved my 1st drawing'."""
         anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
         env = {"light_lux": 150.0, "temp_c": 22.0}
-        growth.observe_drawing(3000, "resting", anima, env)
+        growth.observe_drawing(3000, "resting", anima, env,
+                               completion_reason="earned_coherence")
         milestone_descs = [m.description for m in growth._memories]
         assert any("Saved my 1st drawing" in d for d in milestone_descs)
 

@@ -33,6 +33,7 @@ class TestRecordDrawingCompletion:
         gs.record_drawing_completion(
             pixel_count=500, mark_count=10,
             coherence=0.8, satisfaction=0.85,
+            completion_reason="earned_coherence",
         )
         # Check memories for creative category
         creative_memories = [m for m in gs._memories if m.category == "creative"]
