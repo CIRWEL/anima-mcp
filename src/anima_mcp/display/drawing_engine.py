@@ -1443,7 +1443,12 @@ class DrawingEngine:
             print(f"[Canvas] Applying queued era switch: {new_era_name}", file=sys.stderr, flush=True)
         else:
             new_era_name = choose_next_era(self.active_era.name, self.canvas.drawings_saved)
-            print(f"[Canvas] Auto-rotating to new era: {new_era_name}", file=sys.stderr, flush=True)
+            if new_era_name != self.active_era.name:
+                print(f"[Canvas] Auto-rotating to new era: {new_era_name}", file=sys.stderr, flush=True)
+            else:
+                # choose_next_era returns the current era when auto_rotate is
+                # off — don't log a rotation that didn't happen.
+                print(f"[Canvas] Continuing era: {new_era_name}", file=sys.stderr, flush=True)
 
         self.canvas.clear()
         self.intent.reset()
