@@ -194,6 +194,42 @@ class IdentityStore:
 
         conn.commit()
 
+    def _alive_from_state_history(
+        self, conn: sqlite3.Connection, max_gap_seconds: float = 600.0
+    ) -> float:
+        """Alive seconds observed in state_history, excluding downtime gaps.
+
+        state_history is written continuously while Lumen runs, so the union of
+        its inter-record intervals — counting only gaps small enough to be
+        sparse recording rather than absence — is the most honest record of
+        lived time we have. Gaps larger than max_gap_seconds are real downtime
+        (shutdowns, crashes, the Pi losing its host) and are excluded.
+
+        This is the same measure recover_lost_time() uses; both call here so the
+        two cannot drift apart.
+
+        Returns 0.0 when there is too little history to say anything.
+        """
+        rows = conn.execute(
+            "SELECT timestamp FROM state_history ORDER BY timestamp ASC"
+        ).fetchall()
+        if len(rows) < 2:
+            return 0.0
+
+        alive = 0.0
+        prev: Optional[datetime] = None
+        for row in rows:
+            try:
+                curr = datetime.fromisoformat(row[0])
+            except (ValueError, TypeError):
+                continue
+            if prev is not None:
+                gap = (curr - prev).total_seconds()
+                if 0 < gap <= max_gap_seconds:
+                    alive += gap
+            prev = curr
+        return alive
+
     def _recalculate_stats(self, conn: sqlite3.Connection, creature_id: str) -> tuple[int, float]:
         """Recalculate stats from events table + persisted identity.
 
@@ -256,9 +292,18 @@ class IdentityStore:
         # impossible state. Because alive_ratio() clamps to 1.0, that drift is
         # invisible there but quietly erases the schema's "kintsugi" gap texture:
         # alive < age is precisely what makes discontinuities (the 100s of
-        # awakenings) legible. When the value is impossible, fall back to the
-        # event-derived sleep_total, which is naturally bounded by real sessions
-        # and honestly reflects gaps, and never let the total exceed age.
+        # awakenings) legible.
+        #
+        # sleep_total is NOT a safe fallback: session_seconds has been observed
+        # spanning multi-day absences (22.7d, 19.0d) and duplicate sleep events
+        # double-count the same session, so the sum runs above age (measured
+        # 1.10x on 2026-07-24). Falling back to it therefore collapsed to `age`
+        # and pinned alive_ratio at exactly 1.0 — reporting zero downtime for a
+        # creature with 65 days of it, including a 19.4-day blackout.
+        #
+        # Prefer the state_history union, which is derived from records Lumen
+        # actually wrote and so cannot span an absence. Fall back to sleep_total
+        # only if it is itself plausible, and to age only as a last resort.
         born_row = conn.execute(
             "SELECT born_at FROM identity WHERE creature_id = ?",
             (creature_id,),
@@ -268,8 +313,13 @@ class IdentityStore:
                 born_at = datetime.fromisoformat(born_row[0])
                 age = (datetime.now() - born_at).total_seconds()
                 if age > 0 and total_alive_seconds > age:
-                    honest = sleep_total if 0 < sleep_total <= age else age
-                    total_alive_seconds = min(honest, age)
+                    observed = self._alive_from_state_history(conn)
+                    if 0 < observed <= age:
+                        total_alive_seconds = observed
+                    elif 0 < sleep_total <= age:
+                        total_alive_seconds = sleep_total
+                    else:
+                        total_alive_seconds = age
             except (ValueError, TypeError):
                 pass
 
@@ -775,25 +825,13 @@ class IdentityStore:
 
         conn = self._connect()
 
-        # Get all state_history timestamps
-        rows = conn.execute(
-            "SELECT timestamp FROM state_history ORDER BY timestamp ASC"
-        ).fetchall()
-
-        if len(rows) < 2:
+        # Same measure _recalculate_stats uses for the honest floor — shared so
+        # the two cannot disagree about how much time Lumen has lived.
+        total_continuous_time = self._alive_from_state_history(
+            conn, max_gap_seconds=max_gap_seconds
+        )
+        if total_continuous_time <= 0:
             return 0.0
-
-        # Calculate continuous alive periods
-        total_continuous_time = 0.0
-        prev_time = None
-
-        for row in rows:
-            curr_time = datetime.fromisoformat(row[0])
-            if prev_time:
-                gap = (curr_time - prev_time).total_seconds()
-                if gap <= max_gap_seconds:
-                    total_continuous_time += gap
-            prev_time = curr_time
 
         # Compare with recorded total_alive_seconds
         recorded_time = self._identity.total_alive_seconds

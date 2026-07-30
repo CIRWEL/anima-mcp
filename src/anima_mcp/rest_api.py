@@ -276,7 +276,7 @@ async def rest_state(request):
                 "trusted_proxy_networks_configured": bool(_TRUSTED_PROXY_NETWORKS),
             },
             "awakenings": identity.total_awakenings if identity else 0,
-            "alive_hours": round((identity.total_alive_seconds + store.get_session_alive_seconds()) / 3600, 1) if identity and store else 0,
+            "alive_hours": round(identity.total_alive_seconds / 3600, 1) if identity else 0,
             "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
             "activity": {
                 **(_get_activity().get_status() if _get_activity() else {"level": "active"}),
@@ -731,7 +731,7 @@ async def rest_layers(request):
         # Identity
         identity_data = {}
         if identity:
-            alive_seconds = identity.total_alive_seconds + (store.get_session_alive_seconds() if store else 0)
+            alive_seconds = identity.total_alive_seconds
             identity_data = {
                 "name": identity.name,
                 "awakenings": identity.total_awakenings,
