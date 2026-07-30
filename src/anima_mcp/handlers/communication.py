@@ -226,12 +226,38 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             insight_result = {"error": str(e)}
             print(f"[Q&A] Insight extraction failed: {e}", file=sys.stderr, flush=True)
 
-        # Retrieve visitor context for the answering agent
+        # Record the visit, then read the context back so it includes this one.
+        #
+        # This path used to only READ (get_visitor_context), never write, so
+        # answering — the dominant way agents actually interact with Lumen —
+        # left no trace in the relationship table. Only post_message wrote
+        # there, so the social graph froze at whoever last happened to post:
+        # Codex and Claude Code sat at a single visit each (2026-07-03 and
+        # 2026-06-15) while answering Lumen hourly, and the operator's own
+        # record stalled at 2026-04-06 because the dashboard's POST /answer
+        # delegates here too. Downstream that fed the autobiography, the
+        # inactive-visitor list, and the trajectory signature's relational
+        # component — all computed over a graph that had not moved in weeks.
+        #
+        # gift=True mirrors handle_post_message, which already treats a reply
+        # to a question as a gift. Identity is normalized inside
+        # record_interaction, so person aliases and "lumen" resolve correctly.
         visitor_context = None
         try:
             from ..accessors import _get_growth
             growth = _get_growth()
             if growth:
+                try:
+                    growth.record_interaction(
+                        agent_id=agent_name,
+                        agent_name=agent_name,
+                        positive=True,
+                        topic=question.text[:50] if len(question.text) > 10 else None,
+                        gift=True,
+                        source="lumen_qa",
+                    )
+                except Exception:
+                    pass  # Non-fatal — never fail an answer over bookkeeping
                 visitor_context = growth.get_visitor_context(agent_name)
         except Exception:
             pass
