@@ -1580,3 +1580,38 @@ class TestEraEarnedCompletion:
         with patch.object(engine, '_check_lumen_said_finished', return_value=False):
             # Must not raise; falls through to other paths (none fire here)
             engine.canvas_check_autonomy(anima)
+
+
+class TestDrawingGoalPersistence:
+    """The current piece's goal must survive a service restart — goals are
+    only generated at canvas_clear, so a dropped one stayed dropped
+    (observed: piece finishing goal-less after the 2026-07-29 deploy)."""
+
+    def test_goal_survives_engine_reload(self, tmp_path):
+        canvas_path = tmp_path / "canvas.json"
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path",
+                   return_value=canvas_path):
+            eng = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+            goal = DrawingGoal(warmth_bias=0.1, coverage_target="sparse",
+                               initial_quadrant=2, description="sparse")
+            eng.drawing_goal = goal
+            eng.canvas.drawing_goal_data = {
+                "warmth_bias": 0.1, "coverage_target": "sparse",
+                "initial_quadrant": 2, "description": "sparse",
+            }
+            eng.canvas.draw_pixel(1, 1, (10, 10, 10))
+            eng.canvas.save_to_disk()
+
+            # Fresh engine = service restart
+            eng2 = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+        assert eng2.drawing_goal is not None
+        assert eng2.drawing_goal.coverage_target == "sparse"
+        assert eng2.drawing_goal.initial_quadrant == 2
+
+    def test_clear_drops_previous_goal_data(self, tmp_path):
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path",
+                   return_value=tmp_path / "canvas.json"):
+            eng = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+        eng.canvas.drawing_goal_data = {"coverage_target": "dense"}
+        eng.canvas.clear()
+        assert eng.canvas.drawing_goal_data is None

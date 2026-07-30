@@ -112,6 +112,10 @@ class CanvasState:
     # growth/memory systems can gate autobiographical writes on honest signal.
     # See completion_reason() for the taxonomy.
     last_completion_reason: Optional[str] = None
+    # Serialized DrawingGoal for the current canvas — persisted so a service
+    # restart mid-piece doesn't silently drop the piece's intention (goals
+    # are only generated at canvas_clear, so a lost one stayed lost).
+    drawing_goal_data: Optional[dict] = None
 
     # Render caching - avoid redrawing all pixels every frame
     _dirty: bool = True  # Set by draw_pixel(), cleared after render
@@ -155,6 +159,7 @@ class CanvasState:
         self.energy = 1.0
         self.mark_count = 0
         self.last_completion_reason = None
+        self.drawing_goal_data = None
         # Reset attention/coherence/narrative
         self.curiosity = 1.0
         self.engagement = 0.5
@@ -262,6 +267,7 @@ class CanvasState:
                 "satisfaction_time": self.satisfaction_time,
                 "drawings_saved": self.drawings_saved,
                 "last_completion_reason": self.last_completion_reason,
+                "drawing_goal": self.drawing_goal_data,
                 "energy": self.energy,
                 "mark_count": self.mark_count,
                 "era": self._era_name,
@@ -428,6 +434,13 @@ class CanvasState:
             reason = data.get("last_completion_reason")
             if reason is None or isinstance(reason, str):
                 self.last_completion_reason = reason
+        except Exception:
+            pass
+
+        try:
+            goal = data.get("drawing_goal")
+            if goal is None or isinstance(goal, dict):
+                self.drawing_goal_data = goal
         except Exception:
             pass
 
@@ -848,6 +861,13 @@ class DrawingEngine:
 
         # Load any persisted canvas from disk (includes attention/narrative state)
         self.canvas.load_from_disk()
+
+        # Restore the in-flight piece's goal (generated only at clear time)
+        if self.canvas.drawing_goal_data:
+            try:
+                self.drawing_goal = DrawingGoal(**self.canvas.drawing_goal_data)
+            except (TypeError, ValueError):
+                self.drawing_goal = None
 
         # Restore drawing state from persisted canvas
         self.intent.mark_count = self.canvas.mark_count
@@ -1479,6 +1499,8 @@ class DrawingEngine:
                     q = self.drawing_goal.initial_quadrant
                     self.intent.focus_x = float((q % 2) * 120 + 60)
                     self.intent.focus_y = float((q // 2) * 120 + 60)
+                from dataclasses import asdict as _asdict
+                self.canvas.drawing_goal_data = _asdict(self.drawing_goal)
                 print(f"[Canvas] Drawing goal: {self.drawing_goal.description}",
                       file=sys.stderr, flush=True)
             else:
