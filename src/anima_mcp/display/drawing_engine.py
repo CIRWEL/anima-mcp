@@ -1697,22 +1697,31 @@ class DrawingEngine:
     def _check_lumen_said_finished(self) -> bool:
         """Check if Lumen recently said it's finished with the drawing.
 
-        Looks for keywords like "finished", "done", "complete" in recent observations.
-        Only triggers once per drawing (resets after save).
+        Looks for keywords like "finished", "done", "complete" in recent
+        observations — but only observations posted AFTER the current canvas
+        started (m.timestamp > canvas.last_clear_time). Without that bound,
+        the observation Lumen posts on completing a piece stayed matchable
+        for its whole 5-minute window and re-triggered on each fresh canvas
+        as soon as it crossed the 200px floor: 3-4 ten-mark "finished"
+        pieces ~65s apart after every big completion (the 60s save floor
+        paced the loop instead of stopping it). Observed 2026-07-27/28.
         """
         try:
             from ..messages import get_board, MESSAGE_TYPE_OBSERVATION
             board = get_board()
             board._load()
 
-            # Check last 5 observations from the past 5 minutes
+            # Check last 5 observations from the past 5 minutes that are
+            # about THIS drawing (posted since the canvas last cleared).
             now = time.time()
             five_min_ago = now - 300
+            current_canvas_start = self.canvas.last_clear_time
 
             recent_obs = [
                 m for m in board._messages
                 if m.msg_type == MESSAGE_TYPE_OBSERVATION
                 and m.timestamp > five_min_ago
+                and m.timestamp > current_canvas_start
                 and m.author == "lumen"
             ][-5:]
 

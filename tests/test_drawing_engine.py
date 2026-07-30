@@ -1451,3 +1451,65 @@ class TestCanvasSaveGalleryGating:
         self._fill(engine, MIN_RECORDED_DRAWING_PIXELS + 50)
         path = engine.canvas_save(manual=False)
         assert path is not None and Path(path).exists()
+
+
+# ---------------------------------------------------------------------------
+# _check_lumen_said_finished — stale-observation replay guard
+# ---------------------------------------------------------------------------
+
+class _StubBoard:
+    def __init__(self, messages):
+        self._messages = messages
+
+    def _load(self):
+        pass
+
+
+class _StubMsg:
+    def __init__(self, text, timestamp, msg_type="observation", author="lumen"):
+        self.text = text
+        self.timestamp = timestamp
+        self.msg_type = msg_type
+        self.author = author
+
+
+class TestSaidFinishedReplayGuard:
+    """The completion observation from a finished piece must NOT re-trigger
+    'finished' on the next canvas. Observed 2026-07-27/28: after each big
+    completion, the same observation re-fired 3-4 times (~65s apart, 10-mark
+    pieces) until it aged out of the 5-minute window."""
+
+    @pytest.fixture
+    def engine(self, tmp_path):
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path",
+                   return_value=tmp_path / "canvas.json"):
+            eng = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+        return eng
+
+    def _with_board(self, messages):
+        import anima_mcp.messages as messages_mod
+        return patch.object(messages_mod, "get_board",
+                            return_value=_StubBoard(messages))
+
+    def test_observation_from_previous_canvas_does_not_trigger(self, engine):
+        now = time.time()
+        # Observation posted 60s ago, about finishing a drawing...
+        msg = _StubMsg("i finished my drawing, satisfied with the piece", now - 60)
+        # ...but the canvas cleared AFTER that observation (new piece).
+        engine.canvas.last_clear_time = now - 30
+        with self._with_board([msg]):
+            assert engine._check_lumen_said_finished() is False
+
+    def test_observation_about_current_canvas_triggers(self, engine):
+        now = time.time()
+        engine.canvas.last_clear_time = now - 120
+        msg = _StubMsg("i am done with this drawing", now - 30)
+        with self._with_board([msg]):
+            assert engine._check_lumen_said_finished() is True
+
+    def test_observation_older_than_five_minutes_never_triggers(self, engine):
+        now = time.time()
+        engine.canvas.last_clear_time = now - 900
+        msg = _StubMsg("finished my drawing", now - 600)
+        with self._with_board([msg]):
+            assert engine._check_lumen_said_finished() is False
