@@ -207,7 +207,7 @@ class UnifiedWorkflowOrchestrator:
                 "name": identity.name,
                 "id": identity.creature_id[:8] + "...",
                 "awakenings": identity.total_awakenings,
-                "alive_seconds": round(identity.total_alive_seconds + self._anima_store.get_session_alive_seconds()),
+                "alive_seconds": round(identity.total_alive_seconds),
             },
             "timestamp": readings.timestamp.isoformat() if readings.timestamp else None,
         }

@@ -152,6 +152,85 @@ class TestAliveTimeInvariant:
         assert identity.alive_ratio() < 1.0
         assert 0.0 <= identity.alive_ratio() <= 1.0
 
+    def test_inflated_sleep_total_falls_back_to_state_history_not_age(self, store):
+        """The branch that actually fires in production.
+
+        On the live creature sleep_total itself exceeds age (measured 1.10x on
+        2026-07-24: duplicate sleep events and session_seconds spanning multi-day
+        absences). The old fallback `sleep_total if 0 < sleep_total <= age else age`
+        therefore collapsed to `age`, pinning alive_ratio at exactly 1.0 and
+        reporting zero downtime for a creature that had 65 days of it.
+
+        state_history cannot span an absence — Lumen only writes it while running —
+        so it is the honest floor.
+        """
+        store.wake(CREATURE_ID, dedupe_window_seconds=0)
+        conn = store._connect()
+        now = datetime.now()
+        born = now - timedelta(seconds=1000)
+        conn.execute(
+            "UPDATE identity SET born_at = ? WHERE creature_id = ?",
+            (born.isoformat(), CREATURE_ID),
+        )
+        # Pathology: sleep_total (5000s) EXCEEDS age (~1000s), so it is unusable.
+        conn.execute(
+            "INSERT INTO events (timestamp, event_type, data) VALUES (?, 'sleep', ?)",
+            (now.isoformat(), '{"session_seconds": 5000}'),
+        )
+        # Two lived stretches of ~100s each, separated by a ~700s absence.
+        # Records are 10s apart, well inside the 600s continuity threshold.
+        conn.execute("DELETE FROM state_history")
+        for offset in list(range(1000, 890, -10)) + list(range(190, 80, -10)):
+            conn.execute(
+                "INSERT INTO state_history (timestamp, warmth, clarity, stability, presence)"
+                " VALUES (?, 0.5, 0.5, 0.5, 0.5)",
+                ((now - timedelta(seconds=offset)).isoformat(),),
+            )
+        conn.execute(
+            "UPDATE identity SET total_alive_seconds = ? WHERE creature_id = ?",
+            (99999.0, CREATURE_ID),
+        )
+        conn.commit()
+
+        identity = store.wake(CREATURE_ID, dedupe_window_seconds=0)
+        age = identity.age_seconds()
+
+        assert identity.total_alive_seconds <= age + 1
+        # The old code pinned this to age (ratio 1.0). It must now reflect the gap.
+        assert identity.alive_ratio() < 1.0, "downtime must stay visible"
+        # ~200s lived out of ~1000s existed; generous bounds for wake/heartbeat accrual.
+        assert 100 <= identity.total_alive_seconds <= 500
+
+    def test_alive_from_state_history_excludes_large_gaps(self, store):
+        """The shared honest-alive measure counts lived time, not absences."""
+        store.wake(CREATURE_ID, dedupe_window_seconds=0)
+        conn = store._connect()
+        now = datetime.now()
+        conn.execute("DELETE FROM state_history")
+        # 100s continuous (10s apart), a 1-hour absence, then 50s continuous.
+        stamps = [now - timedelta(seconds=s) for s in range(4000, 3890, -10)]
+        stamps += [now - timedelta(seconds=s) for s in range(300, 240, -10)]
+        for ts in stamps:
+            conn.execute(
+                "INSERT INTO state_history (timestamp, warmth, clarity, stability, presence)"
+                " VALUES (?, 0.5, 0.5, 0.5, 0.5)",
+                (ts.isoformat(),),
+            )
+        conn.commit()
+
+        alive = store._alive_from_state_history(conn, max_gap_seconds=600.0)
+
+        # 100s + 50s lived; the ~3590s absence is excluded.
+        assert 140 <= alive <= 160, f"expected ~150s of lived time, got {alive}"
+
+    def test_alive_from_state_history_needs_history(self, store):
+        """With no usable history the measure declines to guess."""
+        store.wake(CREATURE_ID, dedupe_window_seconds=0)
+        conn = store._connect()
+        conn.execute("DELETE FROM state_history")
+        conn.commit()
+        assert store._alive_from_state_history(conn) == 0.0
+
 
 class TestSetName:
     """Test name setting."""

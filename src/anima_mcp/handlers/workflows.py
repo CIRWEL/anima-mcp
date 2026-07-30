@@ -282,7 +282,7 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
                     "born_at": identity.born_at.isoformat(),
                     "awakenings": identity.total_awakenings,
                     "age_seconds": round(identity.age_seconds()),
-                    "alive_seconds": round(identity.total_alive_seconds + store.get_session_alive_seconds()),
+                    "alive_seconds": round(identity.total_alive_seconds),
                     "alive_ratio": round(identity.alive_ratio(), 3),
                 }
             except Exception as e:
