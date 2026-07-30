@@ -48,6 +48,17 @@ class ArtEra(Protocol):
     """Protocol for art era modules. Duck-typed — no inheritance required.
 
     Any object with these attributes and methods can serve as an era.
+
+    Optional (looked up via getattr by the drawing engine):
+      min_marks_for_completion: int — floor before any completion path fires
+          (default 5; pointillist=80, field=30, geometric=3).
+      earned_completion(drawing_state, canvas, era_state) -> Optional[str] —
+          era-specific "the pattern found itself" signal, returning an earned
+          reason tag (must be in drawing_engine._EARNED_COMPLETION_REASONS)
+          or None. Supply this when the global earned paths don't fit the
+          era's dynamics (e.g. resonance, whose V never reaches the global
+          coherence-settle threshold); otherwise pieces only ever end via
+          bail-outs and the earned-only autobiographical gate starves.
     """
 
     name: str

@@ -1513,3 +1513,70 @@ class TestSaidFinishedReplayGuard:
         msg = _StubMsg("finished my drawing", now - 600)
         with self._with_board([msg]):
             assert engine._check_lumen_said_finished() is False
+
+
+# ---------------------------------------------------------------------------
+# Era-supplied earned completion (PRIORITY 1.5)
+# ---------------------------------------------------------------------------
+
+class TestEraEarnedCompletion:
+    """Eras may supply earned_completion; the engine honors it, records the
+    reason (feeding the earned-only autobiographical gate), and saves."""
+
+    @pytest.fixture
+    def engine(self, tmp_path):
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path",
+                   return_value=tmp_path / "canvas.json"):
+            eng = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+        return eng
+
+    class _EarnedEra:
+        name = "stub"
+        description = "stub era"
+        min_marks_for_completion = 5
+
+        def create_state(self):
+            from anima_mcp.display.art_era import EraState
+            return EraState()
+
+        def earned_completion(self, drawing_state, canvas, era_state):
+            return "earned_field"
+
+    def test_era_earned_reason_saves_and_records(self, engine):
+        anima = make_anima()
+        engine.canvas.last_save_time = 0.0
+        engine.canvas.drawing_paused_until = 0.0
+        engine.last_anima = anima
+        engine.active_era = self._EarnedEra()
+        engine.intent.mark_count = 10
+        for i in range(250):
+            engine.canvas.draw_pixel(i % 240, i // 240, (128, 128, 128))
+
+        with patch.object(engine, '_check_lumen_said_finished', return_value=False), \
+             patch.object(engine, 'canvas_save', return_value="/tmp/test.png"), \
+             patch.object(engine, 'canvas_clear'):
+            result = engine.canvas_check_autonomy(anima)
+
+        assert result == "saved_and_cleared"
+        assert engine.canvas.last_completion_reason == "earned_field"
+        from anima_mcp.display.drawing_engine import is_earned_completion_reason
+        assert is_earned_completion_reason("earned_field") is True
+
+    def test_era_earned_error_is_non_fatal(self, engine):
+        anima = make_anima()
+        engine.canvas.last_save_time = 0.0
+        engine.canvas.drawing_paused_until = 0.0
+        engine.last_anima = anima
+
+        class _BrokenEra(self._EarnedEra):
+            def earned_completion(self, *a):
+                raise RuntimeError("boom")
+
+        engine.active_era = _BrokenEra()
+        engine.intent.mark_count = 10
+        for i in range(250):
+            engine.canvas.draw_pixel(i % 240, i // 240, (128, 128, 128))
+
+        with patch.object(engine, '_check_lumen_said_finished', return_value=False):
+            # Must not raise; falls through to other paths (none fire here)
+            engine.canvas_check_autonomy(anima)

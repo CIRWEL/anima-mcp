@@ -542,3 +542,105 @@ class TestFieldPersistence:
         field_data[5][5] = 0.42
         state.field = np.array(field_data, dtype=np.float32)
         assert abs(state.field[5, 5] - 0.42) < 0.001
+
+
+# ---------------------------------------------------------------------------
+# earned_completion — field-settled signal
+# ---------------------------------------------------------------------------
+
+from types import SimpleNamespace
+
+from anima_mcp.display.eras.resonance import (
+    ResonanceEra, ResonanceState,
+    REVISIT_WINDOW, SETTLED_STREAK, SETTLED_MIN_MARKS, SETTLED_MIN_FATIGUE,
+    SETTLED_REVISIT_RATIO,
+)
+
+
+def _settled_inputs(marks=SETTLED_MIN_MARKS + 100, fatigue=SETTLED_MIN_FATIGUE + 0.1,
+                    revisit_ratio=SETTLED_REVISIT_RATIO + 0.2):
+    era_state = ResonanceState()
+    n_revisit = int(REVISIT_WINDOW * revisit_ratio)
+    era_state.revisit_window = [True] * n_revisit + [False] * (REVISIT_WINDOW - n_revisit)
+    drawing_state = SimpleNamespace(fatigue=fatigue)
+    canvas = SimpleNamespace(mark_count=marks)
+    return drawing_state, canvas, era_state
+
+
+class TestEarnedCompletion:
+    def test_fires_after_sustained_settled_streak(self):
+        era = ResonanceEra()
+        ds, canvas, es = _settled_inputs()
+        for _ in range(SETTLED_STREAK - 1):
+            assert era.earned_completion(ds, canvas, es) is None
+        assert era.earned_completion(ds, canvas, es) == "earned_field"
+
+    def test_streak_resets_when_ratio_drops(self):
+        era = ResonanceEra()
+        ds, canvas, es = _settled_inputs()
+        for _ in range(SETTLED_STREAK - 1):
+            era.earned_completion(ds, canvas, es)
+        # One scattered window resets the streak
+        es.revisit_window = [False] * REVISIT_WINDOW
+        assert era.earned_completion(ds, canvas, es) is None
+        assert es.settled_streak == 0
+
+    def test_gated_on_marks(self):
+        era = ResonanceEra()
+        ds, canvas, es = _settled_inputs(marks=SETTLED_MIN_MARKS - 1)
+        for _ in range(SETTLED_STREAK + 2):
+            assert era.earned_completion(ds, canvas, es) is None
+
+    def test_gated_on_fatigue(self):
+        era = ResonanceEra()
+        ds, canvas, es = _settled_inputs(fatigue=SETTLED_MIN_FATIGUE - 0.05)
+        for _ in range(SETTLED_STREAK + 2):
+            assert era.earned_completion(ds, canvas, es) is None
+
+    def test_gated_on_full_window(self):
+        era = ResonanceEra()
+        ds, canvas, es = _settled_inputs()
+        es.revisit_window = [True] * (REVISIT_WINDOW - 1)  # not enough data yet
+        for _ in range(SETTLED_STREAK + 2):
+            assert era.earned_completion(ds, canvas, es) is None
+
+    def test_wrong_state_type_returns_none(self):
+        era = ResonanceEra()
+        ds, canvas, _ = _settled_inputs()
+        assert era.earned_completion(ds, canvas, object()) is None
+
+
+class TestRevisitTracking:
+    def test_place_mark_records_revisit_flags(self):
+        era = ResonanceEra()
+        state = era.create_state()
+        state._cached_warmth = 0.5
+        state._cached_presence = 0.5
+        state._cached_clarity = 0.5
+
+        class _Canvas:
+            def draw_pixel(self, x, y, color):
+                pass
+
+        canvas = _Canvas()
+        # First deposit: empty field -> fresh ground (not a revisit)
+        era.place_mark(state, canvas, 120.0, 120.0, 0.0, 0.5, (100, 100, 100))
+        assert state.revisit_window == [False]
+        # Same spot again: accumulated cell -> revisit
+        era.place_mark(state, canvas, 120.0, 120.0, 0.0, 0.5, (100, 100, 100))
+        assert state.revisit_window[-1] is True
+
+    def test_window_is_bounded(self):
+        era = ResonanceEra()
+        state = era.create_state()
+        state._cached_warmth = 0.5
+        state._cached_presence = 0.5
+        state._cached_clarity = 0.5
+
+        class _Canvas:
+            def draw_pixel(self, x, y, color):
+                pass
+
+        for _ in range(REVISIT_WINDOW + 20):
+            era.place_mark(state, _Canvas(), 120.0, 120.0, 0.0, 0.5, (100, 100, 100))
+        assert len(state.revisit_window) == REVISIT_WINDOW

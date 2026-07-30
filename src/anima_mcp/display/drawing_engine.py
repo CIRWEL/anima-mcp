@@ -25,7 +25,14 @@ from ..anima import Anima
 from ..expression_moods import ExpressionMoodTracker
 
 
-_EARNED_COMPLETION_REASONS = frozenset({"earned_coherence", "earned_composition"})
+_EARNED_COMPLETION_REASONS = frozenset({
+    "earned_coherence", "earned_composition",
+    # Era-supplied earned path (ArtEra.earned_completion) — e.g. resonance's
+    # field-settled signal. The global paths are unreachable in some eras
+    # (resonance V dynamics cap C ~0.53 < the 0.6 settle threshold), which
+    # starved the earned-only autobiographical gate for the whole era.
+    "earned_field",
+})
 MIN_RECORDED_DRAWING_PIXELS = 200
 
 
@@ -1835,9 +1842,33 @@ class DrawingEngine:
                 self.canvas.save_to_disk()
                 return "saved_and_cleared"
 
+        # === PRIORITY 1.5: Era-specific earned completion ===
+        # Eras may supply their own "the pattern found itself" signal via an
+        # optional earned_completion(state, canvas, era_state) method — the
+        # global earned paths are unreachable in some eras (see resonance).
+        era_min_marks = getattr(self.active_era, 'min_marks_for_completion', 5)
+        era_earned = getattr(self.active_era, 'earned_completion', None)
+        if era_earned is not None and pixel_count >= MIN_RECORDED_DRAWING_PIXELS \
+                and self.intent.mark_count >= era_min_marks:
+            try:
+                era_reason = era_earned(state, self.canvas, self.intent.era_state)
+            except Exception as e:
+                era_reason = None
+                print(f"[Canvas] era earned_completion error (non-fatal): {e}", file=sys.stderr, flush=True)
+            if era_reason:
+                C = state.coherence()
+                satisfaction = self.canvas.compositional_satisfaction()
+                print(f"[Canvas] Era earned completion ({era_reason}) -- saving ({pixel_count}px, {self.intent.mark_count} marks, C={C:.2f}, sat={satisfaction:.2f}, curio={state.curiosity:.2f}, fatigue={state.fatigue:.2f})", file=sys.stderr, flush=True)
+                self.canvas.last_completion_reason = era_reason
+                saved_path = self.canvas_save(announce=True)
+                if saved_path:
+                    self.canvas_clear(persist=True, already_saved=True)
+                    self.intent.reset()
+                    self.canvas.save_to_disk()
+                    return "saved_and_cleared"
+
         # === PRIORITY 2: Narrative complete (multiple paths: coherence+attention, composition+curiosity, or fatigue) ===
         # Eras expose min_marks_for_completion (default 5): pointillist=80, field=30, geometric=3
-        era_min_marks = getattr(self.active_era, 'min_marks_for_completion', 5)
         if (state.narrative_complete(self.canvas)
                 and pixel_count >= MIN_RECORDED_DRAWING_PIXELS
                 and self.intent.mark_count >= era_min_marks):

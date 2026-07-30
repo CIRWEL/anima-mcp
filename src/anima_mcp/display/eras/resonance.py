@@ -10,7 +10,7 @@ Pure NumPy operations — no scipy dependency.
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from typing import List, Tuple
 
 import numpy as np
@@ -40,6 +40,25 @@ GRADIENT_LOW = 0.20
 GRADIENT_HIGH = 0.40
 WARMTH_BIAS_DEGREES = 10.0
 FIELD_HIGH_THRESHOLD = 0.6
+
+# Earned-completion (field-settled) parameters. The global earned paths are
+# structurally unreachable in this era (drawing C = 0.5*(1+tanh(V)) needs
+# V > 0.2 to settle; resonance V dynamics top out ~0.05), so before this hook
+# every resonance piece ended by 8h hard-cap — and the earned-only gate on
+# autobiographical growth writes meant no drawing-satisfaction memories at
+# all. "Settled" here uses the era's own vocabulary: deposits keep landing on
+# accumulated memory (revisits) instead of fresh ground.
+# NOTE: revisit-ratio calibration is provisional (instrumented, logged on
+# every completion for retuning) — the gates below (marks + fatigue) bound
+# the earliest possible fire to roughly the 4.5-5h mark on observed fatigue
+# curves, and the 8h hard-cap remains as backstop, so miscalibration in
+# either direction degrades gracefully to current behavior.
+REVISIT_CELL_FRACTION = 0.3   # deposit cell >= 30% of field max = a revisit
+REVISIT_WINDOW = 50           # rolling deposits considered
+SETTLED_REVISIT_RATIO = 0.6   # window ratio at/above this = settling
+SETTLED_STREAK = 5            # consecutive settled checks required
+SETTLED_MIN_MARKS = 300       # piece must be substantial (typical: 800-950)
+SETTLED_MIN_FATIGUE = 0.6     # attention genuinely winding down
 
 # ---------------------------------------------------------------------------
 # Pure functions — memory field core
@@ -131,6 +150,11 @@ class ResonanceState(EraState):
 
     field: np.ndarray = None  # initialized in __post_init__
     cycle_count: int = 0
+    # Rolling record of whether each deposit landed in an already-accumulated
+    # cell (revisit) vs fresh ground. High sustained revisit ratio = the piece
+    # has converged on its resonant forms — this era's own notion of settled.
+    revisit_window: list = dataclass_field(default_factory=list)
+    settled_streak: int = 0
     _grad_gx: float = 0.0
     _grad_gy: float = 0.0
     _grad_mag: float = 0.0
@@ -192,6 +216,33 @@ class ResonanceEra:
 
     def create_state(self) -> ResonanceState:
         return ResonanceState()
+
+    def earned_completion(self, drawing_state, canvas, era_state) -> str | None:
+        """Era-specific earned completion: the piece has settled into its
+        resonant forms.
+
+        Fires when a sustained majority of recent deposits are revisits of
+        accumulated field regions (the era's own definition of "the pattern
+        found itself") AND the piece is substantial AND attention is
+        genuinely winding down. Returns "earned_field" or None.
+        """
+        if not isinstance(era_state, ResonanceState):
+            return None
+        if canvas.mark_count < SETTLED_MIN_MARKS:
+            return None
+        if drawing_state.fatigue < SETTLED_MIN_FATIGUE:
+            return None
+        window = era_state.revisit_window
+        if len(window) < REVISIT_WINDOW:
+            return None
+        ratio = sum(window) / len(window)
+        if ratio >= SETTLED_REVISIT_RATIO:
+            era_state.settled_streak += 1
+        else:
+            era_state.settled_streak = 0
+        if era_state.settled_streak >= SETTLED_STREAK:
+            return "earned_field"
+        return None
 
     def choose_gesture(
         self,
@@ -279,6 +330,19 @@ class ResonanceEra:
         deposit_val = (state._cached_warmth * DEPOSIT_W_WARMTH +
                        state._cached_presence * DEPOSIT_W_PRESENCE +
                        state._cached_clarity * DEPOSIT_W_CLARITY)
+        # Track whether this deposit lands on accumulated memory (revisit) or
+        # fresh ground BEFORE depositing — feeds earned_completion. Scale-free
+        # (relative to field max) so field decay doesn't skew it.
+        field_max = float(state.field.max())
+        cx_cell = min(max(int(focus_x) // CELL_SIZE, 0), FIELD_SIZE - 1)
+        cy_cell = min(max(int(focus_y) // CELL_SIZE, 0), FIELD_SIZE - 1)
+        is_revisit = (
+            field_max > 1e-6
+            and float(state.field[cy_cell, cx_cell]) >= REVISIT_CELL_FRACTION * field_max
+        )
+        state.revisit_window.append(is_revisit)
+        if len(state.revisit_window) > REVISIT_WINDOW:
+            state.revisit_window.pop(0)
         _deposit(state.field, int(focus_x), int(focus_y), deposit_val)
 
         # Update focus cell
