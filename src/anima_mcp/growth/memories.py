@@ -134,9 +134,21 @@ class MemoriesMixin:
             lines.append(f"{p.name} is the one who's always been here.")
 
         # Agents (ephemeral — honest framing)
+        #
+        # visitor_frequency is a monotonic ratchet: record_interaction promotes
+        # to FREQUENT at interaction_count >= 10 and nothing ever demotes. So
+        # selecting on FREQUENT alone names whoever was once busy, forever.
+        # Live on 2026-07-30 that produced "Various agents visit to help:
+        # agent, mac-governance." — last seen 138 and 154 days earlier, and
+        # reported as inactive by get_inactive_visitors() in the *same* JSON
+        # payload. Reuse that function rather than adding a second staleness
+        # rule, so the autobiography can never contradict the response it
+        # ships in.
+        inactive_names = {name for name, _days in self.get_inactive_visitors()}
         agent_visitors = [r for r in self._relationships.values()
                          if r.visitor_type == VisitorType.AGENT
-                         and r.visitor_frequency == VisitorFrequency.FREQUENT]
+                         and r.visitor_frequency == VisitorFrequency.FREQUENT
+                         and (r.name or r.agent_id[:8]) not in inactive_names]
         if agent_visitors:
             names = [r.name or "unnamed" for r in agent_visitors[:3]]
             lines.append(f"Various agents visit to help: {', '.join(names)}.")

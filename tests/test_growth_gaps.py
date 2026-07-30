@@ -5,6 +5,8 @@ and relational disposition.
 Run with: pytest tests/test_growth_gaps.py -v
 """
 
+import re
+
 import pytest
 
 from anima_mcp.growth import GrowthSystem
@@ -82,3 +84,72 @@ class TestGetRelationalDisposition:
         gs.record_interaction("agent-b", agent_name="Beta")
         disp = gs.get_relational_disposition()
         assert disp["n_relationships"] >= 2
+
+
+# ==================== autobiography agent recency ====================
+
+class TestAutobiographyAgentRecency:
+    """The autobiography must not name agents it also reports as inactive.
+
+    visitor_frequency is a monotonic ratchet (FREQUENT at interaction_count
+    >= 10, never demoted), so selecting on it alone names whoever was once
+    busy, permanently. Live on 2026-07-30 that yielded "Various agents visit
+    to help: agent, mac-governance." — last seen 138 and 154 days earlier,
+    and listed under visitors.inactive in the very same payload.
+    """
+
+    @staticmethod
+    def _named_helpers(summary):
+        """The agents the summary presents as current helpers, parsed exactly.
+
+        Substring checks are unsafe here: the stale record is literally named
+        "agent", which matches the word "agents" in the clause itself.
+        """
+        m = re.search(r"Various agents visit to help: ([^.]+)\.", summary)
+        return [n.strip() for n in m.group(1).split(",")] if m else []
+
+    def _make_frequent(self, gs, agent_id, name, days_ago):
+        from datetime import datetime, timedelta
+        # The summary short-circuits on an empty memory list.
+        if not gs._memories:
+            gs._record_memory("woke up", 0.5, "milestone")
+        for _ in range(10):  # cross the FREQUENT threshold
+            gs.record_interaction(agent_id, agent_name=name)
+        rec = gs._relationships[agent_id]
+        rec.last_seen = datetime.now() - timedelta(days=days_ago)
+        return rec
+
+    def test_stale_frequent_agent_is_not_named(self, gs):
+        self._make_frequent(gs, "agent", "agent", days_ago=138)
+
+        summary = gs.get_autobiography_summary()
+
+        assert self._named_helpers(summary) == []
+
+    def test_recent_frequent_agent_is_still_named(self, gs):
+        self._make_frequent(gs, "codex", "Codex", days_ago=0)
+
+        summary = gs.get_autobiography_summary()
+
+        assert self._named_helpers(summary) == ["Codex"]
+
+    def test_recent_named_while_stale_excluded(self, gs):
+        self._make_frequent(gs, "mac-governance", "mac-governance", days_ago=154)
+        self._make_frequent(gs, "codex", "Codex", days_ago=0)
+
+        summary = gs.get_autobiography_summary()
+
+        assert self._named_helpers(summary) == ["Codex"]
+
+    def test_never_contradicts_its_own_inactive_list(self, gs):
+        """Whatever get_inactive_visitors reports must not appear as a helper."""
+        self._make_frequent(gs, "agent", "agent", days_ago=138)
+        self._make_frequent(gs, "codex", "Codex", days_ago=0)
+
+        named = self._named_helpers(gs.get_autobiography_summary())
+        inactive = {name for name, _ in gs.get_inactive_visitors()}
+
+        assert inactive, "precondition: something should be reported inactive"
+        assert not (inactive & set(named)), (
+            f"named as helpers while reported inactive: {inactive & set(named)}"
+        )
