@@ -65,7 +65,12 @@ dev = [
     "pytest-asyncio>=0.24.0,<2.0.0",
     "pytest-cov>=4.1.0,<8.0.0",
     "black>=26.3.1,<27.0.0",
-    "ruff>=0.0.285,<1.0.0",
+    # PINNED to a minor: ruff's DEFAULT rule set is version-dependent. An
+    # unpinned range let CI resolve 0.16.0, whose broader defaults turned 9
+    # findings into 3,629 and failed `Run lint` — which runs before the test
+    # steps, so the whole suite was skipped from 2026-07-04 to 2026-07-30
+    # while CI reported red for a reason nobody read. Bump deliberately.
+    "ruff>=0.14.0,<0.15.0",
     "mypy>=1.5.0,<3.0.0",
     "types-PyYAML>=6.0.0,<7.0.0",
     "types-psutil>=5.9.0,<8.0.0",
@@ -136,7 +141,12 @@ dev = [
     "pytest-asyncio>=0.24.0,<2.0.0",
     "pytest-cov>=4.1.0,<8.0.0",
     "black>=26.3.1,<27.0.0",
-    "ruff>=0.0.285,<1.0.0",
+    # PINNED to a minor: ruff's DEFAULT rule set is version-dependent. An
+    # unpinned range let CI resolve 0.16.0, whose broader defaults turned 9
+    # findings into 3,629 and failed `Run lint` — which runs before the test
+    # steps, so the whole suite was skipped from 2026-07-04 to 2026-07-30
+    # while CI reported red for a reason nobody read. Bump deliberately.
+    "ruff>=0.14.0,<0.15.0",
     "mypy>=1.5.0,<3.0.0",
     "types-PyYAML>=6.0.0,<7.0.0",
     "types-psutil>=5.9.0,<8.0.0",

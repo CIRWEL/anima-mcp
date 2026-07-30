@@ -548,10 +548,9 @@ class TestFieldPersistence:
 # earned_completion — field-settled signal
 # ---------------------------------------------------------------------------
 
-from types import SimpleNamespace
+from types import SimpleNamespace  # noqa: E402
 
-from anima_mcp.display.eras.resonance import (
-    ResonanceEra, ResonanceState,
+from anima_mcp.display.eras.resonance import (  # noqa: E402
     REVISIT_WINDOW, SETTLED_STREAK, SETTLED_MIN_MARKS, SETTLED_MIN_FATIGUE,
     SETTLED_REVISIT_RATIO,
 )

@@ -149,11 +149,7 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
     from .value_tension import ValueTensionTracker
     from .accessors import (
         _get_schema_hub, _get_calibration_drift,
-        _get_readings_and_anima, _get_last_shm_data,
-    )
-    from .server_state import (
-        SHM_STALE_THRESHOLD_SECONDS, SHM_GOVERNANCE_STALE_SECONDS,
-        THERMAL_RATE_THRESHOLD, MEMORY_PRESSURE_THRESHOLD,
+        _get_readings_and_anima,
     )
 
     max_attempts = 5
