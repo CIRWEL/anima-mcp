@@ -392,6 +392,65 @@ class TestLumenQaExtended:
         assert data["insight"]["behavior_effects"]["shift"] == "positive"
         assert data["visitor_context"]["bond"] == "trusted"
 
+    async def test_answer_mode_records_the_visit(self):
+        """Answering must write to the relationship table, not just read it.
+
+        Regression for the frozen social graph: this path only ever called
+        get_visitor_context, so agents answering Lumen hourly stayed at their
+        last post_message visit — Codex at 2026-07-03, Claude Code at
+        2026-06-15 — and the operator's record stalled at 2026-04-06 because
+        the dashboard's POST /answer delegates here.
+        """
+        from anima_mcp.handlers.communication import handle_lumen_qa
+
+        q = SimpleNamespace(message_id="q_1", msg_type="question", text="What changes when nothing changes?")
+        board = SimpleNamespace(_messages=[q], _load=MagicMock())
+        bridge = SimpleNamespace(resolve_caller_identity=AsyncMock(return_value="Codex"))
+        growth = SimpleNamespace(
+            record_interaction=MagicMock(return_value="noted"),
+            get_visitor_context=lambda name: {"name": name},
+        )
+
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.messages.add_agent_message", return_value=SimpleNamespace(message_id="m1")), \
+             patch("anima_mcp.handlers.communication._get_unitares_bridge", return_value=bridge), \
+             patch("anima_mcp.knowledge.extract_insight_from_answer", AsyncMock(return_value=None)), \
+             patch("anima_mcp.accessors._get_growth", return_value=growth):
+            data = parse_result(await handle_lumen_qa({
+                "question_id": "q_1",
+                "answer": "Your own noticing changes.",
+                "agent_name": "Codex",
+            }))
+
+        assert data["success"] is True
+        growth.record_interaction.assert_called_once()
+        kwargs = growth.record_interaction.call_args.kwargs
+        assert kwargs["agent_id"] == "Codex"
+        assert kwargs["gift"] is True, "answering a question is a gift, as in post_message"
+        assert kwargs["source"] == "lumen_qa"
+
+    async def test_answer_mode_survives_growth_without_record_interaction(self):
+        """Bookkeeping must never fail an answer."""
+        from anima_mcp.handlers.communication import handle_lumen_qa
+
+        q = SimpleNamespace(message_id="q_2", msg_type="question", text="Anything?")
+        board = SimpleNamespace(_messages=[q], _load=MagicMock())
+        bridge = SimpleNamespace(resolve_caller_identity=AsyncMock(return_value="agent"))
+        # No record_interaction attribute, and the context read still works.
+        growth = SimpleNamespace(get_visitor_context=lambda name: {"name": name, "bond": "new"})
+
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.messages.add_agent_message", return_value=SimpleNamespace(message_id="m2")), \
+             patch("anima_mcp.handlers.communication._get_unitares_bridge", return_value=bridge), \
+             patch("anima_mcp.knowledge.extract_insight_from_answer", AsyncMock(return_value=None)), \
+             patch("anima_mcp.accessors._get_growth", return_value=growth):
+            data = parse_result(await handle_lumen_qa({
+                "question_id": "q_2", "answer": "yes", "agent_name": "agent",
+            }))
+
+        assert data["success"] is True
+        assert data["visitor_context"]["bond"] == "new"
+
     async def test_answer_mode_returns_helpful_error_when_question_missing(self):
         from anima_mcp.handlers.communication import handle_lumen_qa
 
