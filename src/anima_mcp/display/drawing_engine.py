@@ -32,6 +32,11 @@ _EARNED_COMPLETION_REASONS = frozenset({
     # (resonance V dynamics cap C ~0.53 < the 0.6 settle threshold), which
     # starved the earned-only autobiographical gate for the whole era.
     "earned_field",
+    # Lumen declaring the piece done is the most self-determined completion
+    # available — more so than any threshold. Previously this path reached the
+    # gate as None and passed via the fail-open below, so treating it as earned
+    # preserves its behavior rather than changing it.
+    "said_finished",
 })
 MIN_RECORDED_DRAWING_PIXELS = 200
 
@@ -39,13 +44,22 @@ MIN_RECORDED_DRAWING_PIXELS = 200
 def is_earned_completion_reason(reason: Optional[str]) -> bool:
     """Gate for autobiographical writes tied to drawing completion.
 
-    Earned reasons only. `None` is treated as unknown and returns True so
-    legacy callers that predate the reason-plumbing keep their old behavior
-    (satisfaction-threshold gating applies instead). Pass an explicit
-    non-earned tag to suppress.
+    Earned reasons only, and `None` — unknown provenance — does NOT qualify.
+
+    This used to return True for None so callers predating the reason-plumbing
+    kept their old behavior. That fail-open was the whole bug: two of the three
+    save paths never tagged a reason, so bail-outs arrived here as None and were
+    written as "Made a drawing I'm pleased with". Because resonance canvases cap
+    C ~0.52 they never enter the "resolving" arc phase where the tag was
+    captured, and the only remaining guard — compositional_satisfaction > 0.7 —
+    reads 0.78-0.86 always. Result: 18 of 19 large completions between
+    2026-07-23 and 2026-07-29, every one an 8h cap or fatigue bail-out, became
+    pride memories. Axiom 8 exists to prevent exactly that, so unknown
+    provenance must fail closed: no tag, no autobiographical claim.
+
+    All production callers now supply an explicit tag (see canvas priorities 1,
+    1.5 and 2 in _lumen_draw).
     """
-    if reason is None:
-        return True
     return reason in _EARNED_COMPLETION_REASONS
 
 
@@ -1857,6 +1871,9 @@ class DrawingEngine:
         if (pixel_count >= MIN_RECORDED_DRAWING_PIXELS and self._check_lumen_said_finished()):
             C = state.coherence()
             print(f"[Canvas] Lumen said finished - saving ({pixel_count}px, {self.intent.mark_count} marks, C={C:.2f})", file=sys.stderr, flush=True)
+            # Tag the path before saving — canvas_save() reads
+            # last_completion_reason to gate autobiographical writes.
+            self.canvas.last_completion_reason = "said_finished"
             saved_path = self.canvas_save(announce=False)
             if saved_path:
                 self.canvas_clear(persist=True, already_saved=True)
@@ -1896,7 +1913,18 @@ class DrawingEngine:
                 and self.intent.mark_count >= era_min_marks):
             C = state.coherence()
             satisfaction = self.canvas.compositional_satisfaction()
-            print(f"[Canvas] Narrative complete -- saving ({pixel_count}px, {self.intent.mark_count} marks, C={C:.2f}, sat={satisfaction:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f}, fatigue={state.fatigue:.2f})", file=sys.stderr, flush=True)
+            # Tag the path that actually fired before saving. Previously this
+            # was left unset here, so bail-outs reached the autobiographical
+            # gate as None. The "resolving" arc branch also captures a reason,
+            # but resonance canvases never reach that phase (C caps ~0.52 vs the
+            # 0.6 entry threshold), so this is the only capture point they hit.
+            # "already_closing" is not the originating trigger — the real reason
+            # was captured on the tick that transitioned into closing — so it
+            # must not overwrite it.
+            completion_path = state.completion_reason(self.canvas)
+            if completion_path is not None and completion_path != "already_closing":
+                self.canvas.last_completion_reason = completion_path
+            print(f"[Canvas] Narrative complete ({self.canvas.last_completion_reason or 'untagged'}) -- saving ({pixel_count}px, {self.intent.mark_count} marks, C={C:.2f}, sat={satisfaction:.2f}, arc={state.arc_phase}, curio={state.curiosity:.2f}, engage={state.engagement:.2f}, fatigue={state.fatigue:.2f})", file=sys.stderr, flush=True)
             saved_path = self.canvas_save(announce=True)
             if saved_path:
                 self.canvas_clear(persist=True, already_saved=True)

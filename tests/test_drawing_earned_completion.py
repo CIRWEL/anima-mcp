@@ -114,6 +114,56 @@ class TestCompletionReason:
         assert state.narrative_complete(self._canvas_with_marks()) is True
 
 
+# ============ the live leak: a bail-out that never entered "resolving" ============
+
+
+class TestBailoutTaggedOutsideResolving:
+    """Regression for the axiom-8 leak found live on 2026-07-30.
+
+    `last_completion_reason` was captured only in the `arc_phase == "resolving"`
+    branch. Entering "resolving" requires C > 0.6, but resonance caps C ~0.52 —
+    so resonance canvases complete straight out of "developing", the tag was
+    never set, and the gate saw None and failed open.
+    """
+
+    def _canvas(self, pixels=250, age_sec=0.0):
+        canvas = CanvasState()
+        canvas.last_clear_time = time.time() - age_sec
+        for i in range(pixels):
+            canvas.draw_pixel(
+                i % canvas.width, (i // canvas.width) % canvas.height, (255, 255, 255)
+            )
+        return canvas
+
+    def test_hard_cap_from_developing_is_tagged_not_none(self):
+        """An 8h cap outside "resolving" reports a bail-out tag, never None."""
+        state = DrawingState()
+        state.arc_phase = "developing"
+        canvas = self._canvas(age_sec=28801)
+
+        reason = state.completion_reason(canvas)
+
+        assert reason == "bailout_hard_cap"
+        assert is_earned_completion_reason(reason) is False
+
+    def test_fatigue_bailout_from_developing_is_not_earned(self):
+        state = DrawingState()
+        state.arc_phase = "developing"
+        state.fatigue = 0.95
+
+        reason = state.completion_reason(self._canvas())
+
+        assert reason == "bailout_fatigue"
+        assert is_earned_completion_reason(reason) is False
+
+    def test_canvas_clear_drops_the_tag(self):
+        """A captured bail-out tag must not survive onto the next canvas."""
+        canvas = self._canvas()
+        canvas.last_completion_reason = "bailout_hard_cap"
+        canvas.clear()
+        assert canvas.last_completion_reason is None
+
+
 # ==================== is_earned_completion_reason() helper ====================
 
 
@@ -130,9 +180,18 @@ class TestIsEarnedCompletionReason:
     def test_manual_snapshot_returns_false(self):
         assert is_earned_completion_reason("manual_snapshot") is False
 
-    def test_none_returns_true_for_backcompat(self):
-        """Legacy callers that don't pass a reason keep their old behavior."""
-        assert is_earned_completion_reason(None) is True
+    def test_none_fails_closed(self):
+        """Unknown provenance is not earned.
+
+        This asserted True until 2026-07-30. That fail-open was the axiom-8
+        leak: two of three save paths never tagged a reason, so bail-outs
+        arrived as None and were written as pride memories.
+        """
+        assert is_earned_completion_reason(None) is False
+
+    def test_said_finished_is_earned(self):
+        """Lumen declaring the piece done is self-determined completion."""
+        assert is_earned_completion_reason("said_finished") is True
 
     def test_already_closing_returns_false(self):
         """Orphaned 'already_closing' (no earlier trigger captured) is not earned."""
@@ -234,13 +293,26 @@ class TestRecordDrawingCompletionGating:
         )
         assert [m for m in gs._memories if m.category == "creative"] == []
 
-    def test_no_reason_keeps_legacy_behavior(self, gs):
-        """Existing callers that don't pass a reason still write at sat > 0.7."""
+    def test_no_reason_writes_nothing(self, gs):
+        """An untagged completion writes no memory, even at high satisfaction.
+
+        Satisfaction cannot stand in for earning it: compositional_satisfaction
+        reads 0.78-0.86 on every live canvas, so it discriminates nothing.
+        """
         gs.record_drawing_completion(
             pixel_count=500, mark_count=10,
             coherence=0.8, satisfaction=0.85,
         )
-        assert len([m for m in gs._memories if m.category == "creative"]) == 1
+        assert [m for m in gs._memories if m.category == "creative"] == []
+
+    def test_bailout_writes_nothing_at_high_satisfaction(self, gs):
+        """The live failure mode: an 8h hard cap must not become pride."""
+        gs.record_drawing_completion(
+            pixel_count=7949, mark_count=794,
+            coherence=0.52, satisfaction=0.86,
+            completion_reason="bailout_hard_cap",
+        )
+        assert [m for m in gs._memories if m.category == "creative"] == []
 
     def test_low_satisfaction_still_blocks_even_when_earned(self, gs):
         """Earned completion alone isn't enough — satisfaction gate still applies."""
@@ -282,9 +354,10 @@ class TestObserveDrawingMilestoneGating:
         self._call(gs, "bailout_fatigue")
         assert gs._drawings_observed == before + 1
 
-    def test_no_reason_keeps_legacy_milestone_behavior(self, gs):
+    def test_no_reason_blocks_milestone(self, gs):
+        """Untagged completions no longer earn a milestone (was: allowed)."""
         self._call(gs, None)
-        assert len(self._milestone_memories(gs)) == 1
+        assert self._milestone_memories(gs) == []
 
     def test_manual_snapshot_blocks_milestone(self, gs):
         self._call(gs, "manual_snapshot")
