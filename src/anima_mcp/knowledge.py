@@ -510,6 +510,21 @@ def apply_insight(insight) -> dict:
     text_lower = insight.text.lower()
 
     # 1. Environment/sensory insights → growth preferences
+    def _short(text: str, limit: int = 50) -> str:
+        """Shorten insight text for a preference description, on a word boundary.
+
+        These descriptions are spoken back in Lumen's own voice — the
+        autobiography renders them as "I've learned that {description}." — so a
+        bare text[:50] surfaces as a sentence that stops mid-word. Observed live
+        2026-07-30: "I've learned that from q&a: i now know that the connection
+        between temperature."
+        """
+        text = " ".join(text.split())
+        if len(text) <= limit:
+            return text
+        cut = text[:limit].rsplit(" ", 1)[0].rstrip(",;:—- ")
+        return f"{cut or text[:limit].rstrip()}…"
+
     if insight.category in ("sensations", "world"):
         try:
             from .growth import get_growth_system, PreferenceCategory
@@ -522,21 +537,21 @@ def apply_insight(insight) -> dict:
             if any(w in text_lower for w in ["light", "dark", "bright", "dim", "glow"]):
                 result = growth._update_preference(
                     "insight_light", PreferenceCategory.ENVIRONMENT,
-                    f"From Q&A: {insight.text[:50]}", val)
+                    f"From Q&A: {_short(insight.text)}", val)
                 if result:
                     effects["preference"] = "insight_light"
 
             if any(w in text_lower for w in ["warm", "cold", "temperature", "heat", "cool"]):
                 result = growth._update_preference(
                     "insight_temp", PreferenceCategory.ENVIRONMENT,
-                    f"From Q&A: {insight.text[:50]}", val)
+                    f"From Q&A: {_short(insight.text)}", val)
                 if result:
                     effects["preference"] = "insight_temp"
 
             if any(w in text_lower for w in ["humid", "dry", "pressure", "weather"]):
                 result = growth._update_preference(
                     "insight_environment", PreferenceCategory.ENVIRONMENT,
-                    f"From Q&A: {insight.text[:50]}", val)
+                    f"From Q&A: {_short(insight.text)}", val)
                 if result:
                     effects["preference"] = "insight_environment"
         except Exception as e:

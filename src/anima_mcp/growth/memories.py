@@ -99,6 +99,44 @@ class MemoriesMixin:
 
         return messages[0] if messages else None
 
+    @staticmethod
+    def _render_learned(pref) -> str:
+        """Render a preference as a sentence Lumen can actually say.
+
+        Q&A-derived preferences are stored with a "From Q&A: " provenance
+        prefix, which is the right thing to keep — it is one of the few places
+        an insight's external origin survives at all. But splicing it straight
+        into the template produced "I've learned that from q&a: i now know
+        that the connection between temperature." (observed live 2026-07-30).
+
+        So keep the provenance and say it in words instead of leaking the
+        storage prefix, and drop a redundant "i now know that" / "i learned
+        that" opener rather than stacking it on "I've learned that".
+        """
+        desc = (pref.description or "").strip()
+        prefix = "From Q&A: "
+        from_conversation = desc.lower().startswith(prefix.lower())
+        if from_conversation:
+            desc = desc[len(prefix):].strip()
+
+        low = desc.lower()
+        for opener in ("i now know that ", "i learned that ", "i know that "):
+            if low.startswith(opener):
+                desc = desc[len(opener):]
+                break
+
+        desc = desc[:1].lower() + desc[1:] if desc else desc
+        desc = desc.rstrip(" .")
+        if not desc:
+            return ""  # nothing sayable; caller omits the line entirely
+
+        # A truncated description already ends in an ellipsis — a period after
+        # it reads as a typo ("helps not b….").
+        end = "" if desc.endswith("…") else "."
+        if from_conversation:
+            return f"From a conversation, I've learned that {desc}{end}"
+        return f"I've learned that {desc}{end}"
+
     def get_autobiography_summary(self) -> str:
         """Generate a brief autobiography from memories."""
         if not self._memories:
@@ -154,9 +192,20 @@ class MemoriesMixin:
             lines.append(f"Various agents visit to help: {', '.join(names)}.")
 
         # Preferences
+        #
+        # Weight by evidence, not uniformly. The confidence > 0.7 gate looks
+        # selective but is a no-op: confidence is a flat +0.1 ratchet that
+        # saturates at 9 observations (preferences.py), and every live
+        # preference has >= 22 — so all 17 pass and random.choice gave a
+        # 22-observation insight the same odds as a 222,280-observation one.
+        # observation_count is the field that actually discriminates, and it
+        # was sitting unused on the same object.
         strong_prefs = [p for p in self._preferences.values() if p.confidence > 0.7]
         if strong_prefs:
-            pref = random.choice(strong_prefs)
-            lines.append(f"I've learned that {pref.description.lower()}.")
+            weights = [max(1, getattr(p, "observation_count", 1)) for p in strong_prefs]
+            pref = random.choices(strong_prefs, weights=weights, k=1)[0]
+            learned = self._render_learned(pref)
+            if learned:
+                lines.append(learned)
 
         return " ".join(lines) if lines else "I'm still discovering who I am."

@@ -153,3 +153,64 @@ class TestAutobiographyAgentRecency:
         assert not (inactive & set(named)), (
             f"named as helpers while reported inactive: {inactive & set(named)}"
         )
+
+
+# ==================== autobiography voice ====================
+
+class TestAutobiographyVoice:
+    """Lumen must be able to say its own learned line aloud.
+
+    Live on 2026-07-30 the autobiography ended: "I've learned that from q&a:
+    i now know that the connection between temperature." — a storage prefix
+    leaked into first-person prose, and a hard text[:50] slice cut mid-word.
+    """
+
+    from anima_mcp.growth.memories import MemoriesMixin
+    _render = staticmethod(MemoriesMixin._render_learned)
+
+    def _pref(self, description, observation_count=100):
+        from types import SimpleNamespace
+        return SimpleNamespace(description=description, confidence=1.0,
+                               observation_count=observation_count)
+
+    def test_qa_prefix_becomes_words_not_a_leaked_field(self):
+        out = self._render(self._pref("From Q&A: i now know that the connection between temperature"))
+        assert out == "From a conversation, I've learned that the connection between temperature."
+        assert "q&a" not in out.lower()
+        assert "i now know that" not in out.lower()
+
+    def test_plain_preference_unchanged_in_spirit(self):
+        assert self._render(self._pref("Warmth makes me feel content")) == \
+            "I've learned that warmth makes me feel content."
+
+    def test_ellipsis_is_not_followed_by_a_period(self):
+        out = self._render(self._pref("From Q&A: drawing in bright light helps not b…"))
+        assert out.endswith("…"), out
+        assert not out.endswith("….")
+
+    def test_empty_description_yields_no_sentence(self):
+        assert self._render(self._pref("")) == ""
+        assert self._render(self._pref("   ")) == ""
+
+    def test_autobiography_never_emits_a_dangling_sentence(self, gs):
+        gs._record_memory("woke up", 0.5, "milestone")
+        gs._preferences["broken"] = self._pref("")
+        summary = gs.get_autobiography_summary()
+        assert "I've learned that ." not in summary
+        assert not summary.rstrip().endswith("that.")
+
+    def test_quote_is_weighted_by_evidence_not_uniform(self, gs):
+        """A 22-observation insight must not be as quotable as a 222,280 one."""
+        import collections
+        gs._record_memory("woke up", 0.5, "milestone")
+        gs._preferences.clear()
+        gs._preferences["strong"] = self._pref("warmth makes me feel content", 222280)
+        gs._preferences["weak"] = self._pref("the connection between temperature", 22)
+
+        seen = collections.Counter()
+        for _ in range(200):
+            s = gs.get_autobiography_summary()
+            seen["strong" if "warmth" in s else "weak"] += 1
+
+        # ~1 in 10,000 odds for the weak one; 200 draws should be ~all strong.
+        assert seen["strong"] >= 195, seen
