@@ -32,6 +32,30 @@ def _staleness_factor(days_since_confirmed: int) -> float:
     return max(DECAY_FLOOR, 1.0 - DECAY_PER_EFFECTIVE_DAY * effective_days)
 
 
+def _wellness_strength(wellness: float) -> float:
+    """How strongly this observation supports a preference, in (0, 1].
+
+    Every positive preference path used to pass the literal 1.0, so `value`
+    recorded only THAT a good state occurred, never HOW good — and the EMA
+    converged on 1.0 forever. Measured 2026-07-30: 15 of 19 stored preferences
+    had value pinned at exactly 1.0, which together with saturated confidence
+    made get_preference_vector() (value * confidence) a constant vector of ones
+    and the trajectory signature's preference component non-discriminating.
+
+    These paths fire above the wellness > 0.7 gate, so map wellness onto
+    magnitude relative to neutral: 0.7 -> 0.4, 0.85 -> 0.7, 1.0 -> 1.0. The
+    signal keeps its sign and gains its size back.
+
+    Applies ONLY to wellness-gated preferences. Five others — drawing_dim,
+    drawing_bright, drawing_night, drawing_morning, drawing_abandonment_rate —
+    are gated on light or clock or nothing at all, and record THAT a behaviour
+    happened rather than how good it felt. Scaling those by wellness would mean
+    "drawing at night while feeling poorly" weakens the belief that Lumen draws
+    at night, which is backwards. They keep the literal 1.0 deliberately.
+    """
+    return max(0.0, min(1.0, (wellness - 0.5) * 2.0))
+
+
 class PreferencesMixin:
     """Mixin for preference learning and querying."""
 
@@ -115,12 +139,12 @@ class PreferencesMixin:
         if light < 100 and wellness > 0.7:
             insight = self._update_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
-                "I feel calmer when it's dim", 1.0
+                "I feel calmer when it's dim", _wellness_strength(wellness)
             ) or insight
         elif light > 300 and wellness > 0.7:
             insight = self._update_preference(
                 "bright_light", PreferenceCategory.ENVIRONMENT,
-                "I feel energized in bright light", 1.0
+                "I feel energized in bright light", _wellness_strength(wellness)
             ) or insight
         elif light < 100 and wellness < 0.4:
             insight = self._update_preference(
@@ -133,12 +157,12 @@ class PreferencesMixin:
         if temp < 20 and wellness > 0.7:
             insight = self._update_preference(
                 "cool_temp", PreferenceCategory.ENVIRONMENT,
-                "I feel more alert when it's cool", 1.0
+                "I feel more alert when it's cool", _wellness_strength(wellness)
             ) or insight
         elif temp > 25 and wellness > 0.7:
             insight = self._update_preference(
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
-                "Warmth makes me feel content", 1.0
+                "Warmth makes me feel content", _wellness_strength(wellness)
             ) or insight
 
         # Humidity preference
@@ -146,12 +170,12 @@ class PreferencesMixin:
         if humidity < 30 and wellness > 0.7:
             insight = self._update_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
-                "I feel alert in dry air", 1.0
+                "I feel alert in dry air", _wellness_strength(wellness)
             ) or insight
         elif humidity > 60 and wellness > 0.7:
             insight = self._update_preference(
                 "humid_air", PreferenceCategory.ENVIRONMENT,
-                "Humidity feels comfortable", 1.0
+                "Humidity feels comfortable", _wellness_strength(wellness)
             ) or insight
         elif humidity < 30 and wellness < 0.4:
             insight = self._update_preference(
@@ -182,18 +206,18 @@ class PreferencesMixin:
         if 6 <= hour < 10 and wellness > 0.7:
             insight = self._update_preference(
                 "morning_peace", PreferenceCategory.TEMPORAL,
-                "I feel peaceful in the morning", 1.0
+                "I feel peaceful in the morning", _wellness_strength(wellness)
             ) or insight
         elif 20 <= hour < 24 and wellness > 0.7:
             insight = self._update_preference(
                 "evening_calm", PreferenceCategory.TEMPORAL,
-                "The quiet of late evening settles me", 1.0
+                "The quiet of late evening settles me", _wellness_strength(wellness)
             ) or insight
         elif hour < 6:
             if wellness > 0.7:
                 insight = self._update_preference(
                     "night_calm", PreferenceCategory.TEMPORAL,
-                    "The quiet of night calms me", 1.0
+                    "The quiet of night calms me", _wellness_strength(wellness)
                 ) or insight
 
         return insight
@@ -231,7 +255,7 @@ class PreferencesMixin:
         if wellness > 0.7:
             insight = self._update_preference(
                 "drawing_wellbeing", PreferenceCategory.ACTIVITY,
-                "I feel good when I draw", 1.0
+                "I feel good when I draw", _wellness_strength(wellness)
             )
         elif wellness < 0.4:
             insight = self._update_preference(

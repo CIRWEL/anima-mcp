@@ -4,17 +4,25 @@
 # live field snapshot — provisional BY DESIGN. This runs daily from launchd
 # (com.cirwel.earned-field-watch, Mac-local plist) and self-removes:
 #   - earned_field observed in the Pi journal -> post info finding, retire.
-#   - never observed by DEADLINE -> post medium finding telling the operator
-#     to recalibrate SETTLED_REVISIT_RATIO from the logged completion values
-#     (every completion line carries curio/fatigue; revisit ratio is in the
-#     era earned log line), then retire.
+#   - never observed by DEADLINE -> post medium finding pointing the operator
+#     at diagnostics.drawing.settling (which now reports WHICH gate held it
+#     back), then retire. It deliberately does NOT conclude the calibration is
+#     too strict: a piece drawn on a "sparse" goal legitimately never revisits
+#     accumulated field, and refusing to earn completion there is the signal
+#     working, not failing.
 # Wired-wake-condition pattern: parked items get automation, not memory notes.
 
 set -uo pipefail
 
 LABEL="com.cirwel.earned-field-watch"
 PLIST="$HOME/Library/LaunchAgents/${LABEL}.plist"
-DEADLINE="2026-08-05"
+# Extended from 2026-08-05. The original clock started 2026-07-29, but until
+# 2026-07-30 (#116) revisit_window and settled_streak were not persisted, so
+# every service restart reset them — and the earned path needs 50 deposits plus
+# a 5-check streak, roughly 100 min of uninterrupted uptime at observed mark
+# rates. Twelve deploys that day made a fire impossible regardless of
+# thresholds, so the signal never had a fair window. This gives it one.
+DEADLINE="2026-08-14"
 PI_HOST="${LUMEN_SSH_HOST:-pi-anima}"
 GOV_API_URL="${UNITARES_GOVERNANCE_HTTP_URL:-http://127.0.0.1:8767}"
 SECRETS_FILE="${UNITARES_SECRETS_ENV:-$HOME/.config/cirwel/secrets.env}"
@@ -62,7 +70,7 @@ fi
 
 if [ "$(date '+%F')" \> "$DEADLINE" ] || [ "$(date '+%F')" = "$DEADLINE" ]; then
   post_finding "medium" "earned-field-never-fired" \
-    "resonance earned_field completion has NOT fired since deploy (2026-07-29, anima 25f2016). The revisit-ratio calibration is too strict — lower SETTLED_REVISIT_RATIO (currently 0.6) or SETTLED_STREAK in display/eras/resonance.py using the logged completion-line values, or the earned path stays as unreachable as the one it replaced."
+    "resonance earned_field has NOT fired by the deadline. Do NOT assume the calibration is too strict — read diagnostics.drawing.settling first (anima-mcp #115): it reports every gate and its margin (marks / fatigue / revisit_ratio / revisit_window_filled / settled_streak), so the failing gate is now identifiable rather than inferred. Two benign explanations to rule out before retuning: (1) pieces drawn on a sparse drawing_goal legitimately never revisit accumulated field, so not earning completion is correct behaviour, not miscalibration; (2) frequent service restarts truncate the run — the counters persist since #116, but the window still needs 50 deposits plus a 5-check streak. Only if settling shows revisit_ratio plateauing well below 0.6 on a NON-sparse goal across an uninterrupted run is SETTLED_REVISIT_RATIO the thing to change."
   retire "deadline reached without a fire — operator finding posted"
   exit 0
 fi
