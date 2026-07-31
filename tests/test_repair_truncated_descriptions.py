@@ -143,3 +143,44 @@ class TestAgainstADatabase:
         capsys.readouterr()
         rep.main()
         assert "none hard-cut" in capsys.readouterr().out
+
+
+class TestDatabaseResolution:
+    """The first version defaulted to ~/.anima/growth.db, which has never
+    existed — a bare invocation always reported "no growth db" and did
+    nothing. Preferences live in anima.db with everything else."""
+
+    def test_never_resolves_to_a_growth_db(self, rep, tmp_path, monkeypatch):
+        """There is no growth.db; preferences live in anima.db."""
+        monkeypatch.delenv("ANIMA_DB", raising=False)
+        monkeypatch.setattr(rep.Path, "home", staticmethod(lambda: tmp_path))
+        (tmp_path / ".anima").mkdir()
+        (tmp_path / ".anima" / "growth.db").touch()   # decoy
+        (tmp_path / ".anima" / "anima.db").touch()
+        assert rep._default_db() == tmp_path / ".anima" / "anima.db"
+
+    def test_prefers_env_var(self, rep, tmp_path, monkeypatch):
+        target = tmp_path / "custom.db"
+        target.touch()
+        monkeypatch.setenv("ANIMA_DB", str(target))
+        assert rep._default_db() == target
+
+    def test_skips_candidates_that_do_not_exist(self, rep, tmp_path, monkeypatch):
+        monkeypatch.setenv("ANIMA_DB", str(tmp_path / "absent.db"))
+        monkeypatch.setattr(rep.Path, "home", staticmethod(lambda: tmp_path))
+        (tmp_path / "anima-mcp").mkdir()
+        fallback = tmp_path / "anima-mcp" / "anima.db"
+        fallback.touch()
+        assert rep._default_db() == fallback
+
+    def test_returns_none_when_nothing_exists(self, rep, tmp_path, monkeypatch):
+        monkeypatch.delenv("ANIMA_DB", raising=False)
+        monkeypatch.setattr(rep.Path, "home", staticmethod(lambda: tmp_path))
+        assert rep._default_db() is None
+
+    def test_exits_nonzero_when_no_database(self, rep, tmp_path, monkeypatch, capsys):
+        monkeypatch.delenv("ANIMA_DB", raising=False)
+        monkeypatch.setattr(rep.Path, "home", staticmethod(lambda: tmp_path))
+        monkeypatch.setattr("sys.argv", ["x"])
+        assert rep.main() == 1
+        assert "no anima.db found" in capsys.readouterr().err
