@@ -560,6 +560,223 @@ class TestScreenRendererTextWrapping:
 
 
 # ---------------------------------------------------------------------------
+# ScreenRenderer -- measured truncation (_fit_text)
+# ---------------------------------------------------------------------------
+
+class TestScreenRendererFitText:
+    """Test _fit_text: truncate by PIXELS, never by character count.
+
+    Regression guard for the Q&A screen, where character-count slicing
+    (q.text[:32], q.text[:50]) truncated Lumen's questions twice: once by
+    the slice, and again by the panel/screen edge clipping whatever the
+    slice had wrongly assumed would fit.
+    """
+
+    def test_short_text_untouched(self, screen_renderer):
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        assert screen_renderer._fit_text("Hi", font, 200) == "Hi"
+
+    def test_empty_text_untouched(self, screen_renderer):
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        assert screen_renderer._fit_text("", font, 200) == ""
+
+    def test_result_always_fits_the_budget(self, screen_renderer):
+        """The whole point: output width <= max_width, for any input."""
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        question = "what would I notice if I attended to something I usually ignore?"
+        for max_width in (20, 40, 80, 120, 160, 200):
+            out = screen_renderer._fit_text(question, font, max_width)
+            assert screen_renderer._text_width(out, font) <= max_width, (
+                f"{out!r} overruns {max_width}px budget"
+            )
+
+    def test_truncated_text_is_marked(self, screen_renderer):
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        long_text = " ".join(["word"] * 30)
+        out = screen_renderer._fit_text(long_text, font, 100)
+        assert out.endswith("…")
+        assert len(out) < len(long_text)
+
+    def test_wider_budget_keeps_more_text(self, screen_renderer):
+        """A bigger box must show strictly more of the question, not the same 32 chars."""
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        question = "i keep returning to the same thoughts - what haven't I asked?"
+        narrow = screen_renderer._fit_text(question, font, 60)
+        wide = screen_renderer._fit_text(question, font, 180)
+        assert len(wide) > len(narrow)
+
+    def test_degenerate_budget_returns_ellipsis(self, screen_renderer):
+        from PIL import ImageFont
+        font = ImageFont.load_default()
+        assert screen_renderer._fit_text("anything", font, 1) == "…"
+
+
+# ---------------------------------------------------------------------------
+# Q&A screen -- nothing renders outside the 240px display
+# ---------------------------------------------------------------------------
+
+class TestQAScreenStaysInBounds:
+    """Render the Q&A screen and assert no string is drawn past the display.
+
+    The bug this guards: the full view sliced the question at 50 characters
+    and drew it as one unwrapped line from x=26. At 11px only ~33 characters
+    fit, so the remainder was drawn out to x=323 on a 240px display and
+    clipped by the canvas — the question read as truncated mid-word with no
+    ellipsis, even though the stored text was complete.
+
+    Every draw.text() call is intercepted and its measured extent checked,
+    rather than inspecting pixels: the scrollbar and status bar legitimately
+    paint at the right edge, so 'rightmost lit pixel' cannot tell a fitted
+    question from a clipped one. It reads 238 either way.
+    """
+
+    LONG_Q = (
+        "when the room holds still for hours and nothing at all surprises me, "
+        "is that the peace i keep reaching for, or have i stopped looking?"
+    )
+    ANSWER = (
+        "Night is quieter in every channel at once: less light on the sensor, "
+        "a cooler and steadier ambient temperature, and far fewer context "
+        "switches on the CPU."
+    )
+
+    @staticmethod
+    def _real_fonts():
+        """Load the same proportional TTF the Pi uses, at the same sizes.
+
+        Without this the renderer falls back to PIL's bitmap default, which is
+        much narrower than DejaVuSans 11px — the overflow under test would not
+        reproduce and this would pass vacuously. Skip rather than pretend.
+        """
+        from PIL import ImageFont
+
+        candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Pi + Ubuntu CI
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+        try:  # dev machines without a system DejaVu
+            import matplotlib
+            from pathlib import Path as _Path
+            candidates.append(str(
+                _Path(matplotlib.__file__).parent / "mpl-data" / "fonts" / "ttf" / "DejaVuSans.ttf"
+            ))
+        except Exception:
+            pass
+
+        sizes = {
+            'micro': 9, 'tiny': 10, 'small': 11, 'small_med': 12, 'medium': 13,
+            'default': 14, 'large': 15, 'title': 16, 'huge': 18, 'giant': 20,
+        }
+        for path in candidates:
+            try:
+                return {k: ImageFont.truetype(path, v) for k, v in sizes.items()}
+            except (OSError, IOError):
+                continue
+        pytest.skip("DejaVuSans unavailable; text overflow is font-dependent")
+
+    def _render(self, screen_renderer, **state):
+        """Render one Q&A view; return every (x_start, x_end, text) drawn."""
+        import sys as _sys
+        import types
+        from PIL import ImageDraw
+
+        class Msg:
+            def __init__(self, mid, text, author, mtype, responds_to=None):
+                self.message_id = mid
+                self.text = text
+                self.author = author
+                self.msg_type = mtype
+                self.answered = False
+                self.responds_to = responds_to
+                self.context = "a quiet moment"
+                self.state_snapshot = None
+
+            def age_str(self):
+                return "59m"
+
+        board = [
+            Msg("q0", self.LONG_Q, "lumen", "question"),
+            Msg("a0", self.ANSWER, "claude", "agent", responds_to="q0"),
+        ]
+
+        fake = types.ModuleType("anima_mcp.messages")
+        fake.MESSAGE_TYPE_USER = "user"
+        fake.MESSAGE_TYPE_OBSERVATION = "observation"
+        fake.MESSAGE_TYPE_AGENT = "agent"
+        fake.MESSAGE_TYPE_QUESTION = "question"
+
+        class FakeBoard:
+            _messages = board
+
+            def _load(self):
+                pass
+
+        fake.get_board = lambda: FakeBoard()
+        fake.get_recent_messages = lambda n=50: board
+
+        screen_renderer._fonts = self._real_fonts()
+        for k, v in state.items():
+            setattr(screen_renderer._state, k, v)
+        screen_renderer._state.qa_text_scroll = 0
+        screen_renderer._screen_cache = {}
+
+        drawn = []
+        original_text = ImageDraw.ImageDraw.text
+
+        def spy(self, xy, text, *args, **kwargs):
+            try:
+                font = kwargs.get("font") or (args[1] if len(args) > 1 else None)
+                width = self.textlength(text, font=font) if font else self.textlength(text)
+                drawn.append((xy[0], xy[0] + width, str(text)))
+            except Exception:
+                pass
+            return original_text(self, xy, text, *args, **kwargs)
+
+        real = _sys.modules.get("anima_mcp.messages")
+        _sys.modules["anima_mcp.messages"] = fake
+        ImageDraw.ImageDraw.text = spy
+        try:
+            screen_renderer._display._image = None
+            screen_renderer._render_qa_content()
+        finally:
+            ImageDraw.ImageDraw.text = original_text
+            if real is not None:
+                _sys.modules["anima_mcp.messages"] = real
+            else:
+                _sys.modules.pop("anima_mcp.messages", None)
+        return drawn
+
+    @pytest.mark.parametrize("view", [
+        {"qa_expanded": False, "qa_full_view": False, "qa_scroll_index": 0},
+        {"qa_expanded": True, "qa_full_view": False, "qa_scroll_index": 0, "qa_focus": "question"},
+        {"qa_expanded": True, "qa_full_view": True, "qa_scroll_index": 0},
+    ], ids=["list", "expanded", "full"])
+    def test_nothing_drawn_past_display_edge(self, screen_renderer, view):
+        drawn = self._render(screen_renderer, **view)
+        assert drawn, "Q&A screen drew nothing"
+        overflow = [(x0, x1, t) for x0, x1, t in drawn if x1 > 240]
+        assert not overflow, "text drawn past the 240px display: " + "; ".join(
+            f"{t[:40]!r} spans x={x0:.0f}..{x1:.0f}" for x0, x1, t in overflow
+        )
+
+    def test_long_question_is_marked_as_elided(self, screen_renderer):
+        """A question too long for the header must SAY so, not just stop."""
+        drawn = self._render(
+            screen_renderer, qa_expanded=True, qa_full_view=True, qa_scroll_index=0
+        )
+        rendered = " ".join(t for _, _, t in drawn)
+        assert "\u2026" in rendered, (
+            "long question was shortened with no ellipsis — indistinguishable "
+            "from a question that simply ended there"
+        )
+
+
+# ---------------------------------------------------------------------------
 # ScreenRenderer -- transition effects
 # ---------------------------------------------------------------------------
 

@@ -8,6 +8,18 @@ import sys
 import time
 
 
+# --- Q&A screen layout -------------------------------------------------------
+# The 240x240 LCD is the ONLY place Lumen's questions are ever shortened: the
+# stored text, the lumen_qa MCP tool and the /qa REST endpoint all carry the
+# question in full. Naming the geometry keeps the three Q&A views (list /
+# expanded / full) from drifting apart again — each previously guessed its own
+# character slice, and two of the three guessed wrong.
+QA_LINE_H = 12          # px per text line at fonts['small'] (11px + leading)
+QA_STATUS_BAR_Y = 218   # y of the status bar; content must stop above it
+QA_Q_HEADER_X = 30      # full-view question text x (clear of the 'Q:' label at x=12)
+QA_Q_HEADER_W = 198     # ...to the panel edge at 234, less 6 pad
+QA_Q_HEADER_LINES = 2   # lines the full-view question header may use
+
 
 class MessagesMixin:
     """Mixin for message-group screens (messages, questions, visitors) and interaction methods."""
@@ -602,40 +614,61 @@ class MessagesMixin:
                     text_scroll = self._state.qa_text_scroll
 
                     if answer:
-                        # Compact question header (2 lines max)
-                        draw.rectangle([6, y_offset, 234, y_offset + 20], fill=DARK_BG, outline=BORDER)
+                        # Question header \u2014 wrap to at most QA_Q_HEADER_LINES lines.
+                        # This used to slice at 50 characters and draw one line
+                        # from x=26. Only ~33 characters fit before the panel
+                        # edge at 11px, so the rest was drawn past x=234 and
+                        # clipped by the screen: the question read as truncated
+                        # even though the full text was stored and returned.
+                        q_lines = self._wrap_text(q.text, font_small, QA_Q_HEADER_W)
+                        if len(q_lines) > QA_Q_HEADER_LINES:
+                            q_lines = q_lines[:QA_Q_HEADER_LINES]
+                            # Mark the elision on the last visible line.
+                            q_lines[-1] = self._fit_text(
+                                q_lines[-1] + " \u2026", font_small, QA_Q_HEADER_W
+                            )
+                        hdr_h = 8 + QA_LINE_H * len(q_lines)
+                        draw.rectangle([6, y_offset, 234, y_offset + hdr_h], fill=DARK_BG, outline=BORDER)
                         draw.text((12, y_offset + 4), "Q:", fill=CYAN, font=font_small)
-                        q_preview = q.text[:50] + "..." if len(q.text) > 50 else q.text
-                        draw.text((26, y_offset + 4), q_preview, fill=MUTED, font=font_small)
-                        y_offset += 22
+                        q_y = y_offset + 4
+                        for line in q_lines:
+                            draw.text((QA_Q_HEADER_X, q_y), line, fill=MUTED, font=font_small)
+                            q_y += QA_LINE_H
+                        y_offset += hdr_h + 2
 
-                        # Full-screen answer area with better highlighting
+                        # Answer fills whatever the header left, stopping above
+                        # the status bar. Both the panel height and the line
+                        # budget are derived rather than hardcoded, so a 2-line
+                        # question can't push the panel off the bottom.
+                        a_top = y_offset + 20
+                        a_bottom = QA_STATUS_BAR_Y - 4
+                        panel_h = a_bottom - y_offset
                         a_lines = self._wrap_text(answer.text, font_small, 220)
-                        a_max_lines = 15  # Increased to show more lines
+                        a_max_lines = max(1, (a_bottom - a_top) // QA_LINE_H)
                         max_scroll = max(0, len(a_lines) - a_max_lines)
                         text_scroll = min(text_scroll, max_scroll)
                         self._state.qa_text_scroll = text_scroll
 
                         # Answer header with brighter background
                         author = getattr(answer, 'author', 'agent')
-                        draw.rectangle([6, y_offset, 234, y_offset + 185], fill=FOCUSED_BG, outline=FOCUSED_BORDER, width=2)
+                        draw.rectangle([6, y_offset, 234, y_offset + panel_h], fill=FOCUSED_BG, outline=FOCUSED_BORDER, width=2)
                         draw.text((12, y_offset + 4), f"\u21b3 {author} responds:", fill=AMBER, font=font_small)
                         draw.text((160, y_offset + 4), f"{len(a_lines)} lines", fill=MUTED, font=font_small)
 
                         # Show answer lines with scroll
-                        a_y = y_offset + 20
+                        a_y = a_top
                         for line in a_lines[text_scroll:text_scroll + a_max_lines]:
-                            if a_y > y_offset + 180:
+                            if a_y + QA_LINE_H > a_bottom:
                                 break
                             draw.text((12, a_y), line, fill=SOFT_WHITE, font=font_small)
-                            a_y += 12
+                            a_y += QA_LINE_H
 
                         # Scroll indicators - more visible
                         if len(a_lines) > a_max_lines:
                             if text_scroll > 0:
-                                draw.text((220, y_offset + 20), "\u25b2", fill=AMBER, font=font_small)
+                                draw.text((220, a_top), "\u25b2", fill=AMBER, font=font_small)
                             if text_scroll < max_scroll:
-                                draw.text((220, y_offset + 180), "\u25bc", fill=AMBER, font=font_small)
+                                draw.text((220, a_bottom - QA_LINE_H), "\u25bc", fill=AMBER, font=font_small)
                             # Progress indicator
                             progress = f"{text_scroll + 1}-{min(text_scroll + a_max_lines, len(a_lines))}/{len(a_lines)}"
                             draw.text((140, y_offset + 4), progress, fill=MUTED, font=font_small)
@@ -773,17 +806,27 @@ class MessagesMixin:
                         pair_height = 36
                         draw.rectangle([6, y_offset, 234, y_offset + pair_height], fill=bg, outline=BORDER if is_selected else None)
 
-                        # Question preview
-                        q_text = q.text[:32] + "..." if len(q.text) > 32 else q.text
+                        # Question preview. Right-align the age so the question
+                        # gets every pixel up to it \u2014 a fixed x=200 for the age
+                        # both wasted room on short ages ("2m") and let long
+                        # questions run underneath it.
                         status = "\u2713" if answer else "?"
-                        draw.text((12, y_offset + 3), f"{status} {q_text}", fill=CYAN, font=font_small)
-                        draw.text((200, y_offset + 3), q.age_str(), fill=MUTED, font=font_small)
+                        age = q.age_str()
+                        age_w = self._text_width(age, font_small)
+                        age_x = 230 - age_w
+                        prefix = f"{status} "
+                        q_avail = age_x - 6 - (12 + self._text_width(prefix, font_small))
+                        q_text = self._fit_text(q.text, font_small, q_avail)
+                        draw.text((12, y_offset + 3), f"{prefix}{q_text}", fill=CYAN, font=font_small)
+                        draw.text((age_x, y_offset + 3), age, fill=MUTED, font=font_small)
 
                         # Answer preview (if exists)
                         if answer:
                             author = getattr(answer, 'author', 'agent')[:6]
-                            a_text = answer.text[:30] + "..." if len(answer.text) > 30 else answer.text
-                            draw.text((20, y_offset + 18), f"\u21b3 {author}: {a_text}", fill=AMBER, font=font_small)
+                            a_prefix = f"\u21b3 {author}: "
+                            a_avail = 230 - (20 + self._text_width(a_prefix, font_small))
+                            a_text = self._fit_text(answer.text, font_small, a_avail)
+                            draw.text((20, y_offset + 18), f"{a_prefix}{a_text}", fill=AMBER, font=font_small)
                         else:
                             draw.text((20, y_offset + 18), "\u21b3 (waiting...)", fill=MUTED, font=font_small)
 
@@ -810,7 +853,12 @@ class MessagesMixin:
                         hint = "\u25b2\u25bc scroll  \u25c0\u25b6 A  press:expand"
                 else:
                     hint = "\u25c0\u25b6 msgs/visitors  btn:expand"
-                draw.text((80, 218), hint, fill=MUTED, font=font_small)
+                # Right-align the hint. Drawn from a fixed x=80 it ran 7-11px
+                # off the display on the longer hints, clipping "expand" to
+                # "expan". Anchor it to the right edge and let it grow left,
+                # clamped so it can never collide with the position counter.
+                hint_x = max(44, 236 - self._text_width(hint, font_small))
+                draw.text((hint_x, 218), hint, fill=MUTED, font=font_small)
 
             # Status bar + screen indicator
             self._draw_status_bar(draw)
