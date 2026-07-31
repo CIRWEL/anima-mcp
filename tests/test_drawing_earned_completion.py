@@ -362,3 +362,80 @@ class TestObserveDrawingMilestoneGating:
     def test_manual_snapshot_blocks_milestone(self, gs):
         self._call(gs, "manual_snapshot")
         assert self._milestone_memories(gs) == []
+
+
+# ============ settling_progress: the per-gate view of earned_field ============
+
+
+class TestSettlingProgress:
+    """The 2026-08-05 watch needs to know WHICH gate held earned_field back.
+
+    Also a regression test for the plumbing: the first version of the
+    diagnostics wiring passed `engine.state` (the drawing state actually lives
+    at `engine.intent.state`), raised AttributeError, and a bare
+    `except Exception: pass` swallowed it — so the field silently never
+    appeared and CI stayed green because nothing exercised the real object.
+    """
+
+    def _era_and_state(self):
+        from anima_mcp.display.eras.resonance import ResonanceEra
+        era = ResonanceEra()
+        return era, era.create_state()
+
+    def _canvas(self, marks=0):
+        canvas = CanvasState()
+        canvas.mark_count = marks
+        return canvas
+
+    def test_reports_each_gate(self):
+        era, era_state = self._era_and_state()
+        state = DrawingState()
+        state.fatigue = 0.7
+
+        p = era.settling_progress(state, self._canvas(marks=800), era_state)
+
+        assert p["available"] is True
+        assert p["marks"] == 800 and p["marks_ok"] is True
+        assert p["fatigue_ok"] is True
+        assert p["revisit_ok"] is False, "empty window cannot pass"
+        assert p["revisit_window_filled"] == 0
+        assert "revisit_ratio" in p and "settled_streak" in p
+
+    def test_distinguishes_which_gate_failed(self):
+        """The whole point: a blind None becomes a located failure."""
+        era, era_state = self._era_and_state()
+        state = DrawingState()
+        state.fatigue = 0.1  # below gate
+
+        p = era.settling_progress(state, self._canvas(marks=10), era_state)
+
+        assert p["marks_ok"] is False
+        assert p["fatigue_ok"] is False
+
+    def test_revisit_ratio_reflects_the_window(self):
+        era, era_state = self._era_and_state()
+        from anima_mcp.display.eras.resonance import REVISIT_WINDOW
+        era_state.revisit_window = [True] * 40 + [False] * 10
+        assert len(era_state.revisit_window) == REVISIT_WINDOW
+
+        p = era.settling_progress(DrawingState(), self._canvas(), era_state)
+
+        assert p["revisit_ratio"] == 0.8
+        assert p["revisit_window_filled"] == REVISIT_WINDOW
+
+    def test_is_read_only(self):
+        """Must not advance the streak — that is earned_completion's job."""
+        era, era_state = self._era_and_state()
+        era_state.revisit_window = [True] * 50
+        era_state.settled_streak = 2
+
+        era.settling_progress(DrawingState(), self._canvas(marks=800), era_state)
+
+        assert era_state.settled_streak == 2
+
+    def test_engine_exposes_the_state_at_intent_dot_state(self):
+        """Pin the attribute path the diagnostics wiring depends on."""
+        from anima_mcp.display.drawing_engine import DrawingIntent
+        intent = DrawingIntent()
+        assert hasattr(intent, "state"), "diagnostics reads engine.intent.state"
+        assert hasattr(intent, "era_state")
