@@ -141,6 +141,13 @@ class CanvasState:
 
     # Resonance memory field persistence (optional, list-of-lists when set)
     _resonance_field: object = None
+    # Settling counters that feed earned_completion. The field beside them was
+    # already persisted; these were not, so every restart reset revisit_window
+    # to empty and settled_streak to 0. earned_field needs 50 deposits to
+    # refill the window plus 5 consecutive settled checks, so a restart cadence
+    # faster than that made the earned path structurally unreachable — measured
+    # live 2026-07-30: 327 marks, revisit_window_filled 0/50.
+    _resonance_settling: object = None
 
     def draw_pixel(self, x: int, y: int, color: Tuple[int, int, int]):
         """Draw a pixel at position."""
@@ -195,6 +202,9 @@ class CanvasState:
                 self._resonance_field = field.tolist()
             except Exception:
                 self._resonance_field = None
+        # Settling is about THIS piece — a new canvas starts unsettled, even
+        # though the field carries a decayed ghost of the previous one.
+        self._resonance_settling = None
         # Clear pending era switch (will be applied by canvas_clear caller)
         self.pending_era_switch = None
         # Pause drawing for 5 seconds after manual clear so user sees empty canvas
@@ -295,6 +305,7 @@ class CanvasState:
                 "i_momentum": self.i_momentum,
                 "drawing_start_time": self.drawing_start_time,
                 "resonance_field": self._resonance_field,
+                "resonance_settling": self._resonance_settling,
             }
             atomic_json_write(_get_canvas_path(), data)
         except Exception as e:
@@ -545,6 +556,9 @@ class CanvasState:
             rf = data.get("resonance_field")
             if rf is not None and isinstance(rf, list):
                 self._resonance_field = rf
+            rs = data.get("resonance_settling")
+            if isinstance(rs, dict):
+                self._resonance_settling = rs
         except Exception:
             pass
 
@@ -990,6 +1004,19 @@ class DrawingEngine:
                 except Exception:
                     pass
 
+            # Restore the settling counters that ride with the field.
+            settling = self.canvas._resonance_settling
+            if isinstance(settling, dict):
+                try:
+                    window = settling.get("revisit_window")
+                    if isinstance(window, list):
+                        self.intent.era_state.revisit_window = [bool(v) for v in window]
+                    streak = settling.get("settled_streak")
+                    if isinstance(streak, int) and streak >= 0:
+                        self.intent.era_state.settled_streak = streak
+                except Exception:
+                    pass
+
         era_state = self.intent.era_state
 
         # Draw frequency: balanced flow -- not constipated, not diarrhea
@@ -1064,6 +1091,10 @@ class DrawingEngine:
         if hasattr(era_state, 'field'):
             try:
                 self.canvas._resonance_field = era_state.field.tolist()
+                self.canvas._resonance_settling = {
+                    "revisit_window": list(getattr(era_state, "revisit_window", [])),
+                    "settled_streak": int(getattr(era_state, "settled_streak", 0)),
+                }
             except Exception:
                 pass
 
