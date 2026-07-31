@@ -80,27 +80,50 @@ Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default
 
 **Governance health** checks broker's shared memory governance data (broker is sole UNITARES caller, default every 180s via `ANIMA_GOVERNANCE_INTERVAL_SECONDS`). Stale threshold: 210s.
 
-### Learning Systems (run in broker only)
+### Learning Systems — which process runs them
 
-These modules run in `stable_creature.py`, not in `server.py`:
+**This table said "run in broker only". That was wrong**, and agents acted on
+it. Verified 2026-07-31 by grepping call sites and checking live state:
 
-| Module | Purpose |
-|--------|---------|
-| `adaptive_prediction.py` | Temporal pattern learning |
-| `memory_retrieval.py` | Context-aware memory search |
-| `agency.py` | TD-learning action selection |
-| `preferences.py` | Preference evolution |
-| `self_model.py` | Self-beliefs (sensitivity, recovery, correlations) |
-| `activity_state.py` | Active/drowsy/resting cycles |
-| `learning.py` | Calibration adaptation |
+| Module | Purpose | Actually runs in |
+|--------|---------|------------------|
+| `memory_retrieval.py` | Context-aware memory search | broker only ✅ |
+| `learning.py` | Calibration adaptation | **server only** — not imported by the broker at all |
+| `agency.py` | TD-learning action selection | **BOTH — two independent learners, see #123** |
+| `activity_state.py` | Active/drowsy/resting cycles | both |
+| `preferences.py` | Preference evolution | both |
+| `self_model.py` | Self-beliefs | both (also via `loop_phases.py`) |
+| `adaptive_prediction.py` | Temporal pattern learning | broker writes; server reads stats |
 
-These modules also run in `server.py` (not broker-only):
+**`agency.py` is the one that bites.** The broker and the server each run a
+full TD loop and each select actions. They persist to *different databases*,
+because `stable_creature.py:440` calls `get_action_selector()` with no
+argument and falls through to a cwd-relative `"anima.db"` default. The
+broker's values — the ones that reach SHM and drive behaviour — therefore
+live in `~/anima-mcp/anima.db`, which **no backup covers**. See #123 before
+touching agency, and do not "just add the db_path": it changes Lumen's
+learned action values.
+
+**Rule this implies:** any `get_*` singleton that takes a `db_path` must be
+given one explicitly. `server.py:152` does it right
+(`get_learner(str(_ctx.store.db_path))`); `stable_creature.py:440` does not.
+A bare default silently binds persistence to the process's working directory.
+
+Server-side only:
 
 | Module | Purpose |
 |--------|---------|
 | `growth/` | Preferences, goals, memories, autobiography (package with mixins) |
 | `self_reflection.py` | Insight discovery from preferences, beliefs, drawing patterns |
 | `knowledge.py` | Q&A-derived insights from answered questions (rule-based) |
+
+Growth persists to `~/.anima/anima.db`. Note that `apply_insight()` in
+`knowledge.py` writes Q&A learning into growth *preference descriptions* — so
+an answer given to Lumen becomes durable self-knowledge. Before 2026-07-30 it
+stored a bare `text[:50]`, and because `_update_preference` never rewrote
+`description`, three froze mid-word and fed malformed questions back into the
+Q&A loop for days (#121). Descriptions refresh on change now, but remember the
+shape: **anything an agent says to Lumen can come back as a stated belief.**
 
 ### Neural System
 
