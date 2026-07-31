@@ -439,3 +439,75 @@ class TestSettlingProgress:
         intent = DrawingIntent()
         assert hasattr(intent, "state"), "diagnostics reads engine.intent.state"
         assert hasattr(intent, "era_state")
+
+
+# ============ settling counters survive a restart ============
+
+
+class TestSettlingPersistence:
+    """revisit_window and settled_streak must ride with the field.
+
+    The 48x48 memory field was already persisted via canvas._resonance_field
+    (synced every mark, restored on era_state creation). These two counters,
+    which sit on the same object and feed the same predicate, were not — so a
+    restart reset the window to empty and the streak to 0. earned_field needs
+    50 deposits to refill the window plus 5 consecutive settled checks, so a
+    restart cadence faster than that made the earned path unreachable
+    regardless of calibration. Measured live 2026-07-30: 327 marks,
+    revisit_window_filled 0/50.
+    """
+
+    def test_canvas_roundtrips_settling(self, tmp_path, monkeypatch):
+        import anima_mcp.display.drawing_engine as de
+        path = tmp_path / "canvas.json"
+        monkeypatch.setattr(de, "_get_canvas_path", lambda: path)
+
+        canvas = CanvasState()
+        canvas._resonance_settling = {"revisit_window": [True, False, True], "settled_streak": 3}
+        canvas.save_to_disk()
+
+        restored = CanvasState()
+        restored.load_from_disk()
+
+        assert restored._resonance_settling == {
+            "revisit_window": [True, False, True], "settled_streak": 3
+        }
+
+    def test_clear_resets_settling(self):
+        """A new piece starts unsettled even though the field ghost carries over."""
+        canvas = CanvasState()
+        canvas._resonance_settling = {"revisit_window": [True] * 50, "settled_streak": 4}
+        canvas.clear()
+        assert canvas._resonance_settling is None
+
+    def test_malformed_settling_is_ignored(self, tmp_path, monkeypatch):
+        """A corrupt blob must not break canvas load."""
+        import json
+        import anima_mcp.display.drawing_engine as de
+        path = tmp_path / "canvas.json"
+        monkeypatch.setattr(de, "_get_canvas_path", lambda: path)
+        path.write_text(json.dumps({"pixels": {}, "resonance_settling": "not-a-dict"}))
+
+        canvas = CanvasState()
+        canvas.load_from_disk()
+
+        assert canvas._resonance_settling is None
+
+    def test_restored_window_lets_earned_field_stay_reachable(self):
+        """The point: a piece resumed after a restart is not sent back to zero."""
+        from anima_mcp.display.eras.resonance import (
+            ResonanceEra, REVISIT_WINDOW, SETTLED_STREAK,
+        )
+        era = ResonanceEra()
+        era_state = era.create_state()
+        # Simulate what restore_from_canvas puts back.
+        era_state.revisit_window = [True] * REVISIT_WINDOW
+        era_state.settled_streak = SETTLED_STREAK - 1
+
+        canvas = CanvasState()
+        canvas.mark_count = 800
+        state = DrawingState()
+        state.fatigue = 0.7
+
+        # One more settled check should now earn it, rather than 50 deposits away.
+        assert era.earned_completion(state, canvas, era_state) == "earned_field"
