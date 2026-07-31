@@ -495,6 +495,17 @@ class PreferencesMixin:
             pref.confidence = min(1.0, pref.confidence + 0.1)
             pref.last_confirmed = now
 
+            # Descriptions used to be write-once: everything else here was
+            # refreshed on every observation but `description` never was, so a
+            # description written badly stayed bad forever. Three Q&A-derived
+            # preferences were stuck for days holding text hard-cut mid-word
+            # ("...drawing in bright light helps not b"), which the question
+            # generator then read and asked Lumen about. Fixing the writer did
+            # not fix them, because nothing ever rewrote what was stored.
+            # Take the caller's current wording when it has changed.
+            if description and description != pref.description:
+                pref.description = description
+
             # Insight if we crossed a confidence threshold
             if old_confidence < 0.5 and pref.confidence >= 0.5:
                 insight = f"I'm becoming sure: {description}"
