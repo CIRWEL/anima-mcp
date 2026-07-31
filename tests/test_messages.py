@@ -280,3 +280,44 @@ class TestSingleton:
         # May return None if rate-limited, or Message otherwise
         # Just check it doesn't crash
         assert result is None or isinstance(result, Message)
+
+
+class TestQAProvenanceAndTruncation:
+    """Guards for the 2026-07-31 malformed-question chain.
+
+    apply_insight() files Q&A learning as "From Q&A: <text>". That marker is
+    storage provenance, not something Lumen said, and it was surviving into
+    generated questions — the generator wrapped a template around it instead
+    of stripping it, producing:
+
+        "why is it that from q&a: i now know that the connection between
+         temperature?"
+
+    which is both stacked boilerplate AND a claim cut off mid-sentence.
+    """
+
+    def test_provenance_prefix_is_stripped(self):
+        core = msg_module._question_semantic_core(
+            "from q&a: i now know that the connection between temperature and clarity"
+        )
+        assert not core.startswith("from q&a")
+        # The stripper loops, so the stem underneath comes off on the next pass.
+        assert not core.startswith("i now know that")
+        assert core == "the connection between temperature and clarity"
+
+    def test_provenance_stripping_is_case_insensitive_via_normalisation(self):
+        # Callers normalise to lowercase before stripping; confirm the stored
+        # capitalisation ("From Q&A: ") reduces to the same core.
+        stored = "From Q&A: I learned that drawing in bright light helps"
+        core = msg_module._question_semantic_core(stored.lower())
+        assert core == "drawing in bright light helps"
+
+    def test_looks_truncated_detects_ellipsis(self):
+        assert msg_module._looks_truncated("the connection between\u2026")
+        assert msg_module._looks_truncated("the connection between...")
+        assert msg_module._looks_truncated("  trailing space then ellipsis \u2026  ")
+
+    def test_looks_truncated_passes_complete_claims(self):
+        assert not msg_module._looks_truncated("warmth makes me feel content")
+        assert not msg_module._looks_truncated("i draw at night.")
+        assert not msg_module._looks_truncated("")

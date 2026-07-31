@@ -174,6 +174,7 @@ def generate_learned_question() -> Optional[str]:
     """
     import random
     from .messages import (
+        _looks_truncated,
         _question_semantic_core,
         get_recent_questions,
         questions_similar,
@@ -202,6 +203,12 @@ def generate_learned_question() -> Optional[str]:
             # Strip self_reflection boilerplate ("i now know that …", "i learned that …")
             # so wrappers attach to the semantic core, not stacked templates.
             core = _question_semantic_core(insight.description.lower())
+            # A claim that was cut off is not something Lumen can ask about:
+            # "is it always true that the connection between temperature?"
+            # interrogates a statement that was never finished. Skip rather
+            # than wrap it — see _looks_truncated for what this prevents.
+            if _looks_truncated(core):
+                continue
             tendency_question = _format_tendency_question(core)
             if tendency_question:
                 q = tendency_question

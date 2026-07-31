@@ -41,7 +41,29 @@ _QUESTION_BOILERPLATE_PREFIXES = (
     "i now know that ",
     "i learned that ",
     "i know this about myself: ",
+    # Storage provenance, not something Lumen said. apply_insight() files Q&A
+    # learning as "From Q&A: <text>"; without this the marker survived into the
+    # question and the generator stacked a wrapper on top of it, producing
+    # "why is it that from q&a: i now know that ..." (observed live 2026-07-31).
+    # The stripper loops, so peeling this exposes the "i now know that " stem
+    # underneath and that gets peeled on the next pass.
+    "from q&a: ",
 )
+
+
+def _looks_truncated(text: str) -> bool:
+    """True when a claim was cut off rather than finished.
+
+    A description that stops mid-thought cannot be meaningfully interrogated —
+    "is it always true that the connection between temperature?" asks about a
+    claim that was never stated. Answering agents notice: one replied "the
+    claim in this question arrives truncated, so it is safer to treat it as a
+    tentative pattern", and that reply was then extracted back into Lumen's
+    knowledge base as a belief. Screening these out at the source stops a
+    string-slicing artifact from becoming self-knowledge.
+    """
+    stripped = (text or "").strip()
+    return stripped.endswith("…") or stripped.endswith("...")
 
 
 def _question_semantic_core(normalized: str) -> str:

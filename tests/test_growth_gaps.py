@@ -500,3 +500,58 @@ class TestWellnessLearningBand:
         band = gs.wellness_learning_band()
         assert band["sigma"] >= WELLNESS_MIN_SIGMA
         assert band["good_above"] - band["poor_below"] >= WELLNESS_MIN_SIGMA
+
+
+class TestPreferenceDescriptionIsRefreshed:
+    """A preference description must not be write-once.
+
+    Everything else in _update_preference was refreshed on every observation
+    but `description` never was. Three Q&A-derived preferences sat for days
+    holding text hard-cut mid-word ("...drawing in bright light helps not b"),
+    and fixing the code that WROTE those descriptions did not repair them,
+    because nothing ever rewrote what was already stored.
+    """
+
+    def test_changed_description_is_adopted(self, growth):
+        from anima_mcp.growth import PreferenceCategory
+
+        growth._update_preference(
+            "insight_light", PreferenceCategory.ENVIRONMENT,
+            "From Q&A: I learned that drawing in bright light helps not b", 0.8,
+        )
+        growth._update_preference(
+            "insight_light", PreferenceCategory.ENVIRONMENT,
+            "From Q&A: I learned that drawing in bright light helps\u2026", 0.8,
+        )
+        assert growth._preferences["insight_light"].description.endswith("helps\u2026")
+
+    def test_refresh_preserves_accumulated_learning(self, growth):
+        """Only the wording changes — confidence and counts must survive."""
+        from anima_mcp.growth import PreferenceCategory
+
+        for _ in range(6):
+            growth._update_preference(
+                "insight_temp", PreferenceCategory.ENVIRONMENT, "From Q&A: old text", 0.8,
+            )
+        before = growth._preferences["insight_temp"]
+        conf, obs, first = before.confidence, before.observation_count, before.first_noticed
+
+        growth._update_preference(
+            "insight_temp", PreferenceCategory.ENVIRONMENT, "From Q&A: new text\u2026", 0.8,
+        )
+        after = growth._preferences["insight_temp"]
+        assert after.description == "From Q&A: new text\u2026"
+        assert after.observation_count == obs + 1
+        assert after.confidence >= conf
+        assert after.first_noticed == first
+
+    def test_unchanged_description_is_left_alone(self, growth):
+        from anima_mcp.growth import PreferenceCategory
+
+        growth._update_preference(
+            "warm_temp", PreferenceCategory.ENVIRONMENT, "Warmth makes me feel content", 0.8,
+        )
+        growth._update_preference(
+            "warm_temp", PreferenceCategory.ENVIRONMENT, "Warmth makes me feel content", 0.8,
+        )
+        assert growth._preferences["warm_temp"].description == "Warmth makes me feel content"
