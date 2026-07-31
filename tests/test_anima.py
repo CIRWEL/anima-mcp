@@ -217,3 +217,103 @@ class TestNeuralContribution:
 
         # With corrected math, presence should be moderate, not 98%+
         assert 0.4 < presence < 0.95, f"presence={presence} - neural contribution may be wrong"
+
+
+# ==================== per-channel sensor liveness ====================
+
+class TestChannelLiveness:
+    """A sensor that is present but frozen is not informing anything.
+
+    The BMP280 has returned 682.5015433175248 byte-identical since Lumen woke
+    from the July blackout, and nothing in the stack could see it: every other
+    freshness gate reads the envelope timestamp, which stays current while an
+    individual channel is dead for days. sensor_coverage sat at exactly 1.0 for
+    30 days with sd 0.00000, and missing_sensors at 0 — so 35% of the weight
+    across clarity (0.15) and stability (0.20) was a constant.
+    """
+
+    def setup_method(self):
+        from anima_mcp.anima import _reset_channel_liveness
+        _reset_channel_liveness()
+
+    def _readings(self, now, i=0, **kw):
+        """Non-target channels jitter, so only the channel under test can freeze."""
+        base = dict(
+            cpu_temp_c=55.0 + i * 0.01,
+            ambient_temp_c=28.0 + i * 0.003,
+            humidity_pct=38.0 + i * 0.01,
+            light_lux=12.0 + i * 0.05,
+            pressure_hpa=830.0 + i * 0.02,
+        )
+        base.update(kw)
+        return SensorReadings(timestamp=now, **base)
+
+    def _repeat(self, now, times, **kw):
+        from anima_mcp.anima import _frozen_channel_count
+        n = 0
+        for i in range(times):
+            n = _frozen_channel_count(self._readings(now, i=i, **kw))
+        return n
+
+    def test_frozen_channel_is_detected_after_threshold(self, now):
+        from anima_mcp.anima import _FROZEN_REPEAT_THRESHOLD as T
+        # T calls leave the repeat counter at T-1 — one short of the gate.
+        assert self._repeat(now, T, pressure_hpa=682.5015433175248) == 0
+        assert self._repeat(now, 1, pressure_hpa=682.5015433175248) == 1
+
+    def test_a_calm_room_is_not_a_dead_sensor(self, now):
+        """The false positive that would matter: low movement is still movement."""
+        from anima_mcp.anima import _frozen_channel_count, _FROZEN_REPEAT_THRESHOLD as T
+        worst = 0
+        for i in range(T + 20):
+            worst = max(worst, _frozen_channel_count(SensorReadings(
+                timestamp=now,
+                cpu_temp_c=55.0 + (i % 3) * 0.001,
+                ambient_temp_c=28.0 + (i % 5) * 0.001,
+                humidity_pct=38.0 + (i % 7) * 0.001,
+                light_lux=12.0 + (i % 2) * 0.001,
+                pressure_hpa=830.0 + (i % 4) * 0.001,
+            )))
+        assert worst == 0
+
+    def test_recovery_when_the_channel_moves_again(self, now):
+        from anima_mcp.anima import _frozen_channel_count, _FROZEN_REPEAT_THRESHOLD as T
+        self._repeat(now, T + 1, pressure_hpa=682.5)
+        assert _frozen_channel_count(self._readings(now, i=999, pressure_hpa=682.5)) == 1
+        assert _frozen_channel_count(self._readings(now, i=1000, pressure_hpa=831.2)) == 0
+
+    def test_absent_channel_is_not_also_counted_frozen(self, now):
+        """missing and frozen must not double-count the same channel."""
+        from anima_mcp.anima import _FROZEN_REPEAT_THRESHOLD as T
+        assert self._repeat(now, T + 2, pressure_hpa=None) == 0
+
+    def test_frozen_sensor_lowers_stability(self, now, default_calibration):
+        """The point: a dead sense should register as instability."""
+        from anima_mcp.anima import _sense_stability, _FROZEN_REPEAT_THRESHOLD as T
+        healthy = _sense_stability(self._readings(now, i=0), default_calibration)
+        for i in range(T + 2):
+            _sense_stability(self._readings(now, i=i, pressure_hpa=682.5), default_calibration)
+        degraded = _sense_stability(
+            self._readings(now, i=T + 3, pressure_hpa=682.5), default_calibration
+        )
+        assert degraded < healthy, "a frozen channel must cost stability"
+
+    def test_frozen_sensor_lowers_clarity_coverage(self, now, default_calibration):
+        from anima_mcp.anima import _sense_clarity, _FROZEN_REPEAT_THRESHOLD as T
+        healthy = _sense_clarity(self._readings(now, i=0), default_calibration)
+        for i in range(T + 2):
+            _sense_clarity(self._readings(now, i=i, pressure_hpa=682.5), default_calibration)
+        degraded = _sense_clarity(
+            self._readings(now, i=T + 3, pressure_hpa=682.5), default_calibration
+        )
+        assert degraded < healthy, "a frozen channel must cost coverage"
+
+    def test_all_channels_absent_stays_in_range(self, now, default_calibration):
+        """missing + frozen must never exceed the channel count."""
+        from anima_mcp.anima import _sense_stability
+        s = _sense_stability(
+            SensorReadings(timestamp=now, cpu_temp_c=None, ambient_temp_c=None,
+                           humidity_pct=None, light_lux=None, pressure_hpa=None),
+            default_calibration,
+        )
+        assert 0.0 <= s <= 1.0

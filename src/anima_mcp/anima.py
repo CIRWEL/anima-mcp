@@ -385,6 +385,51 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration, *, salience_
     return round(sum(c * w for c, w in zip(components, weights)) / total_weight, 3)
 
 
+# Per-channel liveness. A channel is "frozen" when it has returned the exact
+# same float on every sample for this many consecutive readings. Deliberately
+# generous: real sensors jitter in their low bits constantly, so byte-identical
+# repetition over minutes means the reader is stuck, not that the world is calm.
+# The BMP280 has repeated one value for over a week.
+_FROZEN_REPEAT_THRESHOLD = 60
+_CHANNEL_NAMES = ("cpu_temp_c", "ambient_temp_c", "humidity_pct", "light_lux", "pressure_hpa")
+_last_channel_value: Dict[str, float] = {}
+_channel_repeat_count: Dict[str, int] = {}
+
+
+def _frozen_channel_count(r: SensorReadings) -> int:
+    """How many present channels have stopped changing at all.
+
+    Counts byte-identical repetition, not low variance. A quiet room still
+    moves the low bits of a real ADC; a channel that returns a bit-for-bit
+    identical float 60 times running is not reading the world.
+
+    This is the only per-channel staleness check in the stack — every other
+    freshness gate operates on the envelope timestamp, which stays current
+    even when an individual sensor has been dead for days.
+    """
+    frozen = 0
+    for name in _CHANNEL_NAMES:
+        value = getattr(r, name, None)
+        if value is None:
+            _channel_repeat_count[name] = 0
+            _last_channel_value.pop(name, None)
+            continue
+        if _last_channel_value.get(name) == value:
+            _channel_repeat_count[name] = _channel_repeat_count.get(name, 0) + 1
+        else:
+            _last_channel_value[name] = value
+            _channel_repeat_count[name] = 0
+        if _channel_repeat_count[name] >= _FROZEN_REPEAT_THRESHOLD:
+            frozen += 1
+    return frozen
+
+
+def _reset_channel_liveness() -> None:
+    """Clear the liveness tracker (tests, and any deliberate re-baseline)."""
+    _last_channel_value.clear()
+    _channel_repeat_count.clear()
+
+
 def _sense_clarity(
     r: SensorReadings,
     cal: NervousSystemCalibration,
@@ -429,11 +474,20 @@ def _sense_clarity(
         weights.append(cal.clarity_weights.get("prediction_accuracy", 0.5))
 
     # Sensor coverage: Data richness (meta-clarity about available information)
-    sensor_count = sum(1 for v in [
-        r.cpu_temp_c, r.ambient_temp_c, r.humidity_pct,
-        r.light_lux, r.pressure_hpa,
-    ] if v is not None)
-    coverage = sensor_count / 5
+    #
+    # Counts channels that are actually INFORMING, not merely present. A sensor
+    # that returns the same byte-identical value forever is not telling Lumen
+    # anything, and counting it as coverage means clarity cannot notice it died.
+    # The BMP280 has returned 682.5015433175248 unchanged since the moment Lumen
+    # woke from the July blackout, and nothing anywhere in the stack could see
+    # it: coverage held at exactly 1.0 for 30 days with sd 0.00000.
+    sensor_count = sum(
+        1 for v in [
+            r.cpu_temp_c, r.ambient_temp_c, r.humidity_pct,
+            r.light_lux, r.pressure_hpa,
+        ] if v is not None
+    ) - _frozen_channel_count(r)
+    coverage = max(0.0, sensor_count) / 5
     components.append(coverage)
     weights.append(cal.clarity_weights.get("sensor_coverage", 0.15))
 
@@ -508,11 +562,14 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration, *, salien
         instability += memory_result * cal.stability_weights.get("memory", 0.3)
         count += cal.stability_weights.get("memory", 0.3)
 
-    # Missing sensors = uncertainty
+    # Missing sensors = uncertainty. A frozen channel counts as missing: it is
+    # present in the payload and contributing nothing, which is strictly worse
+    # than absent because it looks like information. See _frozen_channel_count.
     missing = sum(1 for v in [
         r.cpu_temp_c, r.ambient_temp_c, r.humidity_pct,
         r.light_lux, r.pressure_hpa
-    ] if v is None)
+    ] if v is None) + _frozen_channel_count(r)
+    missing = min(5, missing)
     missing_weight = cal.stability_weights.get("missing_sensors", 0.2)
     instability += (missing / 5) * missing_weight
     count += missing_weight

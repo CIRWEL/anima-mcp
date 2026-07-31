@@ -672,6 +672,33 @@ def run_creature():
                     }
                     # Remove None values
                     observations = {k: v for k, v in observations.items() if v is not None}
+
+                    # Close the prediction loop BEFORE folding the new values in,
+                    # so the model is scored on a genuine forecast rather than on
+                    # a value it has already seen.
+                    #
+                    # Nothing did this. record_prediction_error() has never had a
+                    # production caller in the repo's history, so _recent_errors
+                    # stayed permanently empty, get_accuracy_stats() always
+                    # returned insufficient_data, and clarity's LARGEST component
+                    # — prediction_accuracy, weight 0.50 of 1.10, 45% of the
+                    # dimension — fell back to the literal 0.5 on every one of
+                    # 255,973 samples. The docstring calls it "the core of
+                    # internal seeing"; it was a placeholder.
+                    for _var, _actual in observations.items():
+                        try:
+                            _predicted, _ = adaptive_model.predict(
+                                _var,
+                                current_light=readings.light_lux,
+                                current_temp=readings.ambient_temp_c,
+                            )
+                            if _predicted is not None:
+                                adaptive_model.record_prediction_error(
+                                    _var, _predicted, _actual
+                                )
+                        except Exception:
+                            pass  # Scoring must never break observation
+
                     adaptive_model.observe(
                         observations,
                         current_light=readings.light_lux,
