@@ -273,6 +273,19 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                 drawing_info["drawing_age_s"] = round(
                     _time.time() - engine.canvas.last_clear_time, 1
                 ) if engine.canvas.last_clear_time > 0 else None
+                drawing_info["last_completion_reason"] = engine.canvas.last_completion_reason
+                # Per-gate view of the era's earned-completion signal. Without
+                # this, a non-firing earned path is indistinguishable from a
+                # broken one — which is exactly the position the 2026-08-05
+                # earned_field watch was in.
+                try:
+                    progress = getattr(engine.active_era, "settling_progress", None)
+                    if progress is not None:
+                        drawing_info["settling"] = progress(
+                            engine.state, engine.canvas, engine.intent.era_state
+                        )
+                except Exception:
+                    pass
     except Exception:
         pass
 

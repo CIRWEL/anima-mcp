@@ -274,3 +274,87 @@ class TestDiurnalBuckets:
         vec = gs.get_preference_vector()
         assert len(vec["vector"]) == 13, "genesis comparison depends on this length"
         assert "evening_calm" not in vec["labels"]
+
+
+# ==================== preference retraction ====================
+
+class TestPreferenceRetraction:
+    """A preference that stops being observed must be able to lose trust.
+
+    Decay existed but ran only inside _update_preference — i.e. only when a
+    preference was being REINFORCED. Measured 2026-07-30: active_engagement
+    (153,332 observations) had no writer anywhere in the codebase since
+    2026-02-02 and still read confidence 1.0, 178 days later. With confidence
+    a +0.1 ratchet saturating on the 9th observation, every live preference sat
+    at 1.0 and every `confidence > 0.7` gate downstream was a tautology.
+    """
+
+    ANIMA = {"warmth": 0.8, "clarity": 0.8, "stability": 0.8, "presence": 0.8}
+    ENV = {"light_lux": 150.0, "temp_c": 22.0, "humidity_pct": 45.0}
+
+    def _stale_pref(self, gs, name, days_ago, confidence=1.0):
+        from datetime import datetime, timedelta
+        from anima_mcp.growth.models import GrowthPreference, PreferenceCategory
+        now = datetime.now()
+        gs._preferences[name] = GrowthPreference(
+            category=PreferenceCategory.ENVIRONMENT, name=name,
+            description=name, value=1.0, confidence=confidence,
+            observation_count=153332,
+            first_noticed=now - timedelta(days=days_ago + 1),
+            last_confirmed=now - timedelta(days=days_ago),
+        )
+        return gs._preferences[name]
+
+    def test_abandoned_preference_falls_below_the_trust_gate(self, gs):
+        """The active_engagement case: 178 days unobserved."""
+        from anima_mcp.growth.preferences import RETRACTION_GATE
+        self._stale_pref(gs, "active_engagement", days_ago=178)
+
+        retracted = gs.decay_stale_preferences()
+
+        assert "active_engagement" in retracted
+        assert gs._preferences["active_engagement"].confidence <= RETRACTION_GATE
+
+    def test_freshly_confirmed_preference_is_untouched(self, gs):
+        self._stale_pref(gs, "warm_temp", days_ago=0)
+        assert gs.decay_stale_preferences() == []
+        assert gs._preferences["warm_temp"].confidence == 1.0
+
+    def test_sweep_is_idempotent(self, gs):
+        """Running twice must equal running once — it clamps to a target."""
+        self._stale_pref(gs, "cool_temp", days_ago=178)
+        gs.decay_stale_preferences()
+        once = gs._preferences["cool_temp"].confidence
+        gs.decay_stale_preferences()
+        gs.decay_stale_preferences()
+        assert gs._preferences["cool_temp"].confidence == once
+
+    def test_decay_never_raises_confidence(self, gs):
+        self._stale_pref(gs, "dim_light", days_ago=200, confidence=0.3)
+        gs.decay_stale_preferences()
+        assert gs._preferences["dim_light"].confidence == 0.3
+
+    def test_retraction_takes_weeks_not_minutes(self, gs):
+        """Sanity on the rate: a real absence, not a transient gap."""
+        from anima_mcp.growth.preferences import RETRACTION_GATE
+        self._stale_pref(gs, "a", days_ago=7)
+        self._stale_pref(gs, "b", days_ago=30)
+        gs.decay_stale_preferences()
+        assert gs._preferences["a"].confidence > RETRACTION_GATE, "a week off must not retract"
+        assert gs._preferences["b"].confidence <= RETRACTION_GATE, "a month off must"
+
+    def test_retraction_actually_closes_the_confidence_gate(self, gs):
+        """The point of the whole change: a stale preference stops being quoted."""
+        self._stale_pref(gs, "stale_one", days_ago=178)
+        gs._record_memory("woke up", 0.5, "milestone")
+        gs.decay_stale_preferences()
+        strong = [p for p in gs._preferences.values() if p.confidence > 0.7]
+        assert all(p.name != "stale_one" for p in strong)
+
+    def test_decay_persists_to_disk(self, gs):
+        self._stale_pref(gs, "active_engagement", days_ago=178)
+        gs.decay_stale_preferences()
+        row = gs._connect().execute(
+            "SELECT confidence FROM preferences WHERE name = 'active_engagement'"
+        ).fetchone()
+        assert row is not None and row[0] <= 0.7
