@@ -278,14 +278,22 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                 # this, a non-firing earned path is indistinguishable from a
                 # broken one — which is exactly the position the 2026-08-05
                 # earned_field watch was in.
-                try:
-                    progress = getattr(engine.active_era, "settling_progress", None)
-                    if progress is not None:
+                #
+                # The drawing state lives at engine.intent.state, NOT
+                # engine.state (see get_drawing_eisv). The first version of this
+                # used engine.state, raised AttributeError, and a bare
+                # `except Exception: pass` swallowed it — so the field simply
+                # never appeared and looked like an era that declines to report.
+                # Report the failure instead of hiding it: a diagnostic that
+                # fails silently is worse than no diagnostic.
+                progress = getattr(engine.active_era, "settling_progress", None)
+                if progress is not None and engine.intent is not None:
+                    try:
                         drawing_info["settling"] = progress(
-                            engine.state, engine.canvas, engine.intent.era_state
+                            engine.intent.state, engine.canvas, engine.intent.era_state
                         )
-                except Exception:
-                    pass
+                    except Exception as e:
+                        drawing_info["settling"] = {"error": f"{type(e).__name__}: {e}"}
     except Exception:
         pass
 
