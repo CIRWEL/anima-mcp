@@ -217,6 +217,36 @@ class ResonanceEra:
     def create_state(self) -> ResonanceState:
         return ResonanceState()
 
+    def settling_progress(self, drawing_state, canvas, era_state) -> dict:
+        """Which earned-completion gates currently pass, and by how much.
+
+        earned_completion() returns only a reason-or-None, so when it does not
+        fire there is no way to tell WHICH gate held it back. That made the
+        2026-08-05 calibration watch an unsound negative: it could not
+        distinguish "the revisit signal never got close" from "it was one
+        streak tick short every time". Read-only; changes no state.
+        """
+        if not isinstance(era_state, ResonanceState):
+            return {"available": False}
+        window = era_state.revisit_window
+        ratio = (sum(window) / len(window)) if window else 0.0
+        return {
+            "available": True,
+            "marks": canvas.mark_count,
+            "marks_gate": SETTLED_MIN_MARKS,
+            "marks_ok": canvas.mark_count >= SETTLED_MIN_MARKS,
+            "fatigue": round(drawing_state.fatigue, 4),
+            "fatigue_gate": SETTLED_MIN_FATIGUE,
+            "fatigue_ok": drawing_state.fatigue >= SETTLED_MIN_FATIGUE,
+            "revisit_window_filled": len(window),
+            "revisit_window_needed": REVISIT_WINDOW,
+            "revisit_ratio": round(ratio, 4),
+            "revisit_gate": SETTLED_REVISIT_RATIO,
+            "revisit_ok": len(window) >= REVISIT_WINDOW and ratio >= SETTLED_REVISIT_RATIO,
+            "settled_streak": era_state.settled_streak,
+            "streak_gate": SETTLED_STREAK,
+        }
+
     def earned_completion(self, drawing_state, canvas, era_state) -> str | None:
         """Era-specific earned completion: the piece has settled into its
         resonant forms.

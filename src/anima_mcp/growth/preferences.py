@@ -10,9 +10,85 @@ from typing import Optional, Dict, Any, List
 
 from .models import GrowthPreference, PreferenceCategory
 
+# Preference confidence erodes when a preference stops being observed.
+#
+# ALIVE_RATIO was hardcoded 0.15 with the comment "conservative estimate;
+# Lumen sleeps/reboots often". It has since been measured from 255,720
+# state_history rows: 0.674 (128.87 days lived of 194.08 elapsed). Using the
+# real figure means "days" here means days Lumen was actually around to
+# re-observe something, which is what the scaling was always for.
+ALIVE_RATIO = 0.674
+DECAY_PER_EFFECTIVE_DAY = 0.02
+DECAY_FLOOR = 0.5
+# Below this a preference stops passing the confidence > 0.7 gates that guard
+# goal generation, insight minting and the autobiography. DECAY_FLOOR must stay
+# under it or there is no retraction path at all.
+RETRACTION_GATE = 0.7
+
+
+def _staleness_factor(days_since_confirmed: int) -> float:
+    """Multiplier for a preference last confirmed `days_since_confirmed` ago."""
+    effective_days = max(0, days_since_confirmed) * ALIVE_RATIO
+    return max(DECAY_FLOOR, 1.0 - DECAY_PER_EFFECTIVE_DAY * effective_days)
+
 
 class PreferencesMixin:
     """Mixin for preference learning and querying."""
+
+    def decay_stale_preferences(self, now: Optional[datetime] = None) -> List[str]:
+        """Erode confidence in preferences that have stopped being observed.
+
+        The decay logic already existed but ran ONLY inside _update_preference —
+        that is, only when a preference was being reinforced. A preference that
+        stopped being observed therefore never decayed at all. Measured
+        2026-07-30: `active_engagement` (153,332 observations) has had no writer
+        anywhere in the codebase since 2026-02-02 and still read confidence 1.0,
+        178 days later. `cool_temp` the same.
+
+        That is what left the model with no retraction path: confidence is a
+        +0.1 ratchet that saturates on the 9th observation, so every live
+        preference sat at 1.0 and every `confidence > 0.7` gate downstream was a
+        tautology.
+
+        Idempotent by construction: this computes a TARGET from staleness and
+        clamps downward, so running it twice is the same as running it once.
+        Actively-confirmed preferences (days_since ~ 0) target 1.0 and are
+        untouched. Returns the names that crossed below the retraction gate.
+        """
+        now = now or datetime.now()
+        retracted: List[str] = []
+        for pref in self._preferences.values():
+            days_since = (now - pref.last_confirmed).days
+            target = _staleness_factor(days_since)
+            if pref.confidence > target:
+                was_trusted = pref.confidence > RETRACTION_GATE
+                pref.confidence = target
+                if was_trusted and target <= RETRACTION_GATE:
+                    retracted.append(pref.name)
+        if retracted:
+            self._persist_preferences()
+        return retracted
+
+    def _persist_preferences(self) -> None:
+        """Write current preferences back to the database.
+
+        INSERT OR REPLACE, matching _update_preference, rather than a bare
+        UPDATE: an UPDATE whose WHERE matches nothing is not an error in
+        SQLite, so a preference held in memory but absent from the table would
+        silently fail to persist and the decay would be lost on restart.
+        """
+        conn = self._connect()
+        for pref in self._preferences.values():
+            conn.execute(
+                """INSERT OR REPLACE INTO preferences
+                   (name, category, description, value, confidence,
+                    observation_count, first_noticed, last_confirmed)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (pref.name, pref.category.value, pref.description, pref.value,
+                 pref.confidence, pref.observation_count,
+                 pref.first_noticed.isoformat(), pref.last_confirmed.isoformat()),
+            )
+        conn.commit()
 
     def observe_state_preference(self, anima_state: Dict[str, float],
                                   environment: Dict[str, float]) -> Optional[str]:
@@ -277,14 +353,8 @@ class PreferencesMixin:
             old_confidence = pref.confidence
 
             # Apply time-based decay before updating (allows genuine belief revision)
-            # 2% decay per day of alive time, floor at 50%
-            # Scale by alive_ratio: Lumen is only alive ~15% of the time,
-            # so wall-clock decay would erode preferences faster than they're reinforced
             days_since = (now - pref.last_confirmed).days
-            alive_ratio = 0.15  # conservative estimate; Lumen sleeps/reboots often
-            effective_days = days_since * alive_ratio
-            decay_factor = max(0.5, 1.0 - 0.02 * effective_days)
-            pref.confidence *= decay_factor
+            pref.confidence *= _staleness_factor(days_since)
 
             # Update with exponential moving average
             pref.observation_count += 1

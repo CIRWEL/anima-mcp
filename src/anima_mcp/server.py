@@ -47,7 +47,7 @@ from .server_state import (
     METACOG_INTERVAL, AGENCY_INTERVAL, SELF_MODEL_INTERVAL,
     PRIMITIVE_LANG_INTERVAL, VOICE_INTERVAL, GROWTH_INTERVAL,
     TRAJECTORY_INTERVAL, SERVER_GOVERNANCE_FALLBACK_SECONDS,
-    LEARNING_INTERVAL,
+    LEARNING_INTERVAL, PREFERENCE_DECAY_INTERVAL_SECONDS,
     SYSTEM_METRICS_RECORD_INTERVAL, SYSTEM_METRICS_PRUNE_INTERVAL,
     SYSTEM_METRICS_RETENTION_HOURS,
     SELF_MODEL_SAVE_INTERVAL, SCHEMA_EXTRACTION_INTERVAL,
@@ -1153,6 +1153,24 @@ async def _update_display_loop():
                         "temp_c": readings.ambient_temp_c,
                         "humidity_pct": readings.humidity_pct,
                     }
+
+                    # Erode preferences that have stopped being observed. Decay
+                    # otherwise only runs when a preference is REINFORCED, so an
+                    # abandoned one keeps its confidence forever — the model had
+                    # no retraction path. Hourly is ample: the floor is reached
+                    # after weeks, not minutes, and the sweep is idempotent.
+                    try:
+                        _now = time.time()
+                        if _now - _ctx.last_preference_decay_at >= PREFERENCE_DECAY_INTERVAL_SECONDS:
+                            _ctx.last_preference_decay_at = _now
+                            _retracted = _ctx.growth.decay_stale_preferences()
+                            for _name in _retracted:
+                                logger.info(
+                                    "[Growth] preference '%s' fell below the trust gate "
+                                    "(unobserved too long)", _name,
+                                )
+                    except Exception as e:
+                        logger.debug("[Growth] preference decay sweep failed: %s", e)
 
                     # Observe for preference learning
                     insight = _ctx.growth.observe_state_preference(anima_state, environment)

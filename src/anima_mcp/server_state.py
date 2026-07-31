@@ -40,6 +40,11 @@ SYSTEM_METRICS_PRUNE_INTERVAL = 1800  # ~1h — delete metrics older than retent
 SYSTEM_METRICS_RETENTION_HOURS = 24.0
 THERMAL_RATE_THRESHOLD = 5.0          # °C/min — CPU temp rise rate before concern
 MEMORY_PRESSURE_THRESHOLD = 90.0      # % — memory usage before concern
+# Preference decay sweep. Decay otherwise only runs when a preference is
+# REINFORCED, so an unobserved one never erodes. Hourly is ample — the floor
+# takes weeks to reach — and the sweep is idempotent, so cadence only affects
+# how promptly a retraction shows up, never the value it converges to.
+PREFERENCE_DECAY_INTERVAL_SECONDS = 3600.0
 LEARNING_INTERVAL = 100
 SELF_MODEL_SAVE_INTERVAL = 300
 SCHEMA_EXTRACTION_INTERVAL = 600
