@@ -1136,3 +1136,43 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
             lines.append(current_line)
 
         return lines
+
+    def _text_width(self, text: str, font) -> int:
+        """Measured pixel width of ``text`` in ``font``."""
+        if not text:
+            return 0
+        try:
+            bbox = self._get_measure_draw().textbbox((0, 0), text, font=font)
+            return bbox[2] - bbox[0]
+        except Exception:
+            # Same fallback as _wrap_text: estimate ~7 pixels per character.
+            return len(text) * 7
+
+    def _fit_text(self, text: str, font, max_width: int) -> str:
+        """Truncate ``text`` to ``max_width`` PIXELS, appending an ellipsis.
+
+        Character-count slicing (``text[:32]``) is not a fit: DejaVuSans is
+        proportional, so 32 characters is anywhere from 150px to 250px wide.
+        Slicing therefore either wastes space or — worse — leaves text that
+        still overruns its box and gets clipped by the panel or the screen
+        edge, silently losing characters the slice thought it had kept.
+        Measure instead, so what is drawn is exactly what fits.
+        """
+        if not text or self._text_width(text, font) <= max_width:
+            return text
+
+        ellipsis = "…"
+        budget = max_width - self._text_width(ellipsis, font)
+        if budget <= 0:
+            return ellipsis
+
+        # Binary search the longest prefix that fits in the remaining budget.
+        lo, hi = 0, len(text)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if self._text_width(text[:mid], font) <= budget:
+                lo = mid
+            else:
+                hi = mid - 1
+
+        return text[:lo].rstrip() + ellipsis
