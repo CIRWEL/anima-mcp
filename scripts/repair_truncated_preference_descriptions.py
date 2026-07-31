@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -44,8 +45,25 @@ LEGACY_PREFIX = "From Q&A: "
 LEGACY_CAP = len(LEGACY_PREFIX) + 50  # 60
 
 
-def _default_db() -> Path:
-    return Path.home() / ".anima" / "growth.db"
+def _default_db() -> Path | None:
+    """Resolve Lumen's database the way the rest of the codebase does.
+
+    There is no growth.db — preferences live in anima.db alongside everything
+    else, and the first version of this script defaulted to a path that has
+    never existed, so a bare invocation always reported "no growth db".
+
+    Order matches rest_api.py: $ANIMA_DB, then ~/.anima/anima.db, then the
+    repo-relative ~/anima-mcp/anima.db. Only the first that EXISTS is used —
+    on Lumen both are present, and the repo-relative one is a 104KB vestige
+    with no state_history table, not the live store.
+    """
+    env_db = os.environ.get("ANIMA_DB")
+    candidates = [Path(env_db)] if env_db else []
+    candidates += [
+        Path.home() / ".anima" / "anima.db",
+        Path.home() / "anima-mcp" / "anima.db",
+    ]
+    return next((p for p in candidates if p.exists()), None)
 
 
 def looks_hard_cut(description: str) -> bool:
@@ -106,16 +124,22 @@ def repair(description: str) -> str:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--db", type=Path, default=_default_db())
+    ap.add_argument("--db", type=Path, default=None)
     ap.add_argument("--apply", action="store_true",
                     help="write the changes (default is a dry run)")
     args = ap.parse_args()
 
-    if not args.db.exists():
-        print(f"no growth db at {args.db}", file=sys.stderr)
+    db = args.db or _default_db()
+    if db is None:
+        print("no anima.db found (looked at $ANIMA_DB, ~/.anima/, ~/anima-mcp/)",
+              file=sys.stderr)
         return 1
+    if not db.exists():
+        print(f"no database at {db}", file=sys.stderr)
+        return 1
+    print(f"database: {db}\n")
 
-    conn = sqlite3.connect(str(args.db))
+    conn = sqlite3.connect(str(db))
     rows = conn.execute(
         "SELECT name, description, confidence, observation_count FROM preferences"
     ).fetchall()
