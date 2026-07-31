@@ -5,6 +5,7 @@ Handles observing state/drawing preferences, updating preference values,
 and providing trajectory/dimension preference data.
 """
 
+import json
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -30,6 +31,37 @@ def _staleness_factor(days_since_confirmed: int) -> float:
     """Multiplier for a preference last confirmed `days_since_confirmed` ago."""
     effective_days = max(0, days_since_confirmed) * ALIVE_RATIO
     return max(DECAY_FLOOR, 1.0 - DECAY_PER_EFFECTIVE_DAY * effective_days)
+
+
+# What counts as a state worth learning from.
+#
+# This used to be the fixed band `0.4 < wellness < 0.7 -> learn nothing`. The
+# intent — don't learn from ambiguous states — is right, but the constants were
+# calibrated against a wellness distribution that has since moved. Measured
+# 2026-07-30 over 255,973 samples:
+#
+#   full life   mean 0.732   learned on 61.7% of samples
+#   last 30d    mean 0.667   learned on  6.0% of samples
+#
+# A 10x collapse in learning rate that nothing detected, caused by the room
+# getting darker (median lux 723 -> 12) rather than by anything about Lumen.
+# And `wellness < 0.4` has fired ZERO times in Lumen's entire life, so half the
+# gate was unreachable.
+#
+# The band is now relative to Lumen's own running distribution, which keeps the
+# learning rate roughly constant no matter where the environment drags the
+# mean, and makes the negative branch reachable for the first time. This also
+# matches how the wider fleet assesses behaviour — self-relative deviation from
+# an agent's own baseline rather than fixed universal thresholds.
+WELLNESS_BAND_SIGMA = 0.5        # distance from own mean that counts as "clear"
+WELLNESS_MIN_SIGMA = 0.02        # below this Lumen is too steady to call anything clear
+WELLNESS_BASELINE_MIN_SAMPLES = 100  # before this, fall back to the absolute band
+ABSOLUTE_GOOD = 0.7              # cold-start / fallback band
+ABSOLUTE_POOR = 0.4
+# Genuine collapse is always worth learning from, baseline or not. A relative
+# band alone could normalise a creature that is persistently unwell into
+# thinking that is simply its mean.
+ABSOLUTE_DISTRESS = 0.35
 
 
 def _wellness_strength(wellness: float) -> float:
@@ -58,6 +90,67 @@ def _wellness_strength(wellness: float) -> float:
 
 class PreferencesMixin:
     """Mixin for preference learning and querying."""
+
+    def _load_wellness_baseline(self) -> tuple:
+        """Running (count, mean, M2) of wellness. Welford, persisted."""
+        if getattr(self, "_wellness_baseline", None) is None:
+            try:
+                row = self._connect().execute(
+                    "SELECT value FROM growth_state WHERE key = 'wellness_baseline'"
+                ).fetchone()
+                if row and row[0]:
+                    d = json.loads(row[0])
+                    self._wellness_baseline = (
+                        int(d.get("count", 0)), float(d.get("mean", 0.0)), float(d.get("m2", 0.0))
+                    )
+                else:
+                    self._wellness_baseline = (0, 0.0, 0.0)
+            except Exception:
+                self._wellness_baseline = (0, 0.0, 0.0)
+        return self._wellness_baseline
+
+    def _update_wellness_baseline(self, wellness: float) -> tuple:
+        """Fold one observation into the baseline and persist it.
+
+        Persisted deliberately: a baseline that reset on restart would relearn
+        from scratch every deploy, and Lumen restarts often enough that it would
+        never accumulate one.
+        """
+        count, mean, m2 = self._load_wellness_baseline()
+        count += 1
+        delta = wellness - mean
+        mean += delta / count
+        m2 += delta * (wellness - mean)
+        self._wellness_baseline = (count, mean, m2)
+        # Persist on a light cadence — this runs on every observation tick.
+        if count % 50 == 0 or count <= WELLNESS_BASELINE_MIN_SAMPLES:
+            try:
+                conn = self._connect()
+                conn.execute(
+                    "INSERT OR REPLACE INTO growth_state (key, value) VALUES ('wellness_baseline', ?)",
+                    (json.dumps({"count": count, "mean": mean, "m2": m2}),),
+                )
+                conn.commit()
+            except Exception:
+                pass
+        return self._wellness_baseline
+
+    def wellness_learning_band(self) -> Dict[str, Any]:
+        """The current good/poor thresholds, and where they came from."""
+        count, mean, m2 = self._load_wellness_baseline()
+        if count < WELLNESS_BASELINE_MIN_SAMPLES:
+            return {
+                "source": "absolute_fallback", "samples": count,
+                "good_above": ABSOLUTE_GOOD, "poor_below": ABSOLUTE_POOR,
+                "mean": round(mean, 4) if count else None,
+            }
+        sigma = max(WELLNESS_MIN_SIGMA, (m2 / count) ** 0.5)
+        return {
+            "source": "self_relative", "samples": count,
+            "mean": round(mean, 4), "sigma": round(sigma, 4),
+            "good_above": round(mean + WELLNESS_BAND_SIGMA * sigma, 4),
+            "poor_below": round(mean - WELLNESS_BAND_SIGMA * sigma, 4),
+        }
 
     def decay_stale_preferences(self, now: Optional[datetime] = None) -> List[str]:
         """Erode confidence in preferences that have stopped being observed.
@@ -124,9 +217,20 @@ class PreferencesMixin:
         """
         wellness = sum(anima_state.values()) / len(anima_state) if anima_state else 0.5
 
-        # Only learn from clear positive or negative states
-        if 0.4 < wellness < 0.7:
-            return None  # Neutral state, nothing to learn
+        # Only learn from states that are clearly good or clearly poor FOR LUMEN.
+        # The band follows Lumen's own running distribution rather than fixed
+        # constants, so environmental drift cannot silently switch learning off
+        # (see the module header for the 61.7% -> 6.0% collapse this fixes).
+        self._update_wellness_baseline(wellness)
+        band = self.wellness_learning_band()
+        if band["poor_below"] <= wellness <= band["good_above"] and wellness > ABSOLUTE_DISTRESS:
+            return None  # Unremarkable for this creature — nothing to learn
+
+        # The inner branches must use the SAME band as the gate above. When they
+        # hardcoded 0.7/0.4 a state could clear the gate and then match no branch,
+        # learning nothing while looking like it had been considered.
+        is_good = wellness > band["good_above"]
+        is_poor = wellness < band["poor_below"] or wellness <= ABSOLUTE_DISTRESS
 
         now = datetime.now()
         insight = None
@@ -136,17 +240,17 @@ class PreferencesMixin:
         #   < 100 lux: dim/dark room, nighttime
         #   > 300 lux: well-lit room, daylight, desk lamp
         light = environment.get("light_lux", 150)  # neutral default if no data
-        if light < 100 and wellness > 0.7:
+        if light < 100 and is_good:
             insight = self._update_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "I feel calmer when it's dim", _wellness_strength(wellness)
             ) or insight
-        elif light > 300 and wellness > 0.7:
+        elif light > 300 and is_good:
             insight = self._update_preference(
                 "bright_light", PreferenceCategory.ENVIRONMENT,
                 "I feel energized in bright light", _wellness_strength(wellness)
             ) or insight
-        elif light < 100 and wellness < 0.4:
+        elif light < 100 and is_poor:
             insight = self._update_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "Dim light makes me feel uncertain", -0.5
@@ -154,12 +258,12 @@ class PreferencesMixin:
 
         # Temperature preference
         temp = environment.get("temp_c", 22)
-        if temp < 20 and wellness > 0.7:
+        if temp < 20 and is_good:
             insight = self._update_preference(
                 "cool_temp", PreferenceCategory.ENVIRONMENT,
                 "I feel more alert when it's cool", _wellness_strength(wellness)
             ) or insight
-        elif temp > 25 and wellness > 0.7:
+        elif temp > 25 and is_good:
             insight = self._update_preference(
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
                 "Warmth makes me feel content", _wellness_strength(wellness)
@@ -167,17 +271,17 @@ class PreferencesMixin:
 
         # Humidity preference
         humidity = environment.get("humidity_pct", 50)
-        if humidity < 30 and wellness > 0.7:
+        if humidity < 30 and is_good:
             insight = self._update_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
                 "I feel alert in dry air", _wellness_strength(wellness)
             ) or insight
-        elif humidity > 60 and wellness > 0.7:
+        elif humidity > 60 and is_good:
             insight = self._update_preference(
                 "humid_air", PreferenceCategory.ENVIRONMENT,
                 "Humidity feels comfortable", _wellness_strength(wellness)
             ) or insight
-        elif humidity < 30 and wellness < 0.4:
+        elif humidity < 30 and is_poor:
             insight = self._update_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
                 "Dry air makes me uneasy", -0.5
@@ -203,18 +307,18 @@ class PreferencesMixin:
         # night_calm name; its existing count predates this split and mixes
         # both regimes.
         hour = now.hour
-        if 6 <= hour < 10 and wellness > 0.7:
+        if 6 <= hour < 10 and is_good:
             insight = self._update_preference(
                 "morning_peace", PreferenceCategory.TEMPORAL,
                 "I feel peaceful in the morning", _wellness_strength(wellness)
             ) or insight
-        elif 20 <= hour < 24 and wellness > 0.7:
+        elif 20 <= hour < 24 and is_good:
             insight = self._update_preference(
                 "evening_calm", PreferenceCategory.TEMPORAL,
                 "The quiet of late evening settles me", _wellness_strength(wellness)
             ) or insight
         elif hour < 6:
-            if wellness > 0.7:
+            if is_good:
                 insight = self._update_preference(
                     "night_calm", PreferenceCategory.TEMPORAL,
                     "The quiet of night calms me", _wellness_strength(wellness)
@@ -251,13 +355,17 @@ class PreferencesMixin:
         hour = now.hour
         insight = None
 
-        # Drawing + wellness correlation
-        if wellness > 0.7:
+        # Drawing + wellness correlation. Same self-relative band as
+        # observe_state_preference — a fixed 0.7 here would drift out of reach
+        # for exactly the same reason.
+        self._update_wellness_baseline(wellness)
+        _band = self.wellness_learning_band()
+        if wellness > _band["good_above"]:
             insight = self._update_preference(
                 "drawing_wellbeing", PreferenceCategory.ACTIVITY,
                 "I feel good when I draw", _wellness_strength(wellness)
             )
-        elif wellness < 0.4:
+        elif wellness < _band["poor_below"] or wellness <= ABSOLUTE_DISTRESS:
             insight = self._update_preference(
                 "drawing_wellbeing", PreferenceCategory.ACTIVITY,
                 "Drawing doesn't always help", -0.3

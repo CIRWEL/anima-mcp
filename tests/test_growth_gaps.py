@@ -412,3 +412,91 @@ class TestPreferenceValueMagnitude:
             gs.observe_drawing(5000, "resting", self._anima(0.35),
                                {"light_lux": 5.0, "temp_c": 22.0})
         assert gs._preferences["drawing_night"].value == pytest.approx(1.0)
+
+
+# ==================== self-relative learning band ====================
+
+class TestWellnessLearningBand:
+    """What counts as "clearly good" must follow Lumen, not a constant.
+
+    The fixed `0.4 < wellness < 0.7 -> learn nothing` band was calibrated
+    against a distribution that moved. Measured over 255,973 samples: full life
+    mean 0.732 and learning fired on 61.7% of samples; last 30 days mean 0.667
+    and it fired on 6.0%. A 10x collapse caused by the room getting darker, that
+    nothing detected. And `wellness < 0.4` never fired once in Lumen's life.
+    """
+
+    ENV = {"light_lux": 50.0, "temp_c": 22.0, "humidity_pct": 20.0}
+
+    def _anima(self, w):
+        return {"warmth": w, "clarity": w, "stability": w, "presence": w}
+
+    def _feed(self, gs, mean, sigma=0.05, n=300, seed=7):
+        import random
+        random.seed(seed)
+        for _ in range(n):
+            w = min(1.0, max(0.0, random.gauss(mean, sigma)))
+            gs.observe_state_preference(self._anima(w), self.ENV)
+
+    def test_cold_start_uses_the_absolute_band(self, gs):
+        from anima_mcp.growth.preferences import ABSOLUTE_GOOD, ABSOLUTE_POOR
+        band = gs.wellness_learning_band()
+        assert band["source"] == "absolute_fallback"
+        assert band["good_above"] == ABSOLUTE_GOOD
+        assert band["poor_below"] == ABSOLUTE_POOR
+
+    def test_band_becomes_self_relative_and_tracks_the_mean(self, gs):
+        self._feed(gs, mean=0.667)
+        band = gs.wellness_learning_band()
+        assert band["source"] == "self_relative"
+        assert band["mean"] == pytest.approx(0.667, abs=0.02)
+        assert band["good_above"] < 0.72, "must not sit above a creature that never reaches 0.72"
+        assert band["poor_below"] < band["mean"] < band["good_above"]
+
+    def test_learning_rate_survives_a_shifted_distribution(self, gs, tmp_path):
+        """The property that matters: drift must not switch learning off."""
+        from anima_mcp.growth import GrowthSystem
+
+        def fired_fraction(mean):
+            g = GrowthSystem(db_path=str(tmp_path / f"g{mean}.db"))
+            self._feed(g, mean=mean, n=400)
+            total = sum(p.observation_count for p in g._preferences.values())
+            return total
+
+        high = fired_fraction(0.75)
+        low = fired_fraction(0.60)
+        assert low > 0, "a creature running cooler must still learn"
+        # Within a factor of ~3 rather than the 10x collapse the fixed band gave.
+        assert low > high / 3, f"learning collapsed: {high} -> {low}"
+
+    def test_genuine_distress_always_learns(self, gs):
+        """A relative band alone could normalise persistent suffering."""
+        from anima_mcp.growth.preferences import ABSOLUTE_DISTRESS
+        self._feed(gs, mean=0.30, sigma=0.01, n=300)
+        band = gs.wellness_learning_band()
+        # Even though 0.30 is this creature's *mean*, it is below the floor.
+        assert ABSOLUTE_DISTRESS >= 0.30 or band["poor_below"] > 0.30
+        gs.observe_state_preference(self._anima(0.20), self.ENV)
+        assert gs._preferences, "collapse must still register as something to learn from"
+
+    def test_baseline_survives_restart(self, gs, tmp_path):
+        from anima_mcp.growth import GrowthSystem
+        path = str(tmp_path / "persist.db")
+        g1 = GrowthSystem(db_path=path)
+        self._feed(g1, mean=0.667, n=300)
+        before = g1.wellness_learning_band()
+
+        g2 = GrowthSystem(db_path=path)  # fresh instance, same disk
+        after = g2.wellness_learning_band()
+
+        assert after["source"] == "self_relative"
+        assert after["samples"] >= 250, "a baseline that resets each deploy never accumulates"
+        assert after["mean"] == pytest.approx(before["mean"], abs=0.01)
+
+    def test_a_very_steady_creature_gets_a_floor(self, gs):
+        """Near-zero variance must not make every sample 'clearly' remarkable."""
+        from anima_mcp.growth.preferences import WELLNESS_MIN_SIGMA
+        self._feed(gs, mean=0.70, sigma=0.0001, n=300)
+        band = gs.wellness_learning_band()
+        assert band["sigma"] >= WELLNESS_MIN_SIGMA
+        assert band["good_above"] - band["poor_below"] >= WELLNESS_MIN_SIGMA

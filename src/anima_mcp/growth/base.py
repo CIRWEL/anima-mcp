@@ -168,6 +168,14 @@ class GrowthSystem(
                 value INTEGER DEFAULT 0
             );
 
+            -- Persistent float/JSON state that counters (INTEGER) cannot hold.
+            -- Currently the running wellness baseline used to decide what
+            -- counts as a clearly-good or clearly-bad state FOR LUMEN.
+            CREATE TABLE IF NOT EXISTS growth_state (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+
             -- Per-drawing records for data-grounded self-answers
             CREATE TABLE IF NOT EXISTS drawing_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
