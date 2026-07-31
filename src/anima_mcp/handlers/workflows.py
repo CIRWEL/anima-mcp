@@ -324,6 +324,15 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
     # Record state for history if we have it (enriched with interaction context)
     if store and anima and readings:
         sensors_for_history = readings.to_dict()
+        # Own LED brightness is not carried through shared memory, so fill it in
+        # from live proprioception — lux is recorded raw and mixes room light with
+        # Lumen's own glow, and this is the only field that makes them separable.
+        if sensors_for_history.get("led_brightness") is None:
+            try:
+                from ..accessors import _get_led_brightness
+                sensors_for_history["led_brightness"] = _get_led_brightness()
+            except Exception:
+                pass
         try:
             from ..messages import get_recent_messages
             from datetime import datetime

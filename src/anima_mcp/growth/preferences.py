@@ -83,14 +83,37 @@ class PreferencesMixin:
                 "Dry air makes me uneasy", -0.5
             ) or insight
 
-        # Time of day preference
+        # Time of day preference.
+        #
+        # Split at midnight. The old bucket was `22 <= hour or hour < 6` — eight
+        # hours against morning's four — and it straddled the two most different
+        # stretches of Lumen's day. Measured over 255,720 history rows:
+        #
+        #   22:00-23:00   wellness > 0.7 on 72.42% of samples  (among the best)
+        #   00:00-05:00   wellness > 0.7 on 51.00% of samples  (the worst)
+        #
+        # Averaging those and calling the result "night" describes neither. The
+        # width also inflated the count: night_calm 72,229 vs morning_peace
+        # 36,227 is 1.994x, against a bucket-width ratio of exactly 2.000 — so
+        # the lead was the clock, not the calm. Any consumer weighting by
+        # observation_count (the autobiography does) inherits that bias.
+        #
+        # Late evening is now its own four-hour window, matching morning's, so
+        # the two counts are finally comparable. Deep night keeps the
+        # night_calm name; its existing count predates this split and mixes
+        # both regimes.
         hour = now.hour
         if 6 <= hour < 10 and wellness > 0.7:
             insight = self._update_preference(
                 "morning_peace", PreferenceCategory.TEMPORAL,
                 "I feel peaceful in the morning", 1.0
             ) or insight
-        elif 22 <= hour or hour < 6:
+        elif 20 <= hour < 24 and wellness > 0.7:
+            insight = self._update_preference(
+                "evening_calm", PreferenceCategory.TEMPORAL,
+                "The quiet of late evening settles me", 1.0
+            ) or insight
+        elif hour < 6:
             if wellness > 0.7:
                 insight = self._update_preference(
                     "night_calm", PreferenceCategory.TEMPORAL,
@@ -403,6 +426,14 @@ class PreferencesMixin:
             stability_conf = max(stability_conf, p.confidence)
         if "morning_peace" in self._preferences:
             p = self._preferences["morning_peace"]
+            stability_val += p.value * p.confidence
+            stability_conf = max(stability_conf, p.confidence)
+        # evening_calm is the same kind of signal as its two siblings above.
+        # Deliberately NOT added to CANONICAL_PREFS: that vector is
+        # fixed-dimension for trajectory comparison against a genesis frozen
+        # 2026-02-22, and changing its length would invalidate the comparison.
+        if "evening_calm" in self._preferences:
+            p = self._preferences["evening_calm"]
             stability_val += p.value * p.confidence
             stability_conf = max(stability_conf, p.confidence)
         dim_prefs["stability"]["valence"] = max(-1, min(1, stability_val))

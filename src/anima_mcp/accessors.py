@@ -368,6 +368,42 @@ def _get_activity():
     return _cr._ctx.activity if _cr._ctx else None
 
 
+def _get_led_brightness() -> float | None:
+    """Lumen's own LED brightness right now, or None if unknown.
+
+    The display loop keeps `_ctx.led_proprioception` current (server.py), but
+    the SensorReadings used for state_history come from shared memory, where
+    `led_brightness` is None — so it was persisted as NULL in all 255,720
+    history rows.
+
+    That matters because the VEML7700 sits beside the DotStars and lux is used
+    RAW, with no glow correction (see anima.py). Lux therefore mixes room light
+    with Lumen's own output, and lux feeds both clarity (weight 0.15) and the
+    activity score (weight 0.15) — which in turn sets LED brightness. Without
+    this field recorded alongside lux, that loop is not decomposable after the
+    fact, and `SelfModel.observe_led_lux()` — which exists precisely to learn
+    it — can never fire from history.
+    """
+    ctx = _cr._ctx
+    if not ctx:
+        return None
+    prop = getattr(ctx, "led_proprioception", None)
+    if isinstance(prop, dict):
+        brightness = prop.get("brightness")
+        if isinstance(brightness, (int, float)):
+            return float(brightness)
+    leds = getattr(ctx, "leds", None)
+    if leds is not None:
+        try:
+            state = leds.get_proprioceptive_state()
+            brightness = state.get("brightness") if isinstance(state, dict) else None
+            if isinstance(brightness, (int, float)):
+                return float(brightness)
+        except Exception:
+            return None
+    return None
+
+
 def _get_last_governance_decision() -> dict | None:
     """Last governance decision from broker SHM or server fallback."""
     return _cr._ctx.last_governance_decision if _cr._ctx else None

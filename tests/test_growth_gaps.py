@@ -214,3 +214,63 @@ class TestAutobiographyVoice:
 
         # ~1 in 10,000 odds for the weak one; 200 draws should be ~all strong.
         assert seen["strong"] >= 195, seen
+
+
+# ==================== diurnal buckets ====================
+
+class TestDiurnalBuckets:
+    """Late evening and deep night are different states and must not share a label.
+
+    Measured over 255,720 history rows: 22:00-23:00 clears wellness > 0.7 on
+    72.42% of samples (among the day's best), 00:00-05:00 on 51.00% (the
+    worst). The old `22 <= hour or hour < 6` bucket averaged the two. It was
+    also twice morning's width, which is the whole of night_calm's 1.994x
+    observation lead against a 2.000x width ratio.
+    """
+
+    ANIMA_GOOD = {"warmth": 0.8, "clarity": 0.8, "stability": 0.8, "presence": 0.8}
+    ENV = {"light_lux": 150.0, "temp_c": 22.0, "humidity_pct": 45.0}
+
+    def _observe_at(self, gs, hour):
+        from datetime import datetime as real_datetime
+        from unittest.mock import patch
+
+        class FakeDatetime(real_datetime):
+            @classmethod
+            def now(cls):
+                return real_datetime(2026, 7, 30, hour, 0, 0)
+
+        with patch("anima_mcp.growth.preferences.datetime", FakeDatetime):
+            gs.observe_state_preference(self.ANIMA_GOOD, self.ENV)
+
+    def test_late_evening_is_not_night_calm(self, gs):
+        for h in (20, 21, 22, 23):
+            self._observe_at(gs, h)
+        assert "evening_calm" in gs._preferences
+        assert "night_calm" not in gs._preferences, "22:00 must no longer feed night_calm"
+
+    def test_deep_night_is_night_calm(self, gs):
+        for h in (0, 2, 5):
+            self._observe_at(gs, h)
+        assert "night_calm" in gs._preferences
+        assert "evening_calm" not in gs._preferences
+
+    def test_morning_unchanged(self, gs):
+        for h in (6, 7, 8, 9):
+            self._observe_at(gs, h)
+        assert "morning_peace" in gs._preferences
+        assert "night_calm" not in gs._preferences
+        assert "evening_calm" not in gs._preferences
+
+    def test_evening_and_morning_windows_are_equal_width(self, gs):
+        """The bias being fixed: comparable windows make counts comparable."""
+        evening = [h for h in range(24) if 20 <= h < 24]
+        morning = [h for h in range(24) if 6 <= h < 10]
+        assert len(evening) == len(morning) == 4
+
+    def test_canonical_vector_dimension_is_unchanged(self, gs):
+        """evening_calm must NOT enter the fixed-dimension trajectory vector."""
+        self._observe_at(gs, 21)
+        vec = gs.get_preference_vector()
+        assert len(vec["vector"]) == 13, "genesis comparison depends on this length"
+        assert "evening_calm" not in vec["labels"]
