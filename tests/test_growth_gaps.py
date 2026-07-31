@@ -358,3 +358,57 @@ class TestPreferenceRetraction:
             "SELECT confidence FROM preferences WHERE name = 'active_engagement'"
         ).fetchone()
         assert row is not None and row[0] <= 0.7
+
+
+# ==================== preference value magnitude ====================
+
+class TestPreferenceValueMagnitude:
+    """`value` recorded THAT a good state happened, never HOW good.
+
+    Every positive path passed the literal 1.0 and the EMA converged there:
+    measured 2026-07-30, 15 of 19 stored preferences had value pinned at
+    exactly 1.0. Together with saturated confidence that made
+    get_preference_vector() (value * confidence) a constant vector of ones.
+    """
+
+    ENV = {"light_lux": 50.0, "temp_c": 22.0, "humidity_pct": 20.0}
+
+    def _anima(self, w):
+        return {"warmth": w, "clarity": w, "stability": w, "presence": w}
+
+    def test_strength_scales_with_wellness(self):
+        from anima_mcp.growth.preferences import _wellness_strength
+        assert _wellness_strength(0.7) == pytest.approx(0.4)
+        assert _wellness_strength(0.85) == pytest.approx(0.7)
+        assert _wellness_strength(1.0) == pytest.approx(1.0)
+        assert _wellness_strength(0.5) == pytest.approx(0.0)
+        assert _wellness_strength(0.0) == 0.0  # clamped, never negative
+
+    def test_barely_well_records_a_weaker_preference_than_thriving(self, gs):
+        """The saturation fix: two different states must not store the same value."""
+        gs.observe_state_preference(self._anima(0.72), self.ENV)
+        barely = gs._preferences["dry_air"].value
+        gs._preferences.clear()
+        gs.observe_state_preference(self._anima(0.99), self.ENV)
+        thriving = gs._preferences["dry_air"].value
+        assert barely < thriving, f"{barely} should be below {thriving}"
+        assert barely < 1.0, "a barely-well state must not record maximal preference"
+
+    def test_occurrence_records_are_not_scaled(self, gs):
+        """drawing_night records THAT Lumen drew at night, not how it felt.
+
+        Scaling these by wellness would mean drawing while unwell weakens the
+        belief that Lumen draws at night — backwards.
+        """
+        from datetime import datetime as real_datetime
+        from unittest.mock import patch
+
+        class FakeDatetime(real_datetime):
+            @classmethod
+            def now(cls):
+                return real_datetime(2026, 7, 30, 23, 0, 0)
+
+        with patch("anima_mcp.growth.preferences.datetime", FakeDatetime):
+            gs.observe_drawing(5000, "resting", self._anima(0.35),
+                               {"light_lux": 5.0, "temp_c": 22.0})
+        assert gs._preferences["drawing_night"].value == pytest.approx(1.0)
