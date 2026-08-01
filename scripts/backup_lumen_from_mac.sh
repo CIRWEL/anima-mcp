@@ -123,9 +123,16 @@ fi
 
 # Fallback: ask the Pi to mint a fresh consistent snapshot via sqlite3 .backup,
 # pull it, then clean it up. No dependency on any local mirror; stays WAL-consistent.
+# NOTE: this uses python3's sqlite3 module, NOT the sqlite3(1) CLI. The CLI is
+# NOT installed on the Pi (`command -v sqlite3` -> nothing), so the original
+# `ssh ... "sqlite3 ... .backup"` could never succeed. It was dead code that
+# would have failed exactly when it was needed — when the Pi's own hourly
+# snapshot is missing, which is the only path that reaches here. python3 is
+# present (it runs both services) and Connection.backup() is equally
+# WAL-consistent.
 if [ $DB_CAPTURED -eq 0 ]; then
     PI_TMP="/tmp/anima_snap_${DATE}.db"
-    if ssh $SSH_OPTS unitares-anima@$PI_HOST "sqlite3 ~/.anima/anima.db \".backup ${PI_TMP}\"" 2>/dev/null; then
+    if ssh $SSH_OPTS unitares-anima@$PI_HOST "python3 -c \"import sqlite3,os;s=sqlite3.connect(os.path.expanduser('~/.anima/anima.db'));d=sqlite3.connect('${PI_TMP}');s.backup(d);d.close();s.close()\"" 2>/dev/null; then
         rsync -az --timeout=120 -e "ssh $SSH_OPTS" "unitares-anima@$PI_HOST:${PI_TMP}" "$BACKUP_DIR/anima_${DATE}.db"
         DB_RSYNC_STATUS=$?
         ssh $SSH_OPTS unitares-anima@$PI_HOST "rm -f ${PI_TMP}" 2>/dev/null
@@ -150,6 +157,37 @@ if [ $DB_CAPTURED -eq 1 ]; then
         rm -f "$BACKUP_DIR/anima_${DATE}.db" 2>/dev/null
         DB_CAPTURED=0
     fi
+fi
+
+# The broker's agency store. See #123: stable_creature.py:440 calls
+# get_action_selector() with no db_path, so it falls through to a bare
+# "anima.db" and the broker's TD-learning persists relative to the service's
+# working directory — ~/anima-mcp/anima.db, NOT ~/.anima. Everything above
+# backs up ~/.anima only, so the action values that ACTUALLY drive Lumen's
+# behaviour (verified: they match /dev/shm exactly, the ~/.anima copy does
+# not) have never been backed up. 1.6M updates, one reflash from gone, with
+# backup verification green the whole time.
+#
+# This is insurance, not endorsement — #123 may well move the broker onto the
+# main store, at which point delete this block. Until that call is made, do
+# not let the file be the only copy. It is ~100KB; the cost is nothing.
+BROKER_DB="$BACKUP_DIR/agency_${DATE}.db"
+PI_AGENCY_TMP="/tmp/anima_agency_snap_${DATE}.db"
+if ssh $SSH_OPTS unitares-anima@$PI_HOST "test -f ~/anima-mcp/anima.db && python3 -c \"import sqlite3,os;s=sqlite3.connect(os.path.expanduser('~/anima-mcp/anima.db'));d=sqlite3.connect('${PI_AGENCY_TMP}');s.backup(d);d.close();s.close()\"" 2>/dev/null; then
+    rsync -az --timeout=60 -e "ssh $SSH_OPTS" "unitares-anima@$PI_HOST:${PI_AGENCY_TMP}" "$BROKER_DB" 2>/dev/null
+    AGENCY_RSYNC=$?
+    ssh $SSH_OPTS unitares-anima@$PI_HOST "rm -f ${PI_AGENCY_TMP}" 2>/dev/null
+    if { [ $AGENCY_RSYNC -eq 0 ] || [ $AGENCY_RSYNC -eq 24 ]; } && [ -s "$BROKER_DB" ]; then
+        AGENCY_ROWS=$(sqlite3 "$BROKER_DB" "SELECT COALESCE(SUM(count),0) FROM agency_values;" 2>/dev/null)
+        log "Broker agency store captured: agency_${DATE}.db (${AGENCY_ROWS:-?} updates) [#123]"
+        # Keep only the last 14 — this file is small but the run is nightly.
+        ls -t "$BACKUP_DIR"/agency_*.db 2>/dev/null | tail -n +15 | xargs rm -f 2>/dev/null
+    else
+        log "WARNING: broker agency store rsync failed (status $AGENCY_RSYNC) — see #123"
+        rm -f "$BROKER_DB" 2>/dev/null
+    fi
+else
+    log "WARNING: could not snapshot ~/anima-mcp/anima.db (broker agency store, #123)"
 fi
 
 if [ $DB_CAPTURED -eq 1 ]; then
