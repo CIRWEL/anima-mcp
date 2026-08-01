@@ -23,6 +23,7 @@ import random
 from ..atomic_write import atomic_json_write
 from ..anima import Anima
 from ..expression_moods import ExpressionMoodTracker
+from ..db_paths import resolve_db_path
 
 
 _EARNED_COMPLETION_REASONS = frozenset({
@@ -929,7 +930,7 @@ class DrawingEngine:
         self.active_era = get_era(self.canvas._era_name)
         self.intent.era_state = self.active_era.create_state()
 
-        self._db_path = db_path or "anima.db"
+        self._db_path = resolve_db_path(db_path)
         self._identity_store = identity_store
         self._last_persist_time = 0.0  # Rate-limit canvas persistence
         self._last_persist_mark_count = self.canvas.mark_count

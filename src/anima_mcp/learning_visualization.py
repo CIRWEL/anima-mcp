@@ -19,6 +19,7 @@ import json
 from .config import NervousSystemCalibration, ConfigManager
 from .sensors.base import SensorReadings
 from .anima import Anima
+from .db_paths import resolve_db_path
 
 
 @dataclass
@@ -68,7 +69,7 @@ class LearningVisualizer:
             db_path: Path to identity database (contains state_history)
             config_path: Path to config file (for calibration history)
         """
-        self.db_path = Path(db_path)
+        self.db_path = Path(resolve_db_path(db_path))
         self.config_manager = ConfigManager(config_path) if config_path else ConfigManager()
         self._calibration_history: List[CalibrationSnapshot] = []
         self._load_calibration_history()

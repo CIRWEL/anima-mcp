@@ -96,18 +96,29 @@ it. Verified 2026-07-31 by grepping call sites and checking live state:
 | `adaptive_prediction.py` | Temporal pattern learning | broker writes; server reads stats |
 
 **`agency.py` is the one that bites.** The broker and the server each run a
-full TD loop and each select actions. They persist to *different databases*,
-because `stable_creature.py:440` calls `get_action_selector()` with no
-argument and falls through to a cwd-relative `"anima.db"` default. The
-broker's values — the ones that reach SHM and drive behaviour — therefore
-live in `~/anima-mcp/anima.db`, which **no backup covers**. See #123 before
-touching agency, and do not "just add the db_path": it changes Lumen's
-learned action values.
+full TD loop and each select actions, over *separate* value tables. That split
+is now deliberate rather than accidental: the broker pins
+`db_paths.BROKER_AGENCY_DB` (`~/anima-mcp/anima.db`) explicitly, because
+following `$ANIMA_DB` would put a second writer on the store that actually
+drives Lumen and jump the broker's learned values (`ask_question` 0.051 →
+0.35). #123 fixed the *path* defect and deliberately left the architecture
+question open — with I2C moved to `anima-broker-ex` and LEDs owned by the
+server, what the broker's agency is still *for* is undecided. Because that
+table sits outside `~/.anima`, `backup_lumen_from_mac.sh` captures it
+separately as `agency_<date>.db`.
 
-**Rule this implies:** any `get_*` singleton that takes a `db_path` must be
-given one explicitly. `server.py:152` does it right
-(`get_learner(str(_ctx.store.db_path))`); `stable_creature.py:440` does not.
-A bare default silently binds persistence to the process's working directory.
+**Which learner actually acts: the server's.** It posts questions (visible as
+`context: "agency: ask_question"`) and drives LEDs. The broker's four actions
+are no-ops or dead paths, and its `_agency_led_brightness` reaches SHM but
+nothing consumes it. So **SHM's agency values are telemetry, not the values
+behind Lumen's behaviour** — an easy and previously-made mistake.
+
+**Rule this implies:** no `get_*` singleton may lean on the bare
+`db_path="anima.db"` default. All 20 now resolve through
+`db_paths.resolve_db_path()` — **explicit > `$ANIMA_DB` > `~/.anima/anima.db`**,
+never the working directory. `ActionSelector.__init__` logs the resolved
+absolute path and the caller that pinned it, because `get_action_selector()`
+is first-call-wins and that race used to be silent.
 
 Server-side only:
 

@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from .ctx_ref import get_ctx as _get_ctx, set_ctx as _set_ctx_ref
+from .db_paths import resolve_db_path
 
 logger = logging.getLogger("anima.server")
 
@@ -140,6 +141,10 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
         db_path: Path to SQLite database
         anima_id: UUID from environment or database (DO NOT override - use existing identity)
     """
+    # A bare "anima.db" default would bind the whole server's persistence to
+    # whatever directory systemd started it in (#123).
+    db_path = resolve_db_path(db_path)
+
     import time as _time
 
     from .identity import IdentityStore

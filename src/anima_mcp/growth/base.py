@@ -25,6 +25,7 @@ from .visitors import VisitorsMixin
 from .goals import GoalsMixin
 from .memories import MemoriesMixin
 from .curiosity import CuriosityMixin
+from ..db_paths import resolve_db_path
 
 
 # Gallery directory can be overridden for tests
@@ -73,7 +74,7 @@ class GrowthSystem(
     """
 
     def __init__(self, db_path: str = "anima.db"):
-        self.db_path = Path(db_path)
+        self.db_path = Path(resolve_db_path(db_path))
         self._conn: Optional[sqlite3.Connection] = None
         self._preferences: Dict[str, GrowthPreference] = {}
         self._relationships: Dict[str, Relationship] = {}

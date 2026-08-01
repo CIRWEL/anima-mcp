@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 import json
+from ..db_paths import resolve_db_path
 
 
 # Epoch: bump when a model change invalidates existing stored data.
@@ -79,7 +80,7 @@ class IdentityStore:
     """SQLite-backed identity persistence."""
 
     def __init__(self, db_path: str = "anima.db"):
-        self.db_path = Path(db_path)
+        self.db_path = Path(resolve_db_path(db_path))
         self._conn: Optional[sqlite3.Connection] = None
         self._identity: Optional[CreatureIdentity] = None
         self._session_start: Optional[datetime] = None

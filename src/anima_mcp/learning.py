@@ -13,6 +13,7 @@ import sqlite3
 from pathlib import Path
 
 from .config import NervousSystemCalibration, ConfigManager
+from .db_paths import resolve_db_path
 
 
 class AdaptiveLearner:
@@ -30,7 +31,7 @@ class AdaptiveLearner:
             db_path: Path to identity database (contains state_history)
             learning_window_days: How many days of history to use for learning
         """
-        self.db_path = Path(db_path)
+        self.db_path = Path(resolve_db_path(db_path))
         self.learning_window_days = learning_window_days
         self._conn: Optional[sqlite3.Connection] = None
     

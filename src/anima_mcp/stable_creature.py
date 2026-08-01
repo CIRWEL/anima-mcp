@@ -62,6 +62,7 @@ from .display.leds.brightness import estimate_instantaneous_brightness
 from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
 from .identity import IdentityStore
+from .db_paths import BROKER_AGENCY_DB, resolve_db_path
 from .unitares_bridge import UnitaresBridge
 from .governance_passthrough import (
     passthrough_path_from_env,
@@ -250,15 +251,8 @@ def run_creature():
     identity = None
     store = None
     try:
-        # Determine DB persistence path (User Home > Project Root)
-        env_db = os.environ.get("ANIMA_DB")
-        if env_db:
-            db_path = env_db
-        else:
-            # Default to persistent user home directory
-            home_dir = Path.home() / ".anima"
-            home_dir.mkdir(parents=True, exist_ok=True)
-            db_path = str(home_dir / "anima.db")
+        # $ANIMA_DB, else ~/.anima/anima.db — never the working directory (#123).
+        db_path = resolve_db_path()
 
         store = IdentityStore(db_path)
         print(f"[StableCreature] Identity persistence: {db_path}")
@@ -437,7 +431,12 @@ def run_creature():
                 print("[StableCreature] Self-model active - Lumen has beliefs about itself")
 
             if _has_module("agency"):
-                action_selector = get_action_selector()
+                # Deliberately NOT db_path. The broker and the server each run
+                # a full TD loop; pointing this one at $ANIMA_DB would merge it
+                # onto the table that actually drives Lumen, adding a second
+                # writer and jumping the broker's learned values. Absolute, so
+                # it no longer depends on the service's WorkingDirectory (#123).
+                action_selector = get_action_selector(db_path=str(BROKER_AGENCY_DB))
                 exploration_mgr = get_exploration_manager()
                 print("[StableCreature] Agency active - Lumen can choose actions")
 

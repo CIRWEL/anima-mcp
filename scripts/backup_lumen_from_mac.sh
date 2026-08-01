@@ -159,18 +159,22 @@ if [ $DB_CAPTURED -eq 1 ]; then
     fi
 fi
 
-# The broker's agency store. See #123: stable_creature.py:440 calls
-# get_action_selector() with no db_path, so it falls through to a bare
-# "anima.db" and the broker's TD-learning persists relative to the service's
-# working directory — ~/anima-mcp/anima.db, NOT ~/.anima. Everything above
-# backs up ~/.anima only, so the action values that ACTUALLY drive Lumen's
-# behaviour (verified: they match /dev/shm exactly, the ~/.anima copy does
-# not) have never been backed up. 1.6M updates, one reflash from gone, with
-# backup verification green the whole time.
+# The broker's agency store — a permanent fixture now, not a stopgap.
 #
-# This is insurance, not endorsement — #123 may well move the broker onto the
-# main store, at which point delete this block. Until that call is made, do
-# not let the file be the only copy. It is ~100KB; the cost is nothing.
+# #123 is settled: the broker keeps its own TD value table instead of following
+# $ANIMA_DB onto ~/.anima/anima.db. Merging would have put a second writer on
+# the store that actually drives Lumen, so stable_creature.py pins
+# db_paths.BROKER_AGENCY_DB explicitly. The path no longer depends on the
+# service's WorkingDirectory, but it still sits outside ~/.anima, which is all
+# the block above covers. Without this, a reflash loses 1.6M updates with
+# backup verification green the whole way.
+#
+# Correcting the claim this comment used to make: these are NOT "the values
+# that actually drive behaviour". SHM does match this file, but SHM carries the
+# broker's telemetry; the learner that posts questions and drives LEDs is the
+# server's, in ~/.anima/anima.db. The block still earns its keep — ~100KB for
+# 1.6M updates — but the urgency was overstated. Delete it only if the broker's
+# agency is retired outright.
 BROKER_DB="$BACKUP_DIR/agency_${DATE}.db"
 PI_AGENCY_TMP="/tmp/anima_agency_snap_${DATE}.db"
 if ssh $SSH_OPTS unitares-anima@$PI_HOST "test -f ~/anima-mcp/anima.db && python3 -c \"import sqlite3,os;s=sqlite3.connect(os.path.expanduser('~/anima-mcp/anima.db'));d=sqlite3.connect('${PI_AGENCY_TMP}');s.backup(d);d.close();s.close()\"" 2>/dev/null; then

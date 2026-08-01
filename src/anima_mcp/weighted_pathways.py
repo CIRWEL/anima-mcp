@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any
 import sqlite3
 import sys
 import time
+from .db_paths import resolve_db_path
 
 
 # ---------------------------------------------------------------------------
@@ -168,7 +169,7 @@ class WeightedPathways:
     """
 
     def __init__(self, db_path: str = "anima.db"):
-        self._db_path = Path(db_path)
+        self._db_path = Path(resolve_db_path(db_path))
         self._conn: Optional[sqlite3.Connection] = None
         self._pathways: Dict[str, Pathway] = {}  # keyed by "context_key|action_key"
         self._init_db()
