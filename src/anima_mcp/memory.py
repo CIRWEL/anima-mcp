@@ -10,15 +10,14 @@ I know what comes next."
 """
 
 import json
-import os
 import sqlite3
 import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
-from pathlib import Path
 from enum import Enum
 import time
 import sys
+from .db_paths import resolve_db_path
 
 
 class ExplorationMode(Enum):
@@ -167,7 +166,7 @@ class AssociativeMemory:
 
     def __init__(self, db_path: str = "anima.db"):
         """Initialize memory from database."""
-        self.db_path = db_path
+        self.db_path = resolve_db_path(db_path)
         # Patterns now include time: (temp, light, humidity, time) -> StateOutcome
         self._patterns: Dict[Tuple[str, str, str, str], StateOutcome] = {}
         # Also keep non-temporal patterns for fallback
@@ -938,25 +937,12 @@ class AssociativeMemory:
 _memory: Optional[AssociativeMemory] = None
 
 
-def _resolve_db_path(db_path: Optional[str] = None) -> str:
-    """Resolve database path: ANIMA_DB env var > explicit > ~/.anima/anima.db."""
-    env_db = os.environ.get("ANIMA_DB")
-    if env_db:
-        return env_db
-    if db_path and db_path != "anima.db":
-        return db_path
-    home_db = Path.home() / ".anima" / "anima.db"
-    if home_db.exists():
-        return str(home_db)
-    return db_path or "anima.db"
-
-
 def get_memory(db_path: str = "anima.db") -> AssociativeMemory:
     """Get or create the global memory instance."""
     global _memory
     if _memory is None:
-        resolved = _resolve_db_path(db_path)
-        _memory = AssociativeMemory(resolved)
+        # AssociativeMemory resolves the path itself (db_paths.resolve_db_path).
+        _memory = AssociativeMemory(db_path)
         _memory.load_patterns()
     return _memory
 

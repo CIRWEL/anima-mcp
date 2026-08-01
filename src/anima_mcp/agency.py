@@ -26,6 +26,7 @@ import random
 import math
 import sqlite3
 import sys
+from .db_paths import resolve_db_path
 
 
 class ActionType(Enum):
@@ -77,6 +78,33 @@ class ActionOutcome:
     reward: float = 0.0  # Computed reward signal
 
 
+def _log_store_binding(db_path: Path) -> None:
+    """Announce which caller pinned this process's agency store (#123).
+
+    ``get_action_selector()`` is first-call-wins, so whichever caller fires
+    first decides where a process's TD-learning persists for its whole
+    lifetime. That was silent, which is how the broker and the server ended up
+    learning into two different databases without anyone noticing. Naming the
+    resolved absolute path and the caller puts the race in the journal instead
+    of leaving it to be found by diffing two SQLite files.
+    """
+    caller = "unknown"
+    try:
+        import traceback
+        for frame in reversed(traceback.extract_stack()[:-2]):
+            if Path(frame.filename).name != "agency.py":
+                caller = f"{Path(frame.filename).name}:{frame.lineno}"
+                break
+    except Exception:
+        pass
+    try:
+        resolved = db_path.resolve()
+    except OSError:
+        resolved = db_path
+    print(f"[Agency] action store: {resolved} (bound by {caller})",
+          file=sys.stderr, flush=True)
+
+
 class ActionSelector:
     """
     Selects actions based on current state, preferences, and exploration.
@@ -88,7 +116,7 @@ class ActionSelector:
     """
 
     def __init__(self, db_path: str = "anima.db"):
-        self._db_path = Path(db_path)
+        self._db_path = Path(resolve_db_path(db_path))
         self._conn: Optional[sqlite3.Connection] = None
 
         # Action value estimates (action_type -> expected reward)
@@ -109,6 +137,7 @@ class ActionSelector:
         self._sensitivity_modifier: float = 1.0  # Multiplier for surprise threshold
 
         # Load persisted state
+        _log_store_binding(self._db_path)
         self._init_db()
         self._load_state()
 
@@ -692,7 +721,13 @@ _exploration_manager: Optional[ExplorationManager] = None
 
 
 def get_action_selector(db_path: str = "anima.db") -> ActionSelector:
-    """Get or create the action selector."""
+    """Get or create the action selector.
+
+    First call wins for the life of the process. A bare call resolves through
+    ``db_paths.resolve_db_path``, so it can no longer land on a cwd-relative
+    file; the broker passes ``BROKER_AGENCY_DB`` explicitly to stay off the
+    server's live value table. See #123.
+    """
     global _action_selector
     if _action_selector is None:
         _action_selector = ActionSelector(db_path=db_path)

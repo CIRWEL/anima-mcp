@@ -29,6 +29,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Tuple, Any
 from enum import Enum
 from pathlib import Path
+from .db_paths import resolve_db_path
 
 
 class TokenCategory(Enum):
@@ -168,7 +169,7 @@ class PrimitiveLanguageSystem:
     """
 
     def __init__(self, db_path: str = "anima.db"):
-        self.db_path = Path(db_path)
+        self.db_path = Path(resolve_db_path(db_path))
         self._conn: Optional[sqlite3.Connection] = None
 
         # Token weights (modified by learning)

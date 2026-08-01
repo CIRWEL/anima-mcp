@@ -88,15 +88,15 @@ else
     log "  WARNING: No anima.db found - Lumen will start fresh"
 fi
 
-# The broker's agency store — see #123. stable_creature.py:440 omits db_path, so
-# the broker's TD-learning persists to ~/anima-mcp/anima.db instead of ~/.anima.
-# Those are the action values that actually drive behaviour (they match
-# /dev/shm; the ~/.anima copy does not), so without this a restore would leave
-# Lumen acting on the server's shadow values instead of its own.
+# The broker's agency store — see #123, now settled. stable_creature.py pins
+# db_paths.BROKER_AGENCY_DB (~/anima-mcp/anima.db) explicitly rather than
+# following $ANIMA_DB, so the broker keeps its own TD value table and does not
+# become a second writer on the store that drives Lumen. That table lives
+# outside ~/.anima, so nothing above restores it.
 #
 # Deliberately NOT matched by the anima_*.db glob above: it is a ~100KB agency
 # store and must never be selectable as the 240MB main database.
-# Delete this block if #123 moves the broker onto the main store.
+# Delete this block only if the broker's agency is retired outright.
 AGENCY_BACKUP=$(ls -t "$(dirname "$BACKUP")"/agency_*.db 2>/dev/null | head -1)
 if [ -n "$AGENCY_BACKUP" ]; then
     scp $SSH_OPTS "$AGENCY_BACKUP" "$PI_USER@$PI_HOST:~/anima-mcp/anima.db"

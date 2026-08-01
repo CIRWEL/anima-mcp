@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Optional, Dict, List, Any
 import sqlite3
 import sys
+from .db_paths import resolve_db_path
 
 
 @dataclass
@@ -174,7 +175,7 @@ class ExperientialMarks:
     """
 
     def __init__(self, db_path: str = "anima.db"):
-        self._db_path = Path(db_path)
+        self._db_path = Path(resolve_db_path(db_path))
         self._conn: Optional[sqlite3.Connection] = None
         self._earned: Dict[str, EarnedMark] = {}
 

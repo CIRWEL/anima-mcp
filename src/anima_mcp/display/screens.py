@@ -21,6 +21,7 @@ from .design import Timing, ease_smooth
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity
+from ..db_paths import resolve_db_path
 from ..learning_visualization import LearningVisualizer
 from .drawing_engine import (
     DrawingEngine,
@@ -125,7 +126,7 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
         """Initialize with display renderer."""
         self._display = display_renderer
         self._state = ScreenState()
-        self._db_path = db_path or "anima.db"
+        self._db_path = resolve_db_path(db_path)
         self._identity_store = identity_store
 
         # Drawing engine owns canvas, intent, era, mood tracker
