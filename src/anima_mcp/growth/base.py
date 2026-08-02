@@ -192,15 +192,73 @@ class GrowthSystem(
                 humidity_pct REAL,
                 hour INTEGER
             );
+
+            -- Within-piece samples: what the drawing was DOING while it ran.
+            -- drawing_records holds one endpoint row per piece, which cannot
+            -- answer "when did this piece stop changing?" — and that question is
+            -- the whole point, because every completion since 2026-07-30 has
+            -- landed on the 8h cap (gaps measured 8.0002-8.0027h across eleven
+            -- consecutive pieces). An endpoint-only corpus can only describe
+            -- what an 8-hour drawing looks like. Sampling the trajectory lets
+            -- the plateau be located after the fact, without moving any gate.
+            CREATE TABLE IF NOT EXISTS drawing_trajectory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                piece_uid TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                elapsed_seconds REAL,
+                era TEXT,
+                arc_phase TEXT,
+                pixel_count INTEGER,
+                mark_count INTEGER,
+                novel_pixels INTEGER,
+                marks_delta INTEGER,
+                occupied_cells INTEGER,
+                grid_entropy REAL,
+                revisit_ratio REAL,
+                curiosity REAL,
+                engagement REAL,
+                fatigue REAL,
+                coherence REAL,
+                satisfaction REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_drawing_trajectory_piece
+                ON drawing_trajectory(piece_uid, elapsed_seconds);
         """)
         conn.commit()
 
         # Migration: add columns that may be missing from older DBs
         # (CREATE TABLE IF NOT EXISTS won't add new columns to existing tables)
+        #
+        # The drawing_records additions below close a gap that made the
+        # completion question unanswerable from durable state: the completion
+        # reason was computed, threaded into observe_drawing() to gate a
+        # milestone memory, and then dropped. 754 recorded drawings, not one of
+        # which says why it ended, in what era, or how long it took.
         migrations = [
             ("relationships", "self_dialogue_topics", "TEXT DEFAULT '[]'"),
             ("relationships", "visitor_type", "TEXT DEFAULT 'agent'"),
             ("drawing_records", "epoch", "INTEGER NOT NULL DEFAULT 1"),
+            ("drawing_records", "piece_uid", "TEXT"),
+            ("drawing_records", "completion_reason", "TEXT"),
+            ("drawing_records", "era", "TEXT"),
+            ("drawing_records", "mark_count", "INTEGER"),
+            ("drawing_records", "duration_seconds", "REAL"),
+            # The piece's declared intention, so outcome can be compared to it.
+            # coverage_target has been generated, described and persisted since
+            # it was written, and read by nothing — the only DrawingGoal field
+            # with no consumer. Recording it is the precondition for it ever
+            # meaning anything.
+            ("drawing_records", "coverage_target", "TEXT"),
+            ("drawing_records", "intention", "TEXT"),
+            # Attention at the moment of completion — distinguishes "wound down"
+            # from "was still going when the clock cut it off".
+            ("drawing_records", "curiosity", "REAL"),
+            ("drawing_records", "engagement", "REAL"),
+            ("drawing_records", "fatigue", "REAL"),
+            ("drawing_records", "coherence", "REAL"),
+            ("drawing_records", "satisfaction", "REAL"),
+            ("drawing_records", "occupied_cells", "INTEGER"),
+            ("drawing_records", "grid_entropy", "REAL"),
         ]
         for table, column, col_type in migrations:
             try:
@@ -430,4 +488,17 @@ def get_growth_system(db_path: str = "anima.db") -> GrowthSystem:
     global _growth_system
     if _growth_system is None:
         _growth_system = GrowthSystem(db_path=db_path)
+    return _growth_system
+
+
+def peek_growth_system() -> Optional[GrowthSystem]:
+    """The growth singleton if something has already bound it, else None.
+
+    For callers that want to record something but have no business deciding
+    where growth lives. The bare `get_growth_system()` default is cwd-relative,
+    so the first caller in a process fixes the database — that is how the broker
+    ended up with a second, unbacked-up agency store (#123). Anything on a timer
+    should peek rather than get: if growth is not up yet, the honest outcome is
+    no row, not a row in the wrong file.
+    """
     return _growth_system

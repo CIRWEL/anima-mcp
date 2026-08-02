@@ -12,7 +12,7 @@ This module enables Lumen to:
 All growth data persists in SQLite for continuity across sessions.
 """
 
-from .base import GrowthSystem, get_growth_system
+from .base import GrowthSystem, get_growth_system, peek_growth_system
 from .models import (
     GrowthPreference,
     VisitorRecord,
@@ -30,6 +30,7 @@ from .models import (
 __all__ = [
     "GrowthSystem",
     "get_growth_system",
+    "peek_growth_system",
     "GrowthPreference",
     "VisitorRecord",
     "Relationship",
