@@ -61,23 +61,45 @@ def note_suppressed(
                Used as the throttle and counter key, so keep it constant.
         exc: The swallowed exception.
     """
+    # Counting comes first and is not wrapped: dict operations under a lock do
+    # not raise, and the count is the part that must survive. An earlier version
+    # wrapped the whole body, so a failure while FORMATTING the message threw
+    # away the tally too — a swallow-detector that could itself swallow, which
+    # is the exact shape this module exists to remove.
     try:
-        now = time.time()
-        with _suppressed_lock:
-            _suppressed_totals[where] = _suppressed_totals.get(where, 0) + 1
-            total = _suppressed_totals[where]
-            last = _suppressed_last_log.get(where, 0.0)
-            should_log = (now - last) >= throttle_seconds
-            if should_log:
-                _suppressed_last_log[where] = now
-        if should_log:
-            print(
-                f"[suppressed] {where}: {type(exc).__name__}: {exc} "
-                f"(x{total} since start)",
-                file=sys.stderr, flush=True,
-            )
+        key = str(where)
     except Exception:
-        # A logging helper must never become the thing that breaks a caller.
+        key = "<unprintable-site>"
+
+    now = time.time()
+    with _suppressed_lock:
+        _suppressed_totals[key] = _suppressed_totals.get(key, 0) + 1
+        total = _suppressed_totals[key]
+        last = _suppressed_last_log.get(key, 0.0)
+        should_log = (now - last) >= throttle_seconds
+        if should_log:
+            _suppressed_last_log[key] = now
+
+    if not should_log:
+        return
+
+    # Only the message can realistically fail — `{exc}` runs the exception's own
+    # __str__, which is arbitrary code. Degrade to the type name rather than
+    # losing the line.
+    try:
+        detail = f"{type(exc).__name__}: {exc}"
+    except Exception:
+        detail = type(exc).__name__
+
+    try:
+        print(
+            f"[suppressed] {key}: {detail} (x{total} since start)",
+            file=sys.stderr, flush=True,
+        )
+    except Exception:
+        # stderr is gone (closed or redirected to something broken). The count
+        # is already recorded, so `suppressed_counts()` still carries the
+        # signal — nothing is lost silently.
         pass
 
 
