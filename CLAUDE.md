@@ -452,6 +452,18 @@ Server syncs `_last_governance_decision` from SHM when `governance_at` is within
 
 ## Identity, Continuity, and Control
 
+**Visitor attribution — a channel is not a person.** `normalize_visitor_identity()`
+resolves PERSON from an explicit **name** claim only. It used to also match the
+`source` argument against the operator's aliases (`"dashboard"` was one), and the
+check was `id in aliases OR source in aliases` — so the channel **overrode the
+author the caller supplied**, and an agent answering through the dashboard was
+durably recorded as the operator, as a PERSON. The generic role words
+(`"caretaker"`, `"human"`) were the same mistake: anyone can type them. Do not
+re-add surface-based or role-word inference; an unattributed caller is
+`ANONYMOUS_VISITOR_ID`, recorded as an AGENT. `source` is kept for provenance,
+never for identity. ⚠️ Records written before 2026-08-02 are contaminated — the
+operator's `interaction_count` includes agent visits and cannot be separated.
+
 **Two identity notions (do not conflate):**
 - **Record identity:** `creature_id` + SQLite (`identity/store.py`) — continuity of *this* deployment’s database file.
 - **Trajectory identity:** `TrajectorySignature` (`trajectory.py`) — behavioral similarity over time. Same UUID with different lived history is still one record; trajectory compares *patterns*.

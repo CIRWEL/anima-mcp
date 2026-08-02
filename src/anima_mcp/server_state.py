@@ -57,22 +57,35 @@ META_LEARNING_INTERVAL = 21600  # iterations — ~daily at ~2s/iter
 
 # === Identity resolution ===
 # Maps canonical person name → set of aliases (case-insensitive matching)
-# All dashboard interactions also resolve to the first person by default.
-# Note: "cirwel" excluded — agents often inherit this macOS username.
-# Only dashboard source reliably identifies the human.
-#
 # The canonical operator name is deployment-specific, so it comes from the
 # environment (`ANIMA_OPERATOR_NAME`) with a generic default. A fresh clone
 # resolves the human to "operator"; a specific deployment sets the env var to
-# its caretaker's name (e.g. ANIMA_OPERATOR_NAME=Kenny). The role aliases
-# ("caretaker", "dashboard", "human") always resolve to that canonical person.
+# its caretaker's name.
 # NOTE: an existing deployment with person history keyed under a prior canonical
 # name MUST set ANIMA_OPERATOR_NAME to that name, or the growth/relationship
 # record will be created fresh under "operator" instead of matching history.
 OPERATOR_NAME = (os.environ.get("ANIMA_OPERATOR_NAME") or "operator").strip().lower() or "operator"
+
+# Aliases that resolve to the operator. This used to read
+# `{OPERATOR_NAME, "caretaker", "dashboard", "human"}`, and the comment above it
+# claimed "only dashboard source reliably identifies the human". It does not.
+#
+# The dashboard is a web surface, not a person. Anything that can reach the
+# endpoint can post through it — and things do: an agent answering a question
+# via the dashboard was recorded as the operator, as a PERSON, because
+# `normalize_visitor_identity` matched on the CHANNEL and that match overrode
+# the author the caller actually supplied. The generic role words were the same
+# mistake in a different shape: "human" is a self-declaration anyone can type.
+#
+# What remains is the operator's own name — still only a name claim, but a
+# deliberate one, not an inference from which door someone came through.
 KNOWN_PERSON_ALIASES = {
-    OPERATOR_NAME: {OPERATOR_NAME, "caretaker", "dashboard", "human"},
+    OPERATOR_NAME: {OPERATOR_NAME},
 }
+
+# Recorded when a caller does not say who it is. It is a real visitor with no
+# established identity — not the operator, and not asserted to be a person.
+ANONYMOUS_VISITOR_ID = "anonymous"
 
 # === Error/status logging throttle intervals ===
 ERROR_LOG_THROTTLE = 300       # ~10 minutes between repeated error logs

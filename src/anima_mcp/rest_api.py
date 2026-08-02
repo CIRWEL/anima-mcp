@@ -375,8 +375,11 @@ async def rest_answer(request):
         body = await request.json()
         question_id = body.get("question_id") or body.get("id")
         answer = body.get("answer")
-        author = body.get("author", "caretaker")
-        # Normalize identity: dashboard interactions resolve to person
+        # An unattributed answer is unattributed. This defaulted to "caretaker",
+        # which resolved to the operator as a PERSON — so anything that posted
+        # without naming itself was recorded as the human.
+        from .server_state import ANONYMOUS_VISITOR_ID
+        author = (body.get("author") or "").strip() or ANONYMOUS_VISITOR_ID
         _, display_name, _ = normalize_visitor_identity(author, source="dashboard")
         result = await handle_lumen_qa({
             "question_id": question_id,
@@ -402,8 +405,10 @@ async def rest_message(request):
 
         body = await request.json()
         message = body.get("message", body.get("text", ""))
-        author = body.get("author", "dashboard")
-        # Normalize identity: dashboard interactions resolve to person
+        # Same fix as /answer: "dashboard" was itself an operator alias, so an
+        # unattributed message became a message from the human.
+        from .server_state import ANONYMOUS_VISITOR_ID
+        author = (body.get("author") or "").strip() or ANONYMOUS_VISITOR_ID
         _, display_name, _ = normalize_visitor_identity(author, source="dashboard")
         responds_to = body.get("responds_to")
         payload = {"message": message, "source": "dashboard", "agent_name": display_name}

@@ -47,21 +47,23 @@ class TestGetStateExtended:
             presence=0.7,
             feeling=lambda: {"mood": "calm"},
         )
-        recent = [SimpleNamespace(author="user", timestamp=datetime.now().timestamp() - 30)]
+        # From visitor records now — the message board carried no msg_type
+        # "user" on the live system, so the old source was always 0.0.
+        growth = SimpleNamespace(interaction_level=lambda: 0.75)
 
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.handlers.state_queries.extract_neural_bands", return_value={"alpha": 0.2}), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
-             patch("anima_mcp.messages.get_recent_messages", return_value=recent):
+             patch("anima_mcp.accessors._get_growth", return_value=growth):
             data = parse_result(await handle_get_state({}))
 
         assert data["mood"] == "calm"
         assert data["identity"]["name"] == "Lumen"
         assert data["inner_life"]["temperament"] == "gentle"
         store.record_state.assert_called_once()
-        assert "interaction_level" in store.record_state.call_args[0][4]
+        assert store.record_state.call_args[0][4]["interaction_level"] == 0.75
 
     async def test_get_state_identity_error_returns_error(self):
         from anima_mcp.handlers.state_queries import handle_get_state
