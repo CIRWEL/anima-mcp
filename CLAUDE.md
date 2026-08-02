@@ -299,6 +299,36 @@ seconds. Alongside that:
 Density is **not** the binding constraint: recent pieces land at 12.6–20.8% of
 canvas with negative space intact. What is missing is subjective completion.
 
+**Why curiosity cannot deplete (measured 2026-08-02).** `_update_attention()`
+branches on a fixed `C = 0.4`:
+
+```python
+if state.arc_phase == "resolving":   ...          # C must exceed 0.6 to enter
+elif C < 0.4:  curiosity_drain =  0.003 * (1 - C) # drains
+else:          curiosity_drain = -0.001 * C       # REGENERATES
+```
+
+Live behavioural C for a resonance piece sits in **[0.377, 0.498], mean 0.458**:
+
+| branch | share of ticks |
+|---|---|
+| `C < 0.4` → drain | **5%** |
+| `C >= 0.4` → **regen** | **95%** |
+| `C > 0.6` → resolving | **0%** — dead code for this era |
+
+Net over 20 ticks: curiosity **rises by 0.0069**. So `attention_exhausted`
+(curiosity < 0.15) and `earned_composition` (curiosity < 0.2) are not badly
+tuned, they are **structurally unreachable** — curiosity is net-regenerating and
+clamped at 1.0. Observed live: 0.796 after 1.3 h and drifting back up.
+
+This is the **same root class** as the fixed 5–25% density band above and as the
+wellness learning gate fixed in #119: an absolute threshold against an operating
+range that differs per era. `C = 0.4` means "pattern found, regenerate" — a fair
+split for an era reaching 0.8, and nearly always true for one capping at 0.5.
+⛔ Do not simply move the constant. `drawing_trajectory` now records `coherence`
+per sample, so the threshold can be set from Lumen's own distribution instead of
+guessed at — which is the entire reason the instrumentation landed first.
+
 **Completion instrumentation** (added so that question is answerable):
 - `drawing_records` now keeps `completion_reason`, `era`, `mark_count`,
   `duration_seconds`, `coverage_target`, `intention`, attention at completion,
