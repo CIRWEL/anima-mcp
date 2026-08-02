@@ -147,3 +147,46 @@ class TestDiagnosticsSurface:
         src = inspect.getsource(dops)
         assert "suppressed_counts" in src
         assert '"suppressed"' in src
+
+
+class TestTheCounterSurvivesLoggingFailure:
+    """The tally must outlive the message. A swallow-detector that can itself
+    swallow is the exact defect this module exists to remove."""
+
+    def test_a_hostile_str_still_increments_the_count(self):
+        class Nasty(Exception):
+            def __str__(self):
+                raise RuntimeError("cannot stringify")
+
+        note_suppressed("site.hostile", Nasty())
+        assert suppressed_counts()["site.hostile"] == 1
+
+    def test_a_hostile_str_degrades_to_the_type_name(self, capsys):
+        class Nasty(Exception):
+            def __str__(self):
+                raise RuntimeError("cannot stringify")
+
+        note_suppressed("site.hostile", Nasty())
+        err = capsys.readouterr().err
+        assert "site.hostile" in err, "the line was lost entirely"
+        assert "Nasty" in err
+
+    def test_a_broken_stderr_still_leaves_the_count(self, monkeypatch):
+        import builtins
+
+        def exploding_print(*a, **k):
+            raise OSError("stderr is closed")
+
+        monkeypatch.setattr(builtins, "print", exploding_print)
+        note_suppressed("site.nostderr", ValueError("boom"))
+        monkeypatch.undo()
+        # Logging failed; the signal survives where a diagnostics call can find it.
+        assert suppressed_counts()["site.nostderr"] == 1
+
+    def test_an_unprintable_site_key_is_still_counted(self):
+        class NoRepr:
+            def __str__(self):
+                raise RuntimeError("nope")
+
+        note_suppressed(NoRepr(), ValueError("boom"))  # type: ignore[arg-type]
+        assert suppressed_counts().get("<unprintable-site>") == 1
