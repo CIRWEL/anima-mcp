@@ -40,6 +40,27 @@ defmodule AnimaBroker.Sensors.BMP280 do
   @reg_ctrl_meas 0xF4
   @ctrl_meas_normal 0x27
 
+  # Both data registers read 0x80000 when the chip has not completed a
+  # conversion — the power-on/reset value. A BMP280 parked in sleep mode returns
+  # it forever while every read SUCCEEDS, and the compensation math turns it into
+  # a plausible-looking constant that nothing downstream can tell apart from a
+  # steady barometer.
+  #
+  # This is not hypothetical. Measured live 2026-08-02: ctrl_meas read 0x54 —
+  # byte-exact for the Adafruit CircuitPython driver's defaults in SLEEP mode
+  # ((OVERSCAN_X2 <<< 5) + (OVERSCAN_X16 <<< 2) + MODE_SLEEP) — because the
+  # Python sensor stack initialised the same chip during the Elixir cutover and
+  # left it asleep. `configure/3` ran once at init and was never re-asserted, so
+  # the chip stayed asleep for **ten days** publishing 682.5015433175248 hPa
+  # (physically impossible at this altitude; the real value is ~825). Zero read
+  # failures were logged in that entire window, because the reads were fine —
+  # only the data was meaningless.
+  @adc_reset 0x80000
+
+  # Re-assert configuration at most this often while degraded (cycles), so a
+  # genuinely absent chip does not get its register hammered every tick.
+  @reconfigure_every 30
+
   @type calibration :: %{
           required(:dig_t1) => non_neg_integer(),
           required(:dig_t2) => integer(),
@@ -166,15 +187,28 @@ defmodule AnimaBroker.Sensors.BMP280 do
   def configure(impl, bus, address \\ @address),
     do: I2C.write_register(impl, bus, address, @reg_ctrl_meas, <<@ctrl_meas_normal>>)
 
-  @doc "Read + compensate one sample. Needs the calibration read at init."
+  @doc """
+  Read + compensate one sample. Needs the calibration read at init.
+
+  Returns `{:error, :not_converted}` when both data registers still hold the
+  reset value — a successful read of a chip that has produced no measurement.
+  Compensating that yields a stable, believable number, which is the worst
+  possible failure mode: it looks exactly like a calm day.
+  """
   @spec read_once(module(), I2C.bus(), I2C.address(), calibration()) ::
           {:ok, %{temp_c: float(), pressure_hpa: float()}} | {:error, term()}
   def read_once(impl, bus, address \\ @address, calibration) do
     with {:ok, bin} <- I2C.read_register(impl, bus, address, @reg_data, @reg_data_len),
-         {:ok, {adc_p, adc_t}} <- parse_raw(bin) do
+         {:ok, {adc_p, adc_t}} <- parse_raw(bin),
+         :ok <- check_converted(adc_p, adc_t) do
       {:ok, compute(calibration, adc_p, adc_t)}
     end
   end
+
+  @doc "Reject the reset value: a read that succeeded but measured nothing."
+  @spec check_converted(non_neg_integer(), non_neg_integer()) :: :ok | {:error, :not_converted}
+  def check_converted(@adc_reset, @adc_reset), do: {:error, :not_converted}
+  def check_converted(_adc_p, _adc_t), do: :ok
 
   # ---- Callbacks ----
 
@@ -189,6 +223,8 @@ defmodule AnimaBroker.Sensors.BMP280 do
     }
 
     _ = configure(base.impl, base.bus, base.address)
+
+    base = Map.merge(base, %{healthy?: true, degraded_cycles: 0})
 
     case read_calibration(base.impl, base.bus, base.address) do
       {:ok, calib} ->
@@ -207,15 +243,58 @@ defmodule AnimaBroker.Sensors.BMP280 do
   def handle_info(:read, %{calibration: nil} = state), do: {:noreply, state}
 
   def handle_info(:read, state) do
-    case read_once(state.impl, state.bus, state.address, state.calibration) do
-      {:ok, %{temp_c: t, pressure_hpa: p}} ->
-        state.store.merge(%{"readings" => %{"pressure_hpa" => p, "pressure_temp_c" => t}})
+    state =
+      case read_once(state.impl, state.bus, state.address, state.calibration) do
+        {:ok, %{temp_c: t, pressure_hpa: p}} ->
+          state.store.merge(%{"readings" => %{"pressure_hpa" => p, "pressure_temp_c" => t}})
+          note_healthy(state)
 
-      {:error, reason} ->
-        Logger.warning("[BMP280] read failed: #{inspect(reason)}")
-    end
+        {:error, reason} ->
+          # Publish absence, not the last good value. Leaving the previous
+          # reading in the store is what let a dead channel read as a calm one
+          # for ten days — downstream cannot distinguish "unchanged" from
+          # "unmeasured" unless this says so.
+          state.store.merge(%{"readings" => %{"pressure_hpa" => nil, "pressure_temp_c" => nil}})
+          note_degraded(state, reason)
+      end
 
     Process.send_after(self(), :read, state.interval_ms)
     {:noreply, state}
+  end
+
+  # ---- Health transitions ----
+
+  defp note_healthy(%{healthy?: false} = state) do
+    Logger.info("[BMP280] recovered — sensor is converting again")
+    %{state | healthy?: true, degraded_cycles: 0}
+  end
+
+  defp note_healthy(state), do: %{state | degraded_cycles: 0}
+
+  defp note_degraded(state, reason) do
+    if state.healthy? do
+      Logger.warning("[BMP280] read unusable: #{inspect(reason)} — publishing absent")
+    end
+
+    # Re-assert normal mode. Another driver on the same bus can leave this chip
+    # in sleep (measured live: the Adafruit Python stack parked it at 0x54), and
+    # configuring once at init means it never comes back on its own. Bounded so
+    # a truly missing chip is not hammered every tick.
+    state =
+      if rem(state.degraded_cycles, @reconfigure_every) == 0 do
+        case configure(state.impl, state.bus, state.address) do
+          :ok -> state
+          {:error, err} -> tap_error(state, err)
+        end
+      else
+        state
+      end
+
+    %{state | healthy?: false, degraded_cycles: state.degraded_cycles + 1}
+  end
+
+  defp tap_error(state, err) do
+    Logger.warning("[BMP280] reconfigure failed: #{inspect(err)}")
+    state
   end
 end

@@ -113,4 +113,58 @@ defmodule AnimaBroker.Sensors.BMP280Test do
       assert c.dig_t3 == @t3
     end
   end
+
+  # The reset value 0x80000 in both data registers means the chip answered but
+  # measured nothing. Compensating it produces a stable, believable number —
+  # which is why this went unnoticed on the live Pi for ten days at
+  # 682.5015433175248 hPa with zero read failures logged.
+  @adc_reset 0x80000
+
+  defp reset_bin do
+    <<@adc_reset >>> 12 &&& 0xFF, @adc_reset >>> 4 &&& 0xFF, @adc_reset <<< 4 &&& 0xF0,
+      @adc_reset >>> 12 &&& 0xFF, @adc_reset >>> 4 &&& 0xFF, @adc_reset <<< 4 &&& 0xF0>>
+  end
+
+  describe "unconverted-sample rejection" do
+    test "check_converted rejects the reset value in both registers" do
+      assert {:error, :not_converted} = BMP280.check_converted(@adc_reset, @adc_reset)
+    end
+
+    test "check_converted accepts a real sample" do
+      assert :ok = BMP280.check_converted(@adc_p, @adc_t)
+    end
+
+    test "a reset value in only one register is still a real sample" do
+      assert :ok = BMP280.check_converted(@adc_reset, @adc_t)
+      assert :ok = BMP280.check_converted(@adc_p, @adc_reset)
+    end
+
+    test "read_once returns :not_converted instead of a plausible constant" do
+      {:ok, calib} = BMP280.parse_calibration(calib_bin())
+      bus = %{responses: %{{:write_read, 0xF7, 6} => {:ok, reset_bin()}}}
+
+      assert {:error, :not_converted} = BMP280.read_once(FakeI2C, bus, 0x77, calib)
+    end
+
+    test "the rejected value is exactly the believable constant that fooled us" do
+      # Guards the reason this check exists: without it, compute/3 turns the
+      # reset value into a number no consumer would question.
+      {:ok, calib} = BMP280.parse_calibration(calib_bin())
+      %{pressure_hpa: p, temp_c: t} = BMP280.compute(calib, @adc_reset, @adc_reset)
+
+      assert p > 0.0, "the reset value compensates to a positive, plausible-looking pressure"
+      assert t > -50.0 and t < 100.0, "and to a temperature well inside a believable range"
+    end
+  end
+
+  describe "configure re-assertion" do
+    test "configure writes normal mode to ctrl_meas" do
+      bus = %{responses: %{}, trace: self()}
+      assert :ok = BMP280.configure(FakeI2C, bus, 0x77)
+      # 0x27 = osrs_t x1, osrs_p x1, mode=normal. The live chip was found at
+      # 0x54 — the Adafruit Python driver's defaults, mode=sleep — which is how
+      # a chip stops converting while every read still succeeds.
+      assert_received {:i2c_write, 0x77, <<0xF4, 0x27>>}
+    end
+  end
 end
