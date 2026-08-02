@@ -263,6 +263,28 @@ class CanvasState:
         satisfaction = 0.4 * coverage + 0.3 * balance + 0.3 * coherence
         return min(1.0, max(0.0, satisfaction))
 
+    def _rebuild_density_grid(self) -> None:
+        """Recompute the 8x8 density grid from the pixels themselves.
+
+        `density_grid` is maintained incrementally by draw_pixel() and is NOT
+        persisted, while `pixels` is — so every restart restored a full canvas
+        beside an empty grid. Measured live 2026-08-02: a 9,955-pixel piece
+        reported occupied_cells 0 and grid_entropy 0.0.
+
+        This is the same shape as the resonance settling bug (#116): derived
+        state living beside the thing it is derived from, and only one of them
+        surviving a restart. Rebuilding is preferred to persisting because the
+        grid then cannot drift from the pixels it describes.
+
+        Consumers: occupied_cells(), grid_entropy(), and sparsest_cell() — which
+        resonance uses to steer focus, so an empty grid did not merely mis-report
+        structure, it aimed every post-restart drift at cell (0,0).
+        """
+        grid = [[0] * 8 for _ in range(8)]
+        for (x, y) in self.pixels:
+            grid[min(x // 30, 7)][min(y // 30, 7)] += 1
+        self.density_grid = grid
+
     def piece_uid(self) -> str:
         """Stable identifier for the current piece, for joining samples to it.
 
@@ -429,6 +451,12 @@ class CanvasState:
                         continue
         except Exception as e:
             print(f"[Canvas] Error loading pixels: {e}", file=sys.stderr, flush=True)
+
+        # The density grid is not persisted, and it is fully derivable from the
+        # pixels that are — so rebuild it rather than adding a second copy that
+        # could disagree with them. Without this a restored canvas carried
+        # thousands of pixels beside an all-zero grid.
+        self._rebuild_density_grid()
 
         # Load recent_locations with validation
         try:

@@ -475,3 +475,61 @@ class TestNoGateMoved:
 
     def test_sample_interval_does_not_gate_drawing(self):
         assert TRAJECTORY_SAMPLE_INTERVAL == 300.0
+
+
+class TestDensityGridSurvivesRestart:
+    """density_grid is derived from pixels and was not persisted.
+
+    Measured live 2026-08-02: a restored 9,955-pixel canvas reported
+    occupied_cells 0 and grid_entropy 0.0. Same shape as the resonance settling
+    bug (#116) — derived state beside its source, only one surviving a restart.
+    """
+
+    def _saved_canvas(self, tmp_path, monkeypatch):
+        import anima_mcp.display.drawing_engine as de
+
+        monkeypatch.setattr(de, "_get_canvas_path", lambda: tmp_path / "canvas.json")
+        canvas = CanvasState()
+        for gx in range(6):
+            for gy in range(5):
+                for k in range(3):
+                    canvas.draw_pixel(gx * 30 + k, gy * 30 + k, (200, 120, 40))
+        canvas.save_to_disk()
+        return canvas
+
+    def test_reach_is_recovered_after_a_reload(self, tmp_path, monkeypatch):
+        original = self._saved_canvas(tmp_path, monkeypatch)
+        assert original.occupied_cells() == 30
+
+        restored = CanvasState()
+        restored.load_from_disk()
+        assert len(restored.pixels) == len(original.pixels)
+        assert restored.occupied_cells() == original.occupied_cells()
+        assert restored.grid_entropy() == pytest.approx(original.grid_entropy())
+
+    def test_grid_matches_the_pixels_it_describes(self, tmp_path, monkeypatch):
+        self._saved_canvas(tmp_path, monkeypatch)
+        restored = CanvasState()
+        restored.load_from_disk()
+        assert sum(sum(row) for row in restored.density_grid) == len(restored.pixels)
+
+    def test_a_populated_canvas_never_reloads_as_structureless(self, tmp_path, monkeypatch):
+        """The exact live symptom: many pixels, zero reported reach."""
+        self._saved_canvas(tmp_path, monkeypatch)
+        restored = CanvasState()
+        restored.load_from_disk()
+        assert not (len(restored.pixels) > 0 and restored.occupied_cells() == 0)
+
+    def test_sparsest_cell_is_meaningful_after_reload(self, tmp_path, monkeypatch):
+        """resonance steers focus by this; an empty grid aimed it all at (0,0)."""
+        import anima_mcp.display.drawing_engine as de
+
+        monkeypatch.setattr(de, "_get_canvas_path", lambda: tmp_path / "canvas.json")
+        canvas = CanvasState()
+        for k in range(40):  # crowd cell (0,0) only
+            canvas.draw_pixel(k % 29, k // 29, (200, 120, 40))
+        canvas.save_to_disk()
+
+        restored = CanvasState()
+        restored.load_from_disk()
+        assert restored.sparsest_cell() != (0, 0), "densest cell reported as sparsest"
