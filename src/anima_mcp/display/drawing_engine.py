@@ -263,6 +263,28 @@ class CanvasState:
         satisfaction = 0.4 * coverage + 0.3 * balance + 0.3 * coherence
         return min(1.0, max(0.0, satisfaction))
 
+    def _rebuild_density_grid(self) -> None:
+        """Recompute the 8x8 density grid from the pixels themselves.
+
+        `density_grid` is maintained incrementally by draw_pixel() and is NOT
+        persisted, while `pixels` is — so every restart restored a full canvas
+        beside an empty grid. Measured live 2026-08-02: a 9,955-pixel piece
+        reported occupied_cells 0 and grid_entropy 0.0.
+
+        This is the same shape as the resonance settling bug (#116): derived
+        state living beside the thing it is derived from, and only one of them
+        surviving a restart. Rebuilding is preferred to persisting because the
+        grid then cannot drift from the pixels it describes.
+
+        Consumers: occupied_cells(), grid_entropy(), and sparsest_cell() — which
+        resonance uses to steer focus, so an empty grid did not merely mis-report
+        structure, it aimed every post-restart drift at cell (0,0).
+        """
+        grid = [[0] * 8 for _ in range(8)]
+        for (x, y) in self.pixels:
+            grid[min(x // 30, 7)][min(y // 30, 7)] += 1
+        self.density_grid = grid
+
     def piece_uid(self) -> str:
         """Stable identifier for the current piece, for joining samples to it.
 
@@ -429,6 +451,12 @@ class CanvasState:
                         continue
         except Exception as e:
             print(f"[Canvas] Error loading pixels: {e}", file=sys.stderr, flush=True)
+
+        # The density grid is not persisted, and it is fully derivable from the
+        # pixels that are — so rebuild it rather than adding a second copy that
+        # could disagree with them. Without this a restored canvas carried
+        # thousands of pixels beside an all-zero grid.
+        self._rebuild_density_grid()
 
         # Load recent_locations with validation
         try:
@@ -983,6 +1011,10 @@ class DrawingEngine:
         self._last_sample_pixels = 0
         self._last_sample_marks = 0
         self._last_sample_piece = ""
+        # A piece that already had pixels when this process started. Its growth
+        # happened in a process that is gone, so the first sample's deltas are
+        # unknowable — see _sample_trajectory.
+        self._resumed_piece = self.canvas.piece_uid() if self.canvas.pixels else None
 
     def _era_revisit_ratio(self) -> Optional[float]:
         """Fraction of the era's recent deposits that landed on existing field.
@@ -1041,7 +1073,16 @@ class DrawingEngine:
         uid = self.canvas.piece_uid()
         # A new piece restarts the deltas — carrying them across a canvas clear
         # would report the previous drawing's growth as this one's.
+        #
+        # `resumed` distinguishes a genuinely fresh canvas from a piece this
+        # process is joining mid-flight (a restart). For a resumed piece the
+        # deltas since the last sample are simply not knowable: the growth
+        # happened in a process that is gone. Reporting them anyway attributed
+        # the ENTIRE canvas to one 300s window — measured live 2026-08-02,
+        # novel_pixels 9955 at elapsed 24004s, a burst that never happened.
+        resumed = False
         if uid != self._last_sample_piece:
+            resumed = uid == self._resumed_piece
             self._last_sample_piece = uid
             self._last_sample_pixels = 0
             self._last_sample_marks = 0
@@ -1065,8 +1106,10 @@ class DrawingEngine:
                 "arc_phase": state.arc_phase,
                 "pixel_count": pixels,
                 "mark_count": marks,
-                "novel_pixels": pixels - self._last_sample_pixels,
-                "marks_delta": marks - self._last_sample_marks,
+                # NULL rather than the whole canvas when this process did not
+                # watch the growth happen. An unknown delta is not a large one.
+                "novel_pixels": None if resumed else pixels - self._last_sample_pixels,
+                "marks_delta": None if resumed else marks - self._last_sample_marks,
                 "occupied_cells": self.canvas.occupied_cells(),
                 "grid_entropy": round(self.canvas.grid_entropy(), 4),
                 "revisit_ratio": self._era_revisit_ratio(),
