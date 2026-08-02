@@ -309,6 +309,17 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     if drawing_info:
         result["drawing"] = drawing_info
 
+    # What has quietly stopped working. Optional instrumentation is allowed to
+    # fail without stopping a reading, but a swallowed failure used to leave no
+    # trace at all — the channel just stopped appearing, indistinguishable from
+    # one with nothing to report. An empty dict here is the healthy case; a
+    # rising count is an instrument that has gone silent without saying so.
+    try:
+        from ..error_recovery import suppressed_counts
+        result["suppressed"] = suppressed_counts()
+    except Exception as e:
+        result["suppressed"] = {"error": f"{type(e).__name__}: {e}"}
+
     # Governance / UNITARES reachability — surfaces silent local-fallback.
     # get_health() reports governance=ok whenever decisions are produced, even
     # local-only ones, so a prolonged UNITARES outage is otherwise invisible here.

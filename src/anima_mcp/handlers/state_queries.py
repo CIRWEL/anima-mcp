@@ -9,6 +9,7 @@ from mcp.types import TextContent
 
 from ..server_state import extract_neural_bands
 from ..config import ConfigManager
+from ..error_recovery import note_suppressed
 
 
 async def handle_get_state(arguments: dict) -> list[TextContent]:
@@ -89,12 +90,13 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
                 "drives": il.get("drives"),
                 "strongest_drive": il.get("strongest_drive"),
             }
-    except Exception:
-        pass
+    except Exception as e:
+        note_suppressed("state_queries.inner_life", e)
 
-    # Record state for history (enriched with interaction context)
-    # Only count human (user) messages for interaction_level — agent/system
-    # messages (governance check-ins, MCP tool calls) are not "someone is around"
+    # Record state for history. Each optional enrichment below is allowed to
+    # fail without stopping the record — but the gap is logged and counted, not
+    # swallowed: a sensor that quietly stops appearing in state_history is
+    # indistinguishable from one that had nothing to report.
     sensors_for_history = readings.to_dict()
     # Own LED brightness is not carried through shared memory, so fill it in
     # from live proprioception — lux is recorded raw and mixes room light with
@@ -103,8 +105,8 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
         try:
             from ..accessors import _get_led_brightness
             sensors_for_history["led_brightness"] = _get_led_brightness()
-        except Exception:
-            pass
+        except Exception as e:
+            note_suppressed("state_queries.led_brightness", e)
     try:
         from ..accessors import _get_growth
         growth = _get_growth()
@@ -112,8 +114,8 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
             level = growth.interaction_level()
             if level is not None:
                 sensors_for_history["interaction_level"] = level
-    except Exception:
-        pass
+    except Exception as e:
+        note_suppressed("state_queries.interaction_level", e)
     store.record_state(
         anima.warmth, anima.clarity, anima.stability, anima.presence,
         sensors_for_history
