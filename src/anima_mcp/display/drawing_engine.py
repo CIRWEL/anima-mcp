@@ -1011,6 +1011,10 @@ class DrawingEngine:
         self._last_sample_pixels = 0
         self._last_sample_marks = 0
         self._last_sample_piece = ""
+        # A piece that already had pixels when this process started. Its growth
+        # happened in a process that is gone, so the first sample's deltas are
+        # unknowable — see _sample_trajectory.
+        self._resumed_piece = self.canvas.piece_uid() if self.canvas.pixels else None
 
     def _era_revisit_ratio(self) -> Optional[float]:
         """Fraction of the era's recent deposits that landed on existing field.
@@ -1069,7 +1073,16 @@ class DrawingEngine:
         uid = self.canvas.piece_uid()
         # A new piece restarts the deltas — carrying them across a canvas clear
         # would report the previous drawing's growth as this one's.
+        #
+        # `resumed` distinguishes a genuinely fresh canvas from a piece this
+        # process is joining mid-flight (a restart). For a resumed piece the
+        # deltas since the last sample are simply not knowable: the growth
+        # happened in a process that is gone. Reporting them anyway attributed
+        # the ENTIRE canvas to one 300s window — measured live 2026-08-02,
+        # novel_pixels 9955 at elapsed 24004s, a burst that never happened.
+        resumed = False
         if uid != self._last_sample_piece:
+            resumed = uid == self._resumed_piece
             self._last_sample_piece = uid
             self._last_sample_pixels = 0
             self._last_sample_marks = 0
@@ -1093,8 +1106,10 @@ class DrawingEngine:
                 "arc_phase": state.arc_phase,
                 "pixel_count": pixels,
                 "mark_count": marks,
-                "novel_pixels": pixels - self._last_sample_pixels,
-                "marks_delta": marks - self._last_sample_marks,
+                # NULL rather than the whole canvas when this process did not
+                # watch the growth happen. An unknown delta is not a large one.
+                "novel_pixels": None if resumed else pixels - self._last_sample_pixels,
+                "marks_delta": None if resumed else marks - self._last_sample_marks,
                 "occupied_cells": self.canvas.occupied_cells(),
                 "grid_entropy": round(self.canvas.grid_entropy(), 4),
                 "revisit_ratio": self._era_revisit_ratio(),

@@ -533,3 +533,74 @@ class TestDensityGridSurvivesRestart:
         restored = CanvasState()
         restored.load_from_disk()
         assert restored.sparsest_cell() != (0, 0), "densest cell reported as sparsest"
+
+
+class TestResumedPieceDeltas:
+    """Joining a piece mid-flight must not claim its whole history as one window.
+
+    Measured live 2026-08-02: the first sample after a restart reported
+    novel_pixels 9955 at elapsed 24004s — the entire canvas attributed to a
+    single 300s interval, a burst that never happened.
+    """
+
+    @pytest.fixture
+    def restarted(self, monkeypatch, tmp_path):
+        """A piece drawn by one engine, then picked up by a second one.
+
+        This performs a real resume — save to disk, construct a new engine that
+        loads it — rather than faking the state, because the distinction the fix
+        turns on is exactly whether the canvas came off disk.
+        """
+        import anima_mcp.growth.base as base
+        import anima_mcp.display.drawing_engine as de
+
+        db = str(tmp_path / "anima.db")
+        monkeypatch.setattr(base, "_growth_system", GrowthSystem(db_path=db))
+        monkeypatch.setattr(de, "_get_canvas_path", lambda: tmp_path / "canvas.json")
+
+        first = de.DrawingEngine(db_path=db)
+        for i in range(400):
+            first.canvas.draw_pixel(i % 240, (i // 240) * 7, (200, 120, 40))
+        first.canvas.mark_count = 350
+        first.canvas.save_to_disk()
+
+        return de.DrawingEngine(db_path=db)  # the process that comes after
+
+    def test_resumed_piece_reports_unknown_deltas_not_the_whole_canvas(self, restarted):
+        assert restarted.canvas.pixels, "fixture did not actually resume a piece"
+        restarted._sample_trajectory(restarted.canvas.last_clear_time + 20_000)
+
+        row = peek_growth_system().get_drawing_trajectory()[0]
+        assert row["novel_pixels"] is None, "resumed piece claimed the canvas as novel"
+        assert row["marks_delta"] is None
+        # Absolute state is still knowable and still recorded.
+        assert row["pixel_count"] == len(restarted.canvas.pixels)
+        assert row["mark_count"] == 350
+
+    def test_the_next_sample_measures_normally(self, restarted):
+        t0 = restarted.canvas.last_clear_time
+        restarted._sample_trajectory(t0 + 20_000)
+
+        before = len(restarted.canvas.pixels)
+        for k in range(30):
+            restarted.canvas.draw_pixel(k, 200, (200, 120, 40))
+        restarted.canvas.mark_count = 360
+        restarted._sample_trajectory(t0 + 20_000 + TRAJECTORY_SAMPLE_INTERVAL)
+
+        rows = peek_growth_system().get_drawing_trajectory()
+        assert len(rows) == 2
+        assert rows[1]["novel_pixels"] == len(restarted.canvas.pixels) - before
+        assert rows[1]["marks_delta"] == 10
+
+    def test_a_genuinely_fresh_piece_still_reports_its_first_window(self, restarted):
+        """Only a RESUMED piece is unknown — a new canvas is measured from zero."""
+        restarted.canvas.clear()
+        restarted.canvas.last_clear_time += 10_000  # a distinct, brand-new piece
+        for k in range(50):
+            restarted.canvas.draw_pixel(k, 5, (200, 120, 40))
+        restarted.canvas.mark_count = 12
+        restarted._sample_trajectory(restarted.canvas.last_clear_time + 400)
+
+        row = peek_growth_system().get_drawing_trajectory()[0]
+        assert row["novel_pixels"] == 50
+        assert row["marks_delta"] == 12
