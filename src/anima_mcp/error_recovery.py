@@ -8,18 +8,94 @@ Provides:
 - Specific exception types for different failure modes
 """
 
+import sys
 import time
 import asyncio
 import threading
 import concurrent.futures
 from datetime import datetime, timedelta
-from typing import Optional, Callable, TypeVar
+from typing import Dict, Optional, Callable, TypeVar
 from enum import Enum
 from dataclasses import dataclass, field
 
 # Reusable thread pool for timeout-wrapped calls (avoids creation overhead)
 _timeout_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
 _executor_lock = threading.Lock()
+
+# ---------------------------------------------------------------------------
+# Audible suppression
+# ---------------------------------------------------------------------------
+# `except Exception: pass` around optional instrumentation is the mechanism
+# behind Lumen's standing failure mode: a channel that stops working becomes a
+# channel that is silently ABSENT, which is indistinguishable from one that had
+# nothing to report. Every defect found on 2026-08-02 had that shape — the
+# barometer publishing a stale constant, interaction_level pinned at 0.0, the
+# density grid reporting no structure. One of them was found only because a
+# swallowed ImportError made a test fail; nothing logged, nothing degraded.
+#
+# These make a swallow audible without making it noisy, and countable so a
+# diagnostics surface can answer "what has quietly stopped working?".
+_suppressed_last_log: Dict[str, float] = {}
+_suppressed_totals: Dict[str, int] = {}
+_suppressed_lock = threading.Lock()
+
+SUPPRESSED_LOG_THROTTLE_SECONDS = 300.0
+
+
+def note_suppressed(
+    where: str,
+    exc: BaseException,
+    *,
+    throttle_seconds: float = SUPPRESSED_LOG_THROTTLE_SECONDS,
+) -> None:
+    """Record that an optional operation failed and was deliberately swallowed.
+
+    Use in place of a bare `pass` when the failure means a metric will simply
+    not be recorded. The caller's behaviour is unchanged — this never raises,
+    never re-raises, and returns None — but the gap stops being invisible.
+
+    Logs at most once per `where` per `throttle_seconds`; counts every time.
+
+    Args:
+        where: Stable identifier for the site, e.g. "state_queries.interaction_level".
+               Used as the throttle and counter key, so keep it constant.
+        exc: The swallowed exception.
+    """
+    try:
+        now = time.time()
+        with _suppressed_lock:
+            _suppressed_totals[where] = _suppressed_totals.get(where, 0) + 1
+            total = _suppressed_totals[where]
+            last = _suppressed_last_log.get(where, 0.0)
+            should_log = (now - last) >= throttle_seconds
+            if should_log:
+                _suppressed_last_log[where] = now
+        if should_log:
+            print(
+                f"[suppressed] {where}: {type(exc).__name__}: {exc} "
+                f"(x{total} since start)",
+                file=sys.stderr, flush=True,
+            )
+    except Exception:
+        # A logging helper must never become the thing that breaks a caller.
+        pass
+
+
+def suppressed_counts() -> Dict[str, int]:
+    """How many times each site has swallowed a failure, for diagnostics.
+
+    An empty dict is the healthy case. A site with a rising count is an
+    instrument that has stopped reporting without anyone being told.
+    """
+    with _suppressed_lock:
+        return dict(_suppressed_totals)
+
+
+def reset_suppressed_counts() -> None:
+    """Clear the counters (tests, and after an operator acknowledges them)."""
+    with _suppressed_lock:
+        _suppressed_totals.clear()
+        _suppressed_last_log.clear()
 
 
 class ErrorType(Enum):

@@ -8,6 +8,8 @@ import sys
 
 from mcp.types import TextContent
 
+from ..error_recovery import note_suppressed
+
 
 async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
     """Execute unified workflows across anima-mcp and unitares-governance. Safe, never crashes.
@@ -318,8 +320,8 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
             from ..eisv_mapper import anima_to_eisv
             eisv = anima_to_eisv(anima, readings)
             result["eisv"] = eisv.to_dict()
-        except Exception:
-            pass  # EISV is optional enrichment
+        except Exception as e:
+            note_suppressed("workflows.eisv", e)  # optional enrichment
 
     # Record state for history if we have it (enriched with interaction context)
     if store and anima and readings:
@@ -331,8 +333,8 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
             try:
                 from ..accessors import _get_led_brightness
                 sensors_for_history["led_brightness"] = _get_led_brightness()
-            except Exception:
-                pass
+            except Exception as e:
+                note_suppressed("workflows.led_brightness", e)
         try:
             from ..accessors import _get_growth
             growth = _get_growth()
@@ -340,8 +342,8 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
                 level = growth.interaction_level()
                 if level is not None:
                     sensors_for_history["interaction_level"] = level
-        except Exception:
-            pass
+        except Exception as e:
+            note_suppressed("workflows.interaction_level", e)
         store.record_state(
             anima.warmth, anima.clarity, anima.stability, anima.presence,
             sensors_for_history
