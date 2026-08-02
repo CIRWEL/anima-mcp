@@ -41,6 +41,11 @@ _EARNED_COMPLETION_REASONS = frozenset({
 })
 MIN_RECORDED_DRAWING_PIXELS = 200
 
+# How often to record a within-piece trajectory sample, in seconds. At the
+# observed 8-hour piece length this is ~96 rows per drawing — enough resolution
+# to locate where a piece plateaued, cheap enough to keep for a season.
+TRAJECTORY_SAMPLE_INTERVAL = 300.0
+
 
 def is_earned_completion_reason(reason: Optional[str]) -> bool:
     """Gate for autobiographical writes tied to drawing completion.
@@ -257,6 +262,42 @@ class CanvasState:
         # Weighted combination: coverage 40%, balance 30%, coherence 30%
         satisfaction = 0.4 * coverage + 0.3 * balance + 0.3 * coherence
         return min(1.0, max(0.0, satisfaction))
+
+    def piece_uid(self) -> str:
+        """Stable identifier for the current piece, for joining samples to it.
+
+        Keyed on last_clear_time because that is already persisted, already
+        unique per piece, and already survives restarts — a counter would not.
+        """
+        return f"p{int(self.last_clear_time)}"
+
+    def occupied_cells(self) -> int:
+        """How many of the 64 density cells have any pixel at all.
+
+        Structural reach, as opposed to pixel count. A piece that keeps opening
+        new cells is still finding territory; one whose cell count has stopped
+        moving is thickening what it already has.
+        """
+        return sum(1 for row in self.density_grid for c in row if c > 0)
+
+    def grid_entropy(self) -> float:
+        """Normalized Shannon entropy of the 8x8 density grid, 0.0-1.0.
+
+        1.0 = pixels spread evenly over the whole grid; 0.0 = all in one cell.
+        Read alongside occupied_cells: entropy still climbing means the
+        composition is being rebalanced, entropy flat while pixels rise means
+        the drawing is repeating itself. Neither is a verdict — this measures
+        change, and only the piece's own history says whether that is enough.
+        """
+        counts = [c for row in self.density_grid for c in row if c > 0]
+        total = sum(counts)
+        if total <= 0 or len(counts) <= 1:
+            return 0.0
+        h = 0.0
+        for c in counts:
+            p = c / total
+            h -= p * math.log(p)
+        return min(1.0, h / math.log(64))
 
     def sparsest_cell(self) -> Tuple[int, int]:
         """Return (grid_x, grid_y) of the cell with fewest pixels."""
@@ -937,6 +978,110 @@ class DrawingEngine:
         self._behavioral_C = 0.5  # Behavioral coherence (EMA-smoothed)
         # Initialize expression mood tracker
         self._mood_tracker = ExpressionMoodTracker(identity_store=identity_store)
+        # Within-piece trajectory sampling (observation only, gates no decision)
+        self._last_sample_time = 0.0
+        self._last_sample_pixels = 0
+        self._last_sample_marks = 0
+        self._last_sample_piece = ""
+
+    def _era_revisit_ratio(self) -> Optional[float]:
+        """Fraction of the era's recent deposits that landed on existing field.
+
+        Resonance is the only era that tracks this today; others return None,
+        which persists as NULL. A missing signal must read as missing.
+        """
+        window = getattr(self.intent.era_state, "revisit_window", None)
+        if not window:
+            return None
+        try:
+            return round(sum(window) / len(window), 4)
+        except Exception:
+            return None
+
+    def _piece_facts(self) -> dict:
+        """Everything about the finished piece that is worth keeping.
+
+        The completion reason was already computed and already passed to growth
+        — it just had nowhere durable to land, so 754 recorded drawings cannot
+        say why any of them ended. These travel with the record now.
+        """
+        state = self.intent.state
+        goal = self.drawing_goal
+        started = self.canvas.last_clear_time or self.canvas.drawing_start_time
+        return {
+            "piece_uid": self.canvas.piece_uid(),
+            "era": getattr(self.active_era, "name", None),
+            "mark_count": self.canvas.mark_count,
+            "duration_seconds": round(time.time() - started, 1) if started else None,
+            "coverage_target": getattr(goal, "coverage_target", None),
+            "intention": getattr(goal, "description", None),
+            "curiosity": round(state.curiosity, 4),
+            "engagement": round(state.engagement, 4),
+            "fatigue": round(state.fatigue, 4),
+            "coherence": round(self.canvas.coherence_history[-1], 4)
+                         if self.canvas.coherence_history else None,
+            "satisfaction": round(self.canvas.compositional_satisfaction(), 4),
+            "occupied_cells": self.canvas.occupied_cells(),
+            "grid_entropy": round(self.canvas.grid_entropy(), 4),
+        }
+
+    def _sample_trajectory(self, now: float):
+        """Record what the piece is doing, every SAMPLE_INTERVAL seconds.
+
+        An endpoint row per piece cannot answer when a drawing stopped changing,
+        and that is the question worth asking — every completion since
+        2026-07-30 has landed on the 8-hour cap, so endpoints all describe the
+        same clock rather than the same kind of drawing. Deltas between samples
+        give novel-pixels-per-mark and structural change over the piece's life.
+
+        Observation only: it reads state, writes a row, and moves no gate.
+        """
+        if len(self.canvas.pixels) < 1:
+            return
+        uid = self.canvas.piece_uid()
+        # A new piece restarts the deltas — carrying them across a canvas clear
+        # would report the previous drawing's growth as this one's.
+        if uid != self._last_sample_piece:
+            self._last_sample_piece = uid
+            self._last_sample_pixels = 0
+            self._last_sample_marks = 0
+            self._last_sample_time = 0.0
+        if now - self._last_sample_time < TRAJECTORY_SAMPLE_INTERVAL:
+            return
+
+        pixels = len(self.canvas.pixels)
+        marks = self.canvas.mark_count
+        state = self.intent.state
+        started = self.canvas.last_clear_time or self.canvas.drawing_start_time
+        try:
+            from ..growth import peek_growth_system
+            growth = peek_growth_system()
+            if growth is None:
+                return  # Growth not up yet — no row beats a row in the wrong DB
+            growth.record_drawing_sample({
+                "piece_uid": uid,
+                "elapsed_seconds": round(now - started, 1) if started else None,
+                "era": getattr(self.active_era, "name", None),
+                "arc_phase": state.arc_phase,
+                "pixel_count": pixels,
+                "mark_count": marks,
+                "novel_pixels": pixels - self._last_sample_pixels,
+                "marks_delta": marks - self._last_sample_marks,
+                "occupied_cells": self.canvas.occupied_cells(),
+                "grid_entropy": round(self.canvas.grid_entropy(), 4),
+                "revisit_ratio": self._era_revisit_ratio(),
+                "curiosity": round(state.curiosity, 4),
+                "engagement": round(state.engagement, 4),
+                "fatigue": round(state.fatigue, 4),
+                "coherence": round(self._behavioral_C, 4),
+                "satisfaction": round(self.canvas.compositional_satisfaction(), 4),
+            })
+        except Exception as e:
+            print(f"[Canvas] trajectory sample skipped ({e})", file=sys.stderr, flush=True)
+
+        self._last_sample_time = now
+        self._last_sample_pixels = pixels
+        self._last_sample_marks = marks
 
     def _persist_canvas_progress(self, now: Optional[float] = None, *, force: bool = False):
         """Persist unfinished drawing progress with a shorter crash-loss window."""
@@ -1704,6 +1849,7 @@ class DrawingEngine:
                             anima_state=anima_state,
                             environment=environment,
                             completion_reason=completion_reason,
+                            piece=self._piece_facts(),
                         )
                         if insight:
                             print(f"[Growth] Drawing insight: {insight}", file=sys.stderr, flush=True)
@@ -1850,6 +1996,13 @@ class DrawingEngine:
         now = time.time()
         pixel_count = len(self.canvas.pixels)
         state = self.intent.state
+
+        # Sample before any completion decision below. What the piece is doing
+        # must be recorded whichever path is about to fire — and whether or not
+        # one fires at all, which for the last eleven pieces has meant the
+        # 8-hour cap and nothing else.
+        self._sample_trajectory(now)
+
         time_since_save = now - self.canvas.last_save_time if self.canvas.last_save_time > 0 else float('inf')
 
         # Safety floor: at least 60s between saves

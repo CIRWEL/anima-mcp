@@ -292,6 +292,53 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 - No arbitrary mark limit — fatigue accumulates naturally (canvas 15000px limit is only hard cap)
 - `get_drawing_eisv()` — exposes state to governance via bridge check-in
 
+**What actually ends a drawing (measured 2026-08-02 — read before tuning anything):**
+
+The 8-hour cap is not a backstop. It is the only clock. Eleven consecutive
+completions were spaced 8.0002–8.0027 h apart — under 30 seconds of total drift
+across four days. No property of any individual drawing moved its ending by ten
+seconds. Alongside that:
+
+| Gate | Live value | Needs | Status |
+|------|-----------|-------|--------|
+| `earned_composition` / `attention_exhausted` | curiosity **0.80** at 1.3h | < 0.2 / < 0.15 | never fires — curiosity does not deplete |
+| `bailout_fatigue` | fatigue **0.21** at 1.3h | > 0.90 | never fires |
+| `earned_field` (resonance) | revisit_ratio **0.24** | ≥ 0.60 | window now fills 50/50 (#116 worked); ratio is 2.5× short, not a calibration nudge |
+| arc → `resolving` | C caps ~0.52 | > 0.6 | unreachable, so pieces save from `developing` |
+| 15,000px ceiling | max observed **12,009px** | > 15,000 | unreachable in practice — it is a real defect (it calls `mark_satisfied()`, naming a safety hatch a feeling) but it is not what ends pieces |
+
+Density is **not** the binding constraint: recent pieces land at 12.6–20.8% of
+canvas with negative space intact. What is missing is subjective completion.
+
+**Completion instrumentation** (added so that question is answerable):
+- `drawing_records` now keeps `completion_reason`, `era`, `mark_count`,
+  `duration_seconds`, `coverage_target`, `intention`, attention at completion,
+  `occupied_cells`, `grid_entropy`, `piece_uid`. The reason had always been
+  computed and passed to `observe_drawing()` to gate a memory — it was just
+  never stored, so none of the first 754 drawings can say why it ended.
+- `drawing_trajectory` samples the piece every `TRAJECTORY_SAMPLE_INTERVAL`
+  (300s, ~96 rows per 8h piece, 90-day retention). Endpoint rows cannot answer
+  *when a drawing stopped changing* — and while one clock ends everything, every
+  endpoint describes that clock rather than the drawing. Deltas between samples
+  give novel-pixels-per-mark and structural change over the piece's life.
+- `CanvasState.occupied_cells()` / `.grid_entropy()` — structural reach vs. pixel
+  count. Cells still opening = finding territory; flat cells with rising pixels =
+  thickening what it already has.
+- **Absent values persist as NULL, never as a default.** Lumen's instrumentation
+  degrades toward healthy-looking numbers; a 0.0 would later be indistinguishable
+  from a drawing that genuinely had no reach.
+- Timer-driven writers use `peek_growth_system()`, not `get_growth_system()` —
+  the bare default is cwd-relative and the first caller fixes the database (#123).
+- **This moved no gate.** `tests/test_drawing_instrumentation.py::TestNoGateMoved`
+  fails if one moves. Retuning is a separate decision, and the point of recording
+  first is to learn what "enough" means for Lumen before anything is tuned to it.
+
+⚠️ `coverage_target` ("sparse"/"balanced"/"dense") is generated per piece from
+clarity, described, and persisted — and **read by nothing**. It is the only
+`DrawingGoal` field with no consumer (`warmth_bias` and `initial_quadrant` both
+have one). It is now recorded, which is the precondition for it ever meaning
+anything, but it still steers no mark.
+
 **Attention signals** (replace arbitrary energy depletion):
 | Signal | Behavior |
 |--------|----------|

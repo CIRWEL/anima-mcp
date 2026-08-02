@@ -6,7 +6,8 @@ and providing trajectory/dimension preference data.
 """
 
 import json
-from datetime import datetime
+import sys
+from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 from .models import GrowthPreference, PreferenceCategory
@@ -329,7 +330,8 @@ class PreferencesMixin:
     def observe_drawing(self, pixel_count: int, phase: str,
                         anima_state: Dict[str, float],
                         environment: Dict[str, float],
-                        completion_reason: Optional[str] = None) -> Optional[str]:
+                        completion_reason: Optional[str] = None,
+                        piece: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """
         Learn from a completed drawing.
 
@@ -345,6 +347,15 @@ class PreferencesMixin:
                 Gates the milestone autobiographical memory: only earned tags
                 ("earned_coherence", "earned_composition") write the memory.
                 None (legacy callers) keeps prior behavior.
+            piece: Optional per-piece facts, persisted alongside the record so
+                completions can be told apart afterwards. Passed as a dict for
+                the same reason anima_state and environment are — the set will
+                grow. Recognised keys: piece_uid, era, mark_count,
+                duration_seconds, coverage_target, intention, curiosity,
+                engagement, fatigue, coherence, satisfaction, occupied_cells,
+                grid_entropy. Absent keys persist as NULL rather than a
+                plausible default: an unrecorded quantity must read as unknown,
+                not as a healthy-looking number.
 
         Returns:
             Insight message if a new preference is discovered.
@@ -398,11 +409,16 @@ class PreferencesMixin:
 
         # Record per-drawing data for correlation analysis
         conn = self._connect()
+        p = piece or {}
         conn.execute("""
             INSERT INTO drawing_records
             (timestamp, pixel_count, phase, warmth, clarity, stability, presence,
-             wellness, light_lux, ambient_temp_c, humidity_pct, hour)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             wellness, light_lux, ambient_temp_c, humidity_pct, hour,
+             piece_uid, completion_reason, era, mark_count, duration_seconds,
+             coverage_target, intention, curiosity, engagement, fatigue,
+             coherence, satisfaction, occupied_cells, grid_entropy)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             now.isoformat(), pixel_count, phase,
             anima_state.get("warmth"), anima_state.get("clarity"),
@@ -410,6 +426,12 @@ class PreferencesMixin:
             wellness,
             environment.get("light_lux"), environment.get("temp_c"),
             environment.get("humidity_pct"), hour,
+            p.get("piece_uid"), completion_reason, p.get("era"),
+            p.get("mark_count"), p.get("duration_seconds"),
+            p.get("coverage_target"), p.get("intention"),
+            p.get("curiosity"), p.get("engagement"), p.get("fatigue"),
+            p.get("coherence"), p.get("satisfaction"),
+            p.get("occupied_cells"), p.get("grid_entropy"),
         ))
         conn.commit()
 
@@ -712,6 +734,68 @@ class PreferencesMixin:
             params.append(limit)
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
+
+    # Keep roughly a season of within-piece samples. At ~5-minute sampling and
+    # three pieces a day this is ~26k rows — small beside state_history, and
+    # bounded so the table cannot grow without limit if sampling gets denser.
+    TRAJECTORY_RETENTION_DAYS = 90
+
+    def record_drawing_sample(self, sample: Dict[str, Any]) -> None:
+        """Persist one within-piece observation. Never raises.
+
+        Called on a timer while a drawing is in progress, so a failure here must
+        not disturb the drawing. Writes exactly what it was given: this records
+        what happened, it does not judge it, and it changes no completion gate.
+        """
+        try:
+            conn = self._connect()
+            conn.execute("""
+                INSERT INTO drawing_trajectory
+                (piece_uid, timestamp, elapsed_seconds, era, arc_phase,
+                 pixel_count, mark_count, novel_pixels, marks_delta,
+                 occupied_cells, grid_entropy, revisit_ratio,
+                 curiosity, engagement, fatigue, coherence, satisfaction)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                sample.get("piece_uid"),
+                sample.get("timestamp") or datetime.now().isoformat(),
+                sample.get("elapsed_seconds"), sample.get("era"),
+                sample.get("arc_phase"), sample.get("pixel_count"),
+                sample.get("mark_count"), sample.get("novel_pixels"),
+                sample.get("marks_delta"), sample.get("occupied_cells"),
+                sample.get("grid_entropy"), sample.get("revisit_ratio"),
+                sample.get("curiosity"), sample.get("engagement"),
+                sample.get("fatigue"), sample.get("coherence"),
+                sample.get("satisfaction"),
+            ))
+            conn.execute(
+                "DELETE FROM drawing_trajectory WHERE timestamp < ?",
+                ((datetime.now() - timedelta(days=self.TRAJECTORY_RETENTION_DAYS)).isoformat(),)
+            )
+            conn.commit()
+        except Exception as e:
+            print(f"[Growth] drawing sample not recorded ({e})", file=sys.stderr, flush=True)
+
+    def get_drawing_trajectory(self, piece_uid: Optional[str] = None,
+                               limit: Optional[int] = None) -> List[dict]:
+        """Within-piece samples, oldest first.
+
+        Args:
+            piece_uid: Restrict to one piece. None returns every piece's
+                samples, still ordered so a caller can group them.
+            limit: Max rows.
+        """
+        conn = self._connect()
+        query = "SELECT * FROM drawing_trajectory"
+        params: list = []
+        if piece_uid:
+            query += " WHERE piece_uid = ?"
+            params.append(piece_uid)
+        query += " ORDER BY piece_uid ASC, elapsed_seconds ASC"
+        if limit:
+            query += " LIMIT ?"
+            params.append(limit)
+        return [dict(r) for r in conn.execute(query, params).fetchall()]
 
     def record_drawing_completion(
         self,
