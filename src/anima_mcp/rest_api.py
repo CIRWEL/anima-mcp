@@ -375,9 +375,12 @@ async def rest_answer(request):
         body = await request.json()
         question_id = body.get("question_id") or body.get("id")
         answer = body.get("answer")
-        author = body.get("author", "Kenny")
-        # Normalize identity: dashboard interactions resolve to person
-        _, display_name, _ = normalize_visitor_identity(author, source="dashboard")
+        author = body.get("author")
+        if author:
+            _, display_name, _ = normalize_visitor_identity(author)
+        else:
+            # Bare dashboard submissions map to the human visitor identity.
+            _, display_name, _ = normalize_visitor_identity("dashboard", source="dashboard")
         result = await handle_lumen_qa({
             "question_id": question_id,
             "answer": answer,
@@ -402,9 +405,12 @@ async def rest_message(request):
 
         body = await request.json()
         message = body.get("message", body.get("text", ""))
-        author = body.get("author", "dashboard")
-        # Normalize identity: dashboard interactions resolve to person
-        _, display_name, _ = normalize_visitor_identity(author, source="dashboard")
+        author = body.get("author")
+        if author:
+            _, display_name, _ = normalize_visitor_identity(author)
+        else:
+            # Bare dashboard submissions map to the human visitor identity.
+            _, display_name, _ = normalize_visitor_identity("dashboard", source="dashboard")
         responds_to = body.get("responds_to")
         payload = {"message": message, "source": "dashboard", "agent_name": display_name}
         if responds_to:

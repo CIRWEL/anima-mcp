@@ -563,28 +563,58 @@ class TestRestLearningAndSchemaData:
 
 @pytest.mark.asyncio
 class TestRestMessageAnswerVoice:
-    async def test_rest_answer_delegates_and_normalizes_author(self):
+    async def test_rest_answer_preserves_explicit_agent_author(self):
+        with patch(
+            "anima_mcp.growth.normalize_visitor_identity",
+            side_effect=lambda agent_id, agent_name=None, source=None: (
+                agent_id,
+                agent_name or agent_id,
+                {},
+            ),
+        ), patch(
+            "anima_mcp.handlers.communication.handle_lumen_qa",
+            return_value=[SimpleNamespace(text='{"success": true, "answered": true}')],
+        ) as handler:
+            response = await rest_api.rest_answer(
+                _make_request(
+                    method="POST",
+                    path="/answer",
+                    body={"question_id": "q1", "answer": "A1", "author": "Codex"},
+                )
+            )
+            data = json.loads(response.body)
+        payload = handler.call_args[0][0]
+        assert payload["agent_name"] == "Codex"
+        assert data["success"] is True
+
+    async def test_rest_answer_defaults_dashboard_author_to_person(self):
         with patch(
             "anima_mcp.growth.normalize_visitor_identity",
             return_value=("id", "Kenny", {}),
         ), patch(
             "anima_mcp.handlers.communication.handle_lumen_qa",
             return_value=[SimpleNamespace(text='{"success": true, "answered": true}')],
-        ):
+        ) as handler:
             response = await rest_api.rest_answer(
                 _make_request(
                     method="POST",
                     path="/answer",
-                    body={"question_id": "q1", "answer": "A1", "author": "dashboard"},
+                    body={"question_id": "q1", "answer": "A1"},
                 )
             )
             data = json.loads(response.body)
+        payload = handler.call_args[0][0]
+        assert payload["agent_name"] == "Kenny"
         assert data["success"] is True
 
-    async def test_rest_message_includes_responds_to(self):
+    async def test_rest_message_includes_responds_to_and_preserves_explicit_author(self):
         with patch(
             "anima_mcp.growth.normalize_visitor_identity",
-            return_value=("id", "Visitor", {}),
+            side_effect=lambda agent_id, agent_name=None, source=None: (
+                agent_id,
+                agent_name or agent_id,
+                {},
+            ),
         ), patch(
             "anima_mcp.handlers.communication.handle_post_message",
             return_value=[SimpleNamespace(text='{"success": true}')],
@@ -593,12 +623,33 @@ class TestRestMessageAnswerVoice:
                 _make_request(
                     method="POST",
                     path="/message",
-                    body={"message": "hello", "author": "dashboard", "responds_to": "q1"},
+                    body={"message": "hello", "author": "Codex", "responds_to": "q1"},
                 )
             )
             data = json.loads(response.body)
         payload = handler.call_args[0][0]
         assert payload["responds_to"] == "q1"
+        assert payload["agent_name"] == "Codex"
+        assert data["success"] is True
+
+    async def test_rest_message_defaults_dashboard_author_to_person(self):
+        with patch(
+            "anima_mcp.growth.normalize_visitor_identity",
+            return_value=("id", "Kenny", {}),
+        ), patch(
+            "anima_mcp.handlers.communication.handle_post_message",
+            return_value=[SimpleNamespace(text='{"success": true}')],
+        ) as handler:
+            response = await rest_api.rest_message(
+                _make_request(
+                    method="POST",
+                    path="/message",
+                    body={"message": "hello"},
+                )
+            )
+            data = json.loads(response.body)
+        payload = handler.call_args[0][0]
+        assert payload["agent_name"] == "Kenny"
         assert data["success"] is True
 
     async def test_rest_voice_defaults_when_handler_returns_empty(self):
