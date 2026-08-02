@@ -173,13 +173,15 @@ class TestLumenContextExtended:
             presence=0.6,
             feeling=lambda: {"mood": "calm"},
         )
-        recent_message = SimpleNamespace(author="user", timestamp=datetime.now().timestamp() - 60)
         eisv = SimpleNamespace(to_dict=lambda: {"E": 0.3})
+        # interaction_level now comes from visitor records, not from scanning
+        # the message board for a msg_type nothing produces.
+        growth = SimpleNamespace(interaction_level=lambda: 0.5)
 
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
-             patch("anima_mcp.messages.get_recent_messages", return_value=[recent_message]), \
+             patch("anima_mcp.accessors._get_growth", return_value=growth), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = parse_result(await handle_get_lumen_context({"include": ["identity", "anima", "sensors", "mood", "eisv"]}))
 
@@ -188,7 +190,39 @@ class TestLumenContextExtended:
         assert "mood" in data
         store.record_state.assert_called_once()
         recorded_sensor_data = store.record_state.call_args[0][4]
-        assert "interaction_level" in recorded_sensor_data
+        assert recorded_sensor_data["interaction_level"] == 0.5
+
+    async def test_get_lumen_context_omits_interaction_level_when_unknown(self):
+        """No person on record means the key is absent, not 0.0.
+
+        "Nobody has ever visited" and "nobody is here right now" are different
+        claims, and only one of them is a measurement.
+        """
+        from anima_mcp.handlers.workflows import handle_get_lumen_context
+
+        class FakeReadings:
+            def to_dict(self):
+                return {"light_lux": 100}
+
+        store = SimpleNamespace(
+            get_identity=lambda: SimpleNamespace(
+                name="Lumen", creature_id="abc123", born_at=datetime.now(),
+                age_seconds=lambda: 3600, total_awakenings=2, alive_ratio=lambda: 0.7,
+            ),
+            get_session_alive_seconds=lambda: 100,
+            record_state=MagicMock(),
+        )
+        growth = SimpleNamespace(interaction_level=lambda: None)
+
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(is_pi=lambda: False)), \
+             patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), SimpleNamespace(
+                 warmth=0.3, clarity=0.4, stability=0.5, presence=0.6,
+                 feeling=lambda: {"mood": "calm"}))), \
+             patch("anima_mcp.accessors._get_growth", return_value=growth):
+            parse_result(await handle_get_lumen_context({"include": ["identity", "anima"]}))
+
+        assert "interaction_level" not in store.record_state.call_args[0][4]
 
     async def test_get_lumen_context_handles_identity_error(self):
         from anima_mcp.handlers.workflows import handle_get_lumen_context

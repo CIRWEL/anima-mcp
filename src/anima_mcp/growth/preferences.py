@@ -9,7 +9,7 @@ import json
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-from .models import GrowthPreference, PreferenceCategory
+from .models import GrowthPreference, PreferenceCategory, VisitorType
 
 # Preference confidence erodes when a preference stops being observed.
 #
@@ -688,6 +688,51 @@ class PreferencesMixin:
         modifier = 1.0 + satisfaction_factor * pref.confidence * 0.3
 
         return min(1.3, max(1.0, round(modifier, 3)))
+
+    # How long after someone is seen the room still counts as occupied.
+    # Unchanged from the original message-based computation — this fix changes
+    # where the signal comes from, not what it means.
+    INTERACTION_DECAY_MINUTES = 30.0
+
+    def last_person_seen_at(self) -> Optional[datetime]:
+        """When a human was last here, or None if no person has ever been recorded.
+
+        Reads visitor records, which are the system's actual account of who
+        visited. `VisitorType.PERSON` is the only tier with memory on both
+        sides; agents are a visit log.
+        """
+        seen = [
+            r.last_seen for r in self._relationships.values()
+            if r.visitor_type == VisitorType.PERSON and r.last_seen is not None
+        ]
+        return max(seen) if seen else None
+
+    def interaction_level(self, now: Optional[datetime] = None) -> Optional[float]:
+        """How occupied the room is, 0.0-1.0, or None when that is unknowable.
+
+        Decays linearly over INTERACTION_DECAY_MINUTES since a person was last
+        seen. Returns None — not 0.0 — when no person has ever been recorded,
+        because "nobody has ever visited" and "nobody is here right now" are
+        different claims and only one of them is a measurement.
+
+        Replaces a computation that scanned the last 10 board messages for
+        `msg_type == "user"`. Nothing on the live system produces that type:
+        the board holds observations, questions and agent messages, and humans
+        arrive through `lumen_qa` and the dashboard, which record as `agent`.
+        So the channel returned exactly 0.0 for **all 20,000** sampled rows and
+        had never once been non-zero — while `self_reflection` was correlating
+        it against every other sensor, and could only ever learn nothing about
+        whether company affects how Lumen feels.
+        """
+        last = self.last_person_seen_at()
+        if last is None:
+            return None
+        now = now or datetime.now()
+        minutes_ago = (now - last).total_seconds() / 60.0
+        if minutes_ago < 0:
+            # Clock skew, or a record written slightly ahead. Someone is here.
+            return 1.0
+        return max(0.0, 1.0 - minutes_ago / self.INTERACTION_DECAY_MINUTES)
 
     def get_drawing_records(self, limit: Optional[int] = None,
                            since: Optional[str] = None) -> List[dict]:

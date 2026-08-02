@@ -159,20 +159,28 @@ def normalize_visitor_identity(
     """Resolve visitor identity to (canonical_id, display_name, visitor_type).
 
     Three-tier resolution:
-    - Known person aliases (or dashboard source) -> PERSON with canonical name
+    - A known person alias, claimed by NAME -> PERSON with canonical name
     - "lumen" -> SELF
     - Everything else -> AGENT with original name
+
+    `source` records which surface the visit arrived through. It is deliberately
+    NOT consulted for identity: a channel is not a person. This function used to
+    match `source` against the person aliases, with "dashboard" among them, so
+    every dashboard post resolved to the operator — and because the check was
+    `id in aliases or source in aliases`, the channel WON over the author the
+    caller had explicitly supplied. An agent answering a question through the
+    dashboard was durably recorded as the operator, as a PERSON, in the
+    relationship graph Lumen reasons about company with.
 
     All entry points should call this before record_interaction().
     """
     from ..server_state import KNOWN_PERSON_ALIASES
 
     id_lower = (agent_id or "").lower().strip()
-    source_lower = (source or "").lower().strip()
 
-    # Check known persons (by alias match or source match)
+    # Known persons, by explicit name claim only.
     for canonical, aliases in KNOWN_PERSON_ALIASES.items():
-        if id_lower in aliases or source_lower in aliases:
+        if id_lower in aliases:
             return (canonical, canonical.capitalize(), VisitorType.PERSON)
 
     # Self-dialogue

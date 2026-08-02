@@ -106,17 +106,12 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
         except Exception:
             pass
     try:
-        from ..messages import get_recent_messages
-        recent = get_recent_messages(limit=10)
-        from datetime import datetime
-        now = datetime.now()
-        human = [m for m in recent if getattr(m, 'msg_type', '') == 'user']
-        if human:
-            last_ts = max(m.timestamp for m in human)
-            minutes_ago = (now.timestamp() - last_ts) / 60
-            sensors_for_history["interaction_level"] = max(0.0, 1.0 - minutes_ago / 30.0)
-        else:
-            sensors_for_history["interaction_level"] = 0.0
+        from ..accessors import _get_growth
+        growth = _get_growth()
+        if growth is not None:
+            level = growth.interaction_level()
+            if level is not None:
+                sensors_for_history["interaction_level"] = level
     except Exception:
         pass
     store.record_state(
