@@ -299,6 +299,20 @@ class TestCanvasPersistence:
         assert canvas2._era_name == "pointillist"
         assert canvas2.drawings_saved == 3
 
+    def test_auto_rotate_roundtrip(self, tmp_path):
+        """The operator's era-rotation mode must survive a service restart."""
+        canvas_file = tmp_path / "canvas.json"
+        canvas = CanvasState()
+        canvas.auto_rotate = True
+
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path",
+                   return_value=canvas_file):
+            assert canvas.save_to_disk() is True
+            restored = CanvasState()
+            restored.load_from_disk()
+
+        assert restored.auto_rotate is True
+
     def test_load_handles_missing_file(self, tmp_path):
         with patch("anima_mcp.display.drawing_engine._get_canvas_path",
                    return_value=tmp_path / "nonexistent.json"):
@@ -974,6 +988,59 @@ class TestDrawingEngineRecovery:
         assert engine.canvas.pixels == {(10, 20): (255, 128, 0)}
         assert engine.intent.mark_count == 12
         assert engine.intent.state.arc_phase == "developing"
+
+    def test_restart_restores_auto_rotate_runtime_state(self, tmp_path, monkeypatch):
+        """Loading a persisted canvas must restore the era module's live toggle."""
+        import anima_mcp.display.eras as eras_module
+
+        canvas_file = tmp_path / "canvas.json"
+        canvas_file.write_text(json.dumps({
+            "pixels": {"10,20": [255, 128, 0]},
+            "era": "pointillist",
+            "auto_rotate": True,
+        }))
+        monkeypatch.setattr(eras_module, "auto_rotate", False)
+
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path", return_value=canvas_file):
+            engine = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+
+        assert engine.get_current_era()["auto_rotate"] is True
+        assert eras_module.auto_rotate is True
+
+    def test_set_auto_rotate_updates_and_persists_state(self, tmp_path, monkeypatch):
+        """The runtime control must update both live selection and restart state."""
+        import anima_mcp.display.eras as eras_module
+
+        canvas_file = tmp_path / "canvas.json"
+        monkeypatch.setattr(eras_module, "auto_rotate", False)
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path", return_value=canvas_file):
+            engine = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+            result = engine.set_auto_rotate(True)
+            restored = CanvasState()
+            restored.load_from_disk()
+
+        assert result == {"success": True, "auto_rotate": True}
+        assert eras_module.auto_rotate is True
+        assert restored.auto_rotate is True
+
+    def test_set_auto_rotate_rolls_back_when_persistence_fails(
+        self, tmp_path, monkeypatch,
+    ):
+        """A failed write must not acknowledge or leave a volatile-only change."""
+        import anima_mcp.display.eras as eras_module
+
+        monkeypatch.setattr(eras_module, "auto_rotate", False)
+        with patch("anima_mcp.display.drawing_engine._get_canvas_path",
+                   return_value=tmp_path / "canvas.json"):
+            engine = DrawingEngine(db_path=str(tmp_path / "test.db"), identity_store=None)
+
+        with patch.object(engine.canvas, "save_to_disk", return_value=False):
+            result = engine.set_auto_rotate(True)
+
+        assert result["success"] is False
+        assert "persist" in result["error"].lower()
+        assert eras_module.auto_rotate is False
+        assert engine.canvas.auto_rotate is False
 
     def test_draw_persists_after_mark_batch(self, tmp_path):
         with patch("anima_mcp.display.drawing_engine._get_canvas_path", return_value=tmp_path / "canvas.json"):

@@ -212,6 +212,10 @@ class ScreenRenderer(HomeMixin, InfoMixin, MindMixin, MessagesMixin, ArtMixin):
     def set_era(self, era_name, force_immediate=False):
         return self.drawing_engine.set_era(era_name, force_immediate)
 
+    def set_auto_rotate(self, enabled: bool):
+        """Set and persist automatic art-era rotation."""
+        return self.drawing_engine.set_auto_rotate(enabled)
+
     def era_cursor_up(self):
         return self.drawing_engine.era_cursor_up(self._state)
 

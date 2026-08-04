@@ -17,6 +17,7 @@ VALID_DISPLAY_ACTIONS = [
     "list_eras",
     "get_era",
     "set_era",
+    "set_auto_rotate",
     "resonance_critique",
     "calibrate_leds",
 ]
@@ -449,6 +450,18 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
         result = renderer.set_era(era_name)
         return [TextContent(type="text", text=json.dumps({
             "action": "set_era",
+            **result,
+        }))]
+
+    elif action == "set_auto_rotate":
+        enabled = arguments.get("enabled")
+        if not isinstance(enabled, bool):
+            return [TextContent(type="text", text=json.dumps({
+                "error": "enabled must be a boolean"
+            }))]
+        result = renderer.set_auto_rotate(enabled)
+        return [TextContent(type="text", text=json.dumps({
+            "action": "set_auto_rotate",
             **result,
         }))]
 
