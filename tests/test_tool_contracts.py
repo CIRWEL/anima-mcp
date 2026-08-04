@@ -10,7 +10,12 @@ These catch tool definition drift before it reaches production:
 
 
 
-from anima_mcp.tool_registry import TOOLS, HANDLERS
+from anima_mcp.tool_registry import (
+    TOOLS,
+    HANDLERS,
+    _create_tool_wrapper,
+    _json_type_to_python,
+)
 
 
 # ============================================================
@@ -97,6 +102,55 @@ def test_enum_properties_have_values():
                 assert len(prop_def["enum"]) > 0, (
                     f"{tool.name}.{prop_name}: enum is empty"
                 )
+
+
+def test_manage_display_schema_exposes_auto_rotate_control():
+    """The advertised MCP contract includes the restart-safe rotation setter."""
+    tool = next(tool for tool in TOOLS if tool.name == "manage_display")
+    properties = tool.inputSchema["properties"]
+
+    assert "set_auto_rotate" in properties["action"]["enum"]
+    assert properties["enabled"]["type"] == "boolean"
+    assert {
+        "if": {
+            "properties": {"action": {"const": "set_auto_rotate"}},
+            "required": ["action"],
+        },
+        "then": {"required": ["enabled"]},
+    } in tool.inputSchema["allOf"]
+
+
+def test_boolean_schema_generates_boolean_annotation():
+    """FastMCP must not advertise strings for JSON Schema boolean values."""
+    assert _json_type_to_python("boolean") is bool
+
+
+def test_manage_display_wrapper_keeps_enabled_boolean_only():
+    """The generated FastMCP signature allows bool or omission, never strings."""
+    import inspect
+    from types import NoneType
+    from typing import get_args
+
+    tool = next(tool for tool in TOOLS if tool.name == "manage_display")
+    wrapper = _create_tool_wrapper(HANDLERS["manage_display"], tool.name, tool)
+    annotation = inspect.signature(wrapper).parameters["enabled"].annotation
+
+    assert set(get_args(annotation)) == {bool, NoneType}
+
+
+def test_fastmcp_manage_display_schema_preserves_contract(monkeypatch):
+    """The production FastMCP listing retains enum and conditional constraints."""
+    import asyncio
+    from anima_mcp import tool_registry
+
+    monkeypatch.setattr(tool_registry, "_fastmcp", None)
+    server = tool_registry.get_fastmcp()
+    tools = asyncio.run(server.list_tools())
+    schema = next(tool.inputSchema for tool in tools if tool.name == "manage_display")
+
+    assert "set_auto_rotate" in schema["properties"]["action"]["enum"]
+    assert schema["properties"]["enabled"]["type"] == "boolean"
+    assert schema["allOf"][0]["then"] == {"required": ["enabled"]}
 
 
 # ============================================================

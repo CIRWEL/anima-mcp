@@ -292,6 +292,39 @@ class TestManageDisplayExtended:
         assert data["success"] is True
         assert data["era"] == "field"
 
+    async def test_set_auto_rotate_passes_through_renderer_result(self):
+        """The MCP display surface can restore the live rotation policy."""
+        from anima_mcp.handlers.display_ops import handle_manage_display
+
+        setter = MagicMock(return_value={"success": True, "auto_rotate": True})
+        renderer = SimpleNamespace(set_auto_rotate=setter)
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
+            data = parse_result(await handle_manage_display({
+                "action": "set_auto_rotate",
+                "enabled": True,
+            }))
+
+        setter.assert_called_once_with(True)
+        assert data == {
+            "action": "set_auto_rotate",
+            "success": True,
+            "auto_rotate": True,
+        }
+
+    async def test_set_auto_rotate_requires_boolean_enabled(self):
+        """Ambiguous strings must not silently change Lumen's era policy."""
+        from anima_mcp.handlers.display_ops import handle_manage_display
+
+        renderer = SimpleNamespace(set_auto_rotate=MagicMock())
+        with patch("anima_mcp.accessors._get_screen_renderer", return_value=renderer):
+            data = parse_result(await handle_manage_display({
+                "action": "set_auto_rotate",
+                "enabled": "true",
+            }))
+
+        assert "enabled must be a boolean" in data["error"]
+        renderer.set_auto_rotate.assert_not_called()
+
     async def test_unknown_action_returns_valid_action_list(self):
         from anima_mcp.handlers.display_ops import handle_manage_display
 
@@ -300,6 +333,7 @@ class TestManageDisplayExtended:
 
         assert "Unknown action" in data["error"]
         assert "valid_actions" in data
+        assert "set_auto_rotate" in data["valid_actions"]
 
     async def test_calibrate_leds_requires_available_leds(self):
         from anima_mcp.handlers.display_ops import handle_manage_display

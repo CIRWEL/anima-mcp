@@ -60,6 +60,20 @@ def screen_renderer(mock_display, tmp_path):
     return sr
 
 
+def test_set_auto_rotate_delegates_to_drawing_engine(screen_renderer):
+    """ScreenRenderer exposes the engine control used by manage_display."""
+    with patch.object(
+        screen_renderer.drawing_engine,
+        "set_auto_rotate",
+        return_value={"success": True, "auto_rotate": True},
+        create=True,
+    ) as setter:
+        result = screen_renderer.set_auto_rotate(True)
+
+    setter.assert_called_once_with(True)
+    assert result["auto_rotate"] is True
+
+
 # ---------------------------------------------------------------------------
 # ScreenMode enum
 # ---------------------------------------------------------------------------

@@ -123,6 +123,7 @@ class CanvasState:
     # Art era (persisted so drawings continue in the same era after restart)
     _era_name: str = "gestural"
     pending_era_switch: Optional[str] = None  # Queue era switch until current drawing completes
+    auto_rotate: bool = False  # Operator-selected era policy; survives service restarts
 
     # False-start tracking (volatile - resets on restart, not persisted)
     consecutive_false_starts: int = 0
@@ -339,8 +340,8 @@ class CanvasState:
             self.satisfaction_time = time.time()
             print(f"[Canvas] Lumen feels satisfied with drawing ({len(self.pixels)} pixels)", file=sys.stderr, flush=True)
 
-    def save_to_disk(self):
-        """Persist canvas state to disk."""
+    def save_to_disk(self) -> bool:
+        """Persist canvas state to disk and report whether the write succeeded."""
         try:
             # Convert pixel dict keys to strings for JSON
             pixel_data = {f"{x},{y}": list(color) for (x, y), color in self.pixels.items()}
@@ -360,6 +361,7 @@ class CanvasState:
                 "mark_count": self.mark_count,
                 "era": self._era_name,
                 "pending_era_switch": self.pending_era_switch,
+                "auto_rotate": self.auto_rotate,
                 # Attention/coherence/narrative state
                 "curiosity": self.curiosity,
                 "engagement": self.engagement,
@@ -372,8 +374,10 @@ class CanvasState:
                 "resonance_settling": self._resonance_settling,
             }
             atomic_json_write(_get_canvas_path(), data)
+            return True
         except Exception as e:
             print(f"[Canvas] Save to disk error: {e}", file=sys.stderr, flush=True)
+            return False
 
     def load_from_disk(self):
         """Load canvas state from disk - defensive against corruption."""
@@ -567,6 +571,15 @@ class CanvasState:
             pending = data.get("pending_era_switch")
             if pending is None or (isinstance(pending, str) and pending):
                 self.pending_era_switch = pending
+        except Exception:
+            pass
+
+        # Restore operator-selected era policy. Strict bool validation avoids
+        # treating strings such as "false" as truthy during recovery.
+        try:
+            auto_rotate = data.get("auto_rotate", False)
+            if isinstance(auto_rotate, bool):
+                self.auto_rotate = auto_rotate
         except Exception:
             pass
 
@@ -959,6 +972,11 @@ class DrawingEngine:
 
         # Load any persisted canvas from disk (includes attention/narrative state)
         self.canvas.load_from_disk()
+
+        # `eras.auto_rotate` is the live selector consulted at piece boundaries.
+        # Restore it before any drawing or era decision can occur.
+        import anima_mcp.display.eras as eras_module
+        eras_module.auto_rotate = self.canvas.auto_rotate
 
         # Restore the in-flight piece's goal (generated only at clear time)
         if self.canvas.drawing_goal_data:
@@ -1642,6 +1660,28 @@ class DrawingEngine:
             "description": era.description,
         }
 
+    def set_auto_rotate(self, enabled: bool) -> dict:
+        """Set and persist the operator-selected era rotation policy."""
+        if not isinstance(enabled, bool):
+            return {"success": False, "error": "enabled must be a boolean"}
+
+        import anima_mcp.display.eras as eras_module
+        previous_live = eras_module.auto_rotate
+        previous_persisted = self.canvas.auto_rotate
+        eras_module.auto_rotate = enabled
+        self.canvas.auto_rotate = enabled
+        if not self.canvas.save_to_disk():
+            eras_module.auto_rotate = previous_live
+            self.canvas.auto_rotate = previous_persisted
+            return {
+                "success": False,
+                "error": "Failed to persist auto-rotate state",
+                "auto_rotate": previous_live,
+            }
+        state = "on" if enabled else "off"
+        print(f"[ArtEras] Auto-rotate: {state}", file=sys.stderr, flush=True)
+        return {"success": True, "auto_rotate": enabled}
+
     def era_cursor_up(self, screen_state):
         """Move era cursor up on art eras screen."""
         from .eras import list_all_era_info
@@ -1666,10 +1706,7 @@ class DrawingEngine:
 
         if screen_state.era_cursor == len(all_eras):
             # Toggle auto-rotate
-            eras_module.auto_rotate = not eras_module.auto_rotate
-            state = "on" if eras_module.auto_rotate else "off"
-            print(f"[ArtEras] Auto-rotate: {state}", file=sys.stderr, flush=True)
-            return {"success": True, "auto_rotate": eras_module.auto_rotate}
+            return self.set_auto_rotate(not eras_module.auto_rotate)
 
         if 0 <= screen_state.era_cursor < len(all_eras):
             era_name = all_eras[screen_state.era_cursor]["name"]

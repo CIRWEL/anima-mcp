@@ -140,14 +140,24 @@ TOOLS = [
     ),
     Tool(
         name="manage_display",
-        description="Control Lumen's display: switch screens, show face, navigate. Also manage art eras: list_eras, get_era, set_era, resonance_critique.",
+        description="Control Lumen's display: switch screens, show face, navigate. Also manage art eras: list_eras, get_era, set_era, set_auto_rotate, resonance_critique.",
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era", "resonance_critique", "calibrate_leds"], "description": "Action to perform"},
-                "screen": {"type": "string", "description": "Screen name (for action=switch) or era name (for action=set_era)"}
+                "action": {"type": "string", "enum": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era", "set_auto_rotate", "resonance_critique", "calibrate_leds"], "description": "Action to perform"},
+                "screen": {"type": "string", "description": "Screen name (for action=switch) or era name (for action=set_era)"},
+                "enabled": {"type": "boolean", "description": "Enable or disable automatic era rotation (for action=set_auto_rotate)"}
             },
             "required": ["action"],
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {"action": {"const": "set_auto_rotate"}},
+                        "required": ["action"],
+                    },
+                    "then": {"required": ["enabled"]},
+                },
+            ],
         },
     ),
     Tool(
@@ -546,7 +556,7 @@ def _json_type_to_python(json_type):
         "string": str,
         "integer": int,
         "number": float,
-        "boolean": Union[str, bool],
+        "boolean": bool,
         "array": list,
         "object": dict,
     }
@@ -690,6 +700,16 @@ def get_fastmcp() -> "FastMCP":
 
             # Register with FastMCP using structured_output=False to avoid schema validation
             _fastmcp.tool(description=description, name=tool_name)(wrapper)
+
+            # FastMCP derives a fresh schema from the Python signature, which
+            # drops JSON Schema constraints such as enum and conditional allOf.
+            # Restore the canonical TOOLS contract on the registered tool so
+            # clients see the same constraints on legacy and FastMCP transports.
+            if tool_def is not None:
+                registered_tool = _fastmcp._tool_manager.get_tool(tool_name)
+                if registered_tool is None:
+                    raise RuntimeError(f"FastMCP failed to register tool: {tool_name}")
+                registered_tool.parameters = tool_def.inputSchema
 
         print("[FastMCP] All tools registered", file=sys.stderr, flush=True)
 
