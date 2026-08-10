@@ -1,7 +1,9 @@
 /* Lumen Shared Utilities */
 
 // ── API Base ──
-const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:8768' : window.location.origin;
+// 8771 must match message_server.py PORT. 8768 belongs to the UNITARES gateway;
+// pointing here at 8768 sent file:// loads to that service and 404'd every fetch.
+const API_BASE = window.location.protocol === 'file:' ? 'http://localhost:8771' : window.location.origin;
 
 // ── Utilities ──
 function escapeHtml(text) {

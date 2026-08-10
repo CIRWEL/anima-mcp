@@ -21,7 +21,12 @@ import base64
 import urllib.request
 import urllib.error
 
-PORT = 8768
+# 8771, not 8768: the UNITARES gateway (`com.unitares.gateway-mcp`) is allocated
+# 8768 and binds 127.0.0.1 there. This server binds the wildcard, so both could
+# start, but loopback dials resolved to the gateway — which broke the Control
+# Center whenever control_center.html was opened as a file:// URL (shared.js
+# falls back to http://localhost:<PORT> in that case). See DEFINITIVE_PORTS.md.
+PORT = 8771
 PI_USER = "unitares-anima"
 PI_HOST = os.environ.get("LUMEN_HOST", "lumen-local")  # SSH config alias (local network)
 

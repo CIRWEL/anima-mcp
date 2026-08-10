@@ -2,7 +2,7 @@
 
 **Single source of truth for anima-mcp and related services.** When changing a port, update this file and all references below.
 
-**Last Updated:** February 21, 2026
+**Last Updated:** August 10, 2026
 
 ---
 
@@ -12,6 +12,23 @@
 |--------|------|------------|
 | **anima-mcp** (Lumen MCP server) | **8766** | Pi systemd, Cursor `mcp.json`, scripts, README |
 | **UNITARES governance** (Mac/local) | **8767** | `UNITARES_URL` in anima.service, broker, Cursor governance server |
+| ~~**UNITARES gateway**~~ (Mac/local) | **8768** | ⛔ **NOT OURS — do not bind.** `com.unitares.gateway-mcp` owns it |
+| **Control Center** (`message_server.py`) | **8771** | `scripts/message_server.py` PORT, `docs/static/shared.js` API_BASE, `CONTROL_CENTER.md` |
+
+### Why 8768 is listed but not ours
+
+This file previously listed only 8766 and 8767, so nothing recorded that 8768
+was taken. `message_server.py` hardcoded `PORT = 8768` and bound the wildcard;
+the UNITARES gateway bound `127.0.0.1:8768`. Both started without error — the
+kernel routes loopback dials to the more specific bind — so the collision was
+silent, and the only symptom was that opening `control_center.html` as a
+`file://` URL 404'd on every fetch (its `shared.js` falls back to
+`http://localhost:<PORT>`). Access via the Tailscale or LAN address kept working,
+which is why it went unnoticed.
+
+**Rule:** a port used by a *neighbouring* service on the same host belongs in
+this table too. The table only prevents collisions if it lists what is taken,
+not merely what is ours.
 
 ---
 
