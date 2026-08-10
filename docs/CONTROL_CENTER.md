@@ -54,8 +54,11 @@
 │ control_center  │ HTTP │  message_server  │ SSH  │   Pi/Lumen  │
 │     .html       │ ───► │      .py         │ ───► │             │
 └─────────────────┘      └──────────────────┘      └─────────────┘
-     Browser              localhost:8768           <tailscale-ip>
+     Browser              localhost:8771           <tailscale-ip>
 ```
+
+> **Port 8771, not 8768.** 8768 is allocated to the UNITARES gateway
+> (`com.unitares.gateway-mcp`). See `docs/operations/DEFINITIVE_PORTS.md`.
 
 - **control_center.html**: Static HTML/JS dashboard
 - **message_server.py**: Python HTTP server that proxies requests to Pi via SSH
@@ -104,7 +107,8 @@ PI_KEY = "~/.ssh/id_ed25519_pi"
 **"Could not load..." errors:**
 - Check message_server.py is running
 - Check Pi is reachable via SSH
-- Check port (default 8768)
+- Check port (default 8771 — was 8768 until 2026-08-10; a bookmark still pointing
+  at 8768 now reaches the UNITARES gateway, so every fetch 404s)
 
 **Gallery not loading:**
 - Drawings are in `~/.anima/drawings/` on Pi
