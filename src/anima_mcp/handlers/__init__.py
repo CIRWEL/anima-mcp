@@ -30,6 +30,8 @@ from .knowledge import (
     handle_query,
 )
 
+from .self_iteration import handle_self_iteration
+
 from .display_ops import (
     handle_capture_screen,
     handle_diagnostics,
@@ -73,6 +75,8 @@ __all__ = [
     "handle_get_trajectory",
     "handle_get_eisv_trajectory_state",
     "handle_query",
+    # Code self-awareness and proposal ledger (never writes source)
+    "handle_self_iteration",
     # Display operations
     "handle_capture_screen",
     "handle_diagnostics",

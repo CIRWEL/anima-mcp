@@ -314,6 +314,28 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         else:
             result["mood"] = {"error": "Unable to determine mood"}
 
+    if "code" in include:
+        try:
+            from ..self_iteration import get_self_iteration_system
+
+            overview = get_self_iteration_system().inspect()
+            boundaries = overview["boundaries"]
+            result["code"] = {
+                "mode": overview["mode"],
+                "autonomy_level": overview["autonomy_level"],
+                "runtime": overview["runtime"],
+                "source": overview["source"],
+                "capabilities": overview["capabilities"],
+                "boundary_summary": {
+                    "protected_surface_count": len(boundaries["protected_surfaces"]),
+                    "auto_eligible_surface_count": len(boundaries["initial_auto_eligible_surfaces"]),
+                    "implementation_rule": boundaries["implementation_rule"],
+                },
+                "ledger": overview["ledger"],
+            }
+        except Exception as e:
+            result["code"] = {"error": str(e)}
+
     # Include EISV metrics when anima is available
     if ("eisv" in include or "anima" in include) and anima and readings:
         try:
