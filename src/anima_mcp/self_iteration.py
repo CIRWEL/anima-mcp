@@ -14,6 +14,7 @@ under ``~/.anima``.
 from __future__ import annotations
 
 import ast
+import copy
 import fnmatch
 import hashlib
 import importlib.metadata
@@ -30,7 +31,8 @@ from typing import Any, Callable, Iterable
 
 from .atomic_write import atomic_json_write
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+PROVENANCE_SCHEMA = "anima.self_iteration.provenance.v1"
 MAX_INSPECT_BYTES = 1_000_000
 MAX_FILE_DETAILS = 200
 
@@ -214,6 +216,186 @@ def _isoformat(value: datetime) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _current_request_headers() -> dict[str, str] | None:
+    """Return server-observed MCP headers, never caller arguments."""
+    try:
+        from mcp.server.lowlevel.server import request_ctx
+
+        ctx = request_ctx.get()
+        if ctx.request is not None:
+            return {
+                str(key).lower(): str(value)
+                for key, value in ctx.request.headers.items()
+            }
+    except (LookupError, AttributeError, ImportError, TypeError):
+        pass
+    return None
+
+
+def _current_access_token() -> Any | None:
+    """Return an OAuth token only after MCP auth middleware verified it."""
+    try:
+        from mcp.server.auth.middleware.auth_context import get_access_token
+
+        return get_access_token()
+    except (LookupError, AttributeError, ImportError):
+        return None
+
+
+def _collect_server_provenance(recorded_at: str) -> dict[str, Any]:
+    """Build a receipt from server context, excluding secrets and raw session IDs.
+
+    Authentication proves which OAuth actor submitted the request.  It does
+    not verify any narrative, source label, evidence item, or measurement in
+    the request; those remain explicit caller claims.
+    """
+    headers = _current_request_headers()
+    token = _current_access_token()
+
+    actor = None
+    if token is not None:
+        subject = getattr(token, "subject", None)
+        client_id = getattr(token, "client_id", None)
+        claims = getattr(token, "claims", None) or {}
+        issuer = claims.get("iss") if isinstance(claims, dict) else None
+        scopes = getattr(token, "scopes", None) or []
+        if subject or client_id:
+            actor = {
+                "kind": "oauth_subject" if subject else "oauth_client",
+                "id": subject or client_id,
+                "client_id": client_id,
+                "issuer": issuer if isinstance(issuer, str) else None,
+                "scopes": sorted(str(scope) for scope in scopes),
+                "verified": True,
+            }
+
+    session_id = None
+    if headers:
+        session_id = headers.get("mcp-session-id") or headers.get("x-session-id")
+    session = {
+        "present": bool(session_id),
+        "identifier_sha256": (
+            hashlib.sha256(session_id.encode("utf-8")).hexdigest()
+            if session_id
+            else None
+        ),
+        "source": "server_observed_transport_header" if session_id else "none",
+        "verified": False,
+        "request_actor_verified": actor is not None,
+        "note": "A transport session observation is not identity proof.",
+    }
+
+    return {
+        "schema": PROVENANCE_SCHEMA,
+        "recorded_by": "anima-mcp",
+        "recorded_at": recorded_at,
+        "transport": {
+            "kind": "mcp_http" if headers is not None else "internal_or_test",
+            "server_observed": headers is not None,
+        },
+        "authentication": {
+            "method": "oauth_bearer" if actor else "none",
+            "verified": actor is not None,
+        },
+        "actor": actor,
+        "session": session,
+        "integrity": {
+            "tamper_evident": False,
+            "cryptographically_signed": False,
+            "note": "The local receipt is not a durable attestation.",
+        },
+        "trust": {
+            "classification": (
+                "authenticated_request_unverified_claims"
+                if actor
+                else "unverified_request"
+            ),
+            "actor_authenticated": actor is not None,
+            "claims_verified": False,
+            "evidence_verified": False,
+            "weighting_eligible": False,
+            "authority_eligible": False,
+        },
+    }
+
+
+def _claim_envelope(value: Any, *, field: str, legacy: bool = False) -> dict[str, Any]:
+    return {
+        "field": field,
+        "value": value,
+        "epistemic_status": "caller_claimed_legacy" if legacy else "caller_claimed",
+        "verified": False,
+        "authority_granted": False,
+    }
+
+
+def _zero_weight_trust_policy(*, legacy: bool = False) -> dict[str, Any]:
+    return {
+        "effective_weight": 0.0,
+        "priority_eligible": False,
+        "automation_eligible": False,
+        "authority_eligible": False,
+        "evidence_status": "caller_asserted_legacy" if legacy else "caller_asserted",
+        "reason": (
+            "Legacy provenance is unavailable; claims are unverified."
+            if legacy
+            else "Request provenance identifies receipt context, not claim truth."
+        ),
+        "upgrade_required": (
+            "An independent verifier must append a verification event before "
+            "any policy may assign weight or authority."
+        ),
+    }
+
+
+def _provenance_contract() -> dict[str, Any]:
+    return {
+        "schema": PROVENANCE_SCHEMA,
+        "caller_labels_are_claims_only": True,
+        "server_receipts_verify_request_context_only": True,
+        "ledger_receipts_tamper_evident": False,
+        "unverified_effective_weight": 0.0,
+        "unverified_priority_eligible": False,
+        "unverified_automation_eligible": False,
+        "unverified_authority_eligible": False,
+        "verification_upgrade": "independent_append_only_event_required",
+    }
+
+
+def _legacy_provenance(recorded_at: str | None, *, migrated_at: str) -> dict[str, Any]:
+    return {
+        "schema": PROVENANCE_SCHEMA,
+        "recorded_by": "legacy_v1_migration",
+        "recorded_at": recorded_at,
+        "recorded_at_verified": False,
+        "migration_observed_at": migrated_at,
+        "transport": {"kind": "unknown", "server_observed": False},
+        "authentication": {"method": "unknown", "verified": False},
+        "actor": None,
+        "integrity": {
+            "tamper_evident": False,
+            "cryptographically_signed": False,
+            "note": "Schema v1 had no durable provenance attestation.",
+        },
+        "session": {
+            "present": False,
+            "identifier_sha256": None,
+            "source": "legacy_unknown",
+            "verified": False,
+            "request_actor_verified": False,
+            "note": "No trustworthy session provenance was stored in schema v1.",
+        },
+        "trust": {
+            "classification": "legacy_unverified",
+            "actor_authenticated": False,
+            "claims_verified": False,
+            "evidence_verified": False,
+            "weighting_eligible": False,
+            "authority_eligible": False,
+        },
+    }
+
+
 def _discover_repo_root() -> Path | None:
     """Find the source tree without trusting caller-supplied paths."""
     override = os.environ.get("ANIMA_SOURCE_ROOT")
@@ -316,11 +498,67 @@ class SelfIterationSystem:
         repo_root: Path | None = None,
         ledger_path: Path | None = None,
         clock: Callable[[], datetime] = _utc_now,
+        provenance_provider: Callable[
+            [str], dict[str, Any]
+        ] = _collect_server_provenance,
     ) -> None:
         self.repo_root = repo_root.resolve() if repo_root else _discover_repo_root()
         self.ledger_path = ledger_path or Path.home() / ".anima" / "self_iteration.json"
         self._clock = clock
+        self._provenance_provider = provenance_provider
         self._lock = threading.RLock()
+
+    def _server_provenance(self, recorded_at: str) -> dict[str, Any]:
+        """Collect a server-controlled receipt and pin every claim trust bit false."""
+        try:
+            receipt = copy.deepcopy(self._provenance_provider(recorded_at))
+        except Exception as exc:
+            raise SelfIterationError(
+                "server provenance is unavailable; refusing to persist the record"
+            ) from exc
+        if (
+            not isinstance(receipt, dict)
+            or receipt.get("schema") != PROVENANCE_SCHEMA
+            or not isinstance(receipt.get("recorded_by"), str)
+        ):
+            raise SelfIterationError(
+                "server provenance is malformed; refusing to persist the record"
+            )
+
+        receipt["recorded_at"] = recorded_at
+        receipt["integrity"] = {
+            "tamper_evident": False,
+            "cryptographically_signed": False,
+            "note": "The local receipt is not a durable attestation.",
+        }
+        authentication = receipt.get("authentication")
+        actor = receipt.get("actor")
+        actor_authenticated = bool(
+            isinstance(authentication, dict)
+            and authentication.get("verified") is True
+            and isinstance(actor, dict)
+            and actor.get("verified") is True
+            and actor.get("id")
+        )
+        trust = receipt.get("trust")
+        if not isinstance(trust, dict):
+            trust = {}
+        trust.update(
+            {
+                "classification": (
+                    "authenticated_request_unverified_claims"
+                    if actor_authenticated
+                    else "unverified_request"
+                ),
+                "actor_authenticated": actor_authenticated,
+                "claims_verified": False,
+                "evidence_verified": False,
+                "weighting_eligible": False,
+                "authority_eligible": False,
+            }
+        )
+        receipt["trust"] = trust
+        return receipt
 
     def _git_metadata(self) -> dict[str, Any]:
         if self.repo_root is None:
@@ -528,6 +766,8 @@ class SelfIterationSystem:
                 "inspect_structure": True,
                 "persist_change_proposals": True,
                 "record_measured_outcomes": True,
+                "accept_caller_supplied_provenance": False,
+                "weight_unverified_ledger_claims": False,
                 "write_source": False,
                 "execute_proposal_text": False,
                 "commit_or_push": False,
@@ -546,15 +786,30 @@ class SelfIterationSystem:
                     "A separate caretaker or isolated runner must implement, test, "
                     "review, and deploy every proposal."
                 ),
+                "provenance_rule": (
+                    "Caller labels, narratives, and evidence remain zero-weight claims. "
+                    "Authentication identifies a submitter only; an independent verifier "
+                    "must append a separate event before policy can assign weight or authority."
+                ),
             },
             "ledger": self._ledger_summary(),
         }
 
     def _ledger_summary(self) -> dict[str, Any]:
         try:
+            with self._lock:
+                ledger = self._load_ledger()
+            legacy_count = sum(
+                1
+                for proposal in ledger["proposals"]
+                if proposal.get("provenance", {}).get("trust", {}).get("classification")
+                == "legacy_unverified"
+            )
             return {
-                "proposal_count": len(self._load_ledger()["proposals"]),
-                "schema_version": SCHEMA_VERSION,
+                "proposal_count": len(ledger["proposals"]),
+                "legacy_unverified_count": legacy_count,
+                "schema_version": ledger["schema_version"],
+                "provenance_contract": ledger["provenance_contract"],
             }
         except SelfIterationError as exc:
             return {
@@ -688,7 +943,174 @@ class SelfIterationSystem:
         }
 
     def _empty_ledger(self) -> dict[str, Any]:
-        return {"schema_version": SCHEMA_VERSION, "proposals": []}
+        return {
+            "schema_version": SCHEMA_VERSION,
+            "provenance_contract": _provenance_contract(),
+            "migrations": [],
+            "proposals": [],
+        }
+
+    def _migrate_v1(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Reclassify schema-v1 attribution as explicit, zero-weight claims."""
+        migrated_at = _isoformat(self._clock())
+        ledger = copy.deepcopy(data)
+        proposals = ledger.get("proposals")
+        if not isinstance(proposals, list):
+            raise SelfIterationError("self-iteration ledger proposals are malformed")
+
+        for proposal in proposals:
+            if not isinstance(proposal, dict):
+                raise SelfIterationError(
+                    "self-iteration ledger proposals are malformed"
+                )
+            proposal["source_claim"] = _claim_envelope(
+                proposal.pop("source", "unknown"), field="source", legacy=True
+            )
+            proposal["provenance"] = _legacy_provenance(
+                proposal.get("created_at"), migrated_at=migrated_at
+            )
+            proposal["trust_policy"] = _zero_weight_trust_policy(legacy=True)
+            proposal["evidence_epistemic_status"] = "caller_asserted_legacy"
+
+            events = proposal.setdefault("events", [])
+            if not isinstance(events, list):
+                raise SelfIterationError("self-iteration proposal events are malformed")
+            for event in events:
+                if not isinstance(event, dict):
+                    raise SelfIterationError(
+                        "self-iteration proposal events are malformed"
+                    )
+                if event.get("type") != "outcome_recorded":
+                    continue
+                event["measurement_source_claim"] = _claim_envelope(
+                    event.pop("measurement_source", "unknown"),
+                    field="measurement_source",
+                    legacy=True,
+                )
+                event["provenance"] = _legacy_provenance(
+                    event.get("at"), migrated_at=migrated_at
+                )
+                event["trust_policy"] = _zero_weight_trust_policy(legacy=True)
+                event["evidence_epistemic_status"] = "caller_asserted_legacy"
+            events.append(
+                {
+                    "type": "provenance_migrated",
+                    "at": migrated_at,
+                    "from_schema": 1,
+                    "to_schema": SCHEMA_VERSION,
+                    "classification": "legacy_unverified",
+                    "authority_granted": False,
+                }
+            )
+
+        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["provenance_contract"] = _provenance_contract()
+        migrations = ledger.setdefault("migrations", [])
+        if not isinstance(migrations, list):
+            raise SelfIterationError("self-iteration ledger migrations are malformed")
+        migrations.append(
+            {
+                "type": "schema_migration",
+                "at": migrated_at,
+                "from_schema": 1,
+                "to_schema": SCHEMA_VERSION,
+                "classification": "legacy_unverified",
+            }
+        )
+        return ledger
+
+    @staticmethod
+    def _validate_claim(claim: Any, *, label: str) -> None:
+        if (
+            not isinstance(claim, dict)
+            or claim.get("verified") is not False
+            or claim.get("authority_granted") is not False
+            or not isinstance(claim.get("field"), str)
+            or "value" not in claim
+        ):
+            raise SelfIterationError(
+                f"self-iteration ledger {label} is not a valid unverified claim"
+            )
+
+    @staticmethod
+    def _validate_provenance(provenance: Any, *, label: str) -> None:
+        trust = provenance.get("trust") if isinstance(provenance, dict) else None
+        integrity = (
+            provenance.get("integrity") if isinstance(provenance, dict) else None
+        )
+        if (
+            not isinstance(provenance, dict)
+            or provenance.get("schema") != PROVENANCE_SCHEMA
+            or not isinstance(provenance.get("recorded_by"), str)
+            or not isinstance(trust, dict)
+            or trust.get("claims_verified") is not False
+            or trust.get("evidence_verified") is not False
+            or trust.get("weighting_eligible") is not False
+            or trust.get("authority_eligible") is not False
+            or not isinstance(integrity, dict)
+            or integrity.get("tamper_evident") is not False
+            or integrity.get("cryptographically_signed") is not False
+        ):
+            raise SelfIterationError(
+                f"self-iteration ledger {label} provenance violates the zero-trust contract"
+            )
+
+    @staticmethod
+    def _validate_trust_policy(policy: Any, *, label: str) -> None:
+        weight = policy.get("effective_weight") if isinstance(policy, dict) else None
+        if (
+            not isinstance(policy, dict)
+            or isinstance(weight, bool)
+            or not isinstance(weight, (int, float))
+            or weight != 0.0
+            or policy.get("priority_eligible") is not False
+            or policy.get("automation_eligible") is not False
+            or policy.get("authority_eligible") is not False
+        ):
+            raise SelfIterationError(
+                f"self-iteration ledger {label} trust policy violates the zero-weight contract"
+            )
+
+    def _validate_v2(self, data: dict[str, Any]) -> None:
+        if data.get("provenance_contract") != _provenance_contract():
+            raise SelfIterationError(
+                "self-iteration ledger provenance contract is malformed"
+            )
+        if not isinstance(data.get("migrations"), list):
+            raise SelfIterationError("self-iteration ledger migrations are malformed")
+
+        for proposal in data["proposals"]:
+            if not isinstance(proposal, dict):
+                raise SelfIterationError(
+                    "self-iteration ledger proposals are malformed"
+                )
+            if "source" in proposal:
+                raise SelfIterationError(
+                    "self-iteration ledger contains an authoritative-looking source field"
+                )
+            self._validate_claim(proposal.get("source_claim"), label="proposal source")
+            self._validate_provenance(proposal.get("provenance"), label="proposal")
+            self._validate_trust_policy(proposal.get("trust_policy"), label="proposal")
+            events = proposal.get("events")
+            if not isinstance(events, list):
+                raise SelfIterationError("self-iteration proposal events are malformed")
+            for event in events:
+                if not isinstance(event, dict):
+                    raise SelfIterationError(
+                        "self-iteration proposal events are malformed"
+                    )
+                if event.get("type") != "outcome_recorded":
+                    continue
+                if "measurement_source" in event:
+                    raise SelfIterationError(
+                        "self-iteration outcome contains an authoritative-looking measurement field"
+                    )
+                self._validate_claim(
+                    event.get("measurement_source_claim"),
+                    label="outcome measurement source",
+                )
+                self._validate_provenance(event.get("provenance"), label="outcome")
+                self._validate_trust_policy(event.get("trust_policy"), label="outcome")
 
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.exists():
@@ -699,10 +1121,19 @@ class SelfIterationSystem:
             raise SelfIterationError(
                 "self-iteration ledger is unreadable; refusing to overwrite it"
             ) from exc
-        if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+        if not isinstance(data, dict):
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if not isinstance(data.get("proposals"), list):
             raise SelfIterationError("self-iteration ledger proposals are malformed")
+        version = data.get("schema_version", 1)
+        if version == 1:
+            data = self._migrate_v1(data)
+            self._validate_v2(data)
+            self._save_ledger(data)
+        elif version != SCHEMA_VERSION:
+            raise SelfIterationError("self-iteration ledger has an unsupported schema")
+        else:
+            self._validate_v2(data)
         return data
 
     def _save_ledger(self, ledger: dict[str, Any]) -> None:
@@ -730,7 +1161,7 @@ class SelfIterationSystem:
         verification: Any,
         rollback_plan: Any = None,
         risk: Any = "medium",
-        source: Any = "self_observation",
+        claimed_source: Any = "self_observation",
     ) -> dict[str, Any]:
         """Persist an evidence-backed proposal without changing source code."""
         observation_text = _required_text(observation, "observation")
@@ -751,9 +1182,9 @@ class SelfIterationSystem:
             "caretaker",
             "governance",
         }
-        if not isinstance(source, str) or source not in allowed_sources:
+        if not isinstance(claimed_source, str) or claimed_source not in allowed_sources:
             raise SelfIterationError(
-                f"source must be one of: {', '.join(sorted(allowed_sources))}"
+                "claimed_source must be one of: " + ", ".join(sorted(allowed_sources))
             )
 
         rollback_text = (
@@ -778,12 +1209,15 @@ class SelfIterationSystem:
         proposal = {
             "id": proposal_id,
             "created_at": created_at,
-            "source": source,
+            "source_claim": _claim_envelope(claimed_source, field="claimed_source"),
+            "provenance": self._server_provenance(created_at),
+            "trust_policy": _zero_weight_trust_policy(),
             "status": status,
             "observation": observation_text,
             "hypothesis": hypothesis_text,
             "expected_outcome": expected_text,
             "evidence": evidence_items,
+            "evidence_epistemic_status": "caller_asserted",
             "target_paths": normalized_targets,
             "verification": verification_items,
             "rollback_plan": rollback_text,
@@ -798,6 +1232,7 @@ class SelfIterationSystem:
                 "mode": "proposal_only",
                 "source_writes_performed": False,
                 "commands_executed": False,
+                "provenance_authorizes_execution": False,
                 "required_path": "isolated branch -> tests -> review -> canary -> measured outcome",
             },
             "events": [
@@ -845,7 +1280,7 @@ class SelfIterationSystem:
         observed_outcome: Any,
         evidence: Any,
         implementation_ref: Any,
-        measurement_source: Any = "self_observation",
+        claimed_measurement_source: Any = "self_observation",
     ) -> dict[str, Any]:
         proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
         if not isinstance(decision, str) or decision not in {
@@ -868,11 +1303,11 @@ class SelfIterationSystem:
             "self_observation",
         }
         if (
-            not isinstance(measurement_source, str)
-            or measurement_source not in allowed_measurement_sources
+            not isinstance(claimed_measurement_source, str)
+            or claimed_measurement_source not in allowed_measurement_sources
         ):
             raise SelfIterationError(
-                "measurement_source must be one of: "
+                "claimed_measurement_source must be one of: "
                 + ", ".join(sorted(allowed_measurement_sources))
             )
         status_for_decision = {
@@ -893,14 +1328,21 @@ class SelfIterationSystem:
             )
             if proposal is None:
                 raise SelfIterationError(f"proposal not found: {proposal_id_text}")
+            recorded_at = _isoformat(self._clock())
             event = {
                 "type": "outcome_recorded",
-                "at": _isoformat(self._clock()),
+                "at": recorded_at,
                 "decision": decision,
                 "observed_outcome": observed_text,
                 "evidence": evidence_items,
+                "evidence_epistemic_status": "caller_asserted",
                 "implementation_ref": implementation_text,
-                "measurement_source": measurement_source,
+                "measurement_source_claim": _claim_envelope(
+                    claimed_measurement_source,
+                    field="claimed_measurement_source",
+                ),
+                "provenance": self._server_provenance(recorded_at),
+                "trust_policy": _zero_weight_trust_policy(),
                 "code_fingerprint": self._code_fingerprint(),
             }
             proposal.setdefault("events", []).append(event)
