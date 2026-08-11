@@ -216,8 +216,10 @@ class KnowledgeBase:
         """Add a new learned insight.
 
         Args:
-            confidence: Initial confidence. If None, defaults to 1.0 for
-                external sources, 0.7 for self-sourced (author=="lumen").
+            confidence: Initial confidence. If None, defaults to 0.5 for
+                external sources, 0.7 for self-sourced (author=="lumen") —
+                self-derived outranks external assertion; external claims
+                earn promotion via reconvergence.
             occasion_id: Answering occasion (MCP session id). Gates
                 re-derivation credit on a new occasion — see
                 _register_rederivation.
@@ -512,6 +514,17 @@ def get_knowledge() -> KnowledgeBase:
     return _knowledge
 
 
+# Below this, an insight may be stored and surfaced but must not MOVE anything.
+# Matches sync_from_qa_knowledge's min_confidence: a fresh external claim
+# (born 0.5) needs two independent re-derivations (0.5 → 0.55 → 0.60) before
+# it can touch preferences, beliefs, or agency values. Without this floor the
+# birth-confidence hierarchy gated only surfacing, while the single most
+# direct behavior-changing pathway applied hardcoded nudges regardless of
+# trust — an unvalidated stranger's sentence moved Lumen exactly as hard as
+# its own twice-corroborated knowledge.
+APPLY_INSIGHT_CONFIDENCE_FLOOR = 0.6
+
+
 def apply_insight(insight) -> dict:
     """Apply a learned insight to behavioral systems.
 
@@ -522,6 +535,10 @@ def apply_insight(insight) -> dict:
     Returns dict describing what was affected.
     """
     effects = {}
+    if getattr(insight, "confidence", 0.0) < APPLY_INSIGHT_CONFIDENCE_FLOOR:
+        # Not yet earned: stored, surfaceable, contestable — but inert.
+        effects["skipped"] = f"confidence {insight.confidence:.2f} < {APPLY_INSIGHT_CONFIDENCE_FLOOR} floor"
+        return effects
     text_lower = insight.text.lower()
 
     # 1. Environment/sensory insights → growth preferences
