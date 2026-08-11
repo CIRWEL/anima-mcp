@@ -157,7 +157,7 @@ Two processes communicate via shared memory:
 anima-broker                           anima --http
 (hardware broker)                      (MCP server + display)
      |                                      |
-     | sensors, learning,                   | 30 MCP tools, display,
+     | sensors, learning,                   | 31 MCP tools, display,
      | governance check-ins                 | drawing engine, LEDs
      |                                      |
      +---> /dev/shm/anima_state.json <------+
@@ -171,23 +171,37 @@ anima-broker                           anima --http
 | Process | Role |
 |---------|------|
 | **Hardware broker** (`stable_creature.py`) | Owns I2C sensors, runs learning (preferences, self-model, agency, prediction, goals), governance check-ins |
-| **MCP server** (`server.py` + `handlers/`) | Serves 30 tools, drives 240x240 display + LEDs, runs drawing engine, self-reflection cycle |
+| **MCP server** (`server.py` + `handlers/`) | Serves 31 tools, drives 240x240 display + LEDs, runs drawing engine, self-reflection cycle |
 
-The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (6 focused handler modules). A full voice system (mic capture, STT via Vosk, TTS via Piper) is implemented but not yet exposed as MCP tools — enable with `LUMEN_VOICE_MODE=audio`.
+The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (7 focused handler modules). A full voice system (mic capture, STT via Vosk, TTS via Piper) is implemented but not yet exposed as MCP tools — enable with `LUMEN_VOICE_MODE=audio`.
 
 ---
 
-## MCP Tools (30)
+## MCP Tools (31)
 
-Anima exposes 30 tools over the [Model Context Protocol](https://modelcontextprotocol.io/):
+Anima exposes 31 tools over the [Model Context Protocol](https://modelcontextprotocol.io/):
 
 - **State & sensing** (8 tools) — `get_state`, `get_lumen_context`, `get_identity`, `read_sensors`, `get_health`, `get_calibration`, `set_calibration`, `diagnostics`
 - **Knowledge & learning** (7 tools) — `get_self_knowledge`, `get_growth`, `get_trajectory`, `get_eisv_trajectory_state`, `get_qa_insights`, `learning_visualization`, `query`
+- **Code self-awareness** (1 tool) — `self_iteration` (structural inspection, proposals, outcome ledger; never edits or deploys)
 - **Interaction** (7 tools) — `next_steps`, `lumen_qa`, `post_message`, `say`, `configure_voice`, `primitive_feedback`, `unified_workflow`
 - **Display & capture** (2 tools) — `manage_display` (screens, art eras, advisory `resonance_critique`), `capture_screen`
 - **System operations** (6 tools) — `git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`
 
 Start with `get_lumen_context` to understand Anima's current state, or `next_steps` for what it needs right now.
+
+### Bounded Code Self-Iteration
+
+`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, and record whether an externally implemented change helped. `get_lumen_context(include=["code"])` exposes a compact version of this code self-awareness alongside identity and embodied state.
+
+The loop is deliberately split across trust boundaries:
+
+```text
+observation -> hypothesis -> proposal ledger -> isolated branch + tests
+            -> reviewed canary -> measured outcome -> keep or revert
+```
+
+The running creature owns the observation, hypothesis, and measured outcome. A separate caretaker or isolated coding runner owns source edits, Git operations, tests, review, and deployment. Each outcome is linked to an implementation reference and labels whether its evidence came from self-observation, an automated test, governance, or a caretaker. Identity, governance, deployment, persistence, self-measurement, CI, tests, and the self-iteration evaluator are protected surfaces; proposals may identify a problem there, but they are always routed to human review. Proposal text is inert data and is never executed as a command.
 
 ---
 

@@ -26,6 +26,8 @@ from .handlers import (
     # Knowledge
     handle_get_self_knowledge, handle_get_growth, handle_get_qa_insights,
     handle_get_trajectory, handle_get_eisv_trajectory_state, handle_query,
+    # Code self-awareness
+    handle_self_iteration,
     # Display operations
     handle_capture_screen, handle_diagnostics,
     handle_manage_display,
@@ -132,8 +134,8 @@ TOOLS = [
             "properties": {
                 "include": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["identity", "anima", "sensors", "mood"]},
-                    "description": "What to include (default: all)"
+                    "items": {"type": "string", "enum": ["identity", "anima", "sensors", "mood", "code"]},
+                    "description": "What to include (default: identity, anima, sensors, mood; code is opt-in)"
                 }
             },
         },
@@ -230,6 +232,118 @@ TOOLS = [
                     "type": "integer",
                     "description": "Max insights to return (default: 10)"
                 }
+            },
+        },
+    ),
+    Tool(
+        name="self_iteration",
+        description=(
+            "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
+            "list proposals, or record a measured outcome. Proposal-only: never edits source, executes "
+            "commands, commits, or deploys."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["inspect", "propose", "list", "record_outcome"],
+                    "description": "Operation to perform (default: inspect)",
+                    "default": "inspect",
+                },
+                "path": {
+                    "type": "string",
+                    "description": "Repository-relative source path for structural inspection; full source bodies are never returned",
+                },
+                "include_files": {
+                    "type": "boolean",
+                    "description": "Include bounded per-file hashes and sizes in repository inspection (default: false)",
+                    "default": False,
+                },
+                "file_limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 200,
+                    "description": "Maximum per-file records when include_files=true (default: 100)",
+                    "default": 100,
+                },
+                "observation": {
+                    "type": "string",
+                    "description": "Observed behavior or failure motivating a proposal",
+                },
+                "hypothesis": {
+                    "type": "string",
+                    "description": "Falsifiable explanation of how a code change could help",
+                },
+                "expected_outcome": {
+                    "type": "string",
+                    "description": "Measurable result expected if the hypothesis is correct",
+                },
+                "evidence": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Concrete observations, test results, or measurements supporting the proposal or outcome",
+                },
+                "target_paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Repository-relative paths likely involved in the proposed change",
+                },
+                "verification": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Checks or measurements that would falsify or validate the proposal; never executed by this tool",
+                },
+                "rollback_plan": {
+                    "type": "string",
+                    "description": "How an external implementer should restore the prior known-good state",
+                },
+                "risk": {
+                    "type": "string",
+                    "enum": ["low", "medium", "high"],
+                    "description": "Self-assessed proposal risk; protected boundaries may raise it",
+                    "default": "medium",
+                },
+                "source": {
+                    "type": "string",
+                    "enum": ["self_observation", "test_failure", "caretaker", "governance"],
+                    "description": "Origin of the proposal",
+                    "default": "self_observation",
+                },
+                "proposal_id": {
+                    "type": "string",
+                    "description": "Proposal identifier for list filtering or outcome recording",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Optional status filter for list mode",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 100,
+                    "description": "Maximum proposals returned by list mode (default: 10)",
+                    "default": 10,
+                },
+                "decision": {
+                    "type": "string",
+                    "enum": ["keep", "revert", "inconclusive"],
+                    "description": "Measured decision for record_outcome",
+                },
+                "observed_outcome": {
+                    "type": "string",
+                    "description": "What actually happened after an externally implemented change",
+                },
+                "implementation_ref": {
+                    "type": "string",
+                    "description": "Required commit, PR, or deployment reference for the external implementation",
+                },
+                "measurement_source": {
+                    "type": "string",
+                    "enum": ["self_observation", "automated_test", "caretaker", "governance"],
+                    "description": "Provenance of the recorded outcome evidence",
+                    "default": "self_observation",
+                },
             },
         },
     ),
@@ -466,6 +580,7 @@ HANDLERS = {
     "unified_workflow": handle_unified_workflow,
     "get_calibration": handle_get_calibration,
     "get_self_knowledge": handle_get_self_knowledge,
+    "self_iteration": handle_self_iteration,
     "get_growth": handle_get_growth,
     "get_qa_insights": handle_get_qa_insights,
     "query": handle_query,
