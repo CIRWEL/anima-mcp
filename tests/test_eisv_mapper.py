@@ -102,12 +102,35 @@ def test_eisv_with_neural_signals():
     )
     
     eisv = anima_to_eisv(anima, readings, neural_weight=0.3)
-    
+
     # Energy should be boosted by beta/gamma
     assert eisv.energy > 0.5
-    
-    # Integrity should be boosted by alpha
-    assert eisv.integrity > 0.5
+
+    # Integrity is clarity alone — alpha must NOT boost it (alpha = 1 - beta
+    # by construction; mixing it in double-counts CPU% on both sides of V)
+    assert eisv.integrity == anima.clarity
+
+
+def test_alpha_does_not_leak_cpu_into_integrity():
+    """Regression: varying beta (and hence alpha = 1 - beta) must move E only.
+
+    Before the fix, CPU% sat on both sides of V = E - I: beta fed E while
+    alpha fed I, so an idle Pi suppressed E and inflated I from one reading
+    and V could never be positive at rest.
+    """
+    anima = create_test_anima(warmth=0.5, clarity=0.5, stability=0.5, presence=0.5)
+    idle = create_test_readings(with_neural=True, alpha=0.95, beta=0.05, gamma=0.1)
+    busy = create_test_readings(with_neural=True, alpha=0.20, beta=0.80, gamma=0.1)
+
+    eisv_idle = anima_to_eisv(anima, idle, neural_weight=0.3)
+    eisv_busy = anima_to_eisv(anima, busy, neural_weight=0.3)
+
+    # E responds to activation
+    assert eisv_busy.energy > eisv_idle.energy
+    # I does not move with CPU at all
+    assert eisv_idle.integrity == eisv_busy.integrity == anima.clarity
+    # and so V's change is E's change alone
+    assert eisv_busy.valence > eisv_idle.valence
 
 
 def test_eisv_range_clamping():

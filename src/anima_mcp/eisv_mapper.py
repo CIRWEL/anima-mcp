@@ -52,7 +52,7 @@ def anima_to_eisv(
     
     Mapping strategy:
     - Energy (E): Warmth + Beta/Gamma power (activation)
-    - Integrity (I): Clarity + Alpha power (awareness)
+    - Integrity (I): Clarity (alpha excluded: alpha = 1 - beta, see below)
     - Entropy (S): Inverse of Stability (chaos)
     - Valence (V): Signed E-I imbalance (+running hot / -running careful)
     
@@ -89,10 +89,13 @@ def anima_to_eisv(
         neural_energy = beta * 0.6 + gamma * 0.4
         E = pw * anima.warmth + nw * neural_energy
 
-    # Integrity (I): Clarity + Alpha power (awareness)
+    # Integrity (I): Clarity only. Alpha is deliberately NOT mixed in:
+    # alpha = 1 - beta by construction (computational_neural.py), so feeding
+    # alpha into I while beta feeds E puts CPU% on both sides of V = E - I —
+    # the exact double-count CLAUDE.md warns neural consumers about. An idle
+    # Pi would suppress E and inflate I from the same reading, and V could
+    # never be positive at rest. Clarity already carries awareness quality.
     integrity = anima.clarity
-    if has_neural and getattr(readings, 'eeg_alpha_power', None) is not None:
-        integrity = pw * anima.clarity + nw * readings.eeg_alpha_power
     
     # Entropy (S): Inverse of Stability (high stability = low entropy)
     # Stability incorporates Theta/Delta (deep stability)
