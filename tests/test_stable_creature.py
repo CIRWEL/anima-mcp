@@ -109,6 +109,27 @@ class TestModuleConstants:
         assert RETRY_DELAY == 0.5
 
 
+class TestBrokerAgencyFlag:
+    """The duplicate broker TD learner stays retired unless explicitly restored."""
+
+    def test_disabled_by_default(self, monkeypatch):
+        from anima_mcp.stable_creature import broker_agency_enabled
+        monkeypatch.delenv("ANIMA_BROKER_AGENCY_ENABLED", raising=False)
+        assert broker_agency_enabled() is False
+
+    @pytest.mark.parametrize("value", ["1", "true", "YES", "on"])
+    def test_explicit_truthy_values_enable_legacy_loop(self, monkeypatch, value):
+        from anima_mcp.stable_creature import broker_agency_enabled
+        monkeypatch.setenv("ANIMA_BROKER_AGENCY_ENABLED", value)
+        assert broker_agency_enabled() is True
+
+    @pytest.mark.parametrize("value", ["0", "false", "no", "disabled"])
+    def test_other_values_remain_disabled(self, monkeypatch, value):
+        from anima_mcp.stable_creature import broker_agency_enabled
+        monkeypatch.setenv("ANIMA_BROKER_AGENCY_ENABLED", value)
+        assert broker_agency_enabled() is False
+
+
 # =====================================================================
 # Signal handler
 # =====================================================================

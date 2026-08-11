@@ -75,9 +75,12 @@ class SelfInsight:
     last_validated: datetime
     validation_count: int = 0        # How many times it's been confirmed
     contradiction_count: int = 0     # How many times it's been contradicted
+    active: bool = True               # False when its source has retracted
 
     def strength(self) -> float:
         """How strongly this insight holds (confidence * validation ratio)."""
+        if not self.active:
+            return 0.0
         total = self.validation_count + self.contradiction_count
         if total == 0:
             return self.confidence * 0.5  # New insight, moderate strength
@@ -96,6 +99,7 @@ class SelfInsight:
             "validation_count": self.validation_count,
             "contradiction_count": self.contradiction_count,
             "strength": self.strength(),
+            "active": self.active,
         }
 
 
@@ -210,7 +214,8 @@ class SelfReflectionSystem:
                 discovered_at TEXT NOT NULL,
                 last_validated TEXT NOT NULL,
                 validation_count INTEGER DEFAULT 0,
-                contradiction_count INTEGER DEFAULT 0
+                contradiction_count INTEGER DEFAULT 0,
+                active INTEGER NOT NULL DEFAULT 1
             );
 
             CREATE INDEX IF NOT EXISTS idx_insights_category ON insights(category);
@@ -244,6 +249,9 @@ class SelfReflectionSystem:
                 value TEXT NOT NULL
             );
         """)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(insights)")}
+        if "active" not in columns:
+            conn.execute("ALTER TABLE insights ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
         conn.commit()
 
     def _load_reflection_state(self):
@@ -266,6 +274,7 @@ class SelfReflectionSystem:
                 last_validated=datetime.fromisoformat(row["last_validated"]),
                 validation_count=row["validation_count"],
                 contradiction_count=row["contradiction_count"],
+                active=bool(row["active"]),
             )
             self._insights[insight.id] = insight
 
@@ -279,8 +288,9 @@ class SelfReflectionSystem:
         conn.execute("""
             INSERT OR REPLACE INTO insights
             (id, category, description, confidence, sample_count,
-             discovered_at, last_validated, validation_count, contradiction_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             discovered_at, last_validated, validation_count, contradiction_count,
+             active)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             insight.id,
             insight.category.value,
@@ -291,6 +301,7 @@ class SelfReflectionSystem:
             insight.last_validated.isoformat(),
             insight.validation_count,
             insight.contradiction_count,
+            int(insight.active),
         ))
         conn.commit()
         self._insights[insight.id] = insight
@@ -303,7 +314,7 @@ class SelfReflectionSystem:
         validated — a faint new insight deserves time to mature, but a faint
         *wrong* one should not be immune.
         """
-        if insight.contradiction_count > insight.validation_count:
+        if not insight.active or insight.contradiction_count > insight.validation_count:
             return False
         return (now - insight.discovered_at) < self._newborn_grace
 
@@ -1485,7 +1496,7 @@ class SelfReflectionSystem:
 
         contradictions = []
         for existing in self._insights.values():
-            if existing.category != category:
+            if not existing.active or existing.category != category:
                 continue
             # Extract condition and outcome from the existing insight's ID
             existing_condition = self._extract_condition_from_id(existing.id)
@@ -1634,20 +1645,46 @@ class SelfReflectionSystem:
             return []
 
         for pref in growth._preferences.values():
-            if pref.confidence < 0.8 or pref.observation_count < 10:
-                continue
-
             insight_id = f"pref_{pref.name}"
+            eligible = pref.confidence >= 0.8 and pref.observation_count >= 10
+            description = f"i know this about myself: {pref.description.lower()}"
 
-            # Already have this insight? Validate it.
+            # Existing preference insights follow their source through both
+            # confirmation and retraction.  The old early-continue made the
+            # contradiction branch below mathematically unreachable.
             if insight_id in self._insights:
                 existing = self._insights[insight_id]
-                if pref.confidence > 0.7:
-                    existing.validation_count += 1
-                    existing.last_validated = now
-                else:
+                if eligible:
+                    has_new_evidence = pref.observation_count > existing.sample_count
+                    was_inactive = not existing.active
+                    existing.active = True
+                    existing.confidence = pref.confidence
+                    existing.sample_count = pref.observation_count
+                    existing.description = description
+                    if has_new_evidence or was_inactive:
+                        existing.validation_count += 1
+                        existing.last_validated = now
+                    self._save_insight(existing)
+                elif pref.confidence <= 0.7 and existing.active:
+                    existing.active = False
+                    existing.confidence = pref.confidence
+                    existing.sample_count = pref.observation_count
+                    existing.description = description
                     existing.contradiction_count += 1
-                self._save_insight(existing)
+                    existing.last_validated = now
+                    self._save_insight(existing)
+                elif (existing.confidence != pref.confidence
+                      or existing.sample_count != pref.observation_count
+                      or existing.description != description):
+                    # Hysteresis band (0.7, 0.8): retain active/inactive status,
+                    # but do not let the derived snapshot drift from its source.
+                    existing.confidence = pref.confidence
+                    existing.sample_count = pref.observation_count
+                    existing.description = description
+                    self._save_insight(existing)
+                continue
+
+            if not eligible:
                 continue
 
             # Determine category
@@ -1659,8 +1696,6 @@ class SelfReflectionSystem:
             }
             category = cat_map.get(pref.category.value, InsightCategory.BEHAVIORAL)
 
-            description = f"i know this about myself: {pref.description.lower()}"
-
             insight = SelfInsight(
                 id=insight_id,
                 category=category,
@@ -1671,6 +1706,7 @@ class SelfReflectionSystem:
                 last_validated=now,
                 validation_count=1,
                 contradiction_count=0,
+                active=True,
             )
             self._save_insight(insight)
             new_insights.append(insight)
@@ -2111,9 +2147,13 @@ class SelfReflectionSystem:
 
         return shared_text
 
-    def get_insights(self, category: Optional[InsightCategory] = None) -> List[SelfInsight]:
-        """Get all insights, optionally filtered by category."""
-        insights = list(self._insights.values())
+    def get_insights(self, category: Optional[InsightCategory] = None,
+                     *, include_inactive: bool = False) -> List[SelfInsight]:
+        """Get current insights, optionally including retracted history."""
+        insights = [
+            insight for insight in self._insights.values()
+            if include_inactive or insight.active
+        ]
 
         if category:
             insights = [i for i in insights if i.category == category]

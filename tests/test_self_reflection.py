@@ -445,13 +445,52 @@ class TestPreferenceInsights:
         ids = [i.id for i in insights]
         assert "pref_low_conf" not in ids
 
-    def test_existing_insight_validated_not_duplicated(self, srs):
+    def test_existing_insight_is_not_revalidated_from_same_samples(self, srs):
         mock_growth = self._mock_growth()
         with patch("anima_mcp.growth.get_growth_system", return_value=mock_growth):
             srs._analyze_preference_insights()
+            validation_count = srs._insights["pref_night_calm"].validation_count
             insights2 = srs._analyze_preference_insights()
         # Second call should validate, not create new
-        assert len(insights2) == 0  # No NEW insights, just validations
+        assert len(insights2) == 0
+        assert srs._insights["pref_night_calm"].validation_count == validation_count
+
+    def test_source_retraction_deactivates_existing_insight(self, srs):
+        mock_growth = self._mock_growth()
+        with patch("anima_mcp.growth.get_growth_system", return_value=mock_growth):
+            srs._analyze_preference_insights()
+            insight = srs._insights["pref_night_calm"]
+            assert insight.active is True
+
+            mock_growth._preferences["night_calm"].confidence = 0.5
+            srs._analyze_preference_insights()
+            contradiction_count = insight.contradiction_count
+            srs._analyze_preference_insights()
+
+        assert insight.active is False
+        assert insight.strength() == 0.0
+        assert insight.contradiction_count == contradiction_count
+        assert insight not in srs.get_insights()
+        assert insight in srs.get_insights(include_inactive=True)
+        row = srs._connect().execute(
+            "SELECT active FROM insights WHERE id = 'pref_night_calm'"
+        ).fetchone()
+        assert row[0] == 0
+
+    def test_retracted_insight_reactivates_only_after_source_reearns_gate(self, srs):
+        mock_growth = self._mock_growth()
+        pref = mock_growth._preferences["night_calm"]
+        with patch("anima_mcp.growth.get_growth_system", return_value=mock_growth):
+            srs._analyze_preference_insights()
+            pref.confidence = 0.5
+            srs._analyze_preference_insights()
+            pref.confidence = 0.75
+            srs._analyze_preference_insights()
+            assert srs._insights["pref_night_calm"].active is False
+            pref.confidence = 0.8
+            srs._analyze_preference_insights()
+
+        assert srs._insights["pref_night_calm"].active is True
 
 
 # ==================== Belief Insights ====================

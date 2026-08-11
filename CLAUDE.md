@@ -116,38 +116,35 @@ Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default
 
 ### Learning Systems — which process runs them
 
-**This table said "run in broker only". That was wrong**, and agents acted on
-it. Verified 2026-07-31 by grepping call sites and checking live state:
+Verified from call sites and deployment wiring. Embodied JSON learners have a
+single writer; the server consumes refreshing snapshots and sends the few
+semantic mutations it originates through a durable inbox:
 
 | Module | Purpose | Actually runs in |
 |--------|---------|------------------|
 | `memory_retrieval.py` | Context-aware memory search | broker only ✅ |
 | `learning.py` | Calibration adaptation | **server only** — not imported by the broker at all |
-| `agency.py` | TD-learning action selection | **BOTH — two independent learners, see #123** |
+| `agency.py` | TD-learning action selection | **server only**; broker loop is retired by default |
 | `activity_state.py` | Active/drowsy/resting cycles | both |
-| `preferences.py` | Preference evolution | both |
-| `self_model.py` | Self-beliefs | both (also via `loop_phases.py`) |
+| `preferences.py` | Preference evolution | broker writes; server reads |
+| `self_model.py` | Self-beliefs | broker writes; server reads |
 | `adaptive_prediction.py` | Temporal pattern learning | broker writes; server reads stats |
 
-**`agency.py` is the one that bites.** The broker and the server each run a
-full TD loop and each select actions, over *separate* value tables. That split
-is now deliberate rather than accidental: the broker pins
-`db_paths.BROKER_AGENCY_DB` (`~/anima-mcp/anima.db`) explicitly, because
-following `$ANIMA_DB` would put a second writer on the store that actually
-drives Lumen and jump the broker's learned values (`ask_question` 0.051 →
-0.35). #123 fixed the *path* defect and deliberately left the architecture
-question open — with I2C moved to `anima-broker-ex` and LEDs owned by the
-server, what the broker's agency is still *for* is undecided. Because that
-table sits outside `~/.anima`, `backup_lumen_from_mac.sh` captures it
-separately as `agency_<date>.db`.
+**The server's agency learner is authoritative.** It posts questions (visible
+as `context: "agency: ask_question"`) and drives LEDs. The broker's old TD loop
+used a separate value table while its actions were no-ops or dead paths. It is
+now disabled unless an operator explicitly sets
+`ANIMA_BROKER_AGENCY_ENABLED=true`; the separate database and backup remain
+only as rollback/history state.
 
-**Which learner actually acts: the server's.** It posts questions (visible as
-`context: "agency: ask_question"`) and drives LEDs. The broker's four actions
-are no-ops or dead paths, and its `_agency_led_brightness` reaches SHM but
-nothing consumes it. So **SHM's agency values are telemetry, not the values
-behind Lumen's behaviour** — an easy and previously-made mistake.
+`preferences.json` and `self_model.json` are whole-file snapshots, so they
+must never have two process writers. The broker owns both. Server-side
+singletons are read-only and refresh on mtime changes. Question evidence,
+Q&A-derived self-belief evidence, and trajectory meta-learning weights cross
+the process boundary as atomic one-file events in
+`~/.anima/learning_inbox/`, which the broker drains.
 
-**Rule this implies:** no `get_*` singleton may lean on the bare
+**Persistence rule:** no `get_*` singleton may lean on the bare
 `db_path="anima.db"` default. All 20 now resolve through
 `db_paths.resolve_db_path()` — **explicit > `$ANIMA_DB` > `~/.anima/anima.db`**,
 never the working directory. `ActionSelector.__init__` logs the resolved

@@ -40,8 +40,24 @@ def main():
             shutil.copy2(item, dst)
     shutil.rmtree(ext_path, ignore_errors=True)
 
-    print("Restarting anima.service...")
-    subprocess.run(["sudo", "systemctl", "restart", "anima"], timeout=30, check=False)
+    print("Synchronizing core systemd units...")
+    for unit in ("anima.service", "anima-broker.service"):
+        subprocess.run(
+            ["sudo", "install", "-m", "0644", str(REPO_ROOT / "systemd" / unit),
+             str(Path("/etc/systemd/system") / unit)],
+            timeout=15,
+            check=True,
+        )
+    subprocess.run(
+        ["sudo", "systemctl", "daemon-reload"], timeout=15, check=True
+    )
+
+    print("Restarting broker and anima services...")
+    subprocess.run(
+        ["sudo", "systemctl", "restart", "anima-broker", "anima"],
+        timeout=45,
+        check=True,
+    )
     print("Done. Run setup_tailscale via HTTP if needed.")
 
 if __name__ == "__main__":

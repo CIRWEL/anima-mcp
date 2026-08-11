@@ -500,19 +500,32 @@ async def _update_display_loop():
                                             growth.add_curiosity(curiosity_question)
                                     except Exception as e:
                                         logger.debug("[Growth] add_curiosity error: %s", e)
-                                # Update question_asking_tendency belief
-                                try:
-                                    from .self_model import get_self_model
-                                    get_self_model().observe_question_asked(prediction_error.surprise)
-                                except Exception as e:
-                                    logger.debug("[SelfModel] observe_question_asked error: %s", e)
+                                    # The broker owns self_model.json.  Queue a
+                                    # real posted-question episode instead of
+                                    # racing its whole-file snapshot.
+                                    try:
+                                        from .learning_events import enqueue_self_belief_evidence
+                                        enqueue_self_belief_evidence(
+                                            "question_asking_tendency",
+                                            supports=True,
+                                            strength=min(1.0, prediction_error.surprise),
+                                            source="server:question_posted",
+                                        )
+                                    except Exception as e:
+                                        logger.debug("[SelfModel] question evidence enqueue error: %s", e)
                             else:
                                 # Surprised but no question generated — contradicting evidence
                                 try:
-                                    from .self_model import get_self_model
-                                    get_self_model().observe_surprise_no_question(prediction_error.surprise)
+                                    from .learning_events import enqueue_self_belief_evidence
+                                    if prediction_error.surprise > 0.2:
+                                        enqueue_self_belief_evidence(
+                                            "question_asking_tendency",
+                                            supports=False,
+                                            strength=min(1.0, prediction_error.surprise * 0.5),
+                                            source="server:surprise_without_question",
+                                        )
                                 except Exception as e:
-                                    logger.debug("[SelfModel] observe_surprise_no_question error: %s", e)
+                                    logger.debug("[SelfModel] no-question evidence enqueue error: %s", e)
 
                             if reflection.observation:
                                 logger.debug("[Metacog] Reflection: %s", reflection.observation)
@@ -681,11 +694,10 @@ async def _update_display_loop():
                     if loop_count % STATUS_LOG_THROTTLE == 1:
                         print(f"[Agency] Error (non-fatal): {e}", file=sys.stderr, flush=True)
 
-            # === SELF-MODEL: Belief updates from experience ===
-            # Throttled: runs every 5th iteration (aligned with agency).
-            # Body extracted to loop_phases.run_self_model_phase — a testable
-            # seam whose contract is regression-guarded (test_loop_phases) so the
-            # orphaned-write bug fixed in ab984f9 cannot silently recur.
+            # === SELF-MODEL: Refresh the broker-owned belief snapshot ===
+            # The phase retains its historical writer implementation for
+            # standalone use, but lifecycle configures this server process as a
+            # reader so it returns immediately after refreshing.
             if not _skip_subsystems and loop_count % SELF_MODEL_INTERVAL == 0 and anima:
                 _run_self_model_phase(anima, readings, prediction_error, base_delay, loop_count)
 
@@ -1303,7 +1315,8 @@ async def _update_display_loop():
                     # Compute lagged correlations between per-dim satisfaction and health
                     correlations = _compute_lagged_correlations()
 
-                    # Update preference weights via the PreferenceSystem singleton
+                    # Compute against the refreshing broker-owned snapshot, then
+                    # queue the mutation back to its sole writer.
                     pref_system = _ml_get_pref()
                     weights = {
                         d: p.influence_weight
@@ -1312,10 +1325,11 @@ async def _update_display_loop():
                     }
                     if weights:
                         new_weights = meta_learning_update(weights, correlations)
-                        for d, w in new_weights.items():
-                            if d in pref_system._preferences:
-                                pref_system._preferences[d].influence_weight = w
-                        pref_system._save()
+                        from .learning_events import enqueue_preference_weights
+                        enqueue_preference_weights(
+                            new_weights,
+                            source="server:trajectory_meta_learning",
+                        )
                         logger.debug("[MetaLearning] Updated preference weights: %s health=%.3f",
                                     ', '.join(f'{d}={w:.3f}' for d, w in new_weights.items()), health)
                 except Exception as e:

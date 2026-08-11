@@ -88,21 +88,18 @@ else
     log "  WARNING: No anima.db found - Lumen will start fresh"
 fi
 
-# The broker's agency store — see #123, now settled. stable_creature.py pins
-# db_paths.BROKER_AGENCY_DB (~/anima-mcp/anima.db) explicitly rather than
-# following $ANIMA_DB, so the broker keeps its own TD value table and does not
-# become a second writer on the store that drives Lumen. That table lives
-# outside ~/.anima, so nothing above restores it.
+# The retired broker agency store — see #123. The server is the sole active
+# action learner; this separate table is restored only as rollback/history
+# state and remains unused unless ANIMA_BROKER_AGENCY_ENABLED=true is set.
 #
 # Deliberately NOT matched by the anima_*.db glob above: it is a ~100KB agency
 # store and must never be selectable as the 240MB main database.
-# Delete this block only if the broker's agency is retired outright.
 AGENCY_BACKUP=$(ls -t "$(dirname "$BACKUP")"/agency_*.db 2>/dev/null | head -1)
 if [ -n "$AGENCY_BACKUP" ]; then
     scp $SSH_OPTS "$AGENCY_BACKUP" "$PI_USER@$PI_HOST:~/anima-mcp/anima.db"
     log "  broker agency store restored from $(basename "$AGENCY_BACKUP") [#123]"
 else
-    log "  NOTE: no agency_*.db backup — broker relearns action values from zero (#123)"
+    log "  NOTE: no agency_*.db rollback history found (#123)"
 fi
 
 for f in messages.json canvas.json knowledge.json preferences.json patterns.json self_model.json anima_history.json display_brightness.json metacognition_baselines.json last_schema.json trajectory_genesis.json day_summaries.json; do

@@ -159,22 +159,12 @@ if [ $DB_CAPTURED -eq 1 ]; then
     fi
 fi
 
-# The broker's agency store — a permanent fixture now, not a stopgap.
+# The retired broker agency store — retained as rollback/history state.
 #
-# #123 is settled: the broker keeps its own TD value table instead of following
-# $ANIMA_DB onto ~/.anima/anima.db. Merging would have put a second writer on
-# the store that actually drives Lumen, so stable_creature.py pins
-# db_paths.BROKER_AGENCY_DB explicitly. The path no longer depends on the
-# service's WorkingDirectory, but it still sits outside ~/.anima, which is all
-# the block above covers. Without this, a reflash loses 1.6M updates with
-# backup verification green the whole way.
-#
-# Correcting the claim this comment used to make: these are NOT "the values
-# that actually drive behaviour". SHM does match this file, but SHM carries the
-# broker's telemetry; the learner that posts questions and drives LEDs is the
-# server's, in ~/.anima/anima.db. The block still earns its keep — ~100KB for
-# 1.6M updates — but the urgency was overstated. Delete it only if the broker's
-# agency is retired outright.
+# The server is the sole active action learner. The historical broker table is
+# disabled by default, but preserving its 1.6M updates keeps rollback and audit
+# history recoverable. It sits outside ~/.anima, which is all the block above
+# covers.
 BROKER_DB="$BACKUP_DIR/agency_${DATE}.db"
 PI_AGENCY_TMP="/tmp/anima_agency_snap_${DATE}.db"
 if ssh $SSH_OPTS unitares-anima@$PI_HOST "test -f ~/anima-mcp/anima.db && python3 -c \"import sqlite3,os;s=sqlite3.connect(os.path.expanduser('~/anima-mcp/anima.db'));d=sqlite3.connect('${PI_AGENCY_TMP}');s.backup(d);d.close();s.close()\"" 2>/dev/null; then

@@ -16,6 +16,34 @@ from anima_mcp.anima import Anima
 
 
 # ---------------------------------------------------------------------------
+# Persistent-state isolation (autouse — runs for every test)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def isolate_anima_home(monkeypatch, tmp_path):
+    """Never let unit tests read or overwrite an operator's ``~/.anima``.
+
+    Several process-local singletons resolve their default paths lazily. Keep
+    both HOME and their role configuration test-local so collection order
+    cannot turn a later test into a writer for real creature state.
+    """
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    import anima_mcp.preferences as preferences
+    import anima_mcp.self_model as self_model
+
+    preferences._preference_system = None
+    preferences._preference_system_read_only_default = False
+    self_model._self_model = None
+    self_model._self_model_read_only_default = False
+    yield
+    preferences._preference_system = None
+    preferences._preference_system_read_only_default = False
+    self_model._self_model = None
+    self_model._self_model_read_only_default = False
+
+
+# ---------------------------------------------------------------------------
 # Neural sensor reset (autouse — runs for every test)
 # ---------------------------------------------------------------------------
 

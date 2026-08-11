@@ -159,8 +159,12 @@ class PreferenceSystem:
     4. Persists preferences across sessions
     """
 
-    def __init__(self, persistence_path: Optional[Path] = None):
+    def __init__(self, persistence_path: Optional[Path] = None,
+                 read_only: bool = False):
         self.persistence_path = persistence_path or Path.home() / ".anima" / "preferences.json"
+        self.read_only = read_only
+        self._loaded_mtime_ns = 0
+        self._applied_event_ids: list[str] = []
 
         # Core preferences
         self._preferences: Dict[str, Preference] = {
@@ -183,26 +187,54 @@ class PreferenceSystem:
         # Load persisted preferences
         self._load()
 
+    @property
+    def is_writable(self) -> bool:
+        return not self.read_only
+
+    def _apply_persisted_data(self, data: dict) -> None:
+        for dim, pdata in data.get("preferences", {}).items():
+            if dim in self._preferences:
+                p = self._preferences[dim]
+                p.valence = pdata.get("valence", 0.0)
+                p.optimal_low = pdata.get("optimal_low", 0.3)
+                p.optimal_high = pdata.get("optimal_high", 0.7)
+                p.confidence = pdata.get("confidence", 0.0)
+                p.experience_count = pdata.get("experience_count", 0)
+                p.influence_weight = pdata.get("influence_weight", 1.0)
+                p.optimal_center = pdata.get("optimal_center")
+        event_ids = data.get("applied_event_ids", [])
+        if isinstance(event_ids, list):
+            self._applied_event_ids = [str(value) for value in event_ids[-2000:]]
+
     def _load(self):
         """Load preferences from disk."""
         if self.persistence_path.exists():
             try:
-                with open(self.persistence_path, 'r') as f:
-                    data = json.load(f)
-                    for dim, pdata in data.get("preferences", {}).items():
-                        if dim in self._preferences:
-                            p = self._preferences[dim]
-                            p.valence = pdata.get("valence", 0.0)
-                            p.optimal_low = pdata.get("optimal_low", 0.3)
-                            p.optimal_high = pdata.get("optimal_high", 0.7)
-                            p.confidence = pdata.get("confidence", 0.0)
-                            p.experience_count = pdata.get("experience_count", 0)
-                            p.influence_weight = pdata.get("influence_weight", 1.0)
+                data = json.loads(self.persistence_path.read_text())
+                self._apply_persisted_data(data)
+                self._loaded_mtime_ns = self.persistence_path.stat().st_mtime_ns
             except Exception as e:
                 print(f"[Preferences] Could not load: {e}", file=sys.stderr, flush=True)
 
-    def _save(self):
+    def refresh_if_changed(self, *, force: bool = False) -> bool:
+        """Refresh a server-side reader when the broker snapshot changes."""
+        if not self.persistence_path.exists():
+            return False
+        try:
+            mtime_ns = self.persistence_path.stat().st_mtime_ns
+            if not force and mtime_ns == self._loaded_mtime_ns:
+                return False
+            self._apply_persisted_data(json.loads(self.persistence_path.read_text()))
+            self._loaded_mtime_ns = mtime_ns
+            return True
+        except Exception as e:
+            print(f"[Preferences] Could not refresh: {e}", file=sys.stderr, flush=True)
+            return False
+
+    def _save(self) -> bool:
         """Save preferences to disk."""
+        if self.read_only:
+            return False
         try:
             self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
             data = {
@@ -214,14 +246,39 @@ class PreferenceSystem:
                         "confidence": p.confidence,
                         "experience_count": p.experience_count,
                         "influence_weight": p.influence_weight,
+                        "optimal_center": p.optimal_center,
                     }
                     for dim, p in self._preferences.items()
                 },
                 "last_saved": datetime.now().isoformat(),
+                "applied_event_ids": self._applied_event_ids[-2000:],
             }
             atomic_json_write(self.persistence_path, data, indent=2)
+            try:
+                self._loaded_mtime_ns = self.persistence_path.stat().st_mtime_ns
+            except OSError:
+                # The atomic write committed; force a future reader refresh if
+                # metadata lookup is transiently unavailable.
+                self._loaded_mtime_ns = 0
+            return True
         except Exception as e:
             print(f"[Preferences] Could not save: {e}", file=sys.stderr, flush=True)
+            return False
+
+    def has_applied_event(self, event_id: str) -> bool:
+        """Whether a durable inbox event was committed with this snapshot."""
+        return event_id in self._applied_event_ids
+
+    def mark_applied_event(self, event_id: str) -> None:
+        """Record an inbox receipt in the same atomic save as its mutation."""
+        if event_id not in self._applied_event_ids:
+            self._applied_event_ids.append(event_id)
+            del self._applied_event_ids[:-2000]
+
+    def forget_applied_event(self, event_id: str) -> None:
+        """Roll back an uncommitted receipt after a failed snapshot save."""
+        if event_id in self._applied_event_ids:
+            self._applied_event_ids.remove(event_id)
 
     def record_state(self, state: Dict[str, float]):
         """Record current state for experience tracking."""
@@ -240,6 +297,9 @@ class PreferenceSystem:
 
         Valence: -1 (very negative) to 1 (very positive)
         """
+        if self.read_only:
+            return
+
         now = datetime.now()
 
         # Get state before this event (from history)
@@ -450,11 +510,28 @@ def meta_learning_update(
 
 # Singleton instance
 _preference_system: Optional[PreferenceSystem] = None
+_preference_system_read_only_default = False
 
 
-def get_preference_system() -> PreferenceSystem:
-    """Get or create the preference system."""
+def configure_preference_system(*, read_only: bool) -> None:
+    """Set this process's preference role before lifecycle initialization."""
+    global _preference_system_read_only_default
+    _preference_system_read_only_default = bool(read_only)
+    if _preference_system is not None:
+        _preference_system.read_only = bool(read_only)
+        if read_only:
+            _preference_system.refresh_if_changed(force=True)
+
+
+def get_preference_system(*, read_only: Optional[bool] = None) -> PreferenceSystem:
+    """Get or create the process-local writer or refreshing reader."""
     global _preference_system
+    desired = (_preference_system_read_only_default
+               if read_only is None else bool(read_only))
     if _preference_system is None:
-        _preference_system = PreferenceSystem()
+        _preference_system = PreferenceSystem(read_only=desired)
+    elif _preference_system.read_only != desired and read_only is not None:
+        raise RuntimeError("preference-system role cannot change after initialization")
+    if _preference_system.read_only:
+        _preference_system.refresh_if_changed()
     return _preference_system

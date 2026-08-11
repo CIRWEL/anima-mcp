@@ -526,8 +526,11 @@ def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
             q_words = set(question_lower.split()) - {"i", "a", "the", "is", "do", "my", "me", "am", "what", "why", "how", "when", "does"}
             i_words = set(desc.split()) - {"i", "a", "the", "is", "my", "me", "when", "that", "and"}
             overlap = q_words & i_words
-            if overlap and insight.confidence > 0.3:
-                evidence.append((insight.confidence, insight.description))
+            strength_fn = getattr(insight, "strength", None)
+            strength = (strength_fn() if callable(strength_fn)
+                        else float(getattr(insight, "confidence", 0.0)))
+            if overlap and strength > 0.3:
+                evidence.append((strength, insight.description))
     except Exception:
         pass
 
@@ -763,16 +766,17 @@ async def extract_and_validate_schema(anima, readings, identity):
 
 
 def run_self_model_phase(anima, readings, prediction_error, base_delay: float, loop_count: int) -> None:
-    """Self-model belief updates from experience — extracted from _update_display_loop().
+    """Refresh the server reader, or run legacy in-process belief observation.
 
-    CONTRACT (regression-guarded by test_loop_phases): the cross-iteration
+    The production server is configured read-only and returns after refreshing
+    the broker-owned snapshot. For a writable standalone model, the historical
+    contract remains regression-guarded by test_loop_phases: cross-iteration
     trackers live on ``_ctx`` (sm_prev_stability, sm_prev_warmth,
     sm_pending_prediction) so they persist across loop iterations. Assigning them
     to bare locals instead silently disables observe_stability_change /
     observe_warmth_change / verify_prediction — the bug fixed in ab984f9 that ran
     undetected for ~3 months. ``_ctx.sm_observation_count`` /
-    ``sm_last_observation_time`` record that cross-iteration learning is actually
-    firing and are surfaced by ``diagnostics()`` so a recurrence is observable.
+    ``sm_last_observation_time`` record that in-process learning is firing.
 
     Caller is responsible for the throttle/skip guard
     (``loop_count % SELF_MODEL_INTERVAL == 0`` etc.).
@@ -797,6 +801,9 @@ def run_self_model_phase(anima, readings, prediction_error, base_delay: float, l
 
     try:
         sm = get_self_model()
+        if getattr(sm, "read_only", False) is True:
+            sm.refresh_if_changed()
+            return
 
         # 0. Verify any pending self-prediction from previous iteration
         if _ctx.sm_pending_prediction is not None:
