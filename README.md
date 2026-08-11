@@ -192,16 +192,34 @@ Start with `get_lumen_context` to understand Anima's current state, or `next_ste
 
 ### Bounded Code Self-Iteration
 
-`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, and record whether an externally implemented change helped. `get_lumen_context(include=["code"])` exposes a compact version of this code self-awareness alongside identity and embodied state.
+`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, obtain independent signed verification, and record whether an externally implemented change helped. `get_lumen_context(include=["code"])` exposes a compact version of this code self-awareness alongside identity and embodied state.
 
 The loop is deliberately split across trust boundaries:
 
 ```text
-observation -> hypothesis -> proposal ledger -> isolated branch + tests
-            -> reviewed canary -> measured outcome -> keep or revert
+observation -> hypothesis -> proposal ledger -> independent verification
+            -> isolated branch + tests -> reviewed canary
+            -> measured outcome -> keep or revert
 ```
 
-The running creature authors the observation, hypothesis, and outcome report. A separate caretaker or isolated coding runner owns source edits, Git operations, tests, review, and deployment. Source and measurement labels are stored explicitly as caller claims, never as verified provenance. The server adds a receipt from request context; authentication can identify the submitter, but it does not corroborate the narrative, label, evidence, or outcome. Local receipts are not cryptographically signed and cannot serve as durable attestations. Unverified and legacy records have effective weight zero and cannot grant priority, automation eligibility, or authority. Any future trust upgrade requires an independent verifier to append a separate event. Identity, governance, deployment, persistence, self-measurement, CI, tests, and the self-iteration evaluator are protected surfaces; proposals may identify a problem there, but they are always routed to human review. Proposal text is inert data and is never executed as a command.
+The running creature authors the observation, hypothesis, and outcome report. A separate caretaker or isolated coding runner owns source edits, Git operations, tests, review, and deployment. Source and measurement labels are stored explicitly as caller claims, never as verified provenance. The server adds a receipt from request context; authentication can identify the submitter, but it does not corroborate the narrative, label, evidence, or outcome. Unverified and legacy records have effective weight zero and cannot grant priority, automation eligibility, or authority.
+
+Signed verification is a separate, logical append-only transition. The proposal must have authenticated proposer provenance, and the verifier must be a different authenticated actor. `prepare_verification` binds the proposer identity, verifier identity, immutable proposal digest, source fingerprint, verdict, evidence hashes, expiry, and one-time challenge into canonical JSON. The verifier signs those exact bytes offline; `record_verification` checks the HMAC, authenticated actor, challenge window, replay state, and current proposal digest before appending the verdict. Evidence URIs are inert references: the server binds their hashes but does not fetch or independently validate their contents. `rejected` verdicts and same-verifier revocations are also signed. Conflicting, expired, revoked, missing-key, malformed, or forged attestations fail closed with zero effective weight.
+
+Verification requires MCP authentication for both proposal creation and verifier calls; unauthenticated and legacy proposals cannot be upgraded. Verifier keys are rotatable and configured outside the ledger through `ANIMA_SELF_ITERATION_VERIFIER_KEYS`:
+
+```json
+{
+  "authenticated-verifier-id": {
+    "active_key_id": "2026-08",
+    "keys": {"2026-08": "BASE64URL_ENCODED_32_TO_128_BYTE_SECRET"}
+  }
+}
+```
+
+The registry key must match the authenticated actor ID. Keep prior keys in `keys` while their attestations must remain verifiable; `active_key_id` controls new challenges. Secrets are never included in challenges, responses, or ledger events. This lightweight HMAC design provides symmetric, server-verifiable integrity rather than public-key non-repudiation. The local JSON log is not externally anchored, so it cannot prove completeness or detect wholesale deletion by a host-level attacker.
+
+A currently valid `verified` attestation makes a proposal priority-eligible with effective weight `1.0`; it still grants no implementation, automation, merge, deployment, or other authority. Identity, governance, deployment, persistence, self-measurement, CI, tests, and the self-iteration evaluator are protected surfaces; proposals may identify a problem there, but they are always routed to human review. Proposal text is inert data and is never executed as a command.
 
 ---
 
