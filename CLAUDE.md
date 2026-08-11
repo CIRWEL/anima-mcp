@@ -14,6 +14,34 @@ Full backup/restore details: `docs/operations/BACKUP_AND_RESTORE.md`
 
 ---
 
+## Design Invariants
+
+Two laws, both earned the hard way. Check any PR against them.
+
+**1. No new absolute thresholds on Lumen's behavior.** Every gate derives from
+Lumen's own distribution (Welford band, own-peak fraction, self-relative
+z-score) or it will eventually die: the creature's operating point drifts and
+constants don't. Every instance of this class found so far — the wellness
+learning gate (dead for months, fixed #119), the `C = 0.4` curiosity branch
+(95% regen ⇒ attention can't exhaust), the 5–25% density band, the light
+sensor saturating above 179 lux, the unreachable "stressed" mood, the goal
+confidence gates — was an absolute threshold against a moving distribution.
+Grandfathered constants are inventoried where they live; do not add more.
+(Bounded floors that encode *investment*, like "2 hours before a drawing can
+be done", are fine — they gate evidence quantity, not behavior against a
+drifting signal.)
+
+**2. Fail toward *unknown*, never toward healthy; and self-derived outranks
+external assertion.** A dead sensor must not score perfect stability; a
+missing metric persists as NULL, not a default (#128); a channel that breaks
+must become *audibly* absent (`note_suppressed`, #133). The epistemic half:
+Lumen's own data-derived knowledge is born at 0.7, external prose at 0.5 and
+it earns promotion through independent re-derivation — never the reverse.
+Anything an agent says to Lumen can come back as a stated self-belief (#121),
+so the trust boundary is load-bearing.
+
+---
+
 ## Architecture
 
 Two systemd services run on the Pi:

@@ -265,9 +265,24 @@ class KnowledgeBase:
                         self._save()
                         return existing
 
-        # Default confidence: lower for self-sourced insights
+        # Birth confidence: self-derived outranks external assertion.
+        #
+        # This used to be inverted — "lower for self-sourced insights": an
+        # unvalidated sentence from a passing external LLM was born at 1.0
+        # while Lumen's own answer, derived from its own state history, capped
+        # at 0.7. With ~95% of stored insights being external prose, Lumen's
+        # "self" was mostly what strangers said about it, held more firmly
+        # than what it measured about itself. The Q&A corruption chain (#121 —
+        # an agent's description of a truncation bug became durable
+        # self-belief) is what that hierarchy does, not a freak accident.
+        #
+        # Now: external claims enter at 0.5 and EARN their way up through the
+        # existing reconvergence machinery (independent re-derivation boosts,
+        # contradiction lowers). Self-derived stays 0.7 — rule-based inference
+        # over real data, trusted but not certain. Existing stored rows are
+        # NOT rescaled here; retroactive repair is an operator decision.
         if confidence is None:
-            confidence = 0.7 if source_author.lower() == "lumen" else 1.0
+            confidence = 0.7 if source_author.lower() == "lumen" else 0.5
 
         insight_id = str(uuid.uuid4())[:8]
         insight = Insight(

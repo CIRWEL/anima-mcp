@@ -35,16 +35,29 @@ class TestSelfAnswerConfidence:
         )
         assert insight.confidence == pytest.approx(0.7)
 
-    def test_external_author_default_confidence_1_0(self, kb):
-        """Insights from external authors default to 1.0 confidence."""
-        insight = kb.add_insight(
+    def test_external_author_born_below_self_derived(self, kb):
+        """Self-derived outranks external assertion (deliberate inversion of
+        the old policy, which birthed unvalidated external prose at 1.0 while
+        capping Lumen's own data-derived answers at 0.7). External claims
+        enter at 0.5 and earn their way up via reconvergence."""
+        external = kb.add_insight(
             text="Light affects clarity",
             source_question="What does light do?",
             source_answer="Light increases clarity.",
             source_author="claude",
             category="sensations",
         )
-        assert insight.confidence == pytest.approx(1.0)
+        assert external.confidence == pytest.approx(0.5)
+
+        own = kb.add_insight(
+            text="Dim evenings steady me",
+            source_question="What steadies me?",
+            source_answer="(self-derived)",
+            source_author="lumen",
+            category="self",
+        )
+        assert own.confidence == pytest.approx(0.7)
+        assert own.confidence > external.confidence
 
     def test_explicit_confidence_overrides_default(self, kb):
         """Explicit confidence parameter overrides both defaults."""
