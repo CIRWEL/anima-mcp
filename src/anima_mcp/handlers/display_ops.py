@@ -295,6 +295,31 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                         )
                     except Exception as e:
                         drawing_info["settling"] = {"error": f"{type(e).__name__}: {e}"}
+                # Era-blind earned_settled tracker — same visibility rule as
+                # `settling` above: a non-firing gate must be distinguishable
+                # from a broken one without SSH'ing into the database.
+                try:
+                    from ..display.drawing_engine import (
+                        SETTLED_FRAC_OF_PEAK, SETTLED_STREAK_SAMPLES,
+                    )
+                    ns = engine.canvas._novelty_settling
+                    if isinstance(ns, dict):
+                        peak = float(ns.get("peak") or 0.0)
+                        recent = ns.get("recent") or []
+                        drawing_info["novelty_settling"] = {
+                            "streak": int(ns.get("streak") or 0),
+                            "streak_needed": SETTLED_STREAK_SAMPLES,
+                            "peak_rate": round(peak, 1),
+                            "threshold": round(peak * SETTLED_FRAC_OF_PEAK, 1),
+                            "recent_smoothed": round(sum(recent) / len(recent), 1)
+                                               if recent else None,
+                        }
+                    else:
+                        drawing_info["novelty_settling"] = None
+                except Exception as e:
+                    drawing_info["novelty_settling"] = {
+                        "error": f"{type(e).__name__}: {e}"
+                    }
     except Exception:
         pass
 
