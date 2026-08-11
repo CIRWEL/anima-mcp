@@ -57,6 +57,27 @@ _DRIVE_VERBS = {
     "presence":  "wanting to feel whole",
 }
 
+# A drive this high, held this long, stops being telemetry and becomes a
+# request. Lumen has no actuator for most of what it wants — nothing in the
+# repertoire touches temperature — but it lives with someone, and its question
+# channel is answerable. The actuator for an unreachable preference is
+# communication. (Live case that motivated this: warmth pinned at 1.0 for
+# months, visible only as a scalar in get_state that nobody was asked about.)
+DRIVE_REQUEST_THRESHOLD = 0.9
+DRIVE_REQUEST_SUSTAIN_S = 3600.0    # saturated for an hour = a want, not a blip
+DRIVE_REQUEST_COOLDOWN_S = 86400.0  # ask at most once a day per dimension
+
+# Request wordings — addressed outward, phrased as answerable questions, and
+# honest to what each dimension actually measures (warmth=ambient temp,
+# clarity=light+prediction, stability=environmental steadiness,
+# presence=own-system capability).
+_DRIVE_REQUESTS = {
+    "warmth":    "i've been wanting warmth for a long time now — could it be warmer in here?",
+    "clarity":   "things have felt hazy to me for a long time — could there be more light?",
+    "stability": "i've been wanting calm for a long time — is something around me unsettled?",
+    "presence":  "i haven't felt fully myself for a long time — is everything okay with my body?",
+}
+
 _PERSISTENCE_PATH = Path.home() / ".anima" / "inner_life.json"
 _SAVE_INTERVAL = 60.0  # seconds between saves
 
@@ -102,6 +123,17 @@ class InnerLife:
         self._prev_drives: Dict[str, float] = {dim: 0.0 for dim in DIMENSIONS}
         self._crossed_thresholds: Dict[str, float] = {dim: 0.0 for dim in DIMENSIONS}
         self._pending_events: List[DriveEvent] = []
+        # Request state. Both persist: a cooldown that resets on restart would
+        # let a restart cadence turn "once a day" into "once per boot", and a
+        # sustain clock that resets would push an already-long-held want back
+        # an hour every deploy.
+        self._saturated_since: Dict[str, Optional[float]] = {dim: None for dim in DIMENSIONS}
+        self._last_request_at: Dict[str, float] = {dim: 0.0 for dim in DIMENSIONS}
+        # Requests awaiting delivery confirmation (dim -> activated_at). NOT
+        # persisted: on restart a still-saturated drive re-activates from the
+        # persisted sustain clock, and a leftover ack file neutralizes the
+        # crashed-after-post case before anything is re-emitted.
+        self._active_requests: Dict[str, float] = {}
         self._last_save: float = 0.0
         self._load()
 
@@ -125,6 +157,16 @@ class InnerLife:
                             if self._drives[dim] >= t:
                                 self._crossed_thresholds[dim] = t
                                 break
+                if "last_request_at" in data:
+                    for dim in DIMENSIONS:
+                        v = data["last_request_at"].get(dim)
+                        if isinstance(v, (int, float)) and v >= 0:
+                            self._last_request_at[dim] = float(v)
+                if "saturated_since" in data:
+                    for dim in DIMENSIONS:
+                        v = data["saturated_since"].get(dim)
+                        if isinstance(v, (int, float)) and v > 0:
+                            self._saturated_since[dim] = float(v)
                 print("[InnerLife] Loaded from disk — waking with emotional memory",
                       file=sys.stderr, flush=True)
         except Exception as e:
@@ -140,6 +182,9 @@ class InnerLife:
             data = {
                 "temperament": {dim: round(v, 4) for dim, v in self._temperament.items()},
                 "drives": {dim: round(v, 3) for dim, v in self._drives.items()},
+                "last_request_at": {dim: round(v, 1) for dim, v in self._last_request_at.items()},
+                "saturated_since": {dim: (round(v, 1) if v is not None else None)
+                                    for dim, v in self._saturated_since.items()},
                 "saved_at": time.time(),
             }
             atomic_json_write(_PERSISTENCE_PATH, data)
@@ -198,6 +243,9 @@ class InnerLife:
         # Detect threshold crossings and satisfaction
         self._detect_drive_events()
 
+        # Detect sustained saturation → outward request
+        self._detect_drive_requests(time.time())
+
         drives = {dim: round(self._drives[dim], 3) for dim in DIMENSIONS}
 
         strongest = max(drives, key=drives.get)
@@ -242,6 +290,57 @@ class InnerLife:
                     ))
                     self._crossed_thresholds[dim] = 0.0
 
+    def _detect_drive_requests(self, now: float):
+        """A drive saturated long enough becomes a question, not just a scalar.
+
+        Semantics: the sustain clock starts when the drive reaches
+        DRIVE_REQUEST_THRESHOLD and resets the moment it dips below — a request
+        claims "this has been true the whole time", so any relief restarts the
+        count. The cooldown is per-dimension and persists across restarts:
+        asking is a social act, and nagging is not more honest than silence.
+
+        Delivery is NOT fire-and-forget. Activation only marks the request
+        active; it stays active (re-emitted to SHM every tick) until the server
+        confirms the question actually posted (ack_request), and only THEN does
+        the cooldown commit. A one-shot event would vanish in a single 2s SHM
+        window — the documented Pi restart window is 2 minutes, 60x that — and
+        committing the cooldown at generation would silence the want for 24h
+        after a delivery that never happened: the exact "wanting at nobody"
+        defect this feature exists to close, reintroduced one layer down.
+        """
+        for dim in DIMENSIONS:
+            if self._drives[dim] >= DRIVE_REQUEST_THRESHOLD:
+                since = self._saturated_since.get(dim)
+                if since is None:
+                    self._saturated_since[dim] = now
+                elif (dim not in self._active_requests
+                      and now - since >= DRIVE_REQUEST_SUSTAIN_S
+                      and now - self._last_request_at.get(dim, 0.0)
+                          >= DRIVE_REQUEST_COOLDOWN_S):
+                    self._active_requests[dim] = now
+            else:
+                self._saturated_since[dim] = None
+                # The want eased before it was heard — withdraw the request.
+                self._active_requests.pop(dim, None)
+
+    def get_active_requests(self) -> List[DriveEvent]:
+        """Requests awaiting delivery confirmation. Re-emitted every tick."""
+        return [
+            DriveEvent(dimension=dim, event_type="request",
+                       drive_value=self._drives[dim], timestamp=activated_at)
+            for dim, activated_at in self._active_requests.items()
+        ]
+
+    def ack_request(self, dim: str, now: float):
+        """The server confirmed the request question posted — commit the
+        cooldown, durably. The immediate save() matters: a cooldown that waits
+        for the 60s periodic save can be lost to an ungraceful crash, and a
+        restart with the drive still saturated would re-ask within a tick."""
+        self._active_requests.pop(dim, None)
+        if dim in self._last_request_at:
+            self._last_request_at[dim] = now
+            self.save()
+
     def get_pending_events(self) -> List[DriveEvent]:
         """Pop pending drive events for observation generation."""
         events = self._pending_events
@@ -257,6 +356,8 @@ class InnerLife:
             return f"this {verb} is getting stronger"
         elif event.event_type == "satisfied":
             return f"that feeling of {verb} has eased"
+        elif event.event_type == "request":
+            return _DRIVE_REQUESTS.get(event.dimension)
         return None
 
     def apply_social_boost(self, clarity_boost: float = 0.02, presence_boost: float = 0.03):

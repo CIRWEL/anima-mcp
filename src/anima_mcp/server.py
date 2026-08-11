@@ -110,6 +110,9 @@ async def _update_display_loop():
         logger.warning("[Loop] No context - wake() may have failed")
         return
     import sys
+    import time  # hoisted: any `time.` reference before a later local import
+    # in this function would raise UnboundLocalError (name is function-local
+    # the moment an import binds it anywhere in the body)
     from .error_recovery import safe_call, safe_call_async
 
     print("[Loop] Starting", file=sys.stderr, flush=True)
@@ -302,11 +305,43 @@ async def _update_display_loop():
                 if shm:
                     _drive_evts = shm.get("drive_events", [])
                     if _drive_evts:
-                        from .messages import add_observation
+                        from .messages import add_observation, add_question
                         for _de in _drive_evts:
                             # Deduplicate: dimension+event_type is unique per crossing
                             _evt_key = (_de["dimension"], _de["event_type"])
-                            if _ctx and _evt_key not in _ctx.consumed_drive_events:
+                            if not _ctx or _evt_key in _ctx.consumed_drive_events:
+                                continue
+                            if _de.get("event_type") == "request":
+                                # A sustained-saturation want is addressed
+                                # OUTWARD: the answerable question channel,
+                                # not the internal monologue. add_question
+                                # can silently return None (unanswered soft
+                                # cap, 10-min rate limit, similar-text dedup)
+                                # — a dropped ask must NOT count as asked, so
+                                # consumption and the broker-side cooldown
+                                # (ack file) commit only on a confirmed post.
+                                # The broker re-emits until then; throttle
+                                # retries so a suppressed board isn't hammered
+                                # at SHM-poll cadence.
+                                _dim = _de["dimension"]
+                                _now = time.time()
+                                if _now - _ctx.drive_request_attempts.get(_dim, 0.0) < 60.0:
+                                    continue
+                                _ctx.drive_request_attempts[_dim] = _now
+                                _q = add_question(_de["text"], author="lumen",
+                                                  context=f"drive: {_dim}")
+                                if _q:
+                                    _ctx.consumed_drive_events.add(_evt_key)
+                                    try:
+                                        Path(f"/dev/shm/anima_drive_ack_{_dim}").write_text(
+                                            str(_now))
+                                    except Exception as _ack_err:
+                                        logger.debug("[Drive] ack write failed: %s", _ack_err)
+                                    print(f"[Drive] Asked: {_de['text']}",
+                                          file=sys.stderr, flush=True)
+                                else:
+                                    logger.debug("[Drive] board suppressed request (%s); will retry", _dim)
+                            else:
                                 _ctx.consumed_drive_events.add(_evt_key)
                                 add_observation(_de["text"], author="lumen")
                     elif _ctx and _ctx.consumed_drive_events:
@@ -792,7 +827,6 @@ async def _update_display_loop():
             # Face = what Lumen wants to communicate (conscious expression)
             # LEDs = raw proprioceptive state (unconscious body state)
             # Like a fragile baby: face might smile while LEDs show subtle fatigue
-            import time
             update_start = time.time()
             
             # Check BrainCraft HAT input for screen switching
