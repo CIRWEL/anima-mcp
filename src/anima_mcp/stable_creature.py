@@ -411,8 +411,8 @@ def run_creature():
     _memory_future = None       # type: Optional[concurrent.futures.Future]
 
     # Initialize Metacognition Monitor
-    metacog = get_metacognitive_monitor()
-    print("[StableCreature] Metacognition active - Lumen monitors its own predictions")
+    metacog = get_metacognitive_monitor(read_only=True)
+    print("[StableCreature] Metacognition active (read-only observer; mind owns persistence)")
 
     # Initialize Enhanced Learning Systems (genuine agency)
     adaptive_model = None

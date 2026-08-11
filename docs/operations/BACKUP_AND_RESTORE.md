@@ -8,8 +8,12 @@
 
 ```
 ~/backups/lumen/
-  anima_data/              <- latest rsync mirror of Pi's ~/.anima/
+  anima_data/              <- latest complete learned-state mirror
+  anima_data.previous/     <- prior generation (crash-safe fallback)
   anima_YYYYMMDD_HHMM.db  <- dated snapshots (keeps last 48)
+  anima_state_*.tar.gz     <- sanitized learned-state archives
+  lumen_recovery_*.tar     <- matching DB + learned-state off-site bundles
+  predeploy/<timestamp>/   <- verified DB + learned state before each deploy
 ```
 
 > **WARNING:** `~/lumen-backups/` is OLD and STALE -- ignore it.
@@ -27,7 +31,12 @@ cd ~/projects/anima-mcp
 ./scripts/restore_lumen.sh 192.168.1.165  # explicit IP
 ```
 
-What it does: deploys code, restores DB + JSON + drawings, installs deps, enables I2C/SPI, starts services, installs watchdog + cron, installs Tailscale, updates Mac configs.
+What it does: verifies and freezes one local recovery generation before any Pi
+mutation, stops both state writers, deploys code, atomically restores the DB +
+every learned JSON snapshot + the durable learning inbox, restores
+drawings, installs dependencies, starts services, and waits for fresh broker
+shared memory before declaring success. A missing/corrupt DB aborts instead of
+silently creating a new identity.
 
 **Do NOT restore manually step-by-step. Run the script.**
 
@@ -48,14 +57,63 @@ From Pi's `~/.anima/`:
 | `messages.json` | Message board |
 | `anima_history.json` | Recent anima history for trajectory |
 | `metacognition_baselines.json` | Metacognition baselines |
+| `anima_config.json` | Adaptive nervous-system calibration |
 | `display_brightness.json` | Display brightness config |
 | `drawings/` | All saved artwork |
+| `learning_inbox/` | Pending/rejected server-to-broker learning evidence |
+| `oauth.db` | Registered OAuth clients and token continuity (local only) |
+
+The scheduled backup publishes `anima_data/` only after its staging mirror
+finishes. A JSON mirror failure makes the run fail and does not advance
+`.last_success`; one prior generation remains at `anima_data.previous/`.
+An hourly Pi DB snapshot is accepted only while recent and only after an
+integrity check; otherwise the Mac asks SQLite to mint a fresh live backup.
+The mirror excludes all `*.db*` files (including old corrupt copies) and
+`anima.env*` secrets, then captures `oauth.db` separately through SQLite's
+online-backup API for local restore. OAuth tokens remain excluded from the
+unencrypted off-site artifact. The sanitized learned-state archive and matching
+DB are packed into one verified artifact before upload to the private off-site
+dataset, avoiding mismatched halves when a network failure interrupts a run.
+Deploys independently create a WAL-consistent, integrity-checked bundle under
+`predeploy/` and abort if that backup fails unless the operator explicitly uses
+`--skip-backup`.
+
+MCP/zip deployments cannot assume the Mac is reachable, so `git_pull` and
+`deploy_from_github` create a bounded on-device recovery point at
+`~/.anima/backups/predeploy-code/` before replacing any code that will be
+restarted. Snapshot failure prevents the update. The one-time bootstrap path
+does the same.
 
 ### Identity continuity
 
 - **Same backup restored** → same `creature_id`, events, and growth history (continuity of the identity row and DB).
 - **New Pi with empty `~/.anima/`** → a new `creature_id` unless you restore `anima.db` from backup.
 - **Copying `anima.db` to a second device** → forks record identity; trajectory and behavior may diverge with environment.
+
+### Boot continuity gate
+
+`anima-restore.service` runs once per boot (the marker is under `/run`, not
+persistent state). If `anima.db` fails a real SQLite integrity check, or any
+authoritative learned-self JSON is missing/invalid, it restores a staged,
+verified DB plus learned JSON and the learning inbox before the broker may
+start. The DB is published last, so an interrupted repair cannot masquerade as
+a complete identity. An unavailable or corrupt backup leaves body and mind
+stopped rather than minting a silent replacement identity.
+
+For a deliberately new deployment only, set
+`ANIMA_ALLOW_FRESH_START=true` in `~/.anima/anima.env`. Established creatures
+should leave it false.
+
+If both Pi and Mac are lost, recover one complete weekday bundle before running
+the restore:
+
+```bash
+hf download hikewa/lumen-db-backups daily/lumen_recovery_Mon.tar --repo-type dataset
+tar -xf lumen_recovery_Mon.tar -C ~/backups/lumen
+mkdir -p ~/backups/lumen/anima_data
+STATE_ARCHIVE=$(ls -t ~/backups/lumen/anima_state_*.tar.gz | head -1)
+tar -xzf "$STATE_ARCHIVE" -C ~/backups/lumen/anima_data
+```
 
 **Behavioral** identity (trajectory signatures, attractor) is documented in the trajectory-identity paper (`cirwel/trajectory-identity-paper`, separate repo) — distinct from UUID continuity.
 
@@ -75,15 +133,8 @@ If services crash with "database disk image is malformed":
 # Find a clean snapshot
 ls -lt ~/backups/lumen/anima_*.db | head -5
 
-# Copy to Pi
-scp -i ~/.ssh/id_ed25519_pi \
-  ~/backups/lumen/anima_YYYYMMDD_HHMM.db \
-  unitares-anima@lumen.local:~/.anima/anima.db
-
-# Clear WAL files and restart
-ssh -i ~/.ssh/id_ed25519_pi unitares-anima@lumen.local \
-  "rm -f ~/.anima/anima.db-wal ~/.anima/anima.db-shm && \
-   sudo systemctl restart anima-broker anima"
+# Use the guarded restore workflow; never hot-copy over an open WAL database.
+./scripts/restore_lumen.sh lumen.local
 ```
 
 ---

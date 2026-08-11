@@ -21,6 +21,7 @@ import sys
 
 from .sensors.base import SensorReadings
 from .anima import Anima
+from .atomic_write import atomic_json_write
 
 
 @dataclass
@@ -153,6 +154,7 @@ class MetacognitiveMonitor:
         surprise_threshold: float = 0.25,
         reflection_cooldown_seconds: float = 60.0,
         data_dir: Optional[str] = None,
+        read_only: bool = False,
     ):
         self.history_size = history_size
         self.surprise_threshold = surprise_threshold
@@ -163,6 +165,10 @@ class MetacognitiveMonitor:
             self._data_path = Path(data_dir) / "metacognition_baselines.json"
         else:
             self._data_path = Path.home() / ".anima" / "metacognition_baselines.json"
+        # The MCP server is the sole persistent writer.  The hardware broker
+        # still runs an in-memory observer, but may never overwrite the
+        # server's curiosity weights or baseline snapshot with its stale copy.
+        self.read_only = bool(read_only)
         self._save_counter: int = 0  # Track observations for periodic saving
 
         # History for prediction
@@ -231,23 +237,57 @@ class MetacognitiveMonitor:
                     if 0 <= hour < 24 and isinstance(values, list):
                         self._diurnal_light[hour] = values[-10:]
 
-                # Restore curiosity domain weights
-                self._domain_weights = data.get("domain_weights", {})
+                # Restore curiosity state.  The pending evaluation log matters:
+                # without it a restart forgets which questions were awaiting
+                # evidence and can never credit their eventual improvement.
+                domain_weights = data.get("domain_weights", {})
+                if isinstance(domain_weights, dict):
+                    self._domain_weights = {
+                        str(domain): float(weight)
+                        for domain, weight in domain_weights.items()
+                        if isinstance(weight, (int, float)) and math.isfinite(float(weight))
+                    }
+                curiosity_log = data.get("curiosity_log", [])
+                if isinstance(curiosity_log, list):
+                    self._curiosity_log = [
+                        entry for entry in curiosity_log[-50:]
+                        if isinstance(entry, dict)
+                        and isinstance(entry.get("domains"), list)
+                        and isinstance(entry.get("errors_at_time"), dict)
+                        and isinstance(entry.get("obs_count"), int)
+                    ]
+                observation_count = data.get("observation_count")
+                if isinstance(observation_count, int) and observation_count >= 0:
+                    self._save_counter = observation_count
 
                 diurnal_t = sum(1 for v in self._diurnal_temp.values() if v)
                 diurnal_l = sum(1 for v in self._diurnal_light.values() if v)
                 dw_summary = ", ".join(f"{k}={v:.2f}" for k, v in sorted(self._domain_weights.items())) if self._domain_weights else "none yet"
-                print(f"[Metacog] Loaded baselines (temp={self._baseline_ambient_temp:.1f}°C, "
+                temp_summary = (
+                    f"{self._baseline_ambient_temp:.1f}°C"
+                    if self._baseline_ambient_temp is not None else "unknown"
+                )
+                print(f"[Metacog] Loaded baselines (temp={temp_summary}, "
                       f"diurnal: {diurnal_t}h temp/{diurnal_l}h light, "
                       f"curiosity weights: {dw_summary})",
                       file=sys.stderr, flush=True)
         except Exception as e:
             print(f"[Metacog] Could not load baselines: {e}", file=sys.stderr, flush=True)
 
-    def save(self):
-        """Save learned baselines and diurnal patterns to disk."""
+    @property
+    def is_writable(self) -> bool:
+        """Whether this monitor owns the persistent baseline snapshot."""
+        return not self.read_only
+
+    def save(self) -> bool:
+        """Save learned baselines and diurnal patterns to disk.
+
+        Returns False for read-only observers and failed writes so ownership
+        mistakes cannot masquerade as a successful persistence operation.
+        """
+        if self.read_only:
+            return False
         try:
-            self._data_path.parent.mkdir(parents=True, exist_ok=True)
             data = {
                 "baseline_ambient_temp": self._baseline_ambient_temp,
                 "baseline_humidity": self._baseline_humidity,
@@ -256,12 +296,15 @@ class MetacognitiveMonitor:
                 "diurnal_temp": {str(h): vals for h, vals in self._diurnal_temp.items() if vals},
                 "diurnal_light": {str(h): vals for h, vals in self._diurnal_light.items() if vals},
                 "domain_weights": self._domain_weights,
+                "curiosity_log": self._curiosity_log[-50:],
                 "saved_at": datetime.now().isoformat(),
                 "observation_count": self._save_counter,
             }
-            self._data_path.write_text(json.dumps(data, indent=2))
+            atomic_json_write(self._data_path, data, indent=2)
+            return True
         except Exception as e:
             print(f"[Metacog] Could not save baselines: {e}", file=sys.stderr, flush=True)
+            return False
 
     def record_curiosity(self, domains: List[str], error: 'PredictionError'):
         """Record that curiosity fired about these domains.
@@ -860,9 +903,16 @@ class MetacognitiveMonitor:
 _monitor: Optional[MetacognitiveMonitor] = None
 
 
-def get_metacognitive_monitor() -> MetacognitiveMonitor:
-    """Get or create the metacognitive monitor."""
+def get_metacognitive_monitor(*, read_only: bool = False) -> MetacognitiveMonitor:
+    """Get or create the process-local metacognitive monitor.
+
+    A process must choose its persistence role on first access.  Refusing a
+    later role change makes accidental multi-writer wiring visible instead of
+    silently changing ownership halfway through a lifetime.
+    """
     global _monitor
     if _monitor is None:
-        _monitor = MetacognitiveMonitor()
+        _monitor = MetacognitiveMonitor(read_only=read_only)
+    elif _monitor.read_only != bool(read_only):
+        raise RuntimeError("metacognitive monitor persistence role already fixed")
     return _monitor

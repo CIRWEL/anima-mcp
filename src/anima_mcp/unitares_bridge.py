@@ -25,6 +25,7 @@ from .eisv_mapper import (
     compute_confidence,
 )
 from .anima import Anima
+from .atomic_write import atomic_json_write
 from .sensors.base import SensorReadings
 
 logger = logging.getLogger(__name__)
@@ -359,16 +360,13 @@ class UnitaresBridge:
 
     def _save_anchor(self, uuid: str, token: str, client_session_id: Optional[str] = None) -> None:
         try:
-            self._anchor_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "uuid": uuid,
                 "continuity_token": token,
                 "client_session_id": client_session_id or self._client_session_id(),
                 "saved_at": time.time(),
             }
-            tmp = self._anchor_path.with_suffix(".tmp")
-            tmp.write_text(json.dumps(payload, indent=2))
-            tmp.replace(self._anchor_path)
+            atomic_json_write(self._anchor_path, payload, indent=2)
             self._anchor = payload
             logger.info("Governance anchor saved (uuid=%s)", uuid[:8])
         except OSError as e:

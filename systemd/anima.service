@@ -19,7 +19,7 @@ EnvironmentFile=-/home/unitares-anima/.anima/anima.env
 # UNITARES_URL is operator-specific (Tailscale-resolved). Set it in
 # ~/.anima/anima.env using the hostname form so it survives Mac IP changes.
 Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
-Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
+Environment="ANIMA_CONFIG=/home/unitares-anima/.anima/anima_config.json"
 Environment="ANIMA_OAUTH_ISSUER_URL=https://lumen.cirwel.org"
 Environment="ANIMA_OAUTH_AUTO_APPROVE=true"
 Environment="PYTHONUNBUFFERED=1"

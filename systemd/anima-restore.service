@@ -4,17 +4,19 @@ After=network-online.target
 Wants=network-online.target
 Before=anima-broker.service anima.service
 
-# Only attempt restore once per boot
-ConditionPathExists=!/home/unitares-anima/.anima/.restore-attempted
+# Only attempt restore once per boot. /run is a tmpfs and resets on reboot;
+# the previous ~/.anima marker accidentally disabled this guard forever.
+ConditionPathExists=!/run/anima-restore-attempted
 
 [Service]
 Type=oneshot
 RemainAfterExit=no
+EnvironmentFile=-/home/unitares-anima/.anima/anima.env
 
 ExecStart=/home/unitares-anima/anima-mcp/scripts/auto_restore.sh
-ExecStartPost=/bin/touch /home/unitares-anima/.anima/.restore-attempted
+ExecStartPost=/bin/touch /run/anima-restore-attempted
 
-TimeoutStartSec=120
+TimeoutStartSec=300
 
 # Logging
 StandardOutput=journal

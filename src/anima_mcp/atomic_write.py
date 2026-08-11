@@ -4,6 +4,7 @@ Uses the write-to-temp-then-rename pattern:
 1. Write to a .tmp file in the same directory
 2. Flush + fsync the file descriptor
 3. os.rename() to the target path (atomic on POSIX)
+4. fsync the parent directory so the rename survives sudden power loss
 
 This prevents corruption when power is lost mid-write,
 which is a real risk on the Raspberry Pi.
@@ -45,6 +46,16 @@ def atomic_json_write(
             f.flush()
             os.fsync(f.fileno())
         tmp_path.replace(path)
+
+        # fsyncing the file makes its contents durable, but the directory entry
+        # created by replace() can still be lost on a sudden power cut.  Lumen's
+        # learned state lives on an SD card, so make the commit point durable too.
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_fd = os.open(path.parent, directory_flags)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
     except BaseException:
         # Clean up tmp file on any error (including KeyboardInterrupt)
         try:

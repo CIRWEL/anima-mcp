@@ -21,11 +21,72 @@ from .atomic_write import atomic_json_write
 
 
 EVENT_VERSION = 1
+DEFAULT_MAX_QUEUED_EVENTS = 10_000
+DEFAULT_MAX_INBOX_BYTES = 64 * 1024 * 1024
+
+
+class LearningInboxFullError(RuntimeError):
+    """Raised instead of silently filling the device's persistent storage."""
 
 
 def _default_inbox() -> Path:
     """Resolve HOME at call time so tests and alternate runtimes stay isolated."""
     return Path.home() / ".anima" / "learning_inbox"
+
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+    return value if value > 0 else default
+
+
+def learning_inbox_status(*, inbox: Optional[Path] = None) -> dict[str, Any]:
+    """Return queue pressure and age for diagnostics and admission control."""
+    root = Path(inbox) if inbox is not None else _default_inbox()
+    queued_paths = list(root.glob("*.json")) if root.exists() else []
+    rejected_root = root / "rejected"
+    rejected_paths = list(rejected_root.glob("*.json")) if rejected_root.exists() else []
+
+    total_bytes = 0
+    oldest_mtime: float | None = None
+    for path in queued_paths:
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        total_bytes += stat.st_size
+        oldest_mtime = (
+            stat.st_mtime
+            if oldest_mtime is None
+            else min(oldest_mtime, stat.st_mtime)
+        )
+    for path in rejected_paths:
+        try:
+            total_bytes += path.stat().st_size
+        except OSError:
+            continue
+
+    max_events = _positive_env_int(
+        "ANIMA_LEARNING_INBOX_MAX_EVENTS", DEFAULT_MAX_QUEUED_EVENTS
+    )
+    max_bytes = _positive_env_int(
+        "ANIMA_LEARNING_INBOX_MAX_BYTES", DEFAULT_MAX_INBOX_BYTES
+    )
+    queued = len(queued_paths)
+    return {
+        "queued": queued,
+        "rejected": len(rejected_paths),
+        "total_bytes": total_bytes,
+        "oldest_age_s": (
+            max(0.0, time.time() - oldest_mtime)
+            if oldest_mtime is not None else None
+        ),
+        "max_events": max_events,
+        "max_bytes": max_bytes,
+        "over_capacity": queued >= max_events or total_bytes >= max_bytes,
+    }
 
 
 def enqueue_learning_event(
@@ -44,6 +105,17 @@ def enqueue_learning_event(
         "created_at": time.time(),
         "payload": payload,
     }
+    encoded_size = len(json.dumps(event).encode("utf-8"))
+    status = learning_inbox_status(inbox=root)
+    if (
+        status["queued"] >= status["max_events"]
+        or status["total_bytes"] + encoded_size > status["max_bytes"]
+    ):
+        raise LearningInboxFullError(
+            "learning inbox capacity exceeded "
+            f"(queued={status['queued']}/{status['max_events']}, "
+            f"bytes={status['total_bytes']}/{status['max_bytes']})"
+        )
     atomic_json_write(root / f"{event_id}.json", event)
     return event_id
 

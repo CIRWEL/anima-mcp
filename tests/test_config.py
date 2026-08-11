@@ -4,6 +4,8 @@ Tests for config module - nervous system calibration, config round-trips, and ad
 Run with: pytest tests/test_config.py -v
 """
 
+import os
+
 import pytest
 import yaml
 
@@ -187,6 +189,62 @@ class TestConfigManagerLoad:
         first = mgr.load()
         second = mgr.load()
         assert first is second, "Second load without force should return cached object"
+
+    def test_default_path_honors_anima_config_environment(self, tmp_path, monkeypatch):
+        path = tmp_path / "owned-calibration.yaml"
+        data = AnimaConfig()
+        data.nervous_system.cpu_temp_min = 39.0
+        path.write_text(yaml.safe_dump(data.to_dict()))
+        monkeypatch.setenv("ANIMA_CONFIG", str(path))
+
+        mgr = ConfigManager()
+
+        assert mgr.config_path == path
+        assert mgr.load().nervous_system.cpu_temp_min == pytest.approx(39.0)
+
+    def test_cached_reader_refreshes_after_external_atomic_update(self, tmp_path):
+        path = tmp_path / "shared.yaml"
+        first_data = AnimaConfig()
+        first_data.nervous_system.cpu_temp_min = 38.0
+        path.write_text(yaml.safe_dump(first_data.to_dict()))
+        reader = ConfigManager(config_path=path)
+        first = reader.load()
+
+        second_data = AnimaConfig()
+        second_data.nervous_system.cpu_temp_min = 41.0
+        rendered = yaml.safe_dump(second_data.to_dict()) + "# external revision\n"
+        path.write_text(rendered)
+        second = reader.load()
+
+        assert second is not first
+        assert second.nervous_system.cpu_temp_min == pytest.approx(41.0)
+
+    def test_cached_reader_notices_same_size_same_mtime_atomic_replace(self, tmp_path):
+        path = tmp_path / "shared.yaml"
+        first_data = AnimaConfig()
+        first_data.nervous_system.cpu_temp_min = 38.0
+        first_rendered = yaml.safe_dump(first_data.to_dict())
+        path.write_text(first_rendered)
+        original_stat = path.stat()
+        reader = ConfigManager(config_path=path)
+        first = reader.load()
+
+        second_data = AnimaConfig()
+        second_data.nervous_system.cpu_temp_min = 41.0
+        second_rendered = yaml.safe_dump(second_data.to_dict())
+        assert len(second_rendered) == len(first_rendered)
+        replacement = tmp_path / "replacement.yaml"
+        replacement.write_text(second_rendered)
+        os.utime(
+            replacement,
+            ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns),
+        )
+        replacement.replace(path)
+
+        second = reader.load()
+
+        assert second is not first
+        assert second.nervous_system.cpu_temp_min == pytest.approx(41.0)
 
 
 # ---------------------------------------------------------------------------

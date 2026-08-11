@@ -6,6 +6,7 @@ Run with: pytest tests/test_anima.py -v
 
 import pytest
 from datetime import datetime
+from unittest.mock import patch
 from anima_mcp.anima import (
     sense_self, _sense_warmth, _sense_clarity,
     _sense_stability, _sense_presence
@@ -84,6 +85,21 @@ class TestAnimaRanges:
         assert 0 <= anima.clarity <= 1
         assert 0 <= anima.stability <= 1
         assert 0 <= anima.presence <= 1
+
+    def test_authoritative_unknown_does_not_read_process_local_prediction_model(
+        self, normal_readings, default_calibration
+    ):
+        with patch(
+            "anima_mcp.anima._get_prediction_accuracy",
+            side_effect=AssertionError("stale process-local reader used"),
+        ):
+            anima = sense_self(
+                normal_readings,
+                default_calibration,
+                prediction_accuracy=None,
+            )
+
+        assert 0 <= anima.clarity <= 1
 
 
 class TestAnimaNotExtreme:
