@@ -30,7 +30,7 @@ def _claimed_input(
 
 
 async def handle_self_iteration(arguments: dict) -> list[TextContent]:
-    """Inspect source structure or update the proposal/outcome ledger.
+    """Inspect source structure or update the proposal/verification ledger.
 
     This handler intentionally has no implementation, command-execution, Git
     mutation, or deployment action.  Proposal fields remain inert JSON.
@@ -87,6 +87,40 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 )
             )
 
+        if action == "prepare_verification":
+            challenge = system.prepare_verification(
+                proposal_id=arguments.get("proposal_id"),
+                verification_decision=arguments.get("verification_decision"),
+                verification_statement=arguments.get("verification_statement"),
+                verification_evidence=arguments.get("verification_evidence"),
+                expected_content_sha256=arguments.get("expected_content_sha256"),
+                expires_at=arguments.get("expires_at"),
+                target_attestation_id=arguments.get("target_attestation_id"),
+            )
+            return _text(
+                {
+                    "success": True,
+                    "challenge": challenge,
+                    "next_step": (
+                        "The authenticated independent verifier signs the exact "
+                        "challenge bytes offline, then submits record_verification."
+                    ),
+                }
+            )
+
+        if action == "record_verification":
+            proposal = system.record_verification(
+                proposal_id=arguments.get("proposal_id"),
+                challenge_id=arguments.get("challenge_id"),
+                signature=arguments.get("signature"),
+            )
+            return _text({"success": True, "proposal": proposal})
+
+        if action == "verification_status":
+            return _text(
+                system.verification_status(proposal_id=arguments.get("proposal_id"))
+            )
+
         if action == "record_outcome":
             claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
                 arguments,
@@ -112,7 +146,15 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
         return _text(
             {
                 "error": f"unknown self_iteration action: {action}",
-                "allowed_actions": ["inspect", "propose", "list", "record_outcome"],
+                "allowed_actions": [
+                    "inspect",
+                    "propose",
+                    "list",
+                    "prepare_verification",
+                    "record_verification",
+                    "verification_status",
+                    "record_outcome",
+                ],
             }
         )
     except SelfIterationError as exc:
