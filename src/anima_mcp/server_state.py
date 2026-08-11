@@ -110,10 +110,13 @@ NEURAL_SCREEN_DELAY_SECONDS = 0.5
 # ---------------------------------------------------------------------------
 
 def is_broker_running() -> bool:
-    """Check if the stable_creature broker process is running."""
+    """Check if the installed stable-creature entry point is running."""
     try:
         result = subprocess.run(
-            ['pgrep', '-f', 'stable_creature.py'],
+            # Production executes the ``anima-creature`` console script; its
+            # command line never contains ``stable_creature.py``.  Keep the
+            # module form for development/manual launches.
+            ['pgrep', '-f', 'anima-creature|anima_mcp.stable_creature'],
             capture_output=True, timeout=2
         )
         return result.returncode == 0

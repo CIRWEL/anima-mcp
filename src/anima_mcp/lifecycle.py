@@ -145,6 +145,15 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
     # whatever directory systemd started it in (#123).
     db_path = resolve_db_path(db_path)
 
+    # The broker owns embodied learned-state snapshots.  Configure server-side
+    # singletons as refreshing readers before any schema/display subsystem can
+    # instantiate them.  Semantic mutations are handed back through the durable
+    # learning-event inbox.
+    from .self_model import configure_self_model
+    from .preferences import configure_preference_system
+    configure_self_model(read_only=True)
+    configure_preference_system(read_only=True)
+
     import time as _time
 
     from .identity import IdentityStore

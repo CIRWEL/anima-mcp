@@ -37,11 +37,15 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
             except ValueError:
                 pass  # Invalid category, ignore filter
 
-        insights = reflection_system.get_insights(category=category)[:limit]
+        active_insights = reflection_system.get_insights()
+        insights = (
+            reflection_system.get_insights(category=category)[:limit]
+            if category else active_insights[:limit]
+        )
 
         # Build result
         result = {
-            "total_insights": len(reflection_system._insights),
+            "total_insights": len(active_insights),
             "insights": [i.to_dict() for i in insights],
             "summary": reflection_system.get_self_knowledge_summary(),
         }

@@ -363,13 +363,30 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                 # No successful UNITARES check-in within 5 min → running on local fallback
                 "unitares_stale": (age is None) or (age > 300),
             }
-            # Self-model liveness — observation_count stuck at 0 while the loop
-            # runs means cross-iteration learning has silently broken (ab984f9).
-            sm_last = _c.sm_last_observation_time or 0.0
-            result["self_model"] = {
-                "observation_count": _c.sm_observation_count,
-                "last_observation_age_s": round(_gt.time() - sm_last, 1) if sm_last > 0 else None,
-            }
+            from ..self_model import get_self_model
+            sm = get_self_model()
+            if getattr(sm, "read_only", False):
+                try:
+                    snapshot_age = round(
+                        _gt.time() - sm.persistence_path.stat().st_mtime, 1
+                    )
+                except OSError:
+                    snapshot_age = None
+                result["self_model"] = {
+                    "mode": "broker_snapshot_reader",
+                    "snapshot_age_s": snapshot_age,
+                }
+            else:
+                # Standalone writable mode retains the historical liveness
+                # counter for the cross-iteration observer (ab984f9).
+                sm_last = _c.sm_last_observation_time or 0.0
+                result["self_model"] = {
+                    "mode": "in_process_writer",
+                    "observation_count": _c.sm_observation_count,
+                    "last_observation_age_s": (
+                        round(_gt.time() - sm_last, 1) if sm_last > 0 else None
+                    ),
+                }
     except Exception:
         pass
 

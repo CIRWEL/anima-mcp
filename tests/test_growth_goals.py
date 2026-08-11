@@ -492,6 +492,53 @@ class TestSuggestGoal:
                 goal.status = GoalStatus.ACHIEVED
         assert found, "Expected a belief-testing 'test whether' goal within 30 attempts"
 
+    def test_achieved_first_belief_does_not_hide_later_novel_belief(self, growth):
+        from unittest.mock import MagicMock
+
+        spent = growth.form_goal(
+            "test whether my warmth returns to baseline quickly", "already tested"
+        )
+        growth.update_goal_progress(spent.goal_id, 1.0)
+
+        first = MagicMock(
+            description="My warmth returns to baseline quickly",
+            confidence=0.5,
+            supporting_count=4,
+            contradicting_count=1,
+        )
+        first.get_belief_strength.return_value = "moderate"
+        second = MagicMock(
+            description="My baseline warmth tends to stay low",
+            confidence=0.4,
+            supporting_count=5,
+            contradicting_count=2,
+        )
+        second.get_belief_strength.return_value = "moderate"
+        self_model = MagicMock(beliefs={"first": first, "second": second})
+
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+        goal = growth.suggest_goal(anima, self_model=self_model)
+
+        assert goal is not None
+        assert goal.description == "test whether my baseline warmth tends to stay low"
+
+    def test_abandoned_drawing_milestone_can_be_retried(self, growth):
+        abandoned = growth.form_goal("complete 2000 drawings", "first attempt")
+        abandoned.status = GoalStatus.ABANDONED
+        growth._connect().execute(
+            "UPDATE goals SET status = ? WHERE goal_id = ?",
+            (GoalStatus.ABANDONED.value, abandoned.goal_id),
+        )
+        growth._connect().commit()
+        growth._drawings_observed = 1484
+        anima = {"warmth": 0.6, "clarity": 0.6, "stability": 0.6, "presence": 0.6}
+
+        goal = growth.suggest_goal(anima)
+
+        assert goal is not None
+        assert goal.description == "complete 2000 drawings"
+        assert goal.goal_id != abandoned.goal_id
+
     def test_low_wellness_goal_suggestion(self, growth):
         """Low wellness (< 0.4) triggers 'find what makes me feel stable' goal."""
         anima = {"warmth": 0.2, "clarity": 0.3, "stability": 0.25, "presence": 0.35}

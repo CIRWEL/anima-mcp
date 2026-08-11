@@ -53,6 +53,11 @@ class SelfBelief:
         update_bonus: from experiential marks (belief_update_bonus),
             scales the learning rate for faster belief updating.
         """
+        strength = float(strength)
+        if not math.isfinite(strength) or strength <= 0.0:
+            return
+        strength = min(1.0, strength)
+
         self.last_tested = datetime.now()
         lr = 0.1 * (1.0 + update_bonus)
 
@@ -95,8 +100,28 @@ class SelfModel:
     4. Uses beliefs to predict own behavior
     """
 
-    def __init__(self, persistence_path: Optional[Path] = None):
+    # These beliefs were historically tested on every 2-second loop tick.  A
+    # one-time cold start is more honest than preserving millions of correlated
+    # pseudo-observations after switching to episode/time buckets.
+    _EPISODE_MIGRATION_DEFAULTS = {
+        "light_sensitive": (0.5, 0.5),
+        "temp_sensitive": (0.5, 0.5),
+        "temp_clarity_correlation": (0.5, 0.5),
+        "light_warmth_correlation": (0.5, 0.5),
+        "my_leds_affect_lux": (0.5, 0.5),
+        "evening_warmth_increase": (0.3, 0.5),
+        "morning_clarity": (0.3, 0.5),
+        "warmth_baseline_low": (0.3, 0.5),
+        "presence_baseline_low": (0.3, 0.5),
+    }
+
+    def __init__(self, persistence_path: Optional[Path] = None,
+                 read_only: bool = False):
         self.persistence_path = persistence_path or Path.home() / ".anima" / "self_model.json"
+        self.read_only = read_only
+        self._loaded_mtime_ns = 0
+        self._evidence_buckets: Dict[str, str] = {}
+        self._applied_event_ids: List[str] = []
 
         # Core self-beliefs
         self._beliefs: Dict[str, SelfBelief] = {
@@ -215,10 +240,47 @@ class SelfModel:
 
     def _update_belief(self, belief_id: str, supports: bool, strength: float = 1.0):
         """Update a belief, automatically applying belief_update_bonus."""
+        if self.read_only:
+            return
         self._beliefs[belief_id].update_from_evidence(
             supports=supports, strength=strength,
             update_bonus=self.belief_update_bonus,
         )
+
+    @property
+    def is_writable(self) -> bool:
+        return not self.read_only
+
+    def apply_evidence(self, belief_id: str, *, supports: bool,
+                       strength: float = 1.0) -> None:
+        """Apply one explicit evidence episode from the durable event inbox."""
+        if belief_id not in self._beliefs:
+            raise ValueError(f"unknown self-belief: {belief_id}")
+        self._update_belief(belief_id, supports=supports, strength=strength)
+
+    def _claim_evidence_bucket(self, key: str, bucket: str) -> bool:
+        """Claim one evidence opportunity per semantic time bucket."""
+        if self.read_only or self._evidence_buckets.get(key) == bucket:
+            return False
+        self._evidence_buckets[key] = bucket
+        return True
+
+    def _apply_persisted_data(self, data: dict) -> None:
+        for belief_id, bdata in data.get("beliefs", {}).items():
+            if belief_id in self._beliefs:
+                b = self._beliefs[belief_id]
+                b.confidence = bdata.get("confidence", 0.5)
+                b.value = bdata.get("value", 0.5)
+                b.supporting_count = bdata.get("supporting_count", 0)
+                b.contradicting_count = bdata.get("contradicting_count", 0)
+        buckets = data.get("evidence_buckets", {})
+        if isinstance(buckets, dict):
+            self._evidence_buckets = {
+                str(key): str(value) for key, value in buckets.items()
+            }
+        event_ids = data.get("applied_event_ids", [])
+        if isinstance(event_ids, list):
+            self._applied_event_ids = [str(value) for value in event_ids[-2000:]]
 
     def _load(self):
         """Load self-model from disk."""
@@ -226,19 +288,14 @@ class SelfModel:
             try:
                 with open(self.persistence_path, 'r') as f:
                     data = json.load(f)
-                    for belief_id, bdata in data.get("beliefs", {}).items():
-                        if belief_id in self._beliefs:
-                            b = self._beliefs[belief_id]
-                            b.confidence = bdata.get("confidence", 0.5)
-                            b.value = bdata.get("value", 0.5)
-                            b.supporting_count = bdata.get("supporting_count", 0)
-                            b.contradicting_count = bdata.get("contradicting_count", 0)
+                self._apply_persisted_data(data)
 
                 # Migration: reset beliefs corrupted by testing noise as evidence.
                 # Pre-fix, every 2s observation tested correlation even when input
                 # was constant, logging "contradicting" 100K+ times. Reset these
                 # to fresh state so they can learn honestly with the CV>5% gate.
-                if not data.get("_migrated_noise_reset"):
+                migrated = False
+                if not self.read_only and not data.get("_migrated_noise_reset"):
                     for bid, b in self._beliefs.items():
                         total = b.supporting_count + b.contradicting_count
                         if total > 10000:
@@ -249,10 +306,41 @@ class SelfModel:
                             b.value = 0.5
                             b.supporting_count = 0
                             b.contradicting_count = 0
-                    self._save()  # Saves with fresh counts + migration flag
+                    migrated = True
+
+                if not self.read_only and not data.get("_migrated_episode_evidence_v2"):
+                    for bid, (confidence, value) in self._EPISODE_MIGRATION_DEFAULTS.items():
+                        belief = self._beliefs[bid]
+                        belief.confidence = confidence
+                        belief.value = value
+                        belief.supporting_count = 0
+                        belief.contradicting_count = 0
+                    self._evidence_buckets.clear()
+                    migrated = True
+
+                if migrated:
+                    self._save()
+
+                self._loaded_mtime_ns = self.persistence_path.stat().st_mtime_ns
 
             except Exception as e:
                 print(f"[SelfModel] Could not load: {e}")
+
+    def refresh_if_changed(self, *, force: bool = False) -> bool:
+        """Refresh a reader from the broker-owned snapshot when it changes."""
+        if not self.persistence_path.exists():
+            return False
+        try:
+            mtime_ns = self.persistence_path.stat().st_mtime_ns
+            if not force and mtime_ns == self._loaded_mtime_ns:
+                return False
+            data = json.loads(self.persistence_path.read_text())
+            self._apply_persisted_data(data)
+            self._loaded_mtime_ns = mtime_ns
+            return True
+        except Exception as e:
+            print(f"[SelfModel] Could not refresh: {e}")
+            return False
 
     def _maybe_save(self, min_interval_seconds: float = 10.0) -> None:
         """Save if enough time has passed since last save (throttle for high-value updates)."""
@@ -260,11 +348,13 @@ class SelfModel:
             self._last_save_time = 0.0
         now = datetime.now().timestamp()
         if now - self._last_save_time >= min_interval_seconds:
-            self._save()
-            self._last_save_time = now
+            if self._save():
+                self._last_save_time = now
 
-    def _save(self):
+    def _save(self) -> bool:
         """Save self-model to disk."""
+        if self.read_only:
+            return False
         try:
             self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
             data = {
@@ -278,27 +368,58 @@ class SelfModel:
                     for bid, b in self._beliefs.items()
                 },
                 "last_saved": datetime.now().isoformat(),
+                "evidence_buckets": self._evidence_buckets,
+                "applied_event_ids": self._applied_event_ids[-2000:],
                 "_migrated_noise_reset": True,
+                "_migrated_episode_evidence_v2": True,
             }
             atomic_json_write(self.persistence_path, data, indent=2)
+            try:
+                self._loaded_mtime_ns = self.persistence_path.stat().st_mtime_ns
+            except OSError:
+                # The atomic write committed; force a future reader refresh if
+                # metadata lookup is transiently unavailable.
+                self._loaded_mtime_ns = 0
+            return True
         except Exception as e:
             print(f"[SelfModel] Could not save: {e}")
+            return False
+
+    def has_applied_event(self, event_id: str) -> bool:
+        """Whether a durable inbox event was committed with this snapshot."""
+        return event_id in self._applied_event_ids
+
+    def mark_applied_event(self, event_id: str) -> None:
+        """Record an inbox receipt in the same atomic save as its mutation."""
+        if event_id not in self._applied_event_ids:
+            self._applied_event_ids.append(event_id)
+            del self._applied_event_ids[:-2000]
+
+    def forget_applied_event(self, event_id: str) -> None:
+        """Roll back an uncommitted receipt after a failed snapshot save."""
+        if event_id in self._applied_event_ids:
+            self._applied_event_ids.remove(event_id)
 
     def observe_surprise(self, surprise_level: float, sources: List[str]):
         """Record a surprise observation for belief testing."""
+        now = datetime.now()
         self._surprise_data.append({
-            "timestamp": datetime.now(),
+            "timestamp": now,
             "surprise": surprise_level,
             "sources": sources,
         })
 
-        # Test sensitivity beliefs
-        if "light" in sources:
+        # A sustained surprise is one episode, not fresh evidence every two
+        # seconds.  Five-minute source buckets retain responsiveness without
+        # making loop cadence determine certainty.
+        bucket = str(int(now.timestamp() // 300))
+        if "light" in sources and self._claim_evidence_bucket("surprise:light", bucket):
             # High surprise from light suggests high sensitivity
             self._update_belief("light_sensitive",
                 supports=surprise_level > 0.3, strength=surprise_level)
 
-        if "ambient_temp" in sources:
+        if ("ambient_temp" in sources
+                and self._claim_evidence_bucket("surprise:ambient_temp", bucket)):
             self._update_belief("temp_sensitive",
                 supports=surprise_level > 0.3, strength=surprise_level)
 
@@ -412,10 +533,12 @@ class SelfModel:
         if self._prev_led_brightness is not None:
             led_change = led_brightness - self._prev_led_brightness
 
-            if abs(led_change) > 0.05:  # Capture subtle brightness shifts too
+            if abs(led_change) > 0.05:
                 # Look at recent lux data to see if lux changed similarly
                 led_lux_data = list(self._correlation_data["led_lux"])
-                if len(led_lux_data) >= 3:
+                change_bucket = str(int(now.timestamp() // 300))
+                if (len(led_lux_data) >= 3
+                        and self._claim_evidence_bucket("led_lux:change", change_bucket)):
                     # Compare lux before and after the LED change
                     recent_lux = [d["lux"] for d in led_lux_data[-3:]]
                     older_lux = [d["lux"] for d in led_lux_data[-6:-3]] if len(led_lux_data) >= 6 else recent_lux
@@ -499,6 +622,14 @@ class SelfModel:
 
         correlation = numerator / (denom_x * denom_y)
 
+        # Sliding windows overlap almost completely from tick to tick.  Credit
+        # at most one informative window per clock hour, then clear the window
+        # so the next test is built from new observations.
+        bucket = datetime.now().strftime("%Y-%m-%dT%H")
+        if not self._claim_evidence_bucket(f"correlation:{belief_id}", bucket):
+            self._correlation_data[data_key].clear()
+            return
+
         # Update belief
         belief = self._beliefs[belief_id]
 
@@ -511,6 +642,7 @@ class SelfModel:
             # Weak correlation contradicts — but only mildly, since we confirmed
             # there was real input variance
             self._update_belief(belief_id, supports=False, strength=0.3)
+        self._correlation_data[data_key].clear()
         self._maybe_save()
 
     def observe_interaction(self, clarity_before: float, clarity_after: float):
@@ -528,13 +660,16 @@ class SelfModel:
 
     def observe_time_pattern(self, hour: int, warmth: float, clarity: float):
         """Test time-based beliefs."""
+        day_bucket = datetime.now().date().isoformat()
         # Evening warmth (6pm-10pm)
-        if 18 <= hour <= 22:
+        if (18 <= hour <= 22
+                and self._claim_evidence_bucket("time:evening_warmth", day_bucket)):
             self._update_belief("evening_warmth_increase",
                 supports=warmth > 0.5, strength=abs(warmth - 0.5))
 
         # Morning clarity (6am-10am)
-        if 6 <= hour <= 10:
+        if (6 <= hour <= 10
+                and self._claim_evidence_bucket("time:morning_clarity", day_bucket)):
             self._update_belief("morning_clarity",
                 supports=clarity > 0.5, strength=abs(clarity - 0.5))
 
@@ -550,6 +685,10 @@ class SelfModel:
         if len(self._temperament_samples) < 15:
             return
 
+        hour_bucket = datetime.now().strftime("%Y-%m-%dT%H")
+        if not self._claim_evidence_bucket("temperament:baseline", hour_bucket):
+            return
+
         # Test warmth baseline
         warmth_vals = [s.get("warmth", 0.5) for s in self._temperament_samples]
         warmth_mean = sum(warmth_vals) / len(warmth_vals)
@@ -562,6 +701,7 @@ class SelfModel:
         self._update_belief("presence_baseline_low",
             supports=presence_mean < 0.35, strength=abs(presence_mean - 0.35) * 2.0)
 
+        self._temperament_samples.clear()
         self._maybe_save()
 
     def predict_own_response(self, context: str) -> Dict[str, float]:
@@ -591,6 +731,9 @@ class SelfModel:
         If prediction was accurate, confidence in the underlying belief increases.
         If inaccurate, confidence decreases and value adjusts.
         """
+        if self.read_only:
+            return
+
         for key, predicted_value in prediction.items():
             actual_value = actual.get(key)
             if actual_value is None:
@@ -808,18 +951,34 @@ class SelfModel:
         """Get all recovery episodes for analysis."""
         return list(self._stability_episodes)
 
-    def save(self):
+    def save(self) -> bool:
         """Explicitly save the model."""
-        self._save()
+        return self._save()
 
 
 # Singleton instance
 _self_model: Optional[SelfModel] = None
+_self_model_read_only_default = False
 
 
-def get_self_model() -> SelfModel:
-    """Get or create the self-model."""
+def configure_self_model(*, read_only: bool) -> None:
+    """Set this process's self-model role before lifecycle initialization."""
+    global _self_model_read_only_default
+    _self_model_read_only_default = bool(read_only)
+    if _self_model is not None:
+        _self_model.read_only = bool(read_only)
+        if read_only:
+            _self_model.refresh_if_changed(force=True)
+
+
+def get_self_model(*, read_only: Optional[bool] = None) -> SelfModel:
+    """Get or create the process-local writer or refreshing reader."""
     global _self_model
+    desired = _self_model_read_only_default if read_only is None else bool(read_only)
     if _self_model is None:
-        _self_model = SelfModel()
+        _self_model = SelfModel(read_only=desired)
+    elif _self_model.read_only != desired and read_only is not None:
+        raise RuntimeError("self-model role cannot change after initialization")
+    if _self_model.read_only:
+        _self_model.refresh_if_changed()
     return _self_model

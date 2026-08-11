@@ -359,6 +359,17 @@ class TestPreferenceRetraction:
         ).fetchone()
         assert row is not None and row[0] <= 0.7
 
+    def test_partial_decay_persists_without_crossing_gate(self, gs):
+        pref = self._stale_pref(gs, "still_trusted", days_ago=7)
+        retracted = gs.decay_stale_preferences()
+
+        assert retracted == []
+        assert 0.7 < pref.confidence < 1.0
+        row = gs._connect().execute(
+            "SELECT confidence FROM preferences WHERE name = 'still_trusted'"
+        ).fetchone()
+        assert row is not None and row[0] == pref.confidence
+
 
 # ==================== preference value magnitude ====================
 

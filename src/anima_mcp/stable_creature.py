@@ -72,6 +72,7 @@ from .governance_passthrough import (
 from .shared_memory import SharedMemoryClient
 from .eisv_mapper import anima_to_eisv
 from .metacognition import get_metacognitive_monitor
+from .learning_events import drain_learning_events
 
 
 # Enhanced learning systems (optional - for genuine agency)
@@ -233,6 +234,13 @@ UPDATE_INTERVAL = 2.0  # seconds
 MAX_RETRIES = 3
 RETRY_DELAY = 0.5
 
+
+def broker_agency_enabled() -> bool:
+    """Whether the retired broker TD loop is explicitly enabled for rollback."""
+    return os.environ.get("ANIMA_BROKER_AGENCY_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
 # Global shutdown flag
 running = True
 
@@ -246,6 +254,7 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 def run_creature():
     print("[StableCreature] Starting up...")
+    legacy_broker_agency = broker_agency_enabled()
     
     # Initialize components with error handling
     identity = None
@@ -421,24 +430,24 @@ def run_creature():
                 print("[StableCreature] Adaptive prediction active - Lumen learns from experience")
 
             if _has_module("preferences"):
-                preferences = get_preference_system()
+                preferences = get_preference_system(read_only=False)
                 print("[StableCreature] Preferences active - Lumen develops values")
 
             if _has_module("self_model"):
-                self_model = get_self_model()
+                self_model = get_self_model(read_only=False)
                 if exp_marks:
                     self_model.belief_update_bonus = exp_marks.get_effect("belief_update_bonus")
                 print("[StableCreature] Self-model active - Lumen has beliefs about itself")
 
-            if _has_module("agency"):
-                # Deliberately NOT db_path. The broker and the server each run
-                # a full TD loop; pointing this one at $ANIMA_DB would merge it
-                # onto the table that actually drives Lumen, adding a second
-                # writer and jumping the broker's learned values. Absolute, so
-                # it no longer depends on the service's WorkingDirectory (#123).
+            if _has_module("agency") and legacy_broker_agency:
+                # Deliberately NOT db_path. A rollback must remain isolated
+                # from the server's authoritative action table; merging it
+                # would restore the second-writer defect (#123).
                 action_selector = get_action_selector(db_path=str(BROKER_AGENCY_DB))
                 exploration_mgr = get_exploration_manager()
-                print("[StableCreature] Agency active - Lumen can choose actions")
+                print("[StableCreature] Legacy broker agency enabled by operator")
+            elif _has_module("agency"):
+                print("[StableCreature] Broker agency retired - server is the sole action learner")
 
             if _has_module("memory_retrieval"):
                 memory_retriever = get_memory_retriever()
@@ -451,8 +460,8 @@ def run_creature():
     exp_filter = None
     if ENHANCED_LEARNING_AVAILABLE:
         try:
-            if _has_module("weighted_pathways"):
-                pathways = get_weighted_pathways(db_path=db_path)
+            if _has_module("weighted_pathways") and legacy_broker_agency:
+                pathways = get_weighted_pathways(db_path=str(BROKER_AGENCY_DB))
                 print("[StableCreature] Weighted pathways active - decisions shaped by experience")
             if _has_module("experiential_filter"):
                 exp_filter = get_experiential_filter()
@@ -513,6 +522,8 @@ def run_creature():
     last_learning_save = time.time()  # Track periodic learning saves
     readings = None  # Initialize before loop (first iteration has no prior readings)
     last_pattern_apply = 0  # Track periodic learned pattern application
+    last_learning_event_drain = 0.0
+    last_learning_event_failure_log = 0.0
     # LED brightness tracking (broker doesn't own LED hardware — server does)
     # Read actual brightness preset from disk (renderer saves to ~/.anima/display_brightness.json).
     # Falls back to Medium preset (0.12) — NOT the old 0.04 config default.
@@ -530,6 +541,27 @@ def run_creature():
 
     try:
         while running:
+            # Apply durable semantic learning events from the server.  This is
+            # the only cross-process mutation seam for broker-owned JSON state.
+            if time.time() - last_learning_event_drain >= 5.0:
+                try:
+                    drained = drain_learning_events(
+                        self_model=self_model,
+                        preferences=preferences,
+                    )
+                    now = time.time()
+                    should_report_failure = (
+                        drained["failed"]
+                        and now - last_learning_event_failure_log >= 300.0
+                    )
+                    if drained["processed"] or drained["rejected"] or should_report_failure:
+                        print(f"[LearningInbox] {drained}", file=sys.stderr, flush=True)
+                    if should_report_failure:
+                        last_learning_event_failure_log = now
+                except Exception as e:
+                    print(f"[LearningInbox] drain error: {e}", file=sys.stderr, flush=True)
+                last_learning_event_drain = time.time()
+
             # 0. Metacognition: Generate prediction BEFORE sensing
             # Pass LED brightness for proprioceptive light prediction if available
             _led_br = readings.led_brightness if readings and readings.led_brightness is not None else None

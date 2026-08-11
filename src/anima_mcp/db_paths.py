@@ -8,11 +8,9 @@ copy (#123). Both systemd units already set ``ANIMA_DB`` correctly; the code
 simply never read it.
 
 Resolution order is **explicit > $ANIMA_DB > ~/.anima/anima.db**. Explicit
-wins because a caller that names a store means it — that is how the broker
-pins its own agency store (see ``BROKER_AGENCY_DB``) while every other
-subsystem follows the environment. In deployment the two agree, since explicit
-paths are derived from the same store the units point at, so the ordering only
-matters where a caller diverges on purpose.
+wins because a caller that names a store means it. The historical broker
+agency rollback path is the one deliberate exception (see
+``BROKER_AGENCY_DB``); active subsystems follow the environment.
 
 The one thing this never returns is a relative path.
 """
@@ -46,14 +44,12 @@ def resolve_db_path(db_path: Optional[str] = None) -> str:
     return str(home_db)
 
 
-# The Python broker's agency store, pinned deliberately (#123).
+# The retired Python broker agency store, retained for explicit rollback (#123).
 #
-# The broker and the server each run a full TD loop over their own value table.
-# Honouring ANIMA_DB here would merge them onto the store that actually drives
-# Lumen — a second writer on the live table, and a discontinuity in learned
-# values (ask_question 0.051 -> 0.35). The broker keeps its own file until the
-# prior question is settled: with I2C moved to anima-broker-ex and LEDs owned by
-# the server, what the broker's agency is still *for* is undecided.
+# The server is the sole active action learner. If an operator temporarily
+# restores the legacy broker loop with ANIMA_BROKER_AGENCY_ENABLED=true, it
+# must remain isolated from the live server table to avoid a second writer and
+# a discontinuity in learned values (ask_question 0.051 -> 0.35).
 #
 # Absolute, so it no longer depends on the service's WorkingDirectory.
 BROKER_AGENCY_DB = Path.home() / "anima-mcp" / DEFAULT_DB_NAME

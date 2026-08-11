@@ -1369,7 +1369,9 @@ class TestCanvasSaveAtomicPNG:
         engine.canvas.draw_pixel(20, 20, (0, 255, 0))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            result = engine.canvas_save()
+            # Manual snapshots intentionally bypass the completed-drawing pixel
+            # floor; this test exercises atomic PNG I/O with a tiny fixture.
+            result = engine.canvas_save(manual=True)
 
         assert result is not None
         saved = Path(result)

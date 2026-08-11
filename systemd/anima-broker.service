@@ -27,6 +27,10 @@ EnvironmentFile=-/home/unitares-anima/.anima/anima.env
 Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
 Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
 Environment="ANIMA_GOVERNANCE_INTERVAL_SECONDS=180"
+# The server owns the only action policy.  The historical broker TD loop is
+# retained behind an explicit rollback flag but must not silently reopen its
+# second SQLite store or reinforce the server's pathways table.
+Environment="ANIMA_BROKER_AGENCY_ENABLED=false"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONIOENCODING=utf-8"
 Environment="LC_ALL=C.UTF-8"

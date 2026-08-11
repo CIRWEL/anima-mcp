@@ -592,26 +592,28 @@ def apply_insight(insight) -> dict:
     # 2. Self insights → self-model beliefs (half-strength to avoid overfitting)
     if insight.category == "self":
         try:
-            from .self_model import get_self_model
-            sm = get_self_model()
-            beliefs = getattr(sm, 'beliefs', {})
-            if beliefs:
-                if "sensitive" in text_lower and "light" in text_lower and "light_sensitive" in beliefs:
-                    beliefs["light_sensitive"].update_from_evidence(supports=True, strength=0.5)
-                    effects["belief"] = "light_sensitive"
-                elif "sensitive" in text_lower and "temperature" in text_lower and "temp_sensitive" in beliefs:
-                    beliefs["temp_sensitive"].update_from_evidence(supports=True, strength=0.5)
-                    effects["belief"] = "temp_sensitive"
-                elif "recover" in text_lower and ("stability" in text_lower or "stable" in text_lower) and "stability_recovery" in beliefs:
-                    fast = "quickly" in text_lower or "fast" in text_lower
-                    beliefs["stability_recovery"].update_from_evidence(supports=fast, strength=0.5)
-                    effects["belief"] = "stability_recovery"
-                elif "clarity" in text_lower and ("interact" in text_lower or "visitor" in text_lower) and "interaction_clarity_boost" in beliefs:
-                    beliefs["interaction_clarity_boost"].update_from_evidence(supports=True, strength=0.5)
-                    effects["belief"] = "interaction_clarity_boost"
-                elif "growth" in text_lower or "change" in text_lower or "different" in text_lower:
-                    # General self-awareness — no specific belief to update, but still valuable
-                    pass
+            from .learning_events import enqueue_self_belief_evidence
+
+            belief_id = None
+            supports = True
+            if "sensitive" in text_lower and "light" in text_lower:
+                belief_id = "light_sensitive"
+            elif "sensitive" in text_lower and "temperature" in text_lower:
+                belief_id = "temp_sensitive"
+            elif "recover" in text_lower and ("stability" in text_lower or "stable" in text_lower):
+                belief_id = "stability_recovery"
+                supports = "quickly" in text_lower or "fast" in text_lower
+            elif "clarity" in text_lower and ("interact" in text_lower or "visitor" in text_lower):
+                belief_id = "interaction_clarity_boost"
+
+            if belief_id:
+                enqueue_self_belief_evidence(
+                    belief_id,
+                    supports=supports,
+                    strength=0.5,
+                    source=f"knowledge:{insight.insight_id}",
+                )
+                effects["belief"] = belief_id
         except Exception as e:
             logger.debug("[Knowledge] apply_insight beliefs bridge failed: %s", e)
 

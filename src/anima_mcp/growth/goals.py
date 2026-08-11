@@ -199,11 +199,9 @@ class GoalsMixin:
                     f"i've noticed this {pref.observation_count} times",
                     14,
                 ))
-                break  # Only one preference goal
 
         # 2. Curiosity-driven: recurring unanswered questions
-        if self._curiosities:
-            q = random.choice(self._curiosities)
+        for q in self._curiosities:
             suggestions.append((
                 f"find an answer to: {q}",
                 "this has been on my mind",
@@ -237,7 +235,6 @@ class GoalsMixin:
                         f"i'm only {belief.get_belief_strength()} about this",
                         14,
                     ))
-                    break
 
         # 5. Wellness-driven
         if wellness < 0.4:
@@ -249,17 +246,25 @@ class GoalsMixin:
                                 "my clarity is high and i feel curious",
                                 7))
 
-        if not suggestions:
-            return None
-
-        desc, motivation, target_days = random.choice(suggestions)
-
-        # Dedup against ALL goals including achieved/abandoned (prevents re-creating)
+        # Dedup before choosing so a spent first candidate cannot hide later
+        # novel ones.  Abandoned goals are intentionally retryable: abandonment
+        # means the previous attempt did not complete, not that the underlying
+        # aspiration can never become relevant again.
         conn = self._connect()
-        existing = conn.execute(
-            "SELECT 1 FROM goals WHERE LOWER(description) = LOWER(?)", (desc,)
-        ).fetchone()
-        if existing:
+        rows = conn.execute(
+            "SELECT description FROM goals WHERE status IN (?, ?)",
+            (GoalStatus.ACTIVE.value, GoalStatus.ACHIEVED.value),
+        ).fetchall()
+        unavailable = {str(row[0]).casefold() for row in rows}
+        novel: Dict[str, Tuple[str, str, int]] = {}
+        for suggestion in suggestions:
+            key = suggestion[0].casefold()
+            if key not in unavailable:
+                novel.setdefault(key, suggestion)
+
+        if not novel:
             return None
+
+        desc, motivation, target_days = random.choice(list(novel.values()))
 
         return self.form_goal(desc, motivation, target_days=target_days)

@@ -284,6 +284,27 @@ class TestPersistence:
         ps = PreferenceSystem(persistence_path=tmp_path / "missing.json")
         assert ps._preferences["warmth"].valence == 0.0  # Default
 
+    def test_read_only_snapshot_refreshes_without_writing(self, tmp_path):
+        """Server readers follow broker snapshots but cannot overwrite them."""
+        path = tmp_path / "prefs.json"
+        writer = PreferenceSystem(persistence_path=path)
+        writer._preferences["warmth"].valence = 0.25
+        writer._preferences["warmth"].optimal_center = 0.61
+        writer._save()
+
+        reader = PreferenceSystem(persistence_path=path, read_only=True)
+        assert reader._preferences["warmth"].valence == pytest.approx(0.25)
+        assert reader._preferences["warmth"].optimal_center == pytest.approx(0.61)
+
+        reader._preferences["warmth"].valence = -1.0
+        reader._save()
+        assert PreferenceSystem(persistence_path=path)._preferences["warmth"].valence == pytest.approx(0.25)
+
+        writer._preferences["warmth"].valence = 0.75
+        writer._save()
+        assert reader.refresh_if_changed(force=True) is True
+        assert reader._preferences["warmth"].valence == pytest.approx(0.75)
+
 
 # ==================== describe_preferences ====================
 

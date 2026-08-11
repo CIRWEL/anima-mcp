@@ -74,7 +74,7 @@ echo ""
 
 # Step 0: Pull Pi's database before deploying (backup state)
 # Skip backup if Pi is unreachable - deployment can proceed without it
-echo -e "${BLUE}[0/3] Backing up Pi state...${NC}"
+echo -e "${BLUE}[0/4] Backing up Pi state...${NC}"
 if [ "$RESTART" = false ]; then
     echo -e "${BLUE}  Skipping (called from restore or --no-restart)${NC}"
 elif ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
@@ -89,7 +89,7 @@ fi
 echo ""
 
 # Step 1: Sync code
-echo -e "${BLUE}[1/3] Syncing code...${NC}"
+echo -e "${BLUE}[1/4] Syncing code...${NC}"
 # Check connectivity first
 if ! ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
     echo -e "${RED}✗ Pi unreachable (WiFi down?)${NC}"
@@ -123,10 +123,23 @@ else
     exit 1
 fi
 
-# Step 2: Restart service (if requested)
+# Step 2: Keep installed systemd units in lockstep with the deployed source.
+# A code-only rsync left the live anima.service on its April 7 definition while
+# the checkout contained the April 28 I2C single-owner safeguard.
+echo ""
+echo -e "${BLUE}[2/4] Syncing core systemd units...${NC}"
+if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+    "set -e; changed=0; for unit in anima.service anima-broker.service; do src=$PI_PATH/systemd/\$unit; dst=/etc/systemd/system/\$unit; if ! cmp -s \"\$src\" \"\$dst\"; then sudo install -m 0644 \"\$src\" \"\$dst\"; changed=1; fi; done; if [ \"\$changed\" -eq 1 ]; then sudo systemctl daemon-reload; fi"; then
+    echo -e "${GREEN}✓ Core service definitions synchronized${NC}"
+else
+    echo -e "${RED}✗ Could not synchronize core service definitions${NC}"
+    exit 1
+fi
+
+# Step 3: Restart service (if requested)
 if [ "$RESTART" = true ]; then
     echo ""
-    echo -e "${BLUE}[2/3] Restarting anima service...${NC}"
+    echo -e "${BLUE}[3/4] Restarting anima service...${NC}"
     
     # Check if systemd service exists (system-level, not user)
     if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" "systemctl is-enabled anima-broker.service" 2>/dev/null; then
@@ -144,19 +157,19 @@ if [ "$RESTART" = true ]; then
     fi
 else
     echo ""
-    echo -e "${BLUE}[2/3] Skipping restart (--no-restart)${NC}"
+    echo -e "${BLUE}[3/4] Skipping restart (--no-restart)${NC}"
 fi
 
-# Step 3: Show logs (if requested)
+# Step 4: Show logs (if requested)
 if [ "$SHOW_LOGS" = true ]; then
     echo ""
-    echo -e "${BLUE}[3/3] Showing logs...${NC}"
+    echo -e "${BLUE}[4/4] Showing logs...${NC}"
     echo -e "${BLUE}=========================================${NC}"
     ssh -p $PI_PORT "$PI_USER@$PI_HOST" "journalctl -u anima -u anima-broker -n 50 --no-pager" || \
         echo -e "${BLUE}ℹ Could not read logs${NC}"
 else
     echo ""
-    echo -e "${BLUE}[3/3] Done${NC}"
+    echo -e "${BLUE}[4/4] Done${NC}"
 fi
 
 echo ""

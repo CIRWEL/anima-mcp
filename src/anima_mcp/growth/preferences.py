@@ -175,15 +175,17 @@ class PreferencesMixin:
         """
         now = now or datetime.now()
         retracted: List[str] = []
+        changed = False
         for pref in self._preferences.values():
             days_since = (now - pref.last_confirmed).days
             target = _staleness_factor(days_since)
             if pref.confidence > target:
+                changed = True
                 was_trusted = pref.confidence > RETRACTION_GATE
                 pref.confidence = target
                 if was_trusted and target <= RETRACTION_GATE:
                     retracted.append(pref.name)
-        if retracted:
+        if changed:
             self._persist_preferences()
         return retracted
 

@@ -1,6 +1,6 @@
 # Broker Architecture -- Body & Mind Separation
 
-**Last Updated:** March 14, 2026
+**Last Updated:** August 11, 2026
 
 ---
 
@@ -10,7 +10,7 @@ Lumen runs as two systemd services:
 
 1. **`anima-broker.service`** -- Lumen's **Body** (Hardware Broker)
    - Owns I2C sensors, writes to shared memory
-   - Runs learning systems
+   - Sole writer for embodied learning snapshots
    - Command: `anima-creature` (`stable_creature.py`)
 
 2. **`anima.service`** -- Lumen's **Mind** (MCP Server)
@@ -32,7 +32,8 @@ anima-broker.service (Body)
   stable_creature.py
   - Reads sensors (exclusive I2C for sensors)
   - Computes anima state
-  - Runs learning systems
+  - Writes preferences + self-model snapshots
+  - Drains durable server learning events
   - Writes to shared memory
          |
          | /dev/shm/anima_state.json
@@ -41,6 +42,8 @@ anima.service (Mind)
   anima --http (MCP Server)
   - Reads from shared memory
   - Owns TFT display + LEDs (exclusive I2C for display)
+  - Owns the action policy and growth database
+  - Reads broker-owned learning snapshots
   - Provides MCP tools
   - Handles external connections
          |
@@ -56,7 +59,9 @@ External MCP Clients (Claude Code, Cursor, Claude.ai)
 
 - **Startup:** `anima-broker` starts first, then `anima`
 - **Stopping `anima`** does NOT stop broker -- sensors keep reading, face keeps displaying
-- **Stopping `anima-broker`** -- server falls back to direct sensor access
+- **Stopping `anima-broker`** -- server has no fresh sensor state. Its deployed
+  `ANIMA_SENSORS_BACKEND=shm` safeguard prevents direct sensor fallback from
+  opening a second I2C handle.
 
 ---
 
@@ -91,29 +96,36 @@ sudo journalctl -u anima-broker -f    # Broker
 
 ---
 
-## Learning Systems (Broker Only)
+## Learning Ownership
 
-These modules run in the broker, not the MCP server:
+Broker-owned learning:
 
 | Module | Purpose | State Location |
 |--------|---------|----------------|
 | `adaptive_prediction.py` | Temporal pattern learning | Shared memory |
-| `agency.py` | TD-learning action values | Shared memory |
-| `preferences.py` | Preference evolution | Shared memory |
-| `self_model.py` | Self-knowledge beliefs | Shared memory |
+| `preferences.py` | Preference evolution | `~/.anima/preferences.json` |
+| `self_model.py` | Self-knowledge beliefs | `~/.anima/self_model.json` |
 | `activity_state.py` | Active/drowsy/resting cycles | Shared memory |
-| `learning.py` | Calibration adaptation | `anima_config.yaml` |
 
-Learning state is written to `/dev/shm/anima_state.json` and persisted to disk every 5 minutes.
+The server reads the JSON snapshots but cannot save them. Server-originated
+question evidence, Q&A-derived belief evidence, and meta-learning weight
+changes are atomically queued under `~/.anima/learning_inbox/`; the broker
+applies and persists them as the sole writer.
 
-These modules run in the **server** (not broker):
+Server-owned learning:
 
 | Module | Purpose |
 |--------|---------|
+| `agency.py` | TD action selection (the only active action learner) |
+| `learning.py` | Calibration adaptation |
 | `growth/` | Preferences, goals, memories, autobiography |
 | `self_reflection.py` | Insight discovery |
 | `llm_gateway.py` | LLM reflections (Groq/Llama) |
 | `knowledge.py` | Q&A-derived insights |
+
+The historical broker agency loop and its separate
+`~/anima-mcp/anima.db` table are retained only for rollback. They stay off
+unless `ANIMA_BROKER_AGENCY_ENABLED=true` is explicitly set.
 
 ---
 
@@ -195,7 +207,10 @@ lsof /dev/i2c-1 2>/dev/null || echo 'No I2C access detected'
 This architecture solves the original I2C concurrency problem: both `stable_creature.py` and `server.py` needed sensor access, causing bus conflicts. The "Hardware Broker Pattern" (Driver and Passenger model) was implemented in three phases:
 
 1. **Phase 1:** Shared memory layer (`SharedMemoryClient`, `/dev/shm/anima_state.json`) -- broker writes, server reads
-2. **Phase 2:** MCP server refactored to read from shared memory with fallback to direct sensors
+2. **Phase 2:** MCP server refactored to read from shared memory
 3. **Phase 3:** Redis backend added for higher performance; auto-detected, falls back to file-based
+4. **Phase 4:** Deployed server pinned to the SHM sensor backend; embodied
+   learned-state snapshots made single-writer; duplicate broker agency retired
 
-All three phases are complete and verified. Both scripts can run simultaneously safely.
+All four phases are complete. Both services can run simultaneously without
+sharing sensor or learned-snapshot write ownership.

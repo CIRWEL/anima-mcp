@@ -4,6 +4,8 @@ Tests for self-model module.
 Validates belief updates, predictions, correlation testing, and recovery profiles.
 """
 
+import json
+
 import pytest
 
 from anima_mcp.self_model import SelfBelief, SelfModel
@@ -68,6 +70,14 @@ class TestSelfBelief:
         belief.update_from_evidence(supports=False)
         assert belief.supporting_count == 2
         assert belief.contradicting_count == 1
+
+    def test_zero_strength_is_not_counted_as_evidence(self):
+        """A neutral reading cannot inflate the evidence denominator."""
+        belief = SelfBelief(belief_id="test", description="test")
+        belief.update_from_evidence(supports=False, strength=0.0)
+        assert belief.supporting_count == 0
+        assert belief.contradicting_count == 0
+        assert belief.last_tested is None
 
     def test_last_tested_updated(self):
         """Test that last_tested is set on update."""
@@ -256,15 +266,72 @@ class TestPersistence:
         path = tmp_path / "self_model.json"
 
         model1 = SelfModel(persistence_path=path)
-        # Build up some evidence
+        # Repeated ticks inside one five-minute episode count once.
         for _ in range(5):
             model1.observe_surprise(0.8, ["light"])
         model1.save()
 
         # Reload
         model2 = SelfModel(persistence_path=path)
-        assert model2._beliefs["light_sensitive"].supporting_count == 5
+        assert model2._beliefs["light_sensitive"].supporting_count == 1
         assert model2._beliefs["light_sensitive"].confidence > 0.5
+
+    def test_read_only_reader_refreshes_without_writing(self, tmp_path):
+        path = tmp_path / "self_model.json"
+        writer = SelfModel(persistence_path=path)
+        writer.apply_evidence("light_sensitive", supports=True, strength=1.0)
+        writer.save()
+
+        reader = SelfModel(persistence_path=path, read_only=True)
+        before = reader.beliefs["light_sensitive"].supporting_count
+        reader.apply_evidence("light_sensitive", supports=True, strength=1.0)
+        reader.save()
+        assert reader.beliefs["light_sensitive"].supporting_count == before
+
+        writer.apply_evidence("light_sensitive", supports=True, strength=1.0)
+        writer.save()
+        assert reader.refresh_if_changed()
+        assert reader.beliefs["light_sensitive"].supporting_count == before + 1
+
+    def test_cadence_corrupted_beliefs_cold_start_once(self, tmp_path):
+        path = tmp_path / "self_model.json"
+        path.write_text(json.dumps({
+            "beliefs": {
+                "morning_clarity": {
+                    "confidence": 1.0,
+                    "value": 1.0,
+                    "supporting_count": 387287,
+                    "contradicting_count": 0,
+                },
+            },
+            "_migrated_noise_reset": True,
+        }))
+
+        model = SelfModel(persistence_path=path)
+        belief = model.beliefs["morning_clarity"]
+        assert (belief.confidence, belief.value) == (0.3, 0.5)
+        assert belief.supporting_count == 0
+        assert json.loads(path.read_text())["_migrated_episode_evidence_v2"] is True
+
+        model.apply_evidence("morning_clarity", supports=True, strength=1.0)
+        model.save()
+        restarted = SelfModel(persistence_path=path)
+        assert restarted.beliefs["morning_clarity"].supporting_count == 1
+
+
+class TestEpisodeEvidence:
+    def test_time_pattern_counts_once_per_day(self, tmp_path):
+        model = SelfModel(persistence_path=tmp_path / "self_model.json")
+        for _ in range(100):
+            model.observe_time_pattern(8, warmth=0.5, clarity=0.9)
+        assert model.beliefs["morning_clarity"].supporting_count == 1
+
+    def test_temperament_counts_once_per_hour(self, tmp_path):
+        model = SelfModel(persistence_path=tmp_path / "self_model.json")
+        for _ in range(100):
+            model.observe_temperament({"warmth": 0.2, "presence": 0.2})
+        assert model.beliefs["warmth_baseline_low"].supporting_count == 1
+        assert model.beliefs["presence_baseline_low"].supporting_count == 1
 
 
 class TestSelfDescription:
