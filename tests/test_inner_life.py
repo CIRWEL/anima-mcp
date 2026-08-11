@@ -23,6 +23,8 @@ def test_drive_dampened_when_mood_above_comfort():
     il._crossed_thresholds = {"warmth": 0.0, "clarity": 0.0, "stability": 0.0, "presence": 0.0}
     il._pending_events = []
     il._last_save = 0.0
+    il._saturated_since = {d: None for d in il._drives}
+    il._last_request_at = {d: 0.0 for d in il._drives}
 
     # Mood warmth well above comfort (0.40) — should dampen accumulation
     anima_high_mood = _make_anima(warmth=0.60)
@@ -50,6 +52,8 @@ def test_drive_still_accumulates_when_dampened():
     il._crossed_thresholds = {"warmth": 0.0, "clarity": 0.0, "stability": 0.0, "presence": 0.0}
     il._pending_events = []
     il._last_save = 0.0
+    il._saturated_since = {d: None for d in il._drives}
+    il._last_request_at = {d: 0.0 for d in il._drives}
 
     # Even with high mood, drive should still inch up (10% floor)
     anima = _make_anima(warmth=0.80)
@@ -69,6 +73,8 @@ def test_no_dampening_when_mood_below_comfort():
     il._crossed_thresholds = {"warmth": 0.0, "clarity": 0.0, "stability": 0.0, "presence": 0.0}
     il._pending_events = []
     il._last_save = 0.0
+    il._saturated_since = {d: None for d in il._drives}
+    il._last_request_at = {d: 0.0 for d in il._drives}
 
     # Mood at 0.35 — below comfort (0.40), no dampening
     anima = _make_anima(warmth=0.35)
@@ -88,6 +94,8 @@ def test_saturated_drive_decays_when_mood_good():
     il._crossed_thresholds = {"warmth": 0.5, "clarity": 0.0, "stability": 0.0, "presence": 0.0}
     il._pending_events = []
     il._last_save = 0.0
+    il._saturated_since = {d: None for d in il._drives}
+    il._last_request_at = {d: 0.0 for d in il._drives}
 
     # Run 50 ticks with high mood — temperament should rise, drive should eventually decay
     anima = _make_anima(warmth=0.60)

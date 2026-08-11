@@ -302,13 +302,24 @@ async def _update_display_loop():
                 if shm:
                     _drive_evts = shm.get("drive_events", [])
                     if _drive_evts:
-                        from .messages import add_observation
+                        from .messages import add_observation, add_question
                         for _de in _drive_evts:
                             # Deduplicate: dimension+event_type is unique per crossing
                             _evt_key = (_de["dimension"], _de["event_type"])
                             if _ctx and _evt_key not in _ctx.consumed_drive_events:
                                 _ctx.consumed_drive_events.add(_evt_key)
-                                add_observation(_de["text"], author="lumen")
+                                if _de.get("event_type") == "request":
+                                    # A sustained-saturation want is addressed
+                                    # OUTWARD: it lands on the answerable
+                                    # question channel, not the internal
+                                    # monologue. Wanting at nobody was the
+                                    # defect; this is the ask.
+                                    add_question(_de["text"], author="lumen",
+                                                 context=f"drive: {_de['dimension']}")
+                                    print(f"[Drive] Asked: {_de['text']}",
+                                          file=sys.stderr, flush=True)
+                                else:
+                                    add_observation(_de["text"], author="lumen")
                     elif _ctx and _ctx.consumed_drive_events:
                         # Broker cleared events — reset our dedup set
                         _ctx.consumed_drive_events.clear()
