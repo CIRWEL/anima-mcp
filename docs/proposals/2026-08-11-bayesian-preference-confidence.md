@@ -1,5 +1,40 @@
 # Proposal: evidence-directional preference confidence (Beta posterior)
 
+**Status: REFUTED as written — do not implement (2026-08-11).** Independent
+non-Claude review returned four blocking findings, accepted after
+verification; full verdict and the revised sequence are recorded on
+[PR #143](https://github.com/cirwel/anima-mcp/pull/143#issuecomment-5258831754).
+The short form:
+
+1. The motivating goal-band claim below is **wrong** — `goals.py`'s 0.3–0.6
+   band gates `SelfBelief`, not growth preferences, and `break`s on the first
+   eligible candidate (an achieved-duplicate blocks novel beliefs). Fixing
+   goal candidate selection/dedup is the actual revival, not this model.
+2. `confidence = α/(α+β)` with `value` carrying direction is **directionally
+   invalid** — a confidently-disconfirmed preference reads as zero confidence
+   instead of confident aversion. Consistency must be symmetric; direction
+   stays separate.
+3. The migration **fabricates history**: `value` is an EMA (α=0.3, effective
+   N≈5.7); seeding 100 pseudo-counts from it overstates evidence ~18× and
+   invents disconfirms for preferences with only positive writers. ⛔ Never
+   infer α/β history from the current EMA.
+4. The 0.6 promotion path is **effectively unreachable** — all 1,839 stored
+   insights have an empty `last_reconverged_occasion` (occasion gating has
+   never operated), so the merged `APPLY_INSIGHT_CONFIDENCE_FLOOR` currently
+   acts as a full mute on external input, a stronger policy than documented.
+
+**Superseding sequence:** (1) fix goal dedup; (2) repair occasion propagation
+and claim matching; (3) shadow-run symmetric, episode/time-normalized
+evidence counts — cold-start, no history inference.
+
+Kept below unedited as the record of what was proposed and why it failed
+review. This is the diagnostics half of Design Invariant 2 applied to our own
+process: a refuted document must not keep reading as a live plan.
+
+---
+
+Original text (pre-review):
+
 **Status:** proposal — requires an operator decision (rescales 20 stored
 preferences). This is the design deferred in #114: *"confidence is a COUNTER,
 not evidence — a disconfirming observation raises it as much as a confirming
