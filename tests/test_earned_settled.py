@@ -14,11 +14,8 @@ resets it, idle/unknowable holds it.
 
 import time
 
-import pytest
-
 from anima_mcp.display.drawing_engine import (
     MIN_RECORDED_DRAWING_PIXELS,
-    SETTLED_FRAC_OF_PEAK,
     SETTLED_MIN_AGE_SECONDS,
     SETTLED_MIN_MARKS,
     SETTLED_SMOOTH_WINDOW,
