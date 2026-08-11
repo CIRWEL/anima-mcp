@@ -8,6 +8,9 @@ import zipfile
 import shutil
 import subprocess
 import sys
+import json
+import os
+import time
 from pathlib import Path
 
 REPO_ROOT = Path("/home/unitares-anima/anima-mcp")
@@ -22,6 +25,24 @@ def main():
     with zipfile.ZipFile(zip_path, "r") as z:
         z.extractall(ext_path.parent)
     zip_path.unlink(missing_ok=True)
+
+    # The downloaded generation contains the backup implementation that will
+    # accompany the new code. Run it before copying or restarting so changed
+    # persistence code cannot be the first process to touch the only state.
+    sys.path.insert(0, str(ext_path / "src"))
+    try:
+        from anima_mcp.state_snapshot import create_local_state_snapshot
+
+        snapshot = create_local_state_snapshot()
+        print("State recovery point:", snapshot)
+    except Exception as exc:
+        allow_fresh = os.environ.get("ANIMA_ALLOW_FRESH_START", "false").lower()
+        if allow_fresh not in {"1", "true", "yes", "on"}:
+            raise RuntimeError(
+                "pre-restart state snapshot failed; set "
+                "ANIMA_ALLOW_FRESH_START=true only for an intentional new identity"
+            ) from exc
+        print("WARNING: fresh-start override accepted; no prior state snapshot")
 
     print("Deploying to", REPO_ROOT)
     skip = {".venv", ".git", "__pycache__", ".env"}
@@ -41,7 +62,7 @@ def main():
     shutil.rmtree(ext_path, ignore_errors=True)
 
     print("Synchronizing core systemd units...")
-    for unit in ("anima.service", "anima-broker.service"):
+    for unit in ("anima-restore.service", "anima-broker.service", "anima.service"):
         subprocess.run(
             ["sudo", "install", "-m", "0644", str(REPO_ROOT / "systemd" / unit),
              str(Path("/etc/systemd/system") / unit)],
@@ -53,12 +74,47 @@ def main():
     )
 
     print("Restarting broker and anima services...")
+    verification_started = time.time()
     subprocess.run(
         ["sudo", "systemctl", "restart", "anima-broker", "anima"],
         timeout=45,
         check=True,
     )
-    print("Done. Run setup_tailscale via HTTP if needed.")
+    for unit in ("anima-broker", "anima"):
+        subprocess.run(
+            ["systemctl", "is-active", "--quiet", unit],
+            timeout=15,
+            check=True,
+        )
+    environment = subprocess.run(
+        ["systemctl", "show", "anima", "-p", "Environment", "--value"],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    ).stdout.split()
+    if "ANIMA_SENSORS_BACKEND=shm" not in environment:
+        raise RuntimeError("anima service is not pinned to the SHM sensor backend")
+
+    shm_path = Path("/dev/shm/anima_state.json")
+    deadline = time.time() + 60
+    while time.time() < deadline:
+        try:
+            envelope = json.loads(shm_path.read_text())
+            data = envelope.get("data", {})
+            if (
+                shm_path.stat().st_mtime >= verification_started
+                and isinstance(data.get("readings"), dict)
+                and isinstance(data.get("anima"), dict)
+            ):
+                break
+        except (OSError, json.JSONDecodeError):
+            pass
+        time.sleep(1)
+    else:
+        raise RuntimeError("services started but no fresh broker state was published")
+
+    print("Done. Services and fresh broker state verified.")
 
 if __name__ == "__main__":
     main()

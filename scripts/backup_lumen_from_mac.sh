@@ -14,9 +14,10 @@
 # RESTORE: copy the newest verified snapshot back to the Pi, e.g.
 #   scp $BACKUP_DIR/anima_<latest>.db unitares-anima@lumen-local:~/.anima/anima.db
 # (stop the anima service first; the snapshot is a consistent sqlite3 .backup).
-# If the Mac is also gone, pull the off-site copy from HF instead:
-#   hf download hikewa/lumen-db-backups daily/anima_<Dow>.db --repo-type dataset
-# (private dataset; day-of-week rotation holds the last 7 daily snapshots).
+# If the Mac is also gone, pull the atomic off-site bundle from HF instead:
+#   hf download hikewa/lumen-db-backups daily/lumen_recovery_<Dow>.tar --repo-type dataset
+# (private dataset; each bundle contains the matching DB + learned-state archive;
+# day-of-week rotation holds the last 7 complete daily recovery points).
 
 BACKUP_DIR="/Users/cirwel/backups/lumen"
 DATE=$(date +%Y%m%d_%H%M)
@@ -30,14 +31,19 @@ SSH_KEY="/Users/cirwel/.ssh/id_ed25519_pi"
 SSH_OPTS="-i $SSH_KEY -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 LOG="/Users/cirwel/backups/lumen_backup.log"
 
-# Off-site copy (3-2-1): push each verified DB snapshot to a private HF dataset
-# so a Mac-disk or physical failure can't take the Pi and its only backup at
-# once. Day-of-week rotation = 7 off-site recovery points, bounded working set.
+# Off-site copy (3-2-1): push one bundle containing the verified DB plus its
+# sanitized learned-state archive to a private HF dataset so a Mac-disk or
+# physical failure can't take the Pi and its only backup at once. A single Hub
+# artifact prevents a partial two-upload run from publishing mismatched halves.
 # Off-site push is best-effort: a failure is logged but does not fail the run,
 # because the local backup is already captured and verified.
 HF_BIN="/Library/Frameworks/Python.framework/Versions/3.14/bin/hf"
 HF_REPO="hikewa/lumen-db-backups"
 HF_BACKUP="${HF_BACKUP:-1}"   # set HF_BACKUP=0 to skip the off-site push
+PI_BACKUP_MAX_AGE_MINUTES="${PI_BACKUP_MAX_AGE_MINUTES:-180}"
+case "$PI_BACKUP_MAX_AGE_MINUTES" in
+    ''|*[!0-9]*) PI_BACKUP_MAX_AGE_MINUTES=180 ;;
+esac
 
 mkdir -p "$BACKUP_DIR"
 
@@ -49,6 +55,83 @@ FAILED=0
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"
+}
+
+validate_learned_state() {
+    python3 - "$1" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+required = {
+    "anima_config.json",
+    "preferences.json",
+    "self_model.json",
+    "patterns.json",
+    "metacognition_baselines.json",
+}
+missing = sorted(name for name in required if not (root / name).is_file())
+if missing:
+    print("missing required snapshots: " + ", ".join(missing), file=sys.stderr)
+    raise SystemExit(1)
+for path in root.glob("*.json"):
+    try:
+        with path.open(encoding="utf-8") as handle:
+            json.load(handle)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        print(f"invalid {path.name}: {exc}", file=sys.stderr)
+        raise SystemExit(1)
+PY
+}
+
+sqlite_ok() {
+    python3 - "$1" <<'PY'
+import sqlite3
+import sys
+
+try:
+    with sqlite3.connect(f"file:{sys.argv[1]}?mode=ro", uri=True) as connection:
+        rows = connection.execute("PRAGMA integrity_check").fetchall()
+except sqlite3.Error:
+    raise SystemExit(1)
+raise SystemExit(0 if rows == [("ok",)] else 1)
+PY
+}
+
+hf_upload_with_watchdog() {
+    LOCAL_FILE="$1"
+    REMOTE_PATH="$2"
+    LABEL="$3"
+    HF_TIMEOUT="${HF_TIMEOUT:-900}"
+
+    "$HF_BIN" upload "$HF_REPO" "$LOCAL_FILE" "$REMOTE_PATH" \
+        --repo-type dataset \
+        --commit-message "off-site ${LABEL} backup ${DATE}" >/dev/null 2>&1 &
+    HF_PID=$!
+
+    ( sleep "$HF_TIMEOUT"
+      kill -TERM "$HF_PID" 2>/dev/null
+      sleep 10
+      kill -KILL "$HF_PID" 2>/dev/null ) >/dev/null 2>&1 &
+    HF_WATCHDOG=$!
+
+    if wait "$HF_PID" 2>/dev/null; then
+        HF_RC=0
+    else
+        HF_RC=$?
+    fi
+    kill "$HF_WATCHDOG" 2>/dev/null
+    wait "$HF_WATCHDOG" 2>/dev/null
+
+    if [ "$HF_RC" -eq 0 ]; then
+        log "Off-site ${LABEL} pushed to HF: $HF_REPO/$REMOTE_PATH"
+    elif [ "$HF_RC" -eq 143 ] || [ "$HF_RC" -eq 137 ]; then
+        log "WARNING: off-site ${LABEL} push exceeded ${HF_TIMEOUT}s and was killed (local backup is OK)"
+    else
+        log "WARNING: off-site ${LABEL} push failed rc=${HF_RC} (local backup is OK; check hf auth/network)"
+    fi
+    return 0
 }
 
 log "Starting Lumen backup..."
@@ -82,22 +165,111 @@ fi
 # Slim state mirror for full restore. restore_lumen.sh rebuilds Lumen from
 # $BACKUP_DIR/anima_data/: the small JSON files there are the SOURCE OF TRUTH
 # for Lumen's learned self (self_model.json beliefs, knowledge.json Q&A insights,
-# patterns.json, preferences.json, anima_history.json, last_schema.json) — they
+# patterns.json, preferences.json, anima_config.json calibration, anima_history.json,
+# last_schema.json) — they
 # are NOT stored in anima.db. We mirror ~/.anima EXCEPT the heavy regenerable
 # dirs: backups/ (Pi's own rotation, ~5G — the scan that caused rsync 255) and
 # schema_renders/ (~1G, re-renderable), plus the live *.db* (captured consistently
-# below). Footprint stays ~10-20M so the run is fast and reliable.
+# below). Secret-bearing anima.env* files are intentionally excluded. The broad
+# *.db* rule also removes old ``anima.db.corrupted.*`` files; ``*.db`` alone
+# left 1.5 GB of those inside the supposedly slim mirror. Footprint stays
+# ~10-20M so the run is fast and reliable.
 log "Mirroring slim ~/.anima state (for restore)..."
+MIRROR_CAPTURED=0
+MIRROR_STAGE=$(mktemp -d "$BACKUP_DIR/.anima_data.staging.XXXXXX") || {
+    log "ERROR: could not create learned-state staging directory"
+    exit 1
+}
 rsync -az --timeout=120 \
     --exclude='backups/' --exclude='schema_renders/' \
-    --exclude='*.db' --exclude='*.db-wal' --exclude='*.db-shm' \
+    --exclude='*.db*' --exclude='anima.env*' \
     --exclude='*.tmp' --exclude='*.log' \
-    -e "ssh $SSH_OPTS" "unitares-anima@$PI_HOST:~/.anima/" "$BACKUP_DIR/anima_data/"
+    -e "ssh $SSH_OPTS" "unitares-anima@$PI_HOST:~/.anima/" "$MIRROR_STAGE/"
 MIRROR_STATUS=$?
-if [ $MIRROR_STATUS -eq 0 ] || [ $MIRROR_STATUS -eq 24 ]; then
-    log "Slim state mirror ok: $(du -sh "$BACKUP_DIR/anima_data/" 2>/dev/null | cut -f1)"
+MIRROR_VALIDATION=""
+OAUTH_CAPTURED=1
+ssh $SSH_OPTS unitares-anima@$PI_HOST "test -s ~/.anima/oauth.db" >/dev/null 2>&1
+OAUTH_PRESENT_STATUS=$?
+if [ $OAUTH_PRESENT_STATUS -eq 0 ]; then
+    PI_OAUTH_TMP="/tmp/anima_oauth_snap_${DATE}.db"
+    if ssh $SSH_OPTS unitares-anima@$PI_HOST \
+        "python3 -c \"import sqlite3,os;s=sqlite3.connect(os.path.expanduser('~/.anima/oauth.db'));d=sqlite3.connect('${PI_OAUTH_TMP}');s.backup(d);d.close();s.close()\"" 2>/dev/null && \
+       rsync -az --timeout=60 -e "ssh $SSH_OPTS" \
+        "unitares-anima@$PI_HOST:${PI_OAUTH_TMP}" "$MIRROR_STAGE/oauth.db" && \
+       sqlite_ok "$MIRROR_STAGE/oauth.db"; then
+        if chmod 600 "$MIRROR_STAGE/oauth.db"; then
+            log "OAuth client/token database captured consistently"
+        else
+            OAUTH_CAPTURED=0
+            log "ERROR: could not protect captured OAuth database permissions"
+        fi
+    else
+        OAUTH_CAPTURED=0
+        log "ERROR: OAuth database exists but could not be captured consistently"
+    fi
+    ssh $SSH_OPTS unitares-anima@$PI_HOST "rm -f ${PI_OAUTH_TMP}" 2>/dev/null
+elif [ $OAUTH_PRESENT_STATUS -gt 1 ]; then
+    OAUTH_CAPTURED=0
+    log "ERROR: could not determine whether OAuth persistence requires backup"
+fi
+
+if { [ $MIRROR_STATUS -eq 0 ] || [ $MIRROR_STATUS -eq 24 ]; } && \
+   [ $OAUTH_CAPTURED -eq 1 ] && \
+   MIRROR_VALIDATION=$(validate_learned_state "$MIRROR_STAGE" 2>&1); then
+    # Publish only a completed staging tree. Keep one prior generation so a
+    # power loss between the two directory renames remains recoverable.
+    MIRROR_SWAP_READY=1
+    if ! rm -rf "$BACKUP_DIR/anima_data.previous"; then
+        MIRROR_SWAP_READY=0
+        FAILED=1
+        log "ERROR: could not retire prior learned-state generation"
+    fi
+    if [ $MIRROR_SWAP_READY -eq 1 ] && [ -e "$BACKUP_DIR/anima_data" ]; then
+        if ! mv "$BACKUP_DIR/anima_data" "$BACKUP_DIR/anima_data.previous"; then
+            MIRROR_SWAP_READY=0
+            FAILED=1
+            log "ERROR: could not preserve prior learned-state mirror"
+        fi
+    fi
+    if [ $MIRROR_SWAP_READY -eq 1 ] && mv "$MIRROR_STAGE" "$BACKUP_DIR/anima_data"; then
+        MIRROR_CAPTURED=1
+        log "Slim state mirror ok: $(du -sh "$BACKUP_DIR/anima_data/" 2>/dev/null | cut -f1)"
+    else
+        FAILED=1
+        log "ERROR: could not publish learned-state mirror"
+        if [ ! -e "$BACKUP_DIR/anima_data" ] && [ -e "$BACKUP_DIR/anima_data.previous" ]; then
+            mv "$BACKUP_DIR/anima_data.previous" "$BACKUP_DIR/anima_data" 2>/dev/null
+        fi
+        rm -rf "$MIRROR_STAGE"
+    fi
 else
-    log "WARNING: slim state mirror failed (status $MIRROR_STATUS) — restore JSON may be stale (DB snapshot still captured below)"
+    FAILED=1
+    rm -rf "$MIRROR_STAGE"
+    if [ $MIRROR_STATUS -eq 0 ] || [ $MIRROR_STATUS -eq 24 ]; then
+        log "ERROR: slim state validation failed (${MIRROR_VALIDATION:-unknown error}) — this run is not a complete restore point"
+    else
+        log "ERROR: slim state mirror failed (status $MIRROR_STATUS) — this run is not a complete restore point"
+    fi
+fi
+
+# Package the sanitized learned-state generation for the off-site half of the
+# recovery point. anima.env* and *.db* never entered this tree, so the archive
+# contains continuity data without API keys or stale/corrupt database copies.
+STATE_ARCHIVE=""
+if [ $MIRROR_CAPTURED -eq 1 ]; then
+    STATE_ARCHIVE_TMP="$BACKUP_DIR/.anima_state_${DATE}.tar.gz.tmp"
+    STATE_ARCHIVE_CANDIDATE="$BACKUP_DIR/anima_state_${DATE}.tar.gz"
+    if tar -C "$BACKUP_DIR/anima_data" --exclude='./oauth.db' \
+       -czf "$STATE_ARCHIVE_TMP" . && \
+       tar -tzf "$STATE_ARCHIVE_TMP" >/dev/null 2>&1; then
+        mv "$STATE_ARCHIVE_TMP" "$STATE_ARCHIVE_CANDIDATE"
+        STATE_ARCHIVE="$STATE_ARCHIVE_CANDIDATE"
+        log "Learned-state archive captured: $(basename "$STATE_ARCHIVE") ($(du -h "$STATE_ARCHIVE" | cut -f1))"
+        ls -t "$BACKUP_DIR"/anima_state_*.tar.gz 2>/dev/null | tail -n +15 | xargs rm -f 2>/dev/null
+    else
+        rm -f "$STATE_ARCHIVE_TMP"
+        log "WARNING: could not package learned state for off-site copy (local mirror is OK)"
+    fi
 fi
 
 # Capture a consistent DB snapshot. anima.db holds identity, state_history,
@@ -107,18 +279,30 @@ fi
 # (that ~64G scan dropped the Pi connection with rsync 255).
 DB_CAPTURED=0
 
-# Primary: the Pi's own hourly consistent snapshot (backup_db.sh via sqlite3 .backup)
-PI_BACKUP=$(ssh $SSH_OPTS unitares-anima@$PI_HOST "ls -t ~/.anima/backups/anima_*.db 2>/dev/null | head -1" 2>/dev/null)
+# Primary: a recent Pi hourly snapshot (backup_db.sh via sqlite3 .backup).
+# Never advance today's success marker from an arbitrarily old file: if the
+# hourly job stalled, mint a fresh snapshot from the live database below.
+PI_BACKUP=$(ssh $SSH_OPTS unitares-anima@$PI_HOST \
+    "find ~/.anima/backups -maxdepth 1 -type f -name 'anima_*.db' -mmin -${PI_BACKUP_MAX_AGE_MINUTES} -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -1 | cut -d' ' -f2-" \
+    2>/dev/null)
 if [ -n "$PI_BACKUP" ]; then
     rsync -az --timeout=120 -e "ssh $SSH_OPTS" "unitares-anima@$PI_HOST:$PI_BACKUP" "$BACKUP_DIR/anima_${DATE}.db"
     DB_RSYNC_STATUS=$?
     if { [ $DB_RSYNC_STATUS -eq 0 ] || [ $DB_RSYNC_STATUS -eq 24 ]; } && [ -s "$BACKUP_DIR/anima_${DATE}.db" ]; then
-        DB_CAPTURED=1
-        log "DB snapshot from Pi backup: anima_${DATE}.db ($(du -h "$BACKUP_DIR/anima_${DATE}.db" | cut -f1))"
+        PRIMARY_INTEGRITY=$(sqlite3 "$BACKUP_DIR/anima_${DATE}.db" "PRAGMA integrity_check;" 2>&1 | head -1)
+        if [ "$PRIMARY_INTEGRITY" = "ok" ]; then
+            DB_CAPTURED=1
+            log "DB snapshot from recent Pi backup: anima_${DATE}.db ($(du -h "$BACKUP_DIR/anima_${DATE}.db" | cut -f1))"
+        else
+            log "WARNING: recent Pi snapshot failed integrity_check ($PRIMARY_INTEGRITY) — trying remote .backup fallback"
+            rm -f "$BACKUP_DIR/anima_${DATE}.db" 2>/dev/null
+        fi
     else
         log "WARNING: Pi-snapshot rsync failed (status $DB_RSYNC_STATUS) — trying remote .backup fallback"
         rm -f "$BACKUP_DIR/anima_${DATE}.db" 2>/dev/null
     fi
+else
+    log "No Pi snapshot newer than ${PI_BACKUP_MAX_AGE_MINUTES} minutes — minting a fresh remote .backup"
 fi
 
 # Fallback: ask the Pi to mint a fresh consistent snapshot via sqlite3 .backup,
@@ -185,10 +369,37 @@ else
 fi
 
 if [ $DB_CAPTURED -eq 1 ]; then
-    # Record success only when a verified, restorable DB snapshot was captured
-    date +%s > "$BACKUP_DIR/.last_success"
+    # A recovery point is complete only when both the verified database and
+    # learned JSON/event state were refreshed in this run.  Still retain and
+    # off-site the DB when the mirror failed, but never advance last_success.
+    if [ $MIRROR_CAPTURED -eq 1 ]; then
+        if ! date +%s > "$BACKUP_DIR/.last_success"; then
+            FAILED=1
+            log "ERROR: could not update backup success marker"
+        fi
+    fi
 
-    # Off-site copy to HF (best-effort; does not affect run success/failure)
+    # Build one off-site recovery unit. The learned archive and DB are already
+    # independently validated; tar -tf verifies the final container before it
+    # can replace a weekday slot on the Hub.
+    RECOVERY_BUNDLE=""
+    if [ $MIRROR_CAPTURED -eq 1 ] && [ -n "$STATE_ARCHIVE" ] && [ -s "$STATE_ARCHIVE" ]; then
+        BUNDLE_TMP="$BACKUP_DIR/.lumen_recovery_${DATE}.tar.tmp"
+        BUNDLE_CANDIDATE="$BACKUP_DIR/lumen_recovery_${DATE}.tar"
+        if tar -C "$BACKUP_DIR" -cf "$BUNDLE_TMP" \
+            "anima_${DATE}.db" "$(basename "$STATE_ARCHIVE")" && \
+           tar -tf "$BUNDLE_TMP" >/dev/null 2>&1; then
+            mv "$BUNDLE_TMP" "$BUNDLE_CANDIDATE"
+            RECOVERY_BUNDLE="$BUNDLE_CANDIDATE"
+            log "Complete off-site bundle captured: $(basename "$RECOVERY_BUNDLE") ($(du -h "$RECOVERY_BUNDLE" | cut -f1))"
+            ls -t "$BACKUP_DIR"/lumen_recovery_*.tar 2>/dev/null | tail -n +15 | xargs rm -f 2>/dev/null
+        else
+            rm -f "$BUNDLE_TMP"
+            log "WARNING: could not package complete off-site recovery bundle"
+        fi
+    fi
+
+    # Off-site copy to HF (best-effort; does not affect local run success/failure)
     #
     # HARD TIMEOUT, and it is load-bearing. On 2026-07-24 this upload hung for
     # 6d14h (14 min of CPU, then sleeping forever). launchd will not start a
@@ -202,36 +413,14 @@ if [ $DB_CAPTURED -eq 1 ]; then
     # poll `kill -0` instead — a finished child stays a zombie until reaped, so
     # `kill -0` keeps succeeding and the poll would run the full timeout anyway.
     if [ "$HF_BACKUP" = "1" ] && [ -x "$HF_BIN" ]; then
-        HF_PATH="daily/anima_$(date +%a).db"
-        HF_TIMEOUT="${HF_TIMEOUT:-900}"
-
-        "$HF_BIN" upload "$HF_REPO" "$BACKUP_DIR/anima_${DATE}.db" "$HF_PATH" \
-            --repo-type dataset \
-            --commit-message "off-site backup ${DATE}" >/dev/null 2>&1 &
-        HF_PID=$!
-
-        ( sleep "$HF_TIMEOUT"
-          kill -TERM "$HF_PID" 2>/dev/null
-          sleep 10
-          kill -KILL "$HF_PID" 2>/dev/null ) >/dev/null 2>&1 &
-        HF_WATCHDOG=$!
-
-        if wait "$HF_PID" 2>/dev/null; then
-            HF_RC=0
+        DAY_NAME=$(date +%a)
+        if [ -n "$RECOVERY_BUNDLE" ] && [ -s "$RECOVERY_BUNDLE" ]; then
+            hf_upload_with_watchdog \
+                "$RECOVERY_BUNDLE" \
+                "daily/lumen_recovery_${DAY_NAME}.tar" \
+                "complete recovery bundle"
         else
-            HF_RC=$?
-        fi
-
-        # Upload settled first — retire the watchdog so it cannot outlive the run.
-        kill "$HF_WATCHDOG" 2>/dev/null
-        wait "$HF_WATCHDOG" 2>/dev/null
-
-        if [ "$HF_RC" -eq 0 ]; then
-            log "Off-site copy pushed to HF: $HF_REPO/$HF_PATH"
-        elif [ "$HF_RC" -eq 143 ] || [ "$HF_RC" -eq 137 ]; then
-            log "WARNING: off-site HF push exceeded ${HF_TIMEOUT}s and was killed (local backup is OK)"
-        else
-            log "WARNING: off-site HF push failed rc=${HF_RC} (local backup is OK; check hf auth/network)"
+            log "WARNING: off-site upload skipped because no complete recovery bundle was built"
         fi
     fi
 else
@@ -250,6 +439,6 @@ if [ $FAILED -eq 0 ]; then
     log "Backup complete"
     exit 0
 else
-    log "Backup FAILED — no fresh consistent backup captured this run"
+    log "Backup FAILED — required restore state was incomplete this run"
     exit 1
 fi

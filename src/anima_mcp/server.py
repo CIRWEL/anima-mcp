@@ -28,7 +28,6 @@ from datetime import datetime
 from pathlib import Path
 
 from mcp.server.stdio import stdio_server
-from .sensors import get_sensors
 from .display import derive_face_state, get_display
 from .display.leds import get_led_display
 from .display.screens import ScreenMode
@@ -67,7 +66,8 @@ from .accessors import (
     _get_schema_hub, _get_calibration_drift as _get_calibration_drift,
     _get_selfhood_context as _get_selfhood_context, _get_metacog_monitor,
     _get_warm_start_anticipation as _get_warm_start_anticipation,
-    _get_readings_and_anima, _get_display as _get_display, _get_last_shm_data,
+    _get_readings_and_anima, _prediction_accuracy_from_shm,
+    _get_display as _get_display, _get_last_shm_data,
     _get_screen_renderer as _get_screen_renderer, _get_leds as _get_leds,
     _get_growth as _get_growth, _get_display_update_task as _get_display_update_task,
     _get_activity as _get_activity,
@@ -122,17 +122,16 @@ async def _update_display_loop():
 
     if is_broker_running:
         print("[Loop] Broker detected - READER MODE (sensors from shared memory, display/LEDs active)", file=sys.stderr, flush=True)
-        if _ctx.display is None:
-            _ctx.display = get_display()
-        if _ctx.leds is None:
-            _ctx.leds = get_led_display()
     else:
-        if _ctx.sensors is None:
-            _ctx.sensors = get_sensors()
-        if _ctx.display is None:
-            _ctx.display = get_display()
-        if _ctx.leds is None:
-            _ctx.leds = get_led_display()
+        print(
+            "[Loop] Broker unavailable - body state remains unknown (no direct sensor takeover)",
+            file=sys.stderr,
+            flush=True,
+        )
+    if _ctx.display is None:
+        _ctx.display = get_display()
+    if _ctx.leds is None:
+        _ctx.leds = get_led_display()
 
     print(f"[Loop] broker={is_broker_running} store={_ctx.store is not None} sensors={_ctx.sensors is not None} display={_ctx.display.is_available() if _ctx.display else False} leds={_ctx.leds.is_available() if _ctx.leds else False}", file=sys.stderr, flush=True)
 
@@ -259,10 +258,11 @@ async def _update_display_loop():
         try:
             loop_count += 1
             
-            # Read current state with error recovery
-            # Read from shared memory (broker) or fallback to sensors
-            # Only fallback if broker is NOT running to prevent I2C collisions
-            readings, anima = _get_readings_and_anima(fallback_to_sensors=not _is_broker_running())
+            # Read current state with error recovery from broker shared memory.
+            # Body/mind boundary: stale broker state is unknown.  The server
+            # must never become a second I2C owner just because the broker is
+            # unavailable or its heartbeat is malformed.
+            readings, anima = _get_readings_and_anima(fallback_to_sensors=False)
             
             if readings is None or anima is None:
                 # Sensor read failed - skip this iteration
@@ -379,7 +379,13 @@ async def _update_display_loop():
             if _ctx.tension_tracker and readings:
                 try:
                     from .anima import sense_self
-                    _raw_anima_obj = sense_self(readings, get_calibration())
+                    _raw_anima_obj = sense_self(
+                        readings,
+                        get_calibration(),
+                        prediction_accuracy=_prediction_accuracy_from_shm(
+                            _ctx.last_shm_data if _ctx else None
+                        ),
+                    )
                     raw_anima = {
                         "warmth": _raw_anima_obj.warmth,
                         "clarity": _raw_anima_obj.clarity,
@@ -1290,16 +1296,21 @@ async def _update_display_loop():
                         get_preference_system as _ml_get_pref,
                     )
 
-                    # Prediction accuracy trend: -0.5 (poor) to 0.5 (good), from adaptive model
+                    # Prediction accuracy trend: -0.5 (poor) to 0.5 (good).
+                    # The broker owns this learner and publishes its live stats;
+                    # the server's process-local singleton has no observations.
                     pred_trend = 0.0
                     try:
-                        from .adaptive_prediction import get_adaptive_prediction_model
-                        stats = get_adaptive_prediction_model().get_accuracy_stats()
+                        stats = (
+                            ((_ctx.last_shm_data or {}).get("learning") or {}).get(
+                                "prediction_accuracy", {}
+                            )
+                        )
                         if not stats.get("insufficient_data") and "overall_mean_error" in stats:
-                            err = stats["overall_mean_error"]
+                            err = float(stats["overall_mean_error"])
                             pred_trend = max(-0.5, min(0.5, (1.0 - min(1.0, err)) * 2.0 - 1.0))
                     except Exception as e:
-                        logger.debug("[MetaLearning] Prediction accuracy stats error: %s", e)
+                        logger.debug("[MetaLearning] Broker prediction stats error: %s", e)
 
                     health = compute_trajectory_health(
                         satisfaction_history=list(_ctx.satisfaction_history)[-100:],

@@ -21,6 +21,7 @@ except ImportError:
 
 from .face import FaceState, EyeState, MouthState
 from .design import Timing, radial_gradient_color
+from ..atomic_write import atomic_json_write
 
 
 # Display dimensions (BrainCraft HAT)
@@ -145,13 +146,15 @@ class PilRenderer(DisplayRenderer):
     def _save_brightness(self):
         """Save current brightness preset to disk."""
         try:
-            self._brightness_config_path.parent.mkdir(parents=True, exist_ok=True)
             preset = self._brightness_presets[self._brightness_index]
-            self._brightness_config_path.write_text(json.dumps({
-                "name": preset["name"],
-                "display": preset["display"],
-                "leds": preset["leds"],
-            }))
+            atomic_json_write(
+                self._brightness_config_path,
+                {
+                    "name": preset["name"],
+                    "display": preset["display"],
+                    "leds": preset["leds"],
+                },
+            )
         except Exception as e:
             print(f"[Display] Could not save brightness: {e}", file=sys.stderr, flush=True)
 

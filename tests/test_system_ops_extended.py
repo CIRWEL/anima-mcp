@@ -398,6 +398,25 @@ class TestSyncSystemdServicesExtended:
 
         assert synced == ["anima.service"]
 
+    def test_sync_systemd_services_fails_closed_when_unit_install_fails(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _sync_systemd_services
+
+        repo_root = tmp_path / "repo"
+        systemd_dir = repo_root / "systemd"
+        target_dir = tmp_path / "etc-systemd"
+        systemd_dir.mkdir(parents=True)
+        target_dir.mkdir()
+        (systemd_dir / "anima-restore.service").write_text("[Unit]\n", encoding="utf-8")
+
+        def _fake_path(value):
+            return target_dir if str(value) == "/etc/systemd/system" else RealPath(value)
+
+        with patch("anima_mcp.handlers.system_ops.Path", side_effect=_fake_path), patch(
+            "anima_mcp.handlers.system_ops.subprocess.run",
+            return_value=_cp(returncode=1, stderr="permission denied"),
+        ), pytest.raises(RuntimeError, match="permission denied"):
+            _sync_systemd_services(repo_root)
+
 
 @pytest.mark.asyncio
 class TestGitPullExtended:
@@ -445,16 +464,47 @@ class TestGitPullExtended:
             return_value=["anima-restore.service (installed)"],
         ), patch(
             "anima_mcp.handlers.system_ops.asyncio.create_task"
-        ) as create_task_mock:
+        ) as create_task_mock, patch(
+            "anima_mcp.state_snapshot.create_local_state_snapshot",
+            return_value=RealPath("/tmp/predeploy-snapshot"),
+        ):
             data = parse_result(await handle_git_pull({"stash": True, "force": True, "restart": True}))
 
         assert data["success"] is True
         assert data["latest_commit"] == "def456 latest"
         assert "restart" in data
+        assert data["state_backup"] == "/tmp/predeploy-snapshot"
         assert "synced_services" in data
         create_task_mock.assert_called_once()
         # Prevent "coroutine was never awaited" warning in test runtime.
         create_task_mock.call_args[0][0].close()
+
+    async def test_git_pull_backup_failure_does_not_schedule_restart(self):
+        from anima_mcp.handlers.system_ops import handle_git_pull
+
+        with patch(
+            "anima_mcp.handlers.system_ops.subprocess.run",
+            side_effect=[
+                _cp(returncode=0, stdout="pulled"),
+                _cp(returncode=0, stdout="abc latest\n"),
+            ],
+        ) as run_mock, patch(
+            "anima_mcp.handlers.system_ops._sync_systemd_services",
+            return_value=[],
+        ), patch(
+            "anima_mcp.state_snapshot.create_local_state_snapshot",
+            side_effect=RuntimeError("disk full"),
+        ), patch(
+            "anima_mcp.handlers.system_ops._spawn_delayed_restart"
+        ) as restart_mock:
+            data = parse_result(await handle_git_pull({"restart": True}))
+
+        assert data["success"] is False
+        assert data["restart"] == "not scheduled"
+        assert data["update"] == "not attempted"
+        assert "disk full" in data["error"]
+        run_mock.assert_not_called()
+        restart_mock.assert_not_called()
 
 
 @pytest.mark.asyncio

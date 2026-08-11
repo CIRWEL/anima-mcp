@@ -445,6 +445,11 @@ TOOLS = [
                     "description": "Hard reset to remote, discarding local changes (DANGER: loses local changes, default: false)",
                     "default": False,
                 },
+                "skip_backup": {
+                    "type": "boolean",
+                    "description": "Explicitly restart without an on-device state snapshot (dangerous, default: false)",
+                    "default": False,
+                },
             },
         },
     ),
@@ -479,6 +484,11 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Restart anima service after deploy",
                     "default": True,
+                },
+                "skip_backup": {
+                    "type": "boolean",
+                    "description": "Explicitly restart without an on-device state snapshot (dangerous, default: false)",
+                    "default": False,
                 },
             },
         },

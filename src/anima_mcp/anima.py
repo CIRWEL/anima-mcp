@@ -14,13 +14,16 @@ The creature knows "I feel warm" not "E=0.4"
 import math
 from copy import copy
 from dataclasses import dataclass
-from typing import Dict, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
 from .config import get_calibration, NervousSystemCalibration
 from .computational_neural import get_computational_neural_state
 
 if TYPE_CHECKING:
     from .memory import Anticipation
+
+
+_PREDICTION_ACCURACY_UNSET = object()
 
 
 def _get_prediction_accuracy() -> Optional[float]:
@@ -45,6 +48,21 @@ def _get_prediction_accuracy() -> Optional[float]:
         return 1.0 - normalized_error
     except Exception:
         return None
+
+
+def _resolve_prediction_accuracy(value: Any) -> Optional[float]:
+    """Use process-local prediction state only when no owner value was supplied."""
+    if value is _PREDICTION_ACCURACY_UNSET:
+        return _get_prediction_accuracy()
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(numeric):
+        return None
+    return max(0.0, min(1.0, numeric))
 
 
 @dataclass
@@ -155,7 +173,13 @@ def _apply_drift_to_calibration(
     return drifted
 
 
-def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCalibration] = None, drift_midpoints: Optional[Dict[str, float]] = None, salience_weights: Optional[Dict[str, float]] = None) -> Anima:
+def sense_self(
+    readings: SensorReadings,
+    calibration: Optional[NervousSystemCalibration] = None,
+    drift_midpoints: Optional[Dict[str, float]] = None,
+    salience_weights: Optional[Dict[str, float]] = None,
+    prediction_accuracy: Any = _PREDICTION_ACCURACY_UNSET,
+) -> Anima:
     """
     The creature senses itself.
 
@@ -169,6 +193,9 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
             Lumen's accumulated experience rather than fixed defaults.
         salience_weights: Per-dimension salience from ExperientialFilter (optional).
             Amplifies sensor contributions before weighted averaging.
+        prediction_accuracy: Authoritative 0-1 accuracy supplied by another
+            process.  Omitting it uses the process-local adaptive model; passing
+            ``None`` deliberately represents insufficient owner data.
     """
     if calibration is None:
         calibration = get_calibration()
@@ -177,7 +204,12 @@ def sense_self(readings: SensorReadings, calibration: Optional[NervousSystemCali
         calibration = _apply_drift_to_calibration(calibration, drift_midpoints)
 
     warmth = _sense_warmth(readings, calibration, salience_weights=salience_weights)
-    clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy(), salience_weights=salience_weights)
+    clarity = _sense_clarity(
+        readings,
+        calibration,
+        _resolve_prediction_accuracy(prediction_accuracy),
+        salience_weights=salience_weights,
+    )
     stability = _sense_stability(readings, calibration, salience_weights=salience_weights)
     presence = _sense_presence(readings, calibration, salience_weights=salience_weights)
 
@@ -213,6 +245,7 @@ def sense_self_with_memory(
     enable_exploration: bool = True,
     drift_midpoints: Optional[Dict[str, float]] = None,
     salience_weights: Optional[Dict[str, float]] = None,
+    prediction_accuracy: Any = _PREDICTION_ACCURACY_UNSET,
 ) -> Anima:
     """
     The creature senses itself, informed by memory and exploration.
@@ -236,6 +269,9 @@ def sense_self_with_memory(
                            factor that adjusts based on prediction accuracy
         enable_exploration: If True, occasionally explore beyond predictions
         drift_midpoints: Drifted midpoints from CalibrationDrift (optional)
+        prediction_accuracy: Authoritative 0-1 accuracy supplied by another
+            process.  Omitting it uses the process-local adaptive model; passing
+            ``None`` deliberately represents insufficient owner data.
 
     Returns:
         Anima with potential anticipation influence and exploration
@@ -248,7 +284,12 @@ def sense_self_with_memory(
 
     # Base sensed state (raw, before memory influence)
     raw_warmth = _sense_warmth(readings, calibration, salience_weights=salience_weights)
-    raw_clarity = _sense_clarity(readings, calibration, _get_prediction_accuracy(), salience_weights=salience_weights)
+    raw_clarity = _sense_clarity(
+        readings,
+        calibration,
+        _resolve_prediction_accuracy(prediction_accuracy),
+        salience_weights=salience_weights,
+    )
     raw_stability = _sense_stability(readings, calibration, salience_weights=salience_weights)
     raw_presence = _sense_presence(readings, calibration, salience_weights=salience_weights)
 

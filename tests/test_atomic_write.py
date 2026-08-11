@@ -96,12 +96,12 @@ class TestAtomicJsonWrite:
             assert json.load(f) == [1, 2, 3]
 
     def test_calls_fsync(self, tmp_path):
-        """Verifies fsync is called on the file descriptor."""
+        """Verifies both file contents and parent rename are made durable."""
         target = tmp_path / "test.json"
 
         with patch("anima_mcp.atomic_write.os.fsync") as mock_fsync:
             atomic_json_write(target, {"data": 1})
-            assert mock_fsync.called
+            assert mock_fsync.call_count == 2
 
     def test_uses_rename(self, tmp_path):
         """Verifies the rename (replace) pattern is used."""

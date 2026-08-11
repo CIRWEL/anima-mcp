@@ -11,7 +11,9 @@ Adapts to:
 """
 
 import json
+import os
 import sys
+import uuid
 import yaml
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
@@ -224,16 +226,31 @@ class ConfigManager:
         Initialize config manager.
         
         Args:
-            config_path: Path to config file (default: anima_config.yaml in current dir)
+            config_path: Path to config file.  Defaults to ``$ANIMA_CONFIG``
+                when set, otherwise ``anima_config.yaml`` in the current dir.
         """
         if config_path is None:
-            config_path = Path("anima_config.yaml")
+            config_path = Path(os.environ.get("ANIMA_CONFIG", "anima_config.yaml"))
         self.config_path = Path(config_path)
         self._config: Optional[AnimaConfig] = None
+        self._loaded_signature: Optional[tuple[int, int, int, int]] = None
+
+    def _file_signature(self) -> Optional[tuple[int, int, int, int]]:
+        """Return a change token that notices same-size atomic replacements."""
+        try:
+            stat = self.config_path.stat()
+            return stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_size
+        except OSError:
+            return None
     
     def load(self, force_reload: bool = False) -> AnimaConfig:
         """Load configuration from file or return defaults."""
-        if self._config is not None and not force_reload:
+        current_signature = self._file_signature()
+        if (
+            self._config is not None
+            and not force_reload
+            and current_signature == self._loaded_signature
+        ):
             return self._config
         
         if self.config_path.exists():
@@ -258,6 +275,11 @@ class ConfigManager:
         else:
             # No config file - use defaults
             self._config = AnimaConfig()
+
+        # Readers in the broker and server are separate processes.  Remember
+        # which file revision produced this object so either process notices an
+        # atomic calibration update on its next access.
+        self._loaded_signature = self._file_signature()
         
         return self._config
     
@@ -337,14 +359,23 @@ class ConfigManager:
 
             if self.config_path.suffix == ".yaml" or self.config_path.suffix == ".yml":
                 # Atomic write for YAML (same pattern as atomic_json_write)
-                import os as _os
-                tmp_path = self.config_path.with_suffix(".tmp")
+                self.config_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_path = self.config_path.with_name(
+                    f"{self.config_path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+                )
                 try:
                     with open(tmp_path, "w") as f:
                         yaml.dump(data, f, default_flow_style=False, sort_keys=False)
                         f.flush()
-                        _os.fsync(f.fileno())
+                        os.fsync(f.fileno())
                     tmp_path.replace(self.config_path)
+
+                    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+                    directory_fd = os.open(self.config_path.parent, directory_flags)
+                    try:
+                        os.fsync(directory_fd)
+                    finally:
+                        os.close(directory_fd)
                 except BaseException:
                     tmp_path.unlink(missing_ok=True)
                     raise
@@ -352,7 +383,7 @@ class ConfigManager:
                 atomic_json_write(self.config_path, data, indent=2)
 
             self._config = config
-            # Force reload on next access to ensure consistency
+            self._loaded_signature = self._file_signature()
             return True
         except Exception as e:
             print(f"[Config] Error saving config: {e}", file=sys.stderr, flush=True)
@@ -361,6 +392,7 @@ class ConfigManager:
     def reload(self) -> AnimaConfig:
         """Force reload configuration from file."""
         self._config = None
+        self._loaded_signature = None
         return self.load()
     
     def get_calibration(self) -> NervousSystemCalibration:

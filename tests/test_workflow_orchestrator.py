@@ -2,7 +2,7 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from conftest import make_anima, make_readings
@@ -422,6 +422,24 @@ class TestGetReadingsAndAnima:
 
         assert out_readings is readings
         assert out_anima is anima
+
+    def test_stale_shared_state_fails_unknown_without_explicit_backend(self, orchestrator):
+        orchestrator._anima_sensors = None
+        shm_client = MagicMock()
+        shm_client.read.return_value = {
+            "timestamp": (datetime.now() - timedelta(seconds=60)).isoformat(),
+            "readings": {"timestamp": datetime.now().isoformat()},
+            "anima": {"warmth": 0.5},
+        }
+
+        with patch(
+            "anima_mcp.workflow_orchestrator.SharedMemoryClient",
+            return_value=shm_client,
+        ), patch("anima_mcp.workflow_orchestrator.sense_self") as mock_sense:
+            out_readings, out_anima = orchestrator._get_readings_and_anima()
+
+        assert (out_readings, out_anima) == (None, None)
+        mock_sense.assert_not_called()
 
     def test_returns_none_when_both_sources_fail(self, orchestrator):
         orchestrator._anima_sensors = MagicMock()

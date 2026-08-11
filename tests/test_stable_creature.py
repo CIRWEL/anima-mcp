@@ -927,6 +927,8 @@ class TestRunAsyncInBackground:
 
     def test_run_async_timeout_raises(self):
         """Timeout raises concurrent.futures.TimeoutError."""
+        from anima_mcp.stable_creature import _run_coroutine_with_timeout
+
         _bg_loop = asyncio.new_event_loop()
         t = threading.Thread(target=_bg_loop.run_forever, daemon=True)
         t.start()
@@ -936,11 +938,12 @@ class TestRunAsyncInBackground:
             return "never"
 
         try:
-            future = asyncio.run_coroutine_threadsafe(slow(), _bg_loop)
             with pytest.raises(concurrent.futures.TimeoutError):
-                future.result(timeout=0.1)
+                _run_coroutine_with_timeout(slow(), _bg_loop, timeout=0.1)
         finally:
             _bg_loop.call_soon_threadsafe(_bg_loop.stop)
+            t.join(timeout=1.0)
+            _bg_loop.close()
 
     def test_run_async_exception_propagates(self):
         """Exceptions from coroutine propagate to caller."""

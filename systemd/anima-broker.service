@@ -2,6 +2,7 @@
 Description=Anima Hardware Broker - Lumen's Body (Sensors & Display)
 After=network.target redis.service anima-restore.service
 Wants=network-online.target
+Requires=anima-restore.service
 # Broker must start before MCP server (mind)
 Before=anima.service
 # PartOf: when anima is restarted (e.g. deploy), broker also restarts
@@ -25,7 +26,7 @@ EnvironmentFile=-/home/unitares-anima/.anima/anima.env
 # UNITARES_URL is operator-specific (Tailscale-resolved). Set it in
 # ~/.anima/anima.env using the hostname form so it survives Mac IP changes.
 Environment="ANIMA_DB=/home/unitares-anima/.anima/anima.db"
-Environment="ANIMA_CONFIG=/home/unitares-anima/anima-mcp/anima_config.yaml"
+Environment="ANIMA_CONFIG=/home/unitares-anima/.anima/anima_config.json"
 Environment="ANIMA_GOVERNANCE_INTERVAL_SECONDS=180"
 # The server owns the only action policy.  The historical broker TD loop is
 # retained behind an explicit rollback flag but must not silently reopen its
