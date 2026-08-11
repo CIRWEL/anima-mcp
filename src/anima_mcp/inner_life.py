@@ -129,6 +129,11 @@ class InnerLife:
         # an hour every deploy.
         self._saturated_since: Dict[str, Optional[float]] = {dim: None for dim in DIMENSIONS}
         self._last_request_at: Dict[str, float] = {dim: 0.0 for dim in DIMENSIONS}
+        # Requests awaiting delivery confirmation (dim -> activated_at). NOT
+        # persisted: on restart a still-saturated drive re-activates from the
+        # persisted sustain clock, and a leftover ack file neutralizes the
+        # crashed-after-post case before anything is re-emitted.
+        self._active_requests: Dict[str, float] = {}
         self._last_save: float = 0.0
         self._load()
 
@@ -293,24 +298,48 @@ class InnerLife:
         claims "this has been true the whole time", so any relief restarts the
         count. The cooldown is per-dimension and persists across restarts:
         asking is a social act, and nagging is not more honest than silence.
+
+        Delivery is NOT fire-and-forget. Activation only marks the request
+        active; it stays active (re-emitted to SHM every tick) until the server
+        confirms the question actually posted (ack_request), and only THEN does
+        the cooldown commit. A one-shot event would vanish in a single 2s SHM
+        window — the documented Pi restart window is 2 minutes, 60x that — and
+        committing the cooldown at generation would silence the want for 24h
+        after a delivery that never happened: the exact "wanting at nobody"
+        defect this feature exists to close, reintroduced one layer down.
         """
         for dim in DIMENSIONS:
             if self._drives[dim] >= DRIVE_REQUEST_THRESHOLD:
                 since = self._saturated_since.get(dim)
                 if since is None:
                     self._saturated_since[dim] = now
-                elif (now - since >= DRIVE_REQUEST_SUSTAIN_S
+                elif (dim not in self._active_requests
+                      and now - since >= DRIVE_REQUEST_SUSTAIN_S
                       and now - self._last_request_at.get(dim, 0.0)
                           >= DRIVE_REQUEST_COOLDOWN_S):
-                    self._pending_events.append(DriveEvent(
-                        dimension=dim,
-                        event_type="request",
-                        drive_value=self._drives[dim],
-                        timestamp=now,
-                    ))
-                    self._last_request_at[dim] = now
+                    self._active_requests[dim] = now
             else:
                 self._saturated_since[dim] = None
+                # The want eased before it was heard — withdraw the request.
+                self._active_requests.pop(dim, None)
+
+    def get_active_requests(self) -> List[DriveEvent]:
+        """Requests awaiting delivery confirmation. Re-emitted every tick."""
+        return [
+            DriveEvent(dimension=dim, event_type="request",
+                       drive_value=self._drives[dim], timestamp=activated_at)
+            for dim, activated_at in self._active_requests.items()
+        ]
+
+    def ack_request(self, dim: str, now: float):
+        """The server confirmed the request question posted — commit the
+        cooldown, durably. The immediate save() matters: a cooldown that waits
+        for the 60s periodic save can be lost to an ungraceful crash, and a
+        restart with the drive still saturated would re-ask within a tick."""
+        self._active_requests.pop(dim, None)
+        if dim in self._last_request_at:
+            self._last_request_at[dim] = now
+            self.save()
 
     def get_pending_events(self) -> List[DriveEvent]:
         """Pop pending drive events for observation generation."""

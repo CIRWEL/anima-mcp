@@ -571,9 +571,37 @@ def run_creature():
                 except Exception:
                     pass
 
+            # 2-i-b. Drive-request delivery acks: the server writes an ack file
+            # once a request question ACTUALLY posted to the board; only then
+            # does the cooldown commit (inner_life.ack_request). Until acked,
+            # the request re-emits every tick — a one-shot event would vanish
+            # in a single 2s SHM window whenever the server is down or
+            # restarting (documented restart window: 2 minutes).
+            for _dim in ("warmth", "clarity", "stability", "presence"):
+                _ack_path = Path(f"/dev/shm/anima_drive_ack_{_dim}")
+                if _ack_path.exists():
+                    try:
+                        _ack_path.unlink()
+                        # Stale ack for an inactive dim (crashed after post,
+                        # cooldown saved) is simply cleaned up; an active one
+                        # commits the cooldown before this tick re-emits.
+                        _inner_life.ack_request(_dim, time.time())
+                    except Exception:
+                        pass
+
             # 2-i. Collect drive events for server to consume via SHM
             _drive_events = []
             for ev in _inner_life.get_pending_events():
+                obs_text = _inner_life.get_observation_text(ev)
+                if obs_text:
+                    _drive_events.append({
+                        "text": obs_text,
+                        "dimension": ev.dimension,
+                        "event_type": ev.event_type,
+                        "drive_value": round(ev.drive_value, 3),
+                    })
+            # Active requests ride along every tick until acked.
+            for ev in _inner_life.get_active_requests():
                 obs_text = _inner_life.get_observation_text(ev)
                 if obs_text:
                     _drive_events.append({

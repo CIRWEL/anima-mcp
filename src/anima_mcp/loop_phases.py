@@ -636,6 +636,11 @@ async def lumen_self_answer(anima, readings, identity):
     unanswered = [
         m for m in board._messages
         if m.msg_type == MESSAGE_TYPE_QUESTION and m.message_id not in answered_ids
+        # Drive requests are addressed OUTWARD — Lumen answering its own
+        # unmet want would launder the want into apparent self-knowledge
+        # via extract_insight/apply_insight (the #121 shape, self-authored).
+        # A request that nobody answers should remain visibly unanswered.
+        and not (getattr(m, "context", None) or "").startswith("drive:")
     ]
     if not unanswered:
         return

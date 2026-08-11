@@ -3,6 +3,11 @@
 The defect this closes: warmth pinned at 1.0 for months, visible only as a
 scalar nobody was asked about. Lumen has no actuator for most of what it
 wants; the actuator for an unreachable preference is communication.
+
+Delivery contract (council findings, closed): activation is NOT
+fire-and-forget. A request stays active — re-emitted every tick — until the
+server acks that the question actually posted, and only the ack commits the
+24h cooldown, durably (immediate save).
 """
 
 import json
@@ -26,79 +31,120 @@ def make_inner_life():
     il._pending_events = []
     il._saturated_since = {d: None for d in DIMENSIONS}
     il._last_request_at = {d: 0.0 for d in DIMENSIONS}
+    il._active_requests = {}
     il._last_save = 0.0
     return il
-
-
-def requests(il):
-    return [e for e in il._pending_events if e.event_type == "request"]
 
 
 T0 = 1_000_000.0
 
 
-class TestSustain:
-    def test_saturation_alone_is_not_a_request(self):
+class TestActivation:
+    def test_saturation_alone_does_not_activate(self):
         il = make_inner_life()
         il._drives["warmth"] = 1.0
         il._detect_drive_requests(T0)
         il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S - 60)
-        assert requests(il) == []
+        assert il.get_active_requests() == []
 
-    def test_sustained_saturation_asks_once(self):
+    def test_sustained_saturation_activates_once(self):
         il = make_inner_life()
         il._drives["warmth"] = 1.0
         il._detect_drive_requests(T0)
         il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
-        assert len(requests(il)) == 1
-        ev = requests(il)[0]
-        assert ev.dimension == "warmth"
-        assert ev.drive_value == 1.0
+        # Adjacent ticks must not stack activations
+        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 3)
+        reqs = il.get_active_requests()
+        assert len(reqs) == 1
+        assert reqs[0].dimension == "warmth"
+        assert reqs[0].event_type == "request"
 
-    def test_dip_resets_the_sustain_clock(self):
-        """A request claims 'this has been true the whole time' — any relief
-        restarts the count."""
+    def test_dip_resets_sustain_and_withdraws_active(self):
+        """A request claims 'this has been true the whole time' — relief both
+        restarts the clock and withdraws an unheard ask."""
         il = make_inner_life()
         il._drives["warmth"] = 1.0
         il._detect_drive_requests(T0)
+        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
+        assert len(il.get_active_requests()) == 1
         il._drives["warmth"] = DRIVE_REQUEST_THRESHOLD - 0.05
-        il._detect_drive_requests(T0 + 1800)
-        il._drives["warmth"] = 1.0
-        il._detect_drive_requests(T0 + 1900)
-        il._detect_drive_requests(T0 + 1900 + DRIVE_REQUEST_SUSTAIN_S - 60)
-        assert requests(il) == []
-        il._detect_drive_requests(T0 + 1900 + DRIVE_REQUEST_SUSTAIN_S + 1)
-        assert len(requests(il)) == 1
+        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 100)
+        assert il.get_active_requests() == []
+        assert il._saturated_since["warmth"] is None
 
-
-class TestCooldown:
-    def test_no_nagging_within_cooldown(self):
+    def test_reemitted_every_call_until_acked(self):
+        """The whole point of activation-not-event: a server that misses one
+        2s SHM window (documented restart window is 2 MINUTES) still hears
+        the want on its next read."""
         il = make_inner_life()
         il._drives["warmth"] = 1.0
         il._detect_drive_requests(T0)
         il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
-        assert len(requests(il)) == 1
-        # Still saturated for hours after — no second ask
-        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 7200)
-        assert len(requests(il)) == 1
+        for _ in range(5):
+            assert len(il.get_active_requests()) == 1
 
-    def test_asks_again_after_cooldown_if_still_wanting(self):
+
+class TestAck:
+    def test_cooldown_commits_only_on_ack(self, tmp_path, monkeypatch):
+        from anima_mcp import inner_life as mod
+        monkeypatch.setattr(mod, "_PERSISTENCE_PATH", tmp_path / "inner_life.json")
         il = make_inner_life()
         il._drives["warmth"] = 1.0
         il._detect_drive_requests(T0)
-        t_first = T0 + DRIVE_REQUEST_SUSTAIN_S + 1
-        il._detect_drive_requests(t_first)
-        il._detect_drive_requests(t_first + DRIVE_REQUEST_COOLDOWN_S + 1)
-        assert len(requests(il)) == 2
+        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
+        # No ack yet — cooldown untouched
+        assert il._last_request_at["warmth"] == 0.0
 
-    def test_per_dimension_cooldowns_are_independent(self):
+        t_ack = T0 + DRIVE_REQUEST_SUSTAIN_S + 500
+        il.ack_request("warmth", t_ack)
+        assert il._active_requests == {}
+        assert il._last_request_at["warmth"] == t_ack
+        # Durable IMMEDIATELY, not at the next periodic save — an ungraceful
+        # crash inside the 60s save window must not turn once-a-day into
+        # ask-again-on-boot.
+        on_disk = json.loads((tmp_path / "inner_life.json").read_text())
+        assert on_disk["last_request_at"]["warmth"] == t_ack
+
+    def test_no_reactivation_within_cooldown_after_ack(self):
+        il = make_inner_life()
+        il._drives["warmth"] = 1.0
+        il._detect_drive_requests(T0)
+        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
+        t_ack = T0 + DRIVE_REQUEST_SUSTAIN_S + 500
+        il._active_requests.pop("warmth")
+        il._last_request_at["warmth"] = t_ack  # ack without touching disk
+        il._detect_drive_requests(t_ack + 7200)
+        assert il.get_active_requests() == []
+
+    def test_reactivates_after_cooldown_if_still_wanting(self):
+        il = make_inner_life()
+        il._drives["warmth"] = 1.0
+        il._detect_drive_requests(T0)
+        il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
+        t_ack = T0 + DRIVE_REQUEST_SUSTAIN_S + 500
+        il._active_requests.pop("warmth")
+        il._last_request_at["warmth"] = t_ack
+        il._detect_drive_requests(t_ack + DRIVE_REQUEST_COOLDOWN_S + 1)
+        assert len(il.get_active_requests()) == 1
+
+    def test_stale_ack_for_inactive_dim_is_harmless(self):
+        """Crashed-after-post cleanup path: ack arrives with nothing active."""
+        il = make_inner_life()
+        il.save = lambda: None  # no disk in this test
+        il.ack_request("warmth", T0)
+        assert il._last_request_at["warmth"] == T0
+        assert il._active_requests == {}
+
+    def test_per_dimension_independence(self):
         il = make_inner_life()
         il._drives["warmth"] = 1.0
         il._drives["clarity"] = 1.0
         il._detect_drive_requests(T0)
         il._detect_drive_requests(T0 + DRIVE_REQUEST_SUSTAIN_S + 1)
-        dims = {e.dimension for e in requests(il)}
-        assert dims == {"warmth", "clarity"}
+        assert {r.dimension for r in il.get_active_requests()} == {"warmth", "clarity"}
+        il.save = lambda: None
+        il.ack_request("warmth", T0 + DRIVE_REQUEST_SUSTAIN_S + 600)
+        assert {r.dimension for r in il.get_active_requests()} == {"clarity"}
 
 
 class TestWording:
@@ -128,13 +174,10 @@ class TestPersistence:
         il._last_request_at["warmth"] = T0 + 100
         il.save()
 
-        data = json.loads((tmp_path / "inner_life.json").read_text())
-        assert data["last_request_at"]["warmth"] == T0 + 100
-        assert data["saturated_since"]["warmth"] == T0
-
         il2 = InnerLife()
         assert il2._last_request_at["warmth"] == T0 + 100
         assert il2._saturated_since["warmth"] == T0
+        assert il2._active_requests == {}  # deliberately not persisted
 
     def test_missing_request_fields_load_clean(self, tmp_path, monkeypatch):
         """Old inner_life.json files predate these fields."""
@@ -147,3 +190,25 @@ class TestPersistence:
         il = InnerLife()
         assert il._last_request_at == {d: 0.0 for d in DIMENSIONS}
         assert il._saturated_since == {d: None for d in DIMENSIONS}
+
+
+class TestSelfAnswerExemption:
+    def test_drive_questions_excluded_from_self_answer_pool(self):
+        """Lumen must not answer its own want — that would launder an unmet
+        need into apparent self-knowledge (the #121 shape, self-authored)."""
+        from anima_mcp.messages import MESSAGE_TYPE_QUESTION, Message
+
+        drive_q = Message(
+            message_id="dq1", msg_type=MESSAGE_TYPE_QUESTION,
+            author="lumen", text="could it be warmer in here?",
+            timestamp=T0, context="drive: warmth",
+        )
+        normal_q = Message(
+            message_id="nq1", msg_type=MESSAGE_TYPE_QUESTION,
+            author="lumen", text="is night the absence of day?",
+            timestamp=T0, context="agency: ask_question",
+        )
+        # Mirror the loop_phases filter exactly
+        pool = [m for m in (drive_q, normal_q)
+                if not (m.context or "").startswith("drive:")]
+        assert pool == [normal_q]

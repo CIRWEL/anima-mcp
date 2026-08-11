@@ -72,6 +72,10 @@ class ServerContext:
     # Per-iteration cache (updated by _get_readings_and_anima)
     last_shm_data: dict | None = None
     consumed_drive_events: set = field(default_factory=set)
+    # Last add_question attempt per drive dimension (throttles retries while
+    # the board suppresses — cap/rate-limit/dedup — so the retry loop doesn't
+    # hammer the board at SHM-poll cadence)
+    drive_request_attempts: dict = field(default_factory=dict)
 
     # Meta-learning / trajectory
     satisfaction_history: deque = field(default_factory=lambda: deque(maxlen=500))
