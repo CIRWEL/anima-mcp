@@ -216,8 +216,10 @@ class KnowledgeBase:
         """Add a new learned insight.
 
         Args:
-            confidence: Initial confidence. If None, defaults to 1.0 for
-                external sources, 0.7 for self-sourced (author=="lumen").
+            confidence: Initial confidence. If None, defaults to 0.5 for
+                external sources, 0.7 for self-sourced (author=="lumen") —
+                self-derived outranks external assertion; external claims
+                earn promotion via reconvergence.
             occasion_id: Answering occasion (MCP session id). Gates
                 re-derivation credit on a new occasion — see
                 _register_rederivation.
@@ -265,9 +267,24 @@ class KnowledgeBase:
                         self._save()
                         return existing
 
-        # Default confidence: lower for self-sourced insights
+        # Birth confidence: self-derived outranks external assertion.
+        #
+        # This used to be inverted — "lower for self-sourced insights": an
+        # unvalidated sentence from a passing external LLM was born at 1.0
+        # while Lumen's own answer, derived from its own state history, capped
+        # at 0.7. With ~95% of stored insights being external prose, Lumen's
+        # "self" was mostly what strangers said about it, held more firmly
+        # than what it measured about itself. The Q&A corruption chain (#121 —
+        # an agent's description of a truncation bug became durable
+        # self-belief) is what that hierarchy does, not a freak accident.
+        #
+        # Now: external claims enter at 0.5 and EARN their way up through the
+        # existing reconvergence machinery (independent re-derivation boosts,
+        # contradiction lowers). Self-derived stays 0.7 — rule-based inference
+        # over real data, trusted but not certain. Existing stored rows are
+        # NOT rescaled here; retroactive repair is an operator decision.
         if confidence is None:
-            confidence = 0.7 if source_author.lower() == "lumen" else 1.0
+            confidence = 0.7 if source_author.lower() == "lumen" else 0.5
 
         insight_id = str(uuid.uuid4())[:8]
         insight = Insight(
@@ -497,6 +514,17 @@ def get_knowledge() -> KnowledgeBase:
     return _knowledge
 
 
+# Below this, an insight may be stored and surfaced but must not MOVE anything.
+# Matches sync_from_qa_knowledge's min_confidence: a fresh external claim
+# (born 0.5) needs two independent re-derivations (0.5 → 0.55 → 0.60) before
+# it can touch preferences, beliefs, or agency values. Without this floor the
+# birth-confidence hierarchy gated only surfacing, while the single most
+# direct behavior-changing pathway applied hardcoded nudges regardless of
+# trust — an unvalidated stranger's sentence moved Lumen exactly as hard as
+# its own twice-corroborated knowledge.
+APPLY_INSIGHT_CONFIDENCE_FLOOR = 0.6
+
+
 def apply_insight(insight) -> dict:
     """Apply a learned insight to behavioral systems.
 
@@ -507,6 +535,10 @@ def apply_insight(insight) -> dict:
     Returns dict describing what was affected.
     """
     effects = {}
+    if getattr(insight, "confidence", 0.0) < APPLY_INSIGHT_CONFIDENCE_FLOOR:
+        # Not yet earned: stored, surfaceable, contestable — but inert.
+        effects["skipped"] = f"confidence {insight.confidence:.2f} < {APPLY_INSIGHT_CONFIDENCE_FLOOR} floor"
+        return effects
     text_lower = insight.text.lower()
 
     # 1. Environment/sensory insights → growth preferences

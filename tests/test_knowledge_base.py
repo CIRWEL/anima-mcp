@@ -513,13 +513,14 @@ class TestContradictionDownPath:
 
     def test_contradiction_reduces_confidence_both_sides(self, kb):
         a = _rederive(kb, self.OBS_A, "what am i?")
-        assert a.confidence == 1.0
+        birth = a.confidence  # external-authored birth (0.5, earns upward)
+        assert birth == 0.5
         b = _rederive(kb, self.OBS_B, "what am i really?")
         assert kb.count() == 2  # stored separately (negation guard)
         fresh = {i.insight_id: i for i in kb.get_all_insights()}
         penalty = kb.CONTRADICTION_CONFIDENCE_PENALTY
-        assert fresh[a.insight_id].confidence == pytest.approx(1.0 - penalty)
-        assert fresh[b.insight_id].confidence == pytest.approx(1.0 - penalty)
+        assert fresh[a.insight_id].confidence == pytest.approx(birth - penalty)
+        assert fresh[b.insight_id].confidence == pytest.approx(birth - penalty)
 
     def test_contradiction_links_recorded_both_ways(self, kb):
         a = _rederive(kb, self.OBS_A, "what am i?")
@@ -545,7 +546,8 @@ class TestContradictionDownPath:
         assert again.insight_id == b.insight_id
         assert b.references == 1
         fresh = {i.insight_id: i for i in kb.get_all_insights()}
-        assert fresh[a.insight_id].confidence == pytest.approx(1.0 - penalty)
+        # external birth 0.5, penalized exactly once — NOT twice
+        assert fresh[a.insight_id].confidence == pytest.approx(0.5 - penalty)
         assert fresh[a.insight_id].contradicted_by == [b.insight_id]  # not doubled
 
     def test_agreeing_rederivation_never_penalized(self, kb):

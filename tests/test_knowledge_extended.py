@@ -300,7 +300,8 @@ class TestDuplicateAdd:
         )
         assert again is first
         assert first.references == 1
-        assert first.confidence == min(1.0, 1.0 + kb.RECONVERGENCE_CONFIDENCE_BOOST)
+        # external birth 0.5 + one independent re-derivation boost
+        assert first.confidence == min(1.0, 0.5 + kb.RECONVERGENCE_CONFIDENCE_BOOST)
 
 
 # ==================== Trim path (>MAX_INSIGHTS) ====================
