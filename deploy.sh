@@ -8,6 +8,7 @@ PI_HOST="${PI_HOST:-lumen.local}"
 PI_USER="${PI_USER:-unitares-anima}"
 PI_PORT="${PI_PORT:-22}"
 PI_PATH="${PI_PATH:-~/anima-mcp}"
+SSH_KEY="${SSH_KEY:-${HOME}/.ssh/id_ed25519_pi}"
 
 # Colors
 GREEN='\033[0;32m'
@@ -30,6 +31,7 @@ fi
 # Parse arguments
 RESTART=true
 SHOW_LOGS=false
+BACKUP=true
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -41,6 +43,10 @@ while [[ $# -gt 0 ]]; do
             SHOW_LOGS=true
             shift
             ;;
+        --skip-backup)
+            BACKUP=false
+            shift
+            ;;
         --host)
             PI_HOST="$2"
             shift 2
@@ -50,6 +56,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --no-restart    Don't restart anima service after deploy"
+            echo "  --skip-backup   Explicitly deploy without a pre-deploy state snapshot"
             echo "  --logs          Show logs after deploy"
             echo "  --host HOST     Override Pi hostname/IP (default: lumen.local)"
             echo "  --help          Show this help"
@@ -72,36 +79,89 @@ done
 echo -e "${BLUE}Target:${NC} $PI_USER@$PI_HOST:$PI_PATH"
 echo ""
 
-# Step 0: Pull Pi's database before deploying (backup state)
-# Skip backup if Pi is unreachable - deployment can proceed without it
-echo -e "${BLUE}[0/4] Backing up Pi state...${NC}"
-if [ "$RESTART" = false ]; then
-    echo -e "${BLUE}  Skipping (called from restore or --no-restart)${NC}"
-elif ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
-    if python3 scripts/sync_state.py pull 2>/dev/null; then
+SSH_EXTRA=""
+[ -f "$SSH_KEY" ] && SSH_EXTRA="-i $SSH_KEY"
+
+# Step 0a: move adaptive calibration out of the code checkout before rsync can
+# ever replace or orphan it. This is an idempotent format migration; the
+# resulting JSON joins every subsequent state snapshot.
+echo -e "${BLUE}[0a/4] Migrating persistent calibration...${NC}"
+if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+    "$PI_USER@$PI_HOST" \
+    "set -e; mkdir -p ~/.anima; py=$PI_PATH/.venv/bin/python; if [ ! -x \"\$py\" ]; then py=python3; fi; \"\$py\" - '$PI_PATH/anima_config.yaml' '$PI_PATH/anima_config.yaml.example'" <<'PY'
+import json
+import os
+import sys
+import uuid
+from pathlib import Path
+
+destination = Path.home() / ".anima" / "anima_config.json"
+if destination.exists():
+    data = json.loads(destination.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit("persistent calibration is not a JSON object")
+    raise SystemExit(0)
+
+data = {}
+for raw in sys.argv[1:]:
+    source = Path(raw).expanduser()
+    if source.is_file():
+        try:
+            import yaml
+        except ImportError:
+            if source.name.endswith(".example"):
+                data = {}
+                break
+            raise SystemExit(f"PyYAML is required to migrate {source}")
+        data = yaml.safe_load(source.read_text(encoding="utf-8"))
+        break
+if not isinstance(data, dict):
+    raise SystemExit("checkout calibration is not a mapping")
+temporary = destination.with_name(
+    f"{destination.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
+)
+with temporary.open("w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\n")
+    handle.flush()
+    os.fsync(handle.fileno())
+os.replace(temporary, destination)
+descriptor = os.open(destination.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY
+then
+    echo -e "${GREEN}  Persistent calibration ready${NC}"
+else
+    echo -e "${RED}✗ Calibration migration failed; deployment aborted${NC}"
+    exit 1
+fi
+echo ""
+
+# Step 0b: capture a verified DB + learned-state snapshot before mutation.
+# This fails closed unless the operator explicitly chooses --skip-backup.
+echo -e "${BLUE}[0b/4] Backing up Pi state...${NC}"
+if [ "$BACKUP" = true ]; then
+    SYNC_ARGS=(pull --host "$PI_HOST" --user "$PI_USER" --port "$PI_PORT")
+    if [ -f "${SSH_KEY:-}" ]; then
+        SYNC_ARGS+=(--identity-file "$SSH_KEY")
+    fi
+    if python3 scripts/sync_state.py "${SYNC_ARGS[@]}"; then
         echo -e "${GREEN}  State backed up${NC}"
     else
-        echo -e "${BLUE}  Could not pull state (Pi may be offline). Continuing...${NC}"
+        echo -e "${RED}✗ Verified state backup failed; deployment aborted${NC}"
+        echo -e "${YELLOW}  Use --skip-backup only after explicitly accepting that risk${NC}"
+        exit 1
     fi
 else
-    echo -e "${BLUE}  Pi unreachable (WiFi down?) - skipping backup${NC}"
+    echo -e "${YELLOW}  Backup explicitly skipped (--skip-backup)${NC}"
 fi
 echo ""
 
 # Step 1: Sync code
 echo -e "${BLUE}[1/4] Syncing code...${NC}"
-# Check connectivity first
-if ! ping -c 1 -W 2 "$PI_HOST" >/dev/null 2>&1; then
-    echo -e "${RED}✗ Pi unreachable (WiFi down?)${NC}"
-    echo -e "${BLUE}  Cannot deploy while Pi is offline${NC}"
-    echo -e "${BLUE}  Lumen continues operating autonomously - deploy when WiFi returns${NC}"
-    exit 1
-fi
-
-SSH_KEY="${SSH_KEY:-${HOME}/.ssh/id_ed25519_pi}"
-SSH_EXTRA=""
-[ -f "$SSH_KEY" ] && SSH_EXTRA="-i $SSH_KEY"
-
 rsync -avz \
     --exclude='.venv' \
     --exclude='*.db' \
@@ -129,7 +189,7 @@ fi
 echo ""
 echo -e "${BLUE}[2/4] Syncing core systemd units...${NC}"
 if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
-    "set -e; changed=0; for unit in anima.service anima-broker.service; do src=$PI_PATH/systemd/\$unit; dst=/etc/systemd/system/\$unit; if ! cmp -s \"\$src\" \"\$dst\"; then sudo install -m 0644 \"\$src\" \"\$dst\"; changed=1; fi; done; if [ \"\$changed\" -eq 1 ]; then sudo systemctl daemon-reload; fi"; then
+    "set -e; changed=0; for unit in anima-restore.service anima-broker.service anima.service; do src=$PI_PATH/systemd/\$unit; dst=/etc/systemd/system/\$unit; if ! cmp -s \"\$src\" \"\$dst\"; then sudo install -m 0644 \"\$src\" \"\$dst\"; changed=1; fi; done; if [ \"\$changed\" -eq 1 ]; then sudo systemctl daemon-reload; fi; sudo systemctl enable anima-restore.service >/dev/null"; then
     echo -e "${GREEN}✓ Core service definitions synchronized${NC}"
 else
     echo -e "${RED}✗ Could not synchronize core service definitions${NC}"
@@ -141,23 +201,27 @@ if [ "$RESTART" = true ]; then
     echo ""
     echo -e "${BLUE}[3/4] Restarting anima service...${NC}"
     
-    # Check if systemd service exists (system-level, not user)
-    if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" "systemctl is-enabled anima-broker.service" 2>/dev/null; then
-        # Restart broker first (anima depends on it)
-        if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" "sudo systemctl restart anima-broker && sudo systemctl restart anima" 2>/dev/null; then
-            echo -e "${GREEN}✓ Services restarted (broker + mind)${NC}"
-        else
-            echo -e "${YELLOW}⚠ Service restart may have failed (connection issue?)${NC}"
-            echo -e "${BLUE}  Services will auto-restart on next boot if needed${NC}"
-        fi
+    # A deploy is not successful until both processes are active, the mind is
+    # pinned to SHM, and the broker has published fresh, structurally valid state.
+    VERIFY_CODE='import json,os,sys,time;p="/dev/shm/anima_state.json";started=time.time();end=started+45
+while time.time()<end:
+ try:
+  envelope=json.load(open(p));data=envelope.get("data",{});fresh=os.path.getmtime(p)>=started
+  if fresh and isinstance(data.get("readings"),dict) and isinstance(data.get("anima"),dict):sys.exit(0)
+ except Exception:pass
+ time.sleep(1)
+sys.exit(1)'
+    if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+        "set -e; sudo systemctl restart anima-broker anima; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; python3 -c '$VERIFY_CODE'"; then
+        echo -e "${GREEN}✓ Services active; fresh broker state verified${NC}"
     else
-        echo -e "${BLUE}ℹ No systemd service found (that's OK)${NC}"
-        echo "  To set up service, run on Pi:"
-        echo "  ./scripts/setup_pi_service.sh"
+        echo -e "${RED}✗ Restart or post-deploy verification failed${NC}"
+        echo "  Inspect: systemctl status anima-broker anima"
+        exit 1
     fi
 else
     echo ""
-    echo -e "${BLUE}[3/4] Skipping restart (--no-restart)${NC}"
+    echo -e "${YELLOW}[3/4] Restart and runtime verification deferred (--no-restart)${NC}"
 fi
 
 # Step 4: Show logs (if requested)
@@ -165,7 +229,8 @@ if [ "$SHOW_LOGS" = true ]; then
     echo ""
     echo -e "${BLUE}[4/4] Showing logs...${NC}"
     echo -e "${BLUE}=========================================${NC}"
-    ssh -p $PI_PORT "$PI_USER@$PI_HOST" "journalctl -u anima -u anima-broker -n 50 --no-pager" || \
+    ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+        "$PI_USER@$PI_HOST" "journalctl -u anima -u anima-broker -n 50 --no-pager" || \
         echo -e "${BLUE}ℹ Could not read logs${NC}"
 else
     echo ""

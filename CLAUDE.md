@@ -128,7 +128,8 @@ semantic mutations it originates through a durable inbox:
 | `activity_state.py` | Active/drowsy/resting cycles | both |
 | `preferences.py` | Preference evolution | broker writes; server reads |
 | `self_model.py` | Self-beliefs | broker writes; server reads |
-| `adaptive_prediction.py` | Temporal pattern learning | broker writes; server reads stats |
+| `adaptive_prediction.py` | Temporal pattern learning | broker writes; server reads live SHM stats |
+| `metacognition.py` | Prediction-error baselines + curiosity credit | **server writes**; broker observes in memory only |
 
 **The server's agency learner is authoritative.** It posts questions (visible
 as `context: "agency: ask_question"`) and drives LEDs. The broker's old TD loop
@@ -143,6 +144,30 @@ singletons are read-only and refresh on mtime changes. Question evidence,
 Q&A-derived self-belief evidence, and trajectory meta-learning weights cross
 the process boundary as atomic one-file events in
 `~/.anima/learning_inbox/`, which the broker drains.
+
+`metacognition_baselines.json` follows the inverse ownership direction: the
+server originates curiosity and is its sole persistent writer. The broker's
+metacognitive observer is explicitly read-only. Pending curiosity evaluations
+are persisted with the baselines so a restart cannot erase uncredited evidence.
+The learning inbox has bounded event/byte admission and exposes queue age,
+rejections, and pressure through `diagnostics`; a full inbox raises instead of
+silently consuming the SD card.
+
+Both services resolve calibration from `$ANIMA_CONFIG`, and cached readers
+refresh when that file's inode/mtime/size signature changes. This is required
+because the server owns calibration adaptation while the broker consumes the
+result. Production pins it to backed-up state at
+`~/.anima/anima_config.json`; the deploy gate migrates the former untracked
+checkout-local YAML before taking its snapshot.
+
+**Recovery is fail-closed.** Deploys capture a verified DB + learned-state
+generation before restart. The boot restore unit gates `anima-broker`: a
+missing/corrupt DB or learned-self snapshot with no reachable verified backup
+leaves both processes stopped. `ANIMA_ALLOW_FRESH_START=true` is the explicit
+operator escape hatch for intentionally minting a new identity; never set it
+on Lumen. Local snapshots also capture `oauth.db` with SQLite's online-backup
+API so Federation client registrations survive recovery; token-bearing OAuth
+state is intentionally excluded from the unencrypted off-site archive.
 
 **Persistence rule:** no `get_*` singleton may lean on the bare
 `db_path="anima.db"` default. All 20 now resolve through

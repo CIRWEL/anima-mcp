@@ -83,6 +83,24 @@ def _has_module(name: str) -> bool:
     return _LEARNING_MODULES.get(name, False)
 
 
+def _run_coroutine_with_timeout(coro, loop, timeout: float = 10.0):
+    """Run on the broker loop and cancel the task if the caller times out."""
+    future = asyncio.run_coroutine_threadsafe(coro, loop)
+    try:
+        return future.result(timeout=timeout)
+    except concurrent.futures.TimeoutError:
+        future.cancel()
+        # Let the loop deliver cancellation before a shutdown or replacement
+        # task can strand the coroutine as pending.
+        drained = threading.Event()
+        try:
+            loop.call_soon_threadsafe(drained.set)
+            drained.wait(timeout=1.0)
+        except RuntimeError:
+            pass
+        raise
+
+
 def _snapshot_self_beliefs(self_model) -> dict:
     """Capture lightweight self-belief state for reflection episode persistence."""
     if not self_model:
@@ -403,16 +421,15 @@ def run_creature():
         Uses asyncio.run_coroutine_threadsafe to schedule onto _bg_loop,
         so the bridge's aiohttp session stays on a single consistent loop.
         """
-        future = asyncio.run_coroutine_threadsafe(coro, _bg_loop)
-        return future.result(timeout=timeout)
+        return _run_coroutine_with_timeout(coro, _bg_loop, timeout)
 
     # Track background futures so the main loop can skip if still running
     _governance_future = None   # type: Optional[concurrent.futures.Future]
     _memory_future = None       # type: Optional[concurrent.futures.Future]
 
     # Initialize Metacognition Monitor
-    metacog = get_metacognitive_monitor()
-    print("[StableCreature] Metacognition active - Lumen monitors its own predictions")
+    metacog = get_metacognitive_monitor(read_only=True)
+    print("[StableCreature] Metacognition active (read-only observer; mind owns persistence)")
 
     # Initialize Enhanced Learning Systems (genuine agency)
     adaptive_model = None

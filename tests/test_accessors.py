@@ -86,7 +86,7 @@ class TestGetSensors:
         ctx_ref._ctx = None
         mock_get_sensors.return_value = MagicMock()
         result = _get_sensors()
-        mock_get_sensors.assert_called_once()
+        mock_get_sensors.assert_called_once_with(backend="shm")
         assert result is mock_get_sensors.return_value
 
     @patch("anima_mcp.accessors.get_sensors")
@@ -100,6 +100,7 @@ class TestGetSensors:
         result = _get_sensors()
         assert result is mock_get_sensors.return_value
         assert ctx.sensors is mock_get_sensors.return_value
+        mock_get_sensors.assert_called_once_with(backend="shm")
 
     def test_returns_existing_sensors(self):
         """_get_sensors returns existing sensors without re-creating."""
@@ -668,11 +669,29 @@ class TestGetReadingsAndAnima:
         mock_antic.return_value = MagicMock()
         mock_drift.return_value = MagicMock(get_midpoints=MagicMock(return_value={}))
 
-        readings, anima = _get_readings_and_anima()
+        readings, anima = _get_readings_and_anima(fallback_to_sensors=True)
 
         assert readings is not None
         assert anima is not None
         mock_rfd.assert_called_once()
+        assert mock_sense.call_args.kwargs["prediction_accuracy"] is None
+
+    def test_prediction_accuracy_comes_from_broker_snapshot(self):
+        from anima_mcp.accessors import _prediction_accuracy_from_shm
+
+        shm = {
+            "learning": {
+                "prediction_accuracy": {
+                    "overall_mean_error": 0.2,
+                    "total_errors": 12,
+                }
+            }
+        }
+
+        assert _prediction_accuracy_from_shm(shm) == pytest.approx(0.8)
+        assert _prediction_accuracy_from_shm({"learning": {
+            "prediction_accuracy": {"insufficient_data": True}
+        }}) is None
 
     @patch("anima_mcp.accessors._get_calibration_drift")
     @patch("anima_mcp.accessors._get_warm_start_anticipation", return_value=None)
@@ -698,7 +717,7 @@ class TestGetReadingsAndAnima:
         mock_antic.return_value = MagicMock()
         mock_drift.return_value = MagicMock(get_midpoints=MagicMock(return_value={}))
 
-        readings, anima = _get_readings_and_anima()
+        readings, anima = _get_readings_and_anima(fallback_to_sensors=True)
 
         assert readings is not None
         assert anima is not None
@@ -715,7 +734,7 @@ class TestGetReadingsAndAnima:
         mock_shm.return_value.read.return_value = None
         mock_sensors.return_value = None
 
-        readings, anima = _get_readings_and_anima()
+        readings, anima = _get_readings_and_anima(fallback_to_sensors=True)
 
         assert readings is None
         assert anima is None
@@ -750,10 +769,66 @@ class TestGetReadingsAndAnima:
             mock_antic.return_value = MagicMock()
             mock_drift.return_value = MagicMock(get_midpoints=MagicMock(return_value={}))
 
-            readings, anima = _get_readings_and_anima()
+            readings, anima = _get_readings_and_anima(fallback_to_sensors=True)
 
         # Falls back to direct sensor access due to stale SHM
         sensor.read.assert_called_once()
+
+    @patch("anima_mcp.accessors._get_sensors")
+    @patch("anima_mcp.accessors._get_shm_client")
+    def test_fail_closed_does_not_open_sensors_for_empty_shm(
+        self, mock_shm, mock_sensors
+    ):
+        """The server treats missing body state as unknown, not an I2C takeover."""
+        from anima_mcp.accessors import _get_readings_and_anima
+        make_ctx()
+        mock_shm.return_value.read.return_value = None
+
+        assert _get_readings_and_anima(fallback_to_sensors=False) == (None, None)
+        mock_sensors.assert_not_called()
+
+    @patch("anima_mcp.accessors._get_sensors")
+    @patch("anima_mcp.accessors._get_shm_client")
+    def test_fail_closed_does_not_open_sensors_for_stale_shm(
+        self, mock_shm, mock_sensors
+    ):
+        from anima_mcp.accessors import _get_readings_and_anima
+        make_ctx()
+        old_time = datetime.now().astimezone() - timedelta(seconds=30)
+        mock_shm.return_value.read.return_value = {
+            "readings": {"cpu_temp_c": 55},
+            "anima": {"warmth": 0.5},
+            "timestamp": old_time.isoformat(),
+        }
+
+        assert _get_readings_and_anima(fallback_to_sensors=False) == (None, None)
+        mock_sensors.assert_not_called()
+
+    @pytest.mark.parametrize(
+        "timestamp",
+        [
+            None,
+            "not-a-timestamp",
+            (datetime.now().astimezone() + timedelta(minutes=1)).isoformat(),
+        ],
+    )
+    @patch("anima_mcp.accessors._get_sensors")
+    @patch("anima_mcp.accessors._get_shm_client")
+    def test_fail_closed_rejects_missing_malformed_or_future_heartbeat(
+        self, mock_shm, mock_sensors, timestamp
+    ):
+        from anima_mcp.accessors import _get_readings_and_anima
+        make_ctx()
+        payload = {
+            "readings": {"cpu_temp_c": 55},
+            "anima": {"warmth": 0.5},
+        }
+        if timestamp is not None:
+            payload["timestamp"] = timestamp
+        mock_shm.return_value.read.return_value = payload
+
+        assert _get_readings_and_anima(fallback_to_sensors=False) == (None, None)
+        mock_sensors.assert_not_called()
 
     @patch("anima_mcp.accessors._get_shm_client")
     def test_caches_shm_data_on_ctx(self, mock_shm):

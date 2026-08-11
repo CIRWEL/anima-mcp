@@ -32,6 +32,36 @@ def _spawn_delayed_restart() -> None:
     task.add_done_callback(_BACKGROUND_TASKS.discard)
 
 
+def _prepare_state_snapshot(*, skip_backup: bool) -> dict[str, str]:
+    """Capture state before any code mutation that will be followed by restart."""
+    if skip_backup:
+        return {
+            "state_backup": "explicitly skipped",
+            "backup_warning": (
+                "Update and restart are proceeding without an on-device recovery point."
+            ),
+        }
+
+    from ..state_snapshot import create_local_state_snapshot
+
+    snapshot = create_local_state_snapshot()
+    return {"state_backup": str(snapshot)}
+
+
+def _schedule_restart(output: dict, snapshot_details: dict[str, str]) -> None:
+    """Attach the already-created recovery point and schedule the restart."""
+    output.update(snapshot_details)
+
+    output["restart"] = "Restarting in ~5 seconds."
+    output["wait_seconds"] = RESTART_WAIT_SECONDS
+    output["warning"] = (
+        f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
+        "This response confirms the restart was scheduled successfully. "
+        "Any 'fetch failed' or timeout after this is expected — the server is restarting."
+    )
+    _spawn_delayed_restart()
+
+
 def _pi_ssh_host() -> str:
     """Return Pi host/IP for user-facing SSH instructions.
 
@@ -74,7 +104,7 @@ async def _delayed_restart():
 
 
 def _sync_systemd_services(repo_root: Path) -> list[str]:
-    """Sync systemd service/timer/mount files from repo to /etc/systemd/system/ if changed."""
+    """Sync systemd units, raising if a required live update cannot land."""
     synced = []
     systemd_dir = repo_root / "systemd"
     target_dir = Path("/etc/systemd/system")
@@ -87,42 +117,56 @@ def _sync_systemd_services(repo_root: Path) -> list[str]:
     for pattern in ("*.service", "*.timer", "*.mount"):
         for unit_file in systemd_dir.glob(pattern):
             target = target_dir / unit_file.name
-            try:
-                repo_content = unit_file.read_text()
+            repo_content = unit_file.read_text()
 
-                if not target.exists():
-                    # Only auto-install whitelisted units
-                    if unit_file.name not in AUTO_INSTALL:
-                        continue
-                    result = subprocess.run(
-                        ["sudo", "cp", str(unit_file), str(target)],
-                        capture_output=True, text=True, timeout=10
-                    )
-                    if result.returncode == 0:
-                        # Enable the new unit
-                        subprocess.run(
-                            ["sudo", "systemctl", "enable", unit_file.name],
-                            capture_output=True, text=True, timeout=10
-                        )
-                        synced.append(f"{unit_file.name} (installed)")
+            if not target.exists():
+                # Only auto-install whitelisted units
+                if unit_file.name not in AUTO_INSTALL:
                     continue
-
-                target_content = target.read_text()
-                if repo_content != target_content:
-                    result = subprocess.run(
-                        ["sudo", "cp", str(unit_file), str(target)],
-                        capture_output=True, text=True, timeout=10
+                result = subprocess.run(
+                    ["sudo", "cp", str(unit_file), str(target)],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "unknown error").strip()
+                    raise RuntimeError(
+                        f"could not install {unit_file.name}: {detail}"
                     )
-                    if result.returncode == 0:
-                        synced.append(unit_file.name)
-            except Exception:
+                enable = subprocess.run(
+                    ["sudo", "systemctl", "enable", unit_file.name],
+                    capture_output=True, text=True, timeout=10
+                )
+                if enable.returncode != 0:
+                    detail = (enable.stderr or enable.stdout or "unknown error").strip()
+                    raise RuntimeError(
+                        f"could not enable {unit_file.name}: {detail}"
+                    )
+                synced.append(f"{unit_file.name} (installed)")
                 continue
 
+            target_content = target.read_text()
+            if repo_content != target_content:
+                result = subprocess.run(
+                    ["sudo", "cp", str(unit_file), str(target)],
+                    capture_output=True, text=True, timeout=10
+                )
+                if result.returncode != 0:
+                    detail = (result.stderr or result.stdout or "unknown error").strip()
+                    raise RuntimeError(
+                        f"could not update {unit_file.name}: {detail}"
+                    )
+                synced.append(unit_file.name)
+
     if synced:
-        subprocess.run(
+        reload_result = subprocess.run(
             ["sudo", "systemctl", "daemon-reload"],
-            capture_output=True, timeout=10
+            capture_output=True, text=True, timeout=10
         )
+        if reload_result.returncode != 0:
+            detail = (
+                reload_result.stderr or reload_result.stdout or "unknown error"
+            ).strip()
+            raise RuntimeError(f"systemd daemon-reload failed: {detail}")
     return synced
 
 
@@ -134,12 +178,33 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
     if err := require_admin():
         return err
     restart = arguments.get("restart", False)
+    skip_backup = arguments.get("skip_backup", False)
     stash = arguments.get("stash", False)  # Stash local changes before pull
     force = arguments.get("force", False)  # Hard reset to remote (DANGER: loses local changes)
 
     # Find repo root (where .git is)
     repo_root = Path(__file__).parent.parent.parent.parent  # anima-mcp/
     git_dir = repo_root / ".git"
+
+    snapshot_details: dict[str, str] = {}
+    if restart:
+        try:
+            # This must happen before git/zip replaces the implementation that
+            # creates the recovery point.
+            snapshot_details = _prepare_state_snapshot(
+                skip_backup=bool(skip_backup),
+            )
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "restart": "not scheduled",
+                "update": "not attempted",
+                "error": (
+                    "Pre-update state snapshot failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                "repo": str(repo_root),
+            }, indent=2))]
 
     if not git_dir.exists():
         # Bootstrap: deploy from GitHub zip (no git needed — for Pi set up via rsync without .git)
@@ -178,14 +243,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
             if synced_services:
                 output["synced_services"] = synced_services
             if restart:
-                output["restart"] = "Restarting in ~5 seconds."
-                output["wait_seconds"] = RESTART_WAIT_SECONDS
-                output["warning"] = (
-                    f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
-                    "This response confirms the restart was scheduled successfully. "
-                    "Any 'fetch failed' or timeout after this is expected — the server is restarting."
-                )
-                _spawn_delayed_restart()
+                _schedule_restart(output, snapshot_details)
             return [TextContent(type="text", text=json.dumps(output, indent=2))]
         except Exception as e:
             return [TextContent(type="text", text=json.dumps({
@@ -255,14 +313,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 output["synced_services"] = synced_services
 
             if restart:
-                output["restart"] = "Restarting in ~5 seconds."
-                output["wait_seconds"] = RESTART_WAIT_SECONDS
-                output["warning"] = (
-                    f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
-                    "This response confirms the restart was scheduled successfully. "
-                    "Any 'fetch failed' or timeout after this is expected — the server is restarting."
-                )
-                _spawn_delayed_restart()
+                _schedule_restart(output, snapshot_details)
             else:
                 output["note"] = "Changes pulled. Use restart=true to apply, or manually restart."
 
@@ -499,7 +550,26 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
     import shutil
 
     restart = arguments.get("restart", True)
+    skip_backup = arguments.get("skip_backup", False)
     repo_root = Path(__file__).parent.parent.parent.parent  # anima-mcp/
+
+    snapshot_details: dict[str, str] = {}
+    if restart:
+        try:
+            snapshot_details = _prepare_state_snapshot(
+                skip_backup=bool(skip_backup),
+            )
+        except Exception as exc:
+            return [TextContent(type="text", text=json.dumps({
+                "success": False,
+                "restart": "not scheduled",
+                "update": "not attempted",
+                "error": (
+                    "Pre-update state snapshot failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ),
+                "repo": str(repo_root),
+            }, indent=2))]
 
     try:
         url = "https://github.com/CIRWEL/anima-mcp/archive/refs/heads/main.zip"
@@ -525,16 +595,12 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
                 shutil.copy2(item, dst)
         shutil.rmtree(ext_path, ignore_errors=True)
 
+        synced_services = _sync_systemd_services(repo_root)
         output = {"success": True, "message": "Deployed from GitHub", "repo": str(repo_root)}
+        if synced_services:
+            output["synced_services"] = synced_services
         if restart:
-            output["restart"] = "Restarting in ~5 seconds."
-            output["wait_seconds"] = RESTART_WAIT_SECONDS
-            output["warning"] = (
-                f"Do NOT attempt SSH or MCP contact for {RESTART_WAIT_SECONDS} seconds. "
-                "This response confirms the restart was scheduled successfully. "
-                "Any 'fetch failed' or timeout after this is expected — the server is restarting."
-            )
-            _spawn_delayed_restart()
+            _schedule_restart(output, snapshot_details)
         return [TextContent(type="text", text=json.dumps(output, indent=2))]
     except Exception as e:
         return [TextContent(type="text", text=json.dumps({

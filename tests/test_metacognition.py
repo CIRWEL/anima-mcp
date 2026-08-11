@@ -629,7 +629,13 @@ class TestPersistence:
         mm1._baseline_pressure = 1013.0
         mm1._diurnal_temp[14] = [25.0, 26.0]
         mm1._domain_weights = {"light": 1.5, "ambient_temp": 0.8}
-        mm1.save()
+        mm1._curiosity_log = [{
+            "domains": ["light"],
+            "errors_at_time": {"light": 0.4},
+            "obs_count": 12,
+        }]
+        mm1._save_counter = 17
+        assert mm1.save() is True
 
         mm2 = MetacognitiveMonitor(data_dir=str(tmp_path))
         assert mm2._baseline_ambient_temp == pytest.approx(22.5)
@@ -638,6 +644,21 @@ class TestPersistence:
         assert mm2._diurnal_temp[14] == [25.0, 26.0]
         assert mm2._domain_weights.get("light") == pytest.approx(1.5)
         assert mm2._domain_weights.get("ambient_temp") == pytest.approx(0.8)
+        assert mm2._curiosity_log == mm1._curiosity_log
+        assert mm2._save_counter == 17
+
+    def test_read_only_observer_never_overwrites_snapshot(self, tmp_path):
+        writer = MetacognitiveMonitor(data_dir=str(tmp_path))
+        writer._baseline_ambient_temp = 22.5
+        assert writer.save() is True
+        before = (tmp_path / "metacognition_baselines.json").read_bytes()
+
+        observer = MetacognitiveMonitor(data_dir=str(tmp_path), read_only=True)
+        observer._baseline_ambient_temp = 99.0
+
+        assert observer.is_writable is False
+        assert observer.save() is False
+        assert (tmp_path / "metacognition_baselines.json").read_bytes() == before
 
     def test_load_missing_file(self, tmp_path):
         """Loading with no file doesn't crash, uses None baselines."""

@@ -23,6 +23,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple, List
 
+from .atomic_write import atomic_json_write
+
 
 class ActivityLevel(Enum):
     """Lumen's current activity state."""
@@ -364,8 +366,7 @@ class ActivityManager:
         """Persist learned circadian adjustments to disk."""
         try:
             path = self._circadian_path()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(self._circadian_schedule, indent=2))
+            atomic_json_write(path, self._circadian_schedule, indent=2)
         except Exception as e:
             print(f"[Activity] Could not save circadian schedule: {e}", file=sys.stderr, flush=True)
 

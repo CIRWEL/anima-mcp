@@ -17,7 +17,7 @@ Covers:
 
 import sqlite3
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -26,6 +26,39 @@ import pytest
 
 from anima_mcp.server_context import ServerContext
 from anima_mcp import ctx_ref
+
+
+def test_sensor_health_probe_requires_a_valid_fresh_broker_heartbeat(monkeypatch):
+    from anima_mcp import accessors, health, lifecycle
+
+    probes = {}
+    registry = MagicMock()
+    registry.register.side_effect = (
+        lambda name, probe, **_kwargs: probes.__setitem__(name, probe)
+    )
+    state = {"shm": None}
+    monkeypatch.setattr(health, "get_health_registry", lambda: registry)
+    monkeypatch.setattr(accessors, "_get_last_shm_data", lambda: state["shm"])
+
+    lifecycle._register_health_probes()
+    sensor_probe = probes["sensors"]
+
+    state["shm"] = {"readings": {}, "timestamp": datetime.now(timezone.utc).isoformat()}
+    assert sensor_probe() is True
+    for bad in (
+        {"readings": {}},
+        {"readings": {}, "timestamp": "bad"},
+        {
+            "readings": {},
+            "timestamp": (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat(),
+        },
+        {
+            "readings": {},
+            "timestamp": (datetime.now(timezone.utc) + timedelta(minutes=2)).isoformat(),
+        },
+    ):
+        state["shm"] = bad
+        assert sensor_probe() is False
 
 
 # ---------------------------------------------------------------------------

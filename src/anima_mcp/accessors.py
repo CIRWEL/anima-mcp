@@ -10,6 +10,7 @@ Server flags (SERVER_READY, etc.) remain in server.py.
 """
 
 import logging
+import math
 import os
 import sys
 import threading
@@ -63,10 +64,17 @@ def _get_store():
 
 
 def _get_sensors() -> SensorBackend:
+    """Return the server's SHM-backed sensor facade.
+
+    Accessors are part of the MCP/mind process, so backend selection is not
+    delegated to Pi auto-detection.  This keeps the single-I2C-owner invariant
+    true even if a service environment file or manual launch omits the systemd
+    safeguard.
+    """
     if _cr._ctx is None:
-        return get_sensors()  # Fallback when not yet woken
+        return get_sensors(backend="shm")
     if _cr._ctx.sensors is None:
-        _cr._ctx.sensors = get_sensors()
+        _cr._ctx.sensors = get_sensors(backend="shm")
     return _cr._ctx.sensors
 
 
@@ -223,7 +231,26 @@ def _get_warm_start_anticipation():
     )
 
 
-def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorReadings | None, Anima | None]:
+def _prediction_accuracy_from_shm(shm_data: Any) -> float | None:
+    """Read broker-owned prediction accuracy without opening a stale singleton."""
+    if not isinstance(shm_data, dict):
+        return None
+    learning = shm_data.get("learning")
+    if not isinstance(learning, dict):
+        return None
+    stats = learning.get("prediction_accuracy")
+    if not isinstance(stats, dict) or stats.get("insufficient_data"):
+        return None
+    error = stats.get("overall_mean_error")
+    if isinstance(error, bool) or not isinstance(error, (int, float)):
+        return None
+    error = float(error)
+    if not math.isfinite(error):
+        return None
+    return 1.0 - max(0.0, min(1.0, error))
+
+
+def _get_readings_and_anima(fallback_to_sensors: bool = False) -> tuple[SensorReadings | None, Anima | None]:
     """
     Read sensor data from shared memory (broker) or fallback to direct sensor access.
 
@@ -246,20 +273,20 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             if "readings" in shm_data and "anima" in shm_data:
                 # Check timestamp in shared memory data (broker writes "timestamp" field)
                 timestamp_str = shm_data.get("timestamp")
-                if timestamp_str:
+                if isinstance(timestamp_str, str) and timestamp_str:
                     timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
                     age_seconds = (datetime.now(timestamp.tzinfo) - timestamp).total_seconds()
-                    shm_stale = age_seconds > SHM_STALE_THRESHOLD_SECONDS
+                    shm_stale = (
+                        age_seconds > SHM_STALE_THRESHOLD_SECONDS
+                        or age_seconds < -5
+                    )
                     if not shm_stale:
                         shm_valid = True
-                else:
-                    # No timestamp - assume fresh if data exists
-                    shm_valid = True
         except Exception as e:
             logger.debug("[Server] Error checking shared memory timestamp: %s", e)
-            # If timestamp check fails but data exists, try to use it anyway
-            if shm_data and "readings" in shm_data and "anima" in shm_data:
-                shm_valid = True
+            # A malformed heartbeat is not evidence of a present body.  Keep
+            # the reading unknown until the broker publishes a valid timestamp.
+            shm_valid = False
 
     # Try to use shared memory if valid
     if shm_valid:
@@ -276,7 +303,13 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
 
             # Recompute anima from readings with memory influence
             drift = _get_calibration_drift()
-            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
+            anima = sense_self_with_memory(
+                readings,
+                anticipation,
+                calibration,
+                drift_midpoints=drift.get_midpoints(),
+                prediction_accuracy=_prediction_accuracy_from_shm(shm_data),
+            )
 
             return readings, anima
         except Exception as e:
@@ -285,10 +318,11 @@ def _get_readings_and_anima(fallback_to_sensors: bool = True) -> tuple[SensorRea
             traceback.print_exc(file=sys.stderr)
             # Fall through to sensor fallback
 
-    # Fallback to direct sensor access if:
-    # 1. Shared memory is empty/stale/invalid, OR
-    # 2. fallback_to_sensors is True (always allow fallback)
-    if fallback_to_sensors or not shm_valid:
+    # Direct access is opt-in.  This module runs in the MCP server, while the
+    # broker owns /dev/i2c-1; stale or malformed SHM must become "unknown", not
+    # an implicit second hardware owner.  Standalone development callers can
+    # still request a mock/direct backend explicitly.
+    if fallback_to_sensors:
         # Check if broker is running (for logging purposes)
         broker_running = _is_broker_running()
 

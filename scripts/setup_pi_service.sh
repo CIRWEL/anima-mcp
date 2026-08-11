@@ -27,7 +27,7 @@ fi
 
 # Step 1: Copy service files
 echo "1. Installing systemd services..."
-for svc in anima.service anima-broker.service wifi-pm-disable.service wifi-watchdog.service wifi-watchdog.timer; do
+for svc in anima-restore.service anima.service anima-broker.service wifi-pm-disable.service wifi-watchdog.service wifi-watchdog.timer; do
     if [ -f "$PROJECT_DIR/systemd/$svc" ]; then
         cp "$PROJECT_DIR/systemd/$svc" "/etc/systemd/system/$svc"
         echo "  Copied $svc"
@@ -45,10 +45,23 @@ if [ -z "$ANIMA_HOME" ]; then
 fi
 
 # Update service files with correct paths
-for svc in /etc/systemd/system/anima.service /etc/systemd/system/anima-broker.service; do
+for svc in /etc/systemd/system/anima-restore.service /etc/systemd/system/anima.service /etc/systemd/system/anima-broker.service; do
     sed -i "s|/home/unitares-anima|$ANIMA_HOME|g" "$svc"
 done
 echo "  Service paths updated"
+
+echo "2a. Preparing backed-up calibration state..."
+PYTHON_BIN="$PROJECT_DIR/.venv/bin/python"
+[ -x "$PYTHON_BIN" ] || PYTHON_BIN="$(command -v python3)"
+sudo -u unitares-anima env HOME="$ANIMA_HOME" PYTHONPATH="$PROJECT_DIR/src" \
+    "$PYTHON_BIN" - "$ANIMA_HOME/.anima" <<'PY'
+import sys
+
+from anima_mcp.state_snapshot import ensure_persistent_config
+
+ensure_persistent_config(data_dir=sys.argv[1])
+PY
+echo "  Persistent calibration ready"
 
 # Step 2b: Install network tuning (reduces TCP burst on WiFi chip during restarts)
 echo "2b. Installing network sysctl config..."
@@ -97,7 +110,7 @@ fi
 
 # Step 5: Enable services
 echo "5. Enabling services (auto-start on boot)..."
-systemctl enable anima-broker anima
+systemctl enable anima-restore anima-broker anima
 systemctl enable wifi-pm-disable
 systemctl enable wifi-watchdog.timer
 echo "  Services enabled"

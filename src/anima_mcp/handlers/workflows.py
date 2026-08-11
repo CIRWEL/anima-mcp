@@ -18,7 +18,7 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
     If workflow name matches a template, uses template. Otherwise uses original workflow logic.
     """
     import os
-    from ..accessors import _get_store, _get_sensors
+    from ..accessors import _get_store
     from ..workflow_orchestrator import get_orchestrator
     from ..workflow_templates import WorkflowTemplates
 
@@ -28,13 +28,15 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
             "error": "Server not initialized - wake() failed"
         }))]
 
-    sensors = _get_sensors()
     unitares_url = os.environ.get("UNITARES_URL")
 
     orchestrator = get_orchestrator(
         unitares_url=unitares_url,
         anima_store=store,
-        anima_sensors=sensors
+        # The MCP process never becomes a direct sensor owner.  The
+        # orchestrator may accept a backend in standalone use, but production
+        # workflows fail toward unknown when broker SHM is stale or absent.
+        anima_sensors=None,
     )
 
     workflow = arguments.get("workflow")

@@ -46,21 +46,17 @@ def _register_health_probes():
     _health = get_health_registry()
 
     def _sensor_probe():
-        ctx = _get_ctx()
-        if ctx and ctx.sensors is not None:
-            return True
         shm = _get_last_shm_data()
         if shm and "readings" in shm:
             ts = shm.get("timestamp")
-            if ts:
+            if isinstance(ts, str) and ts:
                 from datetime import datetime
                 try:
                     t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                     age = (datetime.now(t.tzinfo) - t).total_seconds()
-                    return age < SHM_STALE_THRESHOLD_SECONDS * 2  # 30s grace
+                    return -5 <= age < SHM_STALE_THRESHOLD_SECONDS * 2
                 except (ValueError, AttributeError):
                     pass
-            return True  # Data exists but no timestamp — assume ok
         return False
 
     _health.register("sensors", probe=_sensor_probe, debounce_seconds=6.0)

@@ -128,31 +128,34 @@ def test_get_readings_and_anima_uses_shared_memory_when_fresh(monkeypatch):
     assert ctx_ref._ctx.last_shm_data == shm_payload
 
 
-def test_get_readings_and_anima_falls_back_to_sensors_when_shm_stale(monkeypatch):
+def test_get_readings_and_anima_fails_unknown_when_shm_stale(monkeypatch):
     stale_iso = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat().replace("+00:00", "Z")
     stale_payload = {
         "timestamp": stale_iso,
         "readings": {"cpu_temp_c": 40},
         "anima": {"warmth": 0.2},
     }
-    direct_readings = SimpleNamespace(to_dict=lambda: {"cpu_temp_c": 55})
-    direct_anima = SimpleNamespace()
-    sensors = SimpleNamespace(read=lambda: direct_readings)
+    sensor_calls = {"count": 0}
+
+    def _unexpected_sensor_access():
+        sensor_calls["count"] += 1
+        raise AssertionError("server attempted direct sensor access")
 
     monkeypatch.setattr(accessors, "_get_shm_client", lambda: SimpleNamespace(read=lambda: stale_payload))
     monkeypatch.setattr(accessors, "_is_broker_running", lambda: True)
-    monkeypatch.setattr(accessors, "_get_sensors", lambda: sensors)
+    monkeypatch.setattr(accessors, "_get_sensors", _unexpected_sensor_access)
     monkeypatch.setattr(accessors, "get_calibration", lambda: SimpleNamespace())
     monkeypatch.setattr(accessors, "_get_warm_start_anticipation", lambda: None)
     monkeypatch.setattr(accessors, "anticipate_state", lambda d: {"anticipated": True})
     monkeypatch.setattr(accessors, "_get_calibration_drift", lambda: SimpleNamespace(get_midpoints=lambda: {}))
-    monkeypatch.setattr(accessors, "sense_self_with_memory", lambda *args, **kwargs: direct_anima)
+    monkeypatch.setattr(accessors, "sense_self_with_memory", lambda *args, **kwargs: SimpleNamespace())
     _set_ctx(monkeypatch, SimpleNamespace(last_shm_data=None))
     monkeypatch.setattr(accessors._get_readings_and_anima, "_last_fallback_log", 0.0, raising=False)
 
     readings, anima = server._get_readings_and_anima()
-    assert readings is direct_readings
-    assert anima is direct_anima
+    assert readings is None
+    assert anima is None
+    assert sensor_calls["count"] == 0
 
 
 def test_get_readings_and_anima_returns_none_when_sensors_unavailable(monkeypatch):
@@ -173,10 +176,10 @@ def test_get_store_returns_none_when_uninitialized(monkeypatch):
 
 def test_get_sensors_lazy_initializes_once(monkeypatch):
     sensor_obj = object()
-    calls = {"count": 0}
+    calls = []
 
-    def _factory():
-        calls["count"] += 1
+    def _factory(*, backend):
+        calls.append(backend)
         return sensor_obj
 
     ctx = SimpleNamespace(sensors=None)
@@ -185,7 +188,7 @@ def test_get_sensors_lazy_initializes_once(monkeypatch):
 
     assert server._get_sensors() is sensor_obj
     assert server._get_sensors() is sensor_obj
-    assert calls["count"] == 1
+    assert calls == ["shm"]
 
 
 def test_get_shm_client_lazy_initializes_with_file_backend(monkeypatch):

@@ -390,6 +390,15 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     except Exception:
         pass
 
+    # Durable server→broker learning handoff.  Queue age and pressure make a
+    # stalled broker or rejected event visible before the SD card fills or
+    # evidence silently stops reaching its owner.
+    try:
+        from ..learning_events import learning_inbox_status
+        result["learning_inbox"] = learning_inbox_status()
+    except Exception as e:
+        result["learning_inbox"] = {"error": f"{type(e).__name__}: {e}"}
+
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 
 

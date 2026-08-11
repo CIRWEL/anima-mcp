@@ -9,6 +9,7 @@ Enables cross-server workflows and orchestration.
 """
 
 import asyncio
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 from enum import Enum
@@ -19,6 +20,7 @@ from .eisv_mapper import EISVMetrics, anima_to_eisv
 from .unitares_bridge import UnitaresBridge
 from .shared_memory import SharedMemoryClient
 from .config import get_calibration
+from .server_state import SHM_STALE_THRESHOLD_SECONDS
 
 
 class WorkflowStatus(Enum):
@@ -103,8 +105,15 @@ class UnifiedWorkflowOrchestrator:
         if shm_data and "readings" in shm_data and "anima" in shm_data:
             try:
                 # Reconstruct SensorReadings from shared memory
-                from datetime import datetime
                 readings_dict = shm_data["readings"]
+
+                state_timestamp = shm_data.get("timestamp") or readings_dict.get("timestamp")
+                if not isinstance(state_timestamp, str) or not state_timestamp:
+                    raise ValueError("shared state has no timestamp")
+                state_time = datetime.fromisoformat(state_timestamp.replace("Z", "+00:00"))
+                age_seconds = (datetime.now(state_time.tzinfo) - state_time).total_seconds()
+                if age_seconds > SHM_STALE_THRESHOLD_SECONDS or age_seconds < -5:
+                    raise ValueError("shared state is stale or future-dated")
                 
                 timestamp_str = readings_dict.get("timestamp", "")
                 if isinstance(timestamp_str, str):
@@ -145,7 +154,12 @@ class UnifiedWorkflowOrchestrator:
                 
                 # Recompute anima from readings (ensures consistency)
                 calibration = get_calibration()
-                anima = sense_self(readings, calibration)
+                from .accessors import _prediction_accuracy_from_shm
+                anima = sense_self(
+                    readings,
+                    calibration,
+                    prediction_accuracy=_prediction_accuracy_from_shm(shm_data),
+                )
                 
                 return readings, anima
             except Exception:

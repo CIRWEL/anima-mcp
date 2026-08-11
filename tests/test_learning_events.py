@@ -1,9 +1,14 @@
 import json
+import os
+
+import pytest
 
 from anima_mcp.learning_events import (
+    LearningInboxFullError,
     drain_learning_events,
     enqueue_preference_weights,
     enqueue_self_belief_evidence,
+    learning_inbox_status,
 )
 from anima_mcp.preferences import PreferenceSystem
 from anima_mcp.self_model import SelfModel
@@ -119,4 +124,51 @@ def test_failed_snapshot_save_rolls_back_and_retains_event(tmp_path, monkeypatch
     assert result["failed"] == 1
     assert model.beliefs["light_sensitive"].supporting_count == 0
     assert model._applied_event_ids == []
+    assert len(list(inbox.glob("*.json"))) == 1
+
+
+def test_inbox_status_surfaces_queue_rejections_and_oldest_age(tmp_path):
+    inbox = tmp_path / "inbox"
+    event_id = enqueue_self_belief_evidence(
+        "light_sensitive",
+        supports=True,
+        strength=0.8,
+        source="test",
+        inbox=inbox,
+    )
+    old = inbox / f"{event_id}.json"
+    os.utime(old, (old.stat().st_atime, old.stat().st_mtime - 10))
+    rejected = inbox / "rejected"
+    rejected.mkdir()
+    (rejected / "bad.json").write_text("bad")
+
+    status = learning_inbox_status(inbox=inbox)
+
+    assert status["queued"] == 1
+    assert status["rejected"] == 1
+    assert status["total_bytes"] > 0
+    assert status["oldest_age_s"] >= 9
+    assert status["over_capacity"] is False
+
+
+def test_enqueue_fails_closed_at_configured_capacity(tmp_path, monkeypatch):
+    inbox = tmp_path / "inbox"
+    monkeypatch.setenv("ANIMA_LEARNING_INBOX_MAX_EVENTS", "1")
+    enqueue_self_belief_evidence(
+        "light_sensitive",
+        supports=True,
+        strength=0.8,
+        source="first",
+        inbox=inbox,
+    )
+
+    with pytest.raises(LearningInboxFullError):
+        enqueue_self_belief_evidence(
+            "light_sensitive",
+            supports=True,
+            strength=0.8,
+            source="second",
+            inbox=inbox,
+        )
+
     assert len(list(inbox.glob("*.json"))) == 1

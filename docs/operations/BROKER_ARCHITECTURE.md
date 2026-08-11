@@ -34,6 +34,7 @@ anima-broker.service (Body)
   - Computes anima state
   - Writes preferences + self-model snapshots
   - Drains durable server learning events
+  - Runs an in-memory, read-only metacognitive observer
   - Writes to shared memory
          |
          | /dev/shm/anima_state.json
@@ -43,6 +44,7 @@ anima.service (Mind)
   - Reads from shared memory
   - Owns TFT display + LEDs (exclusive I2C for display)
   - Owns the action policy and growth database
+  - Owns metacognition baseline/curiosity persistence
   - Reads broker-owned learning snapshots
   - Provides MCP tools
   - Handles external connections
@@ -60,8 +62,8 @@ External MCP Clients (Claude Code, Cursor, Claude.ai)
 - **Startup:** `anima-broker` starts first, then `anima`
 - **Stopping `anima`** does NOT stop broker -- sensors keep reading, face keeps displaying
 - **Stopping `anima-broker`** -- server has no fresh sensor state. Its deployed
-  `ANIMA_SENSORS_BACKEND=shm` safeguard prevents direct sensor fallback from
-  opening a second I2C handle.
+  `ANIMA_SENSORS_BACKEND=shm` safeguard and the server accessor's fail-closed
+  default prevent direct sensor fallback from opening a second I2C handle.
 
 ---
 
@@ -112,16 +114,27 @@ question evidence, Q&A-derived belief evidence, and meta-learning weight
 changes are atomically queued under `~/.anima/learning_inbox/`; the broker
 applies and persists them as the sole writer.
 
+The durable inbox is part of restore state, has bounded admission, and reports
+queued count, rejected count, bytes, and oldest-event age through the MCP
+`diagnostics` tool. Capacity exhaustion is an explicit error, not silent loss.
+
 Server-owned learning:
 
 | Module | Purpose |
 |--------|---------|
 | `agency.py` | TD action selection (the only active action learner) |
 | `learning.py` | Calibration adaptation |
+| `metacognition.py` | Baselines, curiosity effectiveness, pending evaluation log |
 | `growth/` | Preferences, goals, memories, autobiography |
 | `self_reflection.py` | Insight discovery |
 | `llm_gateway.py` | LLM reflections (Groq/Llama) |
 | `knowledge.py` | Q&A-derived insights |
+
+The broker consumes calibration through `$ANIMA_CONFIG`, pinned in production
+to the backed-up `~/.anima/anima_config.json`, and refreshes its cached object
+when the server atomically replaces that file. Prediction accuracy travels in
+broker-published shared memory; the server never consults its observation-empty
+adaptive-prediction singleton.
 
 The historical broker agency loop and its separate
 `~/anima-mcp/anima.db` table are retained only for rollback. They stay off

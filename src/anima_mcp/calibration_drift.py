@@ -28,6 +28,8 @@ import math
 from dataclasses import dataclass, field
 from typing import Any, Dict
 
+from .atomic_write import atomic_json_write
+
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -309,8 +311,7 @@ class CalibrationDrift:
                 name: d.to_dict() for name, d in self.dimensions.items()
             },
         }
-        with open(path, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_json_write(path, data, indent=2)
 
     @classmethod
     def load(cls, path: str) -> CalibrationDrift:
