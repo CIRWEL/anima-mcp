@@ -304,10 +304,10 @@ TOOLS = [
                     "description": "Self-assessed proposal risk; protected boundaries may raise it",
                     "default": "medium",
                 },
-                "source": {
+                "claimed_source": {
                     "type": "string",
                     "enum": ["self_observation", "test_failure", "caretaker", "governance"],
-                    "description": "Origin of the proposal",
+                    "description": "Caller-claimed origin label. Stored as unverified, zero-weight data; server provenance is derived separately and cannot be supplied here",
                     "default": "self_observation",
                 },
                 "proposal_id": {
@@ -338,10 +338,10 @@ TOOLS = [
                     "type": "string",
                     "description": "Required commit, PR, or deployment reference for the external implementation",
                 },
-                "measurement_source": {
+                "claimed_measurement_source": {
                     "type": "string",
                     "enum": ["self_observation", "automated_test", "caretaker", "governance"],
-                    "description": "Provenance of the recorded outcome evidence",
+                    "description": "Caller-claimed measurement-origin label. It does not verify the outcome or evidence and receives no policy weight",
                     "default": "self_observation",
                 },
             },

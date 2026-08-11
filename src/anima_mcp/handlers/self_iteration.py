@@ -13,6 +13,22 @@ def _text(payload: dict) -> list[TextContent]:
     return [TextContent(type="text", text=json.dumps(payload, indent=2))]
 
 
+def _claimed_input(
+    arguments: dict, *, current: str, legacy: str, default: str
+) -> tuple[object, bool]:
+    """Read a caller claim while keeping the former field as an inert alias."""
+    if current in arguments and legacy in arguments:
+        if arguments[current] != arguments[legacy]:
+            raise SelfIterationError(
+                f"{current} and deprecated {legacy} must not conflict"
+            )
+    if current in arguments:
+        return arguments[current], False
+    if legacy in arguments:
+        return arguments[legacy], True
+    return default, False
+
+
 async def handle_self_iteration(arguments: dict) -> list[TextContent]:
     """Inspect source structure or update the proposal/outcome ledger.
 
@@ -33,6 +49,12 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
             )
 
         if action == "propose":
+            claimed_source, used_legacy_source = _claimed_input(
+                arguments,
+                current="claimed_source",
+                legacy="source",
+                default="self_observation",
+            )
             proposal = system.propose(
                 observation=arguments.get("observation"),
                 hypothesis=arguments.get("hypothesis"),
@@ -42,18 +64,19 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 verification=arguments.get("verification"),
                 rollback_plan=arguments.get("rollback_plan"),
                 risk=arguments.get("risk", "medium"),
-                source=arguments.get("source", "self_observation"),
+                claimed_source=claimed_source,
             )
-            return _text(
-                {
-                    "success": True,
-                    "proposal": proposal,
-                    "next_step": (
-                        "A caretaker or isolated coding runner may implement this on a branch. "
-                        "The running creature made no source changes."
-                    ),
-                }
-            )
+            response = {
+                "success": True,
+                "proposal": proposal,
+                "next_step": (
+                    "A caretaker or isolated coding runner may implement this on a branch. "
+                    "The running creature made no source changes."
+                ),
+            }
+            if used_legacy_source:
+                response["deprecated_fields"] = {"source": "claimed_source"}
+            return _text(response)
 
         if action == "list":
             return _text(
@@ -65,17 +88,26 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
             )
 
         if action == "record_outcome":
+            claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
+                arguments,
+                current="claimed_measurement_source",
+                legacy="measurement_source",
+                default="self_observation",
+            )
             proposal = system.record_outcome(
                 proposal_id=arguments.get("proposal_id"),
                 decision=arguments.get("decision"),
                 observed_outcome=arguments.get("observed_outcome"),
                 evidence=arguments.get("evidence"),
                 implementation_ref=arguments.get("implementation_ref"),
-                measurement_source=arguments.get(
-                    "measurement_source", "self_observation"
-                ),
+                claimed_measurement_source=claimed_measurement_source,
             )
-            return _text({"success": True, "proposal": proposal})
+            response = {"success": True, "proposal": proposal}
+            if used_legacy_measurement_source:
+                response["deprecated_fields"] = {
+                    "measurement_source": "claimed_measurement_source"
+                }
+            return _text(response)
 
         return _text(
             {
