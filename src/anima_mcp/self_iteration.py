@@ -25,13 +25,34 @@ import re
 import subprocess
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 from .atomic_write import atomic_json_write
+from .self_iteration_verification import (
+    ATTESTATION_SCHEMA,
+    MAX_ATTESTATION_VALIDITY,
+    SIGNATURE_ALGORITHM,
+    VerificationError,
+    VerifierKey,
+    VerifierKeyProvider,
+    authenticated_identity,
+    attestation_signing_input_b64,
+    build_attestation,
+    canonical_json_bytes,
+    evaluate_verification,
+    parse_utc_timestamp,
+    proposal_content_sha256,
+    validate_evidence,
+    validate_recorded_attestation,
+    verification_contract,
+    verifier_key_from_env,
+    verify_attestation_signature,
+)
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+PROVENANCE_SCHEMA_VERSION = 2
 PROVENANCE_SCHEMA = "anima.self_iteration.provenance.v1"
 MAX_INSPECT_BYTES = 1_000_000
 MAX_FILE_DETAILS = 200
@@ -93,6 +114,7 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
     ("src/anima_mcp/tool_registry.py", "capability boundary"),
     ("src/anima_mcp/handlers/system_ops.py", "deployment and system control"),
     ("src/anima_mcp/self_iteration.py", "self-iteration evaluator"),
+    ("src/anima_mcp/self_iteration_verification.py", "self-iteration evaluator"),
     ("src/anima_mcp/handlers/self_iteration.py", "self-iteration evaluator"),
     ("src/anima_mcp/anima.py", "embodied self-measurement boundary"),
     ("src/anima_mcp/config.py", "calibration boundary"),
@@ -202,6 +224,39 @@ _ARCHITECTURE: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 )
 
 _RISK_ORDER = {"low": 0, "medium": 1, "high": 2}
+
+_V3_PROPOSAL_FIELDS = {
+    "id",
+    "created_at",
+    "source_claim",
+    "provenance",
+    "proposer_identity",
+    "trust_policy",
+    "status",
+    "observation",
+    "hypothesis",
+    "expected_outcome",
+    "evidence",
+    "evidence_epistemic_status",
+    "target_paths",
+    "verification",
+    "rollback_plan",
+    "risk",
+    "boundaries",
+    "code_fingerprint",
+    "implementation_policy",
+    "events",
+    "content_sha256",
+}
+
+_PROPOSAL_STATUSES = {
+    "protected_review_required",
+    "human_review_required",
+    "ready_for_isolated_implementation",
+    "retained",
+    "reverted",
+    "measurement_inconclusive",
+}
 
 
 class SelfIterationError(ValueError):
@@ -501,11 +556,13 @@ class SelfIterationSystem:
         provenance_provider: Callable[
             [str], dict[str, Any]
         ] = _collect_server_provenance,
+        verifier_key_provider: VerifierKeyProvider = verifier_key_from_env,
     ) -> None:
         self.repo_root = repo_root.resolve() if repo_root else _discover_repo_root()
         self.ledger_path = ledger_path or Path.home() / ".anima" / "self_iteration.json"
         self._clock = clock
         self._provenance_provider = provenance_provider
+        self._verifier_key_provider = verifier_key_provider
         self._lock = threading.RLock()
 
     def _server_provenance(self, recorded_at: str) -> dict[str, Any]:
@@ -559,6 +616,54 @@ class SelfIterationSystem:
         )
         receipt["trust"] = trust
         return receipt
+
+    @staticmethod
+    def _identity_from_provenance(
+        provenance: Any, *, label: str, required: bool
+    ) -> dict[str, str | None] | None:
+        trust = provenance.get("trust") if isinstance(provenance, dict) else None
+        claims_authenticated_actor = bool(
+            isinstance(trust, dict) and trust.get("actor_authenticated") is True
+        )
+        if not claims_authenticated_actor and not required:
+            return None
+        try:
+            return authenticated_identity(provenance)
+        except VerificationError as exc:
+            if required:
+                raise SelfIterationError(
+                    f"{label} lacks authenticated actor provenance"
+                ) from exc
+            raise SelfIterationError(f"{label} actor provenance is malformed") from exc
+
+    def _resolve_verifier_key(
+        self,
+        verifier_identity: dict[str, str | None],
+        key_id: str | None = None,
+    ) -> VerifierKey:
+        verifier_id = verifier_identity["id"]
+        assert isinstance(verifier_id, str)
+        try:
+            key = self._verifier_key_provider(verifier_id, key_id)
+        except Exception as exc:
+            raise SelfIterationError(
+                "verifier key registry is unavailable or malformed"
+            ) from exc
+        if key is None:
+            raise SelfIterationError(
+                "no signing key is configured for the authenticated verifier"
+            )
+        if (
+            not isinstance(key, VerifierKey)
+            or key.verifier_id != verifier_id
+            or not isinstance(key.key_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9._:-]{1,100}", key.key_id)
+            or not isinstance(key.secret, bytes)
+            or not 32 <= len(key.secret) <= 128
+            or (key_id is not None and key.key_id != key_id)
+        ):
+            raise SelfIterationError("verifier key registry returned a mismatched key")
+        return key
 
     def _git_metadata(self) -> dict[str, Any]:
         if self.repo_root is None:
@@ -766,8 +871,11 @@ class SelfIterationSystem:
                 "inspect_structure": True,
                 "persist_change_proposals": True,
                 "record_measured_outcomes": True,
+                "prepare_signed_verification": True,
+                "record_signed_verification": True,
                 "accept_caller_supplied_provenance": False,
                 "weight_unverified_ledger_claims": False,
+                "verification_grants_implementation_authority": False,
                 "write_source": False,
                 "execute_proposal_text": False,
                 "commit_or_push": False,
@@ -789,7 +897,12 @@ class SelfIterationSystem:
                 "provenance_rule": (
                     "Caller labels, narratives, and evidence remain zero-weight claims. "
                     "Authentication identifies a submitter only; an independent verifier "
-                    "must append a separate event before policy can assign weight or authority."
+                    "must append a valid signed event before policy can assign priority."
+                ),
+                "verification_rule": (
+                    "A valid HMAC attestation must bind a distinct authenticated verifier, "
+                    "proposal digest, source fingerprint, evidence digests, and expiry. "
+                    "Verification never grants source-editing, merge, or deployment authority."
                 ),
             },
             "ledger": self._ledger_summary(),
@@ -805,11 +918,23 @@ class SelfIterationSystem:
                 if proposal.get("provenance", {}).get("trust", {}).get("classification")
                 == "legacy_unverified"
             )
+            states = [
+                evaluate_verification(
+                    proposal,
+                    key_provider=self._verifier_key_provider,
+                    now=self._clock(),
+                )
+                for proposal in ledger["proposals"]
+            ]
             return {
                 "proposal_count": len(ledger["proposals"]),
                 "legacy_unverified_count": legacy_count,
+                "verified_count": sum(
+                    state["status"] == "verified" for state in states
+                ),
                 "schema_version": ledger["schema_version"],
                 "provenance_contract": ledger["provenance_contract"],
+                "verification_contract": ledger["verification_contract"],
             }
         except SelfIterationError as exc:
             return {
@@ -946,6 +1071,7 @@ class SelfIterationSystem:
         return {
             "schema_version": SCHEMA_VERSION,
             "provenance_contract": _provenance_contract(),
+            "verification_contract": verification_contract(),
             "migrations": [],
             "proposals": [],
         }
@@ -997,13 +1123,13 @@ class SelfIterationSystem:
                     "type": "provenance_migrated",
                     "at": migrated_at,
                     "from_schema": 1,
-                    "to_schema": SCHEMA_VERSION,
+                    "to_schema": PROVENANCE_SCHEMA_VERSION,
                     "classification": "legacy_unverified",
                     "authority_granted": False,
                 }
             )
 
-        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["schema_version"] = PROVENANCE_SCHEMA_VERSION
         ledger["provenance_contract"] = _provenance_contract()
         migrations = ledger.setdefault("migrations", [])
         if not isinstance(migrations, list):
@@ -1013,8 +1139,42 @@ class SelfIterationSystem:
                 "type": "schema_migration",
                 "at": migrated_at,
                 "from_schema": 1,
-                "to_schema": SCHEMA_VERSION,
+                "to_schema": PROVENANCE_SCHEMA_VERSION,
                 "classification": "legacy_unverified",
+            }
+        )
+        return ledger
+
+    def _migrate_v2(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Bind every proposal to immutable content before signed verification."""
+        migrated_at = _isoformat(self._clock())
+        ledger = copy.deepcopy(data)
+        for proposal in ledger["proposals"]:
+            proposal["proposer_identity"] = self._identity_from_provenance(
+                proposal.get("provenance"),
+                label="self-iteration proposal",
+                required=False,
+            )
+            proposal["content_sha256"] = proposal_content_sha256(proposal)
+            proposal.setdefault("events", []).append(
+                {
+                    "type": "verification_schema_migrated",
+                    "at": migrated_at,
+                    "from_schema": PROVENANCE_SCHEMA_VERSION,
+                    "to_schema": SCHEMA_VERSION,
+                    "verification_status": "unverified",
+                    "authority_granted": False,
+                }
+            )
+        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["verification_contract"] = verification_contract()
+        ledger["migrations"].append(
+            {
+                "type": "schema_migration",
+                "at": migrated_at,
+                "from_schema": PROVENANCE_SCHEMA_VERSION,
+                "to_schema": SCHEMA_VERSION,
+                "classification": "verification_requires_signed_attestation",
             }
         )
         return ledger
@@ -1035,14 +1195,28 @@ class SelfIterationSystem:
     @staticmethod
     def _validate_provenance(provenance: Any, *, label: str) -> None:
         trust = provenance.get("trust") if isinstance(provenance, dict) else None
+        authentication = (
+            provenance.get("authentication") if isinstance(provenance, dict) else None
+        )
+        actor = provenance.get("actor") if isinstance(provenance, dict) else None
         integrity = (
             provenance.get("integrity") if isinstance(provenance, dict) else None
+        )
+        authenticated_context = bool(
+            isinstance(authentication, dict)
+            and authentication.get("verified") is True
+            and isinstance(actor, dict)
+            and actor.get("verified") is True
+            and isinstance(actor.get("id"), str)
+            and actor.get("id", "").strip()
         )
         if (
             not isinstance(provenance, dict)
             or provenance.get("schema") != PROVENANCE_SCHEMA
             or not isinstance(provenance.get("recorded_by"), str)
+            or not isinstance(authentication, dict)
             or not isinstance(trust, dict)
+            or trust.get("actor_authenticated") is not authenticated_context
             or trust.get("claims_verified") is not False
             or trust.get("evidence_verified") is not False
             or trust.get("weighting_eligible") is not False
@@ -1054,6 +1228,13 @@ class SelfIterationSystem:
             raise SelfIterationError(
                 f"self-iteration ledger {label} provenance violates the zero-trust contract"
             )
+        if authenticated_context:
+            try:
+                authenticated_identity(provenance)
+            except VerificationError as exc:
+                raise SelfIterationError(
+                    f"self-iteration ledger {label} authenticated identity is malformed"
+                ) from exc
 
     @staticmethod
     def _validate_trust_policy(policy: Any, *, label: str) -> None:
@@ -1112,6 +1293,112 @@ class SelfIterationSystem:
                 self._validate_provenance(event.get("provenance"), label="outcome")
                 self._validate_trust_policy(event.get("trust_policy"), label="outcome")
 
+    def _validate_v3(self, data: dict[str, Any]) -> None:
+        self._validate_v2(data)
+        if data.get("verification_contract") != verification_contract():
+            raise SelfIterationError(
+                "self-iteration ledger verification contract is malformed"
+            )
+        proposal_ids: set[str] = set()
+        for proposal in data["proposals"]:
+            if not set(proposal).issubset(_V3_PROPOSAL_FIELDS):
+                raise SelfIterationError(
+                    "self-iteration proposal contains unsupported unbound fields"
+                )
+            proposal_id = proposal.get("id")
+            if (
+                not isinstance(proposal_id, str)
+                or not proposal_id
+                or proposal_id in proposal_ids
+            ):
+                raise SelfIterationError(
+                    "self-iteration proposal identifiers are malformed or duplicated"
+                )
+            proposal_ids.add(proposal_id)
+            if proposal.get("status") not in _PROPOSAL_STATUSES:
+                raise SelfIterationError("self-iteration proposal status is malformed")
+            expected_digest = proposal_content_sha256(proposal)
+            if proposal.get("content_sha256") != expected_digest:
+                raise SelfIterationError(
+                    "self-iteration proposal content digest is malformed"
+                )
+            expected_identity = self._identity_from_provenance(
+                proposal.get("provenance"),
+                label="self-iteration proposal",
+                required=False,
+            )
+            if proposal.get("proposer_identity") != expected_identity:
+                raise SelfIterationError(
+                    "self-iteration proposal identity binding is malformed"
+                )
+            for event in proposal["events"]:
+                if event.get("type") not in {
+                    "verification_challenge_issued",
+                    "verification_attested",
+                }:
+                    continue
+                attestation = event.get("attestation")
+                if (
+                    not isinstance(attestation, dict)
+                    or attestation.get("schema") != ATTESTATION_SCHEMA
+                ):
+                    raise SelfIterationError(
+                        "self-iteration verification event is malformed"
+                    )
+                self._validate_provenance(
+                    event.get("provenance"), label="verification event"
+                )
+                if event.get("authority_granted") is not False:
+                    raise SelfIterationError(
+                        "self-iteration verification event grants forbidden authority"
+                    )
+                if event.get("type") == "verification_challenge_issued":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "challenge_id",
+                        "attestation",
+                        "signing_sha256",
+                        "provenance",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration verification challenge fields are malformed"
+                        )
+                    signing_digest = event.get("signing_sha256")
+                    if not isinstance(signing_digest, str) or not re.fullmatch(
+                        r"[0-9a-f]{64}", signing_digest
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration verification challenge digest is malformed"
+                        )
+                if event.get("type") == "verification_attested":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "challenge_id",
+                        "attestation",
+                        "signature",
+                        "provenance",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration attestation event fields are malformed"
+                        )
+                    signature = event.get("signature")
+                    if (
+                        not isinstance(signature, dict)
+                        or set(signature)
+                        != {"algorithm", "key_id", "value", "assurance"}
+                        or signature.get("algorithm") != SIGNATURE_ALGORITHM
+                        or signature.get("assurance")
+                        != "symmetric_mac_server_verifiable"
+                        or not isinstance(signature.get("value"), str)
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration attestation signature is malformed"
+                        )
+
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.exists():
             return self._empty_ledger()
@@ -1126,18 +1413,91 @@ class SelfIterationSystem:
         if not isinstance(data.get("proposals"), list):
             raise SelfIterationError("self-iteration ledger proposals are malformed")
         version = data.get("schema_version", 1)
+        migrated = False
         if version == 1:
             data = self._migrate_v1(data)
             self._validate_v2(data)
-            self._save_ledger(data)
-        elif version != SCHEMA_VERSION:
-            raise SelfIterationError("self-iteration ledger has an unsupported schema")
-        else:
+            version = PROVENANCE_SCHEMA_VERSION
+            migrated = True
+        if version == PROVENANCE_SCHEMA_VERSION:
             self._validate_v2(data)
+            data = self._migrate_v2(data)
+            self._validate_v3(data)
+            migrated = True
+        elif version == SCHEMA_VERSION:
+            self._validate_v3(data)
+        else:
+            raise SelfIterationError("self-iteration ledger has an unsupported schema")
+        if migrated:
+            self._save_ledger(data)
         return data
 
     def _save_ledger(self, ledger: dict[str, Any]) -> None:
         atomic_json_write(self.ledger_path, ledger, indent=2)
+
+    @staticmethod
+    def _find_proposal(ledger: dict[str, Any], proposal_id: str) -> dict[str, Any]:
+        proposal = next(
+            (item for item in ledger["proposals"] if item.get("id") == proposal_id),
+            None,
+        )
+        if proposal is None:
+            raise SelfIterationError(f"proposal not found: {proposal_id}")
+        return proposal
+
+    def _verification_state(
+        self, proposal: dict[str, Any], *, now: datetime | None = None
+    ) -> dict[str, Any]:
+        return evaluate_verification(
+            proposal,
+            key_provider=self._verifier_key_provider,
+            now=now or self._now_utc(),
+        )
+
+    def _now_utc(self) -> datetime:
+        value = self._clock()
+        if not isinstance(value, datetime) or value.tzinfo is None:
+            raise SelfIterationError("self-iteration clock must be timezone-aware")
+        return value.astimezone(timezone.utc)
+
+    def _public_proposal(
+        self, proposal: dict[str, Any], *, now: datetime | None = None
+    ) -> dict[str, Any]:
+        result = copy.deepcopy(proposal)
+        result["verification_state"] = self._verification_state(proposal, now=now)
+        return result
+
+    def _validated_attestation(
+        self,
+        proposal: dict[str, Any],
+        attestation_id: str,
+        *,
+        now: datetime,
+    ) -> dict[str, Any]:
+        matches = [
+            (index, event)
+            for index, event in enumerate(proposal["events"])
+            if event.get("type") == "verification_attested"
+            and isinstance(event.get("attestation"), dict)
+            and event["attestation"].get("attestation_id") == attestation_id
+        ]
+        if len(matches) != 1:
+            raise SelfIterationError(
+                "target_attestation_id does not name one recorded attestation"
+            )
+        event_index, event = matches[0]
+        try:
+            return validate_recorded_attestation(
+                proposal=proposal,
+                event=event,
+                event_index=event_index,
+                key_provider=self._verifier_key_provider,
+                now=now,
+            )
+        except VerificationError as exc:
+            raise SelfIterationError(
+                "target attestation is not currently valid"
+            ) from exc
 
     def _code_fingerprint(self) -> dict[str, Any]:
         git = self._git_metadata()
@@ -1206,11 +1566,17 @@ class SelfIterationSystem:
 
         created_at = _isoformat(self._clock())
         proposal_id = f"si-{created_at[:10].replace('-', '')}-{uuid.uuid4().hex[:10]}"
+        provenance = self._server_provenance(created_at)
         proposal = {
             "id": proposal_id,
             "created_at": created_at,
             "source_claim": _claim_envelope(claimed_source, field="claimed_source"),
-            "provenance": self._server_provenance(created_at),
+            "provenance": provenance,
+            "proposer_identity": self._identity_from_provenance(
+                provenance,
+                label="self-iteration proposal",
+                required=False,
+            ),
             "trust_policy": _zero_weight_trust_policy(),
             "status": status,
             "observation": observation_text,
@@ -1243,12 +1609,13 @@ class SelfIterationSystem:
                 }
             ],
         }
+        proposal["content_sha256"] = proposal_content_sha256(proposal)
 
         with self._lock:
             ledger = self._load_ledger()
             ledger["proposals"].append(proposal)
             self._save_ledger(ledger)
-        return proposal
+        return self._public_proposal(proposal)
 
     def list_proposals(
         self,
@@ -1269,8 +1636,363 @@ class SelfIterationSystem:
             proposals = [item for item in proposals if item.get("id") == proposal_id]
         if status is not None:
             proposals = [item for item in proposals if item.get("status") == status]
-        proposals = list(reversed(proposals))[:limit]
+        proposals = [
+            self._public_proposal(item) for item in list(reversed(proposals))[:limit]
+        ]
         return {"count": len(proposals), "proposals": proposals}
+
+    def prepare_verification(
+        self,
+        *,
+        proposal_id: Any,
+        verification_decision: Any,
+        verification_statement: Any,
+        verification_evidence: Any,
+        expected_content_sha256: Any,
+        expires_at: Any = None,
+        target_attestation_id: Any = None,
+    ) -> dict[str, Any]:
+        """Append a one-time challenge for an independent verifier to sign."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        if verification_decision not in {"verified", "rejected", "revoke"}:
+            raise SelfIterationError(
+                "verification_decision must be one of: verified, rejected, revoke"
+            )
+        statement = _required_text(
+            verification_statement, "verification_statement", max_length=4000
+        )
+        try:
+            evidence = validate_evidence(verification_evidence)
+        except VerificationError as exc:
+            raise SelfIterationError(str(exc)) from exc
+        expected_digest = _required_text(
+            expected_content_sha256,
+            "expected_content_sha256",
+            max_length=64,
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+            raise SelfIterationError(
+                "expected_content_sha256 must be exactly 64 hexadecimal characters"
+            )
+        target_id = (
+            _required_text(
+                target_attestation_id,
+                "target_attestation_id",
+                max_length=100,
+            )
+            if target_attestation_id is not None
+            else None
+        )
+
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            if proposal["content_sha256"] != expected_digest:
+                raise SelfIterationError(
+                    "proposal content digest changed; inspect the proposal again"
+                )
+
+            now = self._now_utc()
+            recorded_at = _isoformat(now)
+            receipt = self._server_provenance(recorded_at)
+            verifier_identity = self._identity_from_provenance(
+                receipt,
+                label="verification request",
+                required=True,
+            )
+            proposer_identity = self._identity_from_provenance(
+                proposal.get("provenance"),
+                label="proposal",
+                required=True,
+            )
+            assert verifier_identity is not None
+            assert proposer_identity is not None
+            if proposal.get("proposer_identity") != proposer_identity:
+                raise SelfIterationError(
+                    "proposal proposer identity binding is invalid"
+                )
+            if verifier_identity == proposer_identity:
+                raise SelfIterationError(
+                    "the authenticated proposer may not verify its own proposal"
+                )
+
+            key = self._resolve_verifier_key(verifier_identity)
+            state = self._verification_state(proposal, now=now)
+            if state["status"] == "invalid":
+                raise SelfIterationError(
+                    "proposal contains an invalid attestation; refusing a new challenge"
+                )
+
+            expiry: datetime | None
+            if verification_decision == "revoke":
+                if expires_at is not None:
+                    raise SelfIterationError("expires_at is not valid for a revocation")
+                if target_id is None:
+                    raise SelfIterationError(
+                        "target_attestation_id is required for a revocation"
+                    )
+                target = self._validated_attestation(proposal, target_id, now=now)[
+                    "attestation"
+                ]
+                if target.get("decision") == "revoke":
+                    raise SelfIterationError("a revocation may not target a revocation")
+                if target.get("verifier_identity") != verifier_identity:
+                    raise SelfIterationError(
+                        "only the original verifier may revoke an attestation"
+                    )
+                if target_id in state["revoked_attestation_ids"]:
+                    raise SelfIterationError("target attestation is already revoked")
+                expiry = None
+            else:
+                if target_id is not None:
+                    raise SelfIterationError(
+                        "target_attestation_id is only valid for a revocation"
+                    )
+                if any(
+                    event.get("attestation", {}).get("verifier_identity")
+                    == verifier_identity
+                    and event.get("attestation", {}).get("attestation_id")
+                    in state["active_attestation_ids"]
+                    for event in proposal["events"]
+                    if isinstance(event.get("attestation"), dict)
+                ):
+                    raise SelfIterationError(
+                        "verifier already has an active verdict; revoke it first"
+                    )
+                if expires_at is None:
+                    expiry = now + timedelta(days=1)
+                else:
+                    try:
+                        expiry = parse_utc_timestamp(expires_at, "expires_at")
+                    except VerificationError as exc:
+                        raise SelfIterationError(str(exc)) from exc
+                if expiry <= now:
+                    raise SelfIterationError("expires_at must be in the future")
+                if expiry - now > MAX_ATTESTATION_VALIDITY:
+                    raise SelfIterationError(
+                        "expires_at may be at most seven days after issuance"
+                    )
+
+            challenge_id = f"sic-{uuid.uuid4().hex}"
+            attestation_id = f"sia-{uuid.uuid4().hex}"
+            try:
+                attestation = build_attestation(
+                    proposal=proposal,
+                    verifier_key=key,
+                    verifier_identity=verifier_identity,
+                    decision=verification_decision,
+                    statement=statement,
+                    evidence=evidence,
+                    issued_at=now,
+                    expires_at=expiry,
+                    challenge_id=challenge_id,
+                    attestation_id=attestation_id,
+                    target_attestation_id=target_id,
+                )
+                signing_bytes = canonical_json_bytes(attestation)
+            except VerificationError as exc:
+                raise SelfIterationError(str(exc)) from exc
+            signing_digest = hashlib.sha256(signing_bytes).hexdigest()
+            proposal["events"].append(
+                {
+                    "type": "verification_challenge_issued",
+                    "at": recorded_at,
+                    "challenge_id": challenge_id,
+                    "attestation": attestation,
+                    "signing_sha256": signing_digest,
+                    "provenance": receipt,
+                    "authority_granted": False,
+                }
+            )
+            self._save_ledger(ledger)
+
+        return {
+            "proposal_id": proposal_id_text,
+            "challenge_id": challenge_id,
+            "attestation_id": attestation_id,
+            "attestation": attestation,
+            "signing_input_b64": attestation_signing_input_b64(attestation),
+            "signing_sha256": signing_digest,
+            "signature_algorithm": SIGNATURE_ALGORITHM,
+            "challenge_expires_at": attestation["challenge_expires_at"],
+            "instructions": (
+                "Base64url-decode signing_input_b64, compute HMAC-SHA256 with "
+                "the configured verifier key, and submit the lowercase hexadecimal "
+                "MAC with record_verification before challenge_expires_at."
+            ),
+            "authority_granted": False,
+        }
+
+    def record_verification(
+        self,
+        *,
+        proposal_id: Any,
+        challenge_id: Any,
+        signature: Any,
+    ) -> dict[str, Any]:
+        """Verify a one-time challenge signature and append the signed verdict."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        challenge_id_text = _required_text(challenge_id, "challenge_id", max_length=100)
+        if not re.fullmatch(r"sic-[0-9a-f]{32}", challenge_id_text):
+            raise SelfIterationError("challenge_id is malformed")
+        signature_text = _required_text(signature, "signature", max_length=64).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", signature_text):
+            raise SelfIterationError(
+                "signature must be exactly 64 hexadecimal characters"
+            )
+
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            challenges = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "verification_challenge_issued"
+                and event.get("challenge_id") == challenge_id_text
+            ]
+            if len(challenges) != 1:
+                raise SelfIterationError(
+                    "challenge_id does not name one issued verification challenge"
+                )
+            if any(
+                event.get("type") == "verification_attested"
+                and event.get("challenge_id") == challenge_id_text
+                for event in proposal["events"]
+            ):
+                raise SelfIterationError("verification challenge has already been used")
+
+            challenge = challenges[0]
+            attestation = challenge.get("attestation")
+            if not isinstance(attestation, dict):
+                raise SelfIterationError("verification challenge is malformed")
+            signing_digest = hashlib.sha256(
+                canonical_json_bytes(attestation)
+            ).hexdigest()
+            if challenge.get("signing_sha256") != signing_digest:
+                raise SelfIterationError("verification challenge digest is malformed")
+            if attestation.get("proposal_id") != proposal_id_text:
+                raise SelfIterationError(
+                    "verification challenge belongs to another proposal"
+                )
+            if attestation.get("proposal_content_sha256") != proposal.get(
+                "content_sha256"
+            ) or proposal_content_sha256(proposal) != proposal.get("content_sha256"):
+                raise SelfIterationError(
+                    "verification challenge proposal digest is stale"
+                )
+
+            now = self._now_utc()
+            try:
+                challenge_expires_at = parse_utc_timestamp(
+                    attestation.get("challenge_expires_at"),
+                    "challenge_expires_at",
+                )
+            except VerificationError as exc:
+                raise SelfIterationError(str(exc)) from exc
+            if now >= challenge_expires_at:
+                raise SelfIterationError("verification challenge has expired")
+
+            recorded_at = _isoformat(now)
+            receipt = self._server_provenance(recorded_at)
+            verifier_identity = self._identity_from_provenance(
+                receipt,
+                label="verification request",
+                required=True,
+            )
+            proposer_identity = self._identity_from_provenance(
+                proposal.get("provenance"),
+                label="proposal",
+                required=True,
+            )
+            assert verifier_identity is not None
+            assert proposer_identity is not None
+            if attestation.get("verifier_identity") != verifier_identity:
+                raise SelfIterationError(
+                    "authenticated verifier does not own this challenge"
+                )
+            if attestation.get("proposer_identity") != proposer_identity:
+                raise SelfIterationError("verification challenge proposer is stale")
+            if verifier_identity == proposer_identity:
+                raise SelfIterationError(
+                    "the authenticated proposer may not verify its own proposal"
+                )
+
+            key_id = attestation.get("key_id")
+            if not isinstance(key_id, str):
+                raise SelfIterationError("verification challenge key ID is malformed")
+            key = self._resolve_verifier_key(verifier_identity, key_id)
+            if not verify_attestation_signature(attestation, signature_text, key):
+                raise SelfIterationError("verification signature is invalid")
+
+            state = self._verification_state(proposal, now=now)
+            if state["status"] == "invalid":
+                raise SelfIterationError(
+                    "proposal contains an invalid attestation; refusing a new verdict"
+                )
+            attestation_decision = attestation.get("decision")
+            if attestation_decision in {"verified", "rejected"} and any(
+                event.get("attestation", {}).get("verifier_identity")
+                == verifier_identity
+                and event.get("attestation", {}).get("attestation_id")
+                in state["active_attestation_ids"]
+                for event in proposal["events"]
+                if isinstance(event.get("attestation"), dict)
+            ):
+                raise SelfIterationError(
+                    "verifier already has an active verdict; revoke it first"
+                )
+            if attestation_decision == "revoke":
+                target_id = attestation.get("target_attestation_id")
+                if not isinstance(target_id, str):
+                    raise SelfIterationError("revocation target is malformed")
+                target = self._validated_attestation(proposal, target_id, now=now)[
+                    "attestation"
+                ]
+                if target.get("decision") == "revoke":
+                    raise SelfIterationError("a revocation may not target a revocation")
+                if target.get("verifier_identity") != verifier_identity:
+                    raise SelfIterationError(
+                        "only the original verifier may revoke an attestation"
+                    )
+                if target_id in state["revoked_attestation_ids"]:
+                    raise SelfIterationError("target attestation is already revoked")
+
+            event = {
+                "type": "verification_attested",
+                "at": recorded_at,
+                "challenge_id": challenge_id_text,
+                "attestation": copy.deepcopy(attestation),
+                "signature": {
+                    "algorithm": SIGNATURE_ALGORITHM,
+                    "key_id": key_id,
+                    "value": signature_text,
+                    "assurance": "symmetric_mac_server_verifiable",
+                },
+                "provenance": receipt,
+                "authority_granted": False,
+            }
+            proposal["events"].append(event)
+            post_state = self._verification_state(proposal, now=now)
+            if post_state["status"] == "invalid":
+                proposal["events"].pop()
+                raise SelfIterationError(
+                    "signed verification failed post-append validation"
+                )
+            self._save_ledger(ledger)
+        return self._public_proposal(proposal, now=now)
+
+    def verification_status(self, *, proposal_id: Any) -> dict[str, Any]:
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            state = self._verification_state(proposal)
+        return {
+            "proposal_id": proposal_id_text,
+            "content_sha256": proposal["content_sha256"],
+            "verification_state": state,
+            "verification_contract": verification_contract(),
+        }
 
     def record_outcome(
         self,
@@ -1318,16 +2040,7 @@ class SelfIterationSystem:
 
         with self._lock:
             ledger = self._load_ledger()
-            proposal = next(
-                (
-                    item
-                    for item in ledger["proposals"]
-                    if item.get("id") == proposal_id_text
-                ),
-                None,
-            )
-            if proposal is None:
-                raise SelfIterationError(f"proposal not found: {proposal_id_text}")
+            proposal = self._find_proposal(ledger, proposal_id_text)
             recorded_at = _isoformat(self._clock())
             event = {
                 "type": "outcome_recorded",
@@ -1348,7 +2061,7 @@ class SelfIterationSystem:
             proposal.setdefault("events", []).append(event)
             proposal["status"] = status_for_decision[decision]
             self._save_ledger(ledger)
-        return proposal
+        return self._public_proposal(proposal)
 
 
 _system: SelfIterationSystem | None = None
