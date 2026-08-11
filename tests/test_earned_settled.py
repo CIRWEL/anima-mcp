@@ -134,6 +134,35 @@ class TestTrackerSemantics:
         stub._update_novelty_settling(100400.0)
         assert isinstance(canvas._novelty_settling, dict)
 
+    def test_corrupt_peak_and_streak_self_heal(self):
+        """A guard covering only SOME fields would raise every 300s forever on
+        the rest. Every corrupt field must reset the tracker, not throw."""
+        for bad_field, bad_value in (("peak", "garbage"), ("streak", "NaN"),
+                                     ("recent", [1.0, "x", 2.0])):
+            stub, canvas = self._fresh()
+            ns = canvas._novelty_settling
+            ns[bad_field] = bad_value
+            # Enough active samples to reach the corrupted field's code path
+            self._run(stub, [(60, 5)] * 4)
+            ns = canvas._novelty_settling
+            # Either healed by reset (fresh dict) or the corrupt value was
+            # overwritten by a clean one — never a raise, never stuck.
+            assert ns is None or isinstance(ns, dict)
+            # And the tracker keeps functioning afterwards:
+            if ns is None:
+                stub._update_novelty_settling(999999.0)
+                assert isinstance(canvas._novelty_settling, dict)
+
+    def test_single_mark_trickle_holds_not_advances(self):
+        """A RESTING-hour mark landing on painted territory is not 'working'.
+        marks_delta=1 must hold the streak exactly like idle does."""
+        stub, canvas = self._fresh()
+        ns = self._run(stub, [(60, 5)] * 6 + [(2, 3)] * 5)
+        streak_before = ns["streak"]
+        assert streak_before > 0
+        ns = self._run(stub, [(0, 1)] * 20, t0=ns["last_t"], px0=ns["last_px"])
+        assert ns["streak"] == streak_before
+
 
 class TestCompletionPredicate:
     def _settled_canvas(self, age_s=SETTLED_MIN_AGE_SECONDS + 600):
@@ -180,6 +209,40 @@ class TestCompletionPredicate:
     def test_earned_takes_priority_over_hard_cap(self):
         canvas = self._settled_canvas(age_s=29000)  # past the 8h cap too
         assert DrawingState().completion_reason(canvas) == "earned_settled"
+
+    def test_already_closing_outranks_settled(self):
+        """The originating reason is captured on the closing transition; the
+        caller's `!= "already_closing"` guard protects it from overwrite. A
+        settled tracker landing mid-close must NOT relabel that capture —
+        that would re-introduce the pride-memory bug through a new door."""
+        canvas = self._settled_canvas()
+        state = DrawingState()
+        state.arc_phase = "closing"
+        assert state.completion_reason(canvas) == "already_closing"
+
+    def test_forced_era_switch_resets_tracker(self):
+        """Peak belongs to the era that set it. A forced mid-piece switch must
+        not carry a geometric-sized peak into a small-mark era."""
+        from anima_mcp.display.drawing_engine import DrawingEngine
+
+        class _Stub:
+            pass
+
+        stub = _Stub()
+        canvas = CanvasState()
+        paint(canvas, 60)  # drawing_in_progress threshold is 50px
+        canvas._novelty_settling = {"peak": 2500.0, "streak": 8}
+        canvas.save_to_disk = lambda: True
+
+        class _Intent:
+            era_state = None
+
+        stub.canvas = canvas
+        stub.intent = _Intent()
+        stub.set_era = DrawingEngine.set_era.__get__(stub)
+        result = stub.set_era("field", force_immediate=True)
+        assert result["success"] is True
+        assert canvas._novelty_settling is None
 
 
 class TestPersistence:
