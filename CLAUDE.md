@@ -292,23 +292,32 @@ Lumen draws autonomously on the 240x240 notepad screen. The system has two layer
 - No arbitrary mark limit — fatigue accumulates naturally (canvas 15000px limit is only hard cap)
 - `get_drawing_eisv()` — exposes state to governance via bridge check-in
 
-**What actually ends a drawing (measured 2026-08-02 — read before tuning anything):**
+**What actually ends a drawing (measured 2026-08-02, first corpus readout
+2026-08-11 — read before tuning anything):**
 
-The 8-hour cap is not a backstop. It is the only clock. Eleven consecutive
-completions were spaced 8.0002–8.0027 h apart — under 30 seconds of total drift
-across four days. No property of any individual drawing moved its ending by ten
-seconds. Alongside that:
+The 8-hour cap was the only clock for every mark-by-mark era. The first nine
+days of `drawing_records` instrumentation (34 completions): 26 `bailout_hard_cap`
+(all landing 8.000–8.004h), 8 `bailout_fatigue`, **zero earned**. Alongside that:
 
 | Gate | Live value | Needs | Status |
 |------|-----------|-------|--------|
 | `earned_composition` / `attention_exhausted` | curiosity **0.80** at 1.3h | < 0.2 / < 0.15 | never fires — curiosity does not deplete |
-| `bailout_fatigue` | fatigue **0.21** at 1.3h | > 0.90 | never fires |
+| `bailout_fatigue` | fatigue **0.21** at 1.3h (resonance) | > 0.90 | **era-specific, not dead**: fires every time in `geometric` (8/8, ~70 marks / 0.5–1.1h — whole-shape stamps accrue switch-fatigue ~10× faster per mark). Never fires in mark-by-mark eras. State fatigue claims per era. |
 | `earned_field` (resonance) | revisit_ratio **0.24** | ≥ 0.60 | window now fills 50/50 (#116 worked); ratio is 2.5× short, not a calibration nudge |
+| `earned_settled` (all eras) | see `diagnostics.drawing.novelty_settling` | streak ≥ 12 active samples < 10% of own peak, ≥2h, ≥100 marks | NEW — self-relative; derived from the 27-piece corpus (field plateaus settled at 3.4–7.7h; gestural/pointillist keep changing to the cap and correctly never fire; geometric freezes idle, which holds — never advances — the streak) |
 | arc → `resolving` | C caps ~0.52 | > 0.6 | unreachable, so pieces save from `developing` |
 | 15,000px ceiling | max observed **12,009px** | > 15,000 | unreachable in practice — it is a real defect (it calls `mark_satisfied()`, naming a safety hatch a feeling) but it is not what ends pieces |
 
 Density is **not** the binding constraint: recent pieces land at 12.6–20.8% of
-canvas with negative space intact. What is missing is subjective completion.
+canvas with negative space intact. What was missing is subjective completion —
+`earned_settled` is the measured stand-in: "stopped changing while still being
+worked", judged against the piece's own peak rate, so no per-era tuning and no
+constant an era's operating range can silently sit below.
+
+⚠️ Known follow-up: cap-length `geometric` pieces go **100% idle after ~1h**
+(marks stop entirely — fatigue high enough to suppress marks, below the 0.90
+bail) and then sit frozen for ~7h until the cap. `earned_settled` deliberately
+does not fire there (idle ≠ settled); the freeze itself is a separate defect.
 
 **Why curiosity cannot deplete (measured 2026-08-02).** `_update_attention()`
 branches on a fixed `C = 0.4`:

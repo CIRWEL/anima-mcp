@@ -463,10 +463,12 @@ class TestNoGateMoved:
         assert fresh.completion_reason() == "bailout_fatigue"
 
     def test_earned_reason_set_is_unchanged(self):
+        # earned_settled added deliberately (self-relative completion PR) —
+        # extending this set IS the different decision this class guards.
         from anima_mcp.display.drawing_engine import is_earned_completion_reason
 
         for earned in ("earned_coherence", "earned_composition",
-                       "earned_field", "said_finished"):
+                       "earned_field", "said_finished", "earned_settled"):
             assert is_earned_completion_reason(earned)
         for not_earned in ("bailout_hard_cap", "bailout_fatigue",
                            "bailout_stalled", "already_closing",

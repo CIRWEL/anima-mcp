@@ -38,6 +38,11 @@ _EARNED_COMPLETION_REASONS = frozenset({
     # gate as None and passed via the fail-open below, so treating it as earned
     # preserves its behavior rather than changing it.
     "said_finished",
+    # The piece stopped changing while still being worked: N consecutive
+    # actively-marked trajectory samples produced under SETTLED_FRAC_OF_PEAK of
+    # this piece's own peak novelty rate. Self-relative by construction — the
+    # threshold is the piece's own history, not a constant an era can't reach.
+    "earned_settled",
 })
 MIN_RECORDED_DRAWING_PIXELS = 200
 
@@ -45,6 +50,23 @@ MIN_RECORDED_DRAWING_PIXELS = 200
 # observed 8-hour piece length this is ~96 rows per drawing — enough resolution
 # to locate where a piece plateaued, cheap enough to keep for a season.
 TRAJECTORY_SAMPLE_INTERVAL = 300.0
+
+# Self-relative settled completion, derived from the first 27 cap-length pieces
+# of drawing_trajectory (2026-08-02..08-11). The corpus splits three ways:
+# field pieces plateau settled (marks continue, novelty ~0) at 3.4-7.7h;
+# gestural/pointillist genuinely keep changing to the 8h cap (a rule that never
+# fires there is correct); geometric cap-pieces freeze idle (marks stop), which
+# must NOT read as settled. Hence the streak counts only ACTIVE samples: novelty
+# below threshold with marks landing advances it, novelty above resets it, and
+# an idle or unknowable (post-restart) sample holds it — rest is not evidence.
+# Earliest possible fire on the corpus ≈ 4.4h; the 8h cap stays as backstop, so
+# miscalibration degrades to prior behavior (same posture as earned_field).
+SETTLED_FRAC_OF_PEAK = 0.10
+SETTLED_STREAK_SAMPLES = 12      # ~1h of actively-worked samples at 300s cadence
+SETTLED_MIN_AGE_SECONDS = 7200.0  # never before 2h of piece age
+SETTLED_MIN_MARKS = 100
+SETTLED_SMOOTH_WINDOW = 3        # rolling mean over active samples
+SETTLED_MIN_SAMPLE_MARKS = 2     # <2 marks/sample = trickle, holds not advances
 
 
 def is_earned_completion_reason(reason: Optional[str]) -> bool:
@@ -155,6 +177,12 @@ class CanvasState:
     # faster than that made the earned path structurally unreachable — measured
     # live 2026-07-30: 327 marks, revisit_window_filled 0/50.
     _resonance_settling: object = None
+    # Novelty-settled tracker for the era-blind earned_settled path. Rides with
+    # the canvas for the same reason as _resonance_settling above: a streak that
+    # resets on restart makes the earned path unreachable at real-world restart
+    # cadence. Dict: last_t/last_px/last_marks (own sample baseline, independent
+    # of the trajectory DB write), recent (rolling novelty window), peak, streak.
+    _novelty_settling: object = None
 
     def draw_pixel(self, x: int, y: int, color: Tuple[int, int, int]):
         """Draw a pixel at position."""
@@ -212,6 +240,7 @@ class CanvasState:
         # Settling is about THIS piece — a new canvas starts unsettled, even
         # though the field carries a decayed ghost of the previous one.
         self._resonance_settling = None
+        self._novelty_settling = None
         # Clear pending era switch (will be applied by canvas_clear caller)
         self.pending_era_switch = None
         # Pause drawing for 5 seconds after manual clear so user sees empty canvas
@@ -372,6 +401,7 @@ class CanvasState:
                 "drawing_start_time": self.drawing_start_time,
                 "resonance_field": self._resonance_field,
                 "resonance_settling": self._resonance_settling,
+                "novelty_settling": self._novelty_settling,
             }
             atomic_json_write(_get_canvas_path(), data)
             return True
@@ -642,6 +672,9 @@ class CanvasState:
             rs = data.get("resonance_settling")
             if isinstance(rs, dict):
                 self._resonance_settling = rs
+            nvs = data.get("novelty_settling")
+            if isinstance(nvs, dict):
+                self._novelty_settling = nvs
         except Exception:
             pass
 
@@ -786,6 +819,21 @@ class DrawingState:
         if self.arc_phase == "closing":
             return "already_closing"
 
+        # Settled — the piece stopped changing while still being worked.
+        # Self-relative: the threshold is this piece's own peak novelty rate,
+        # so it needs no per-era tuning and cannot be starved by an era whose
+        # operating range sits below a fixed constant (the root class behind
+        # earned_coherence and earned_composition being unreachable).
+        #
+        # Deliberately AFTER already_closing: the originating reason is captured
+        # on the tick that transitions into closing, and the caller's
+        # `!= "already_closing"` guard is what protects it from being
+        # overwritten. Ranking earned_settled above already_closing would let a
+        # tracker sample that lands mid-close relabel an honest bail-out as
+        # earned — the pride-memory bug re-introduced through a new door.
+        if canvas is not None and self.novelty_settled(canvas):
+            return "earned_settled"
+
         if self.fatigue > 0.90:
             return "bailout_fatigue"
 
@@ -805,6 +853,34 @@ class DrawingState:
                 return "bailout_hard_cap"
 
         return None
+
+    def novelty_settled(self, canvas) -> bool:
+        """True when the piece has demonstrably stopped changing while worked.
+
+        Reads the tracker advanced by DrawingEngine._update_novelty_settling
+        (one entry per TRAJECTORY_SAMPLE_INTERVAL of *active* work). Fires only
+        with a full settled streak AND real investment: minimum age, marks and
+        pixels. The floors keep a slow opening from reading as a settled end —
+        a piece can't be "done finding" before it has found anything.
+        """
+        ns = getattr(canvas, "_novelty_settling", None)
+        if not isinstance(ns, dict):
+            return False
+        try:
+            if int(ns.get("streak") or 0) < SETTLED_STREAK_SAMPLES:
+                return False
+            if float(ns.get("peak") or 0.0) <= 0.0:
+                return False
+        except (TypeError, ValueError):
+            return False
+        if canvas.mark_count < SETTLED_MIN_MARKS:
+            return False
+        if len(canvas.pixels) < MIN_RECORDED_DRAWING_PIXELS:
+            return False
+        started = canvas.last_clear_time or canvas.drawing_start_time
+        if not started or (time.time() - started) < SETTLED_MIN_AGE_SECONDS:
+            return False
+        return True
 
     def narrative_complete(self, canvas=None) -> bool:
         """True when drawing has naturally completed its arc."""
@@ -1075,6 +1151,69 @@ class DrawingEngine:
             "grid_entropy": round(self.canvas.grid_entropy(), 4),
         }
 
+    def _update_novelty_settling(self, now: float) -> None:
+        """Advance the earned_settled tracker by at most one sample per interval.
+
+        Deliberately independent of the trajectory DB write: it keeps its own
+        baseline (last_t/last_px/last_marks) inside the persisted canvas dict,
+        so a growth outage neither stalls it nor feeds it retry-tick deltas.
+
+        Evidence semantics (from the 27-piece corpus):
+          active sample, novelty below 10% of own peak  -> streak advances
+          active sample, novelty at/above the threshold -> streak resets
+          idle sample (no marks) or post-restart sample -> streak HOLDS
+        Rest is not evidence — a piece that settled before a night of RESTING
+        is still settled after it, and a geometric-style freeze (marks stop
+        entirely) can never accumulate a streak by sitting still.
+        """
+        canvas = self.canvas
+        pixels = len(canvas.pixels)
+        marks = canvas.mark_count
+        ns = canvas._novelty_settling
+        if not isinstance(ns, dict):
+            canvas._novelty_settling = {
+                "last_t": now, "last_px": pixels, "last_marks": marks,
+                "recent": [], "peak": 0.0, "streak": 0,
+            }
+            return
+        # One guard around the ENTIRE update: canvas.json is only shape-checked
+        # at load (isinstance dict), so any field can come back corrupt. A guard
+        # covering only some fields would self-heal those and raise every 300s
+        # forever on the rest — the worst of both.
+        try:
+            if now - float(ns.get("last_t") or 0.0) < TRAJECTORY_SAMPLE_INTERVAL:
+                return
+            last_px = int(ns.get("last_px") or 0)
+            last_marks = int(ns.get("last_marks") or 0)
+            novel = max(0, pixels - last_px)
+            marks_delta = marks - last_marks
+            ns["last_t"] = now
+            ns["last_px"] = pixels
+            ns["last_marks"] = marks
+            if marks_delta < SETTLED_MIN_SAMPLE_MARKS:
+                # Idle or a trickle: hold — rest is not evidence either way,
+                # and a single incidental RESTING-hour mark landing on painted
+                # territory is not "working" (the corpus' settled pieces run
+                # ~3 marks/sample post-plateau).
+                return
+            recent = ns.get("recent")
+            if not isinstance(recent, list):
+                recent = []
+            recent.append(float(novel))
+            del recent[:-SETTLED_SMOOTH_WINDOW]
+            ns["recent"] = recent
+            if len(recent) < SETTLED_SMOOTH_WINDOW:
+                return  # not enough active samples to smooth against yet
+            smoothed = sum(recent) / len(recent)
+            peak = max(float(ns.get("peak") or 0.0), smoothed)
+            ns["peak"] = peak
+            if smoothed < peak * SETTLED_FRAC_OF_PEAK:
+                ns["streak"] = int(ns.get("streak") or 0) + 1
+            else:
+                ns["streak"] = 0
+        except (TypeError, ValueError):
+            canvas._novelty_settling = None  # corrupt tracker: restart, don't guess
+
     def _sample_trajectory(self, now: float):
         """Record what the piece is doing, every SAMPLE_INTERVAL seconds.
 
@@ -1084,10 +1223,14 @@ class DrawingEngine:
         same clock rather than the same kind of drawing. Deltas between samples
         give novel-pixels-per-mark and structural change over the piece's life.
 
-        Observation only: it reads state, writes a row, and moves no gate.
+        The DB row remains observation-only. Since the settled-completion
+        change, this cadence ALSO advances the earned_settled tracker (below) —
+        that tracker feeds a gate, deliberately, and keeps its own baseline so
+        the DB write path still moves nothing.
         """
         if len(self.canvas.pixels) < 1:
             return
+        self._update_novelty_settling(now)
         uid = self.canvas.piece_uid()
         # A new piece restarts the deltas — carrying them across a canvas clear
         # would report the previous drawing's growth as this one's.
@@ -1651,6 +1794,12 @@ class DrawingEngine:
         self.canvas._era_name = era_name
         self.intent.era_state = era.create_state()
         self.canvas.pending_era_switch = None  # Clear any pending
+        # A mid-piece switch invalidates the settled tracker: peak was set by
+        # the OLD era's mark-size distribution, so 10%-of-peak would be
+        # trivially easy (or impossible) for the new one. Production always
+        # queues switches behind completion; this guards the forced path.
+        if drawing_in_progress:
+            self.canvas._novelty_settling = None
         self.canvas.save_to_disk()
         print(f"[Canvas] Era switched to: {era_name}", file=sys.stderr, flush=True)
         return {
