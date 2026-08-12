@@ -43,6 +43,8 @@ MAX_EXECUTION_CLAIM_BYTES = 64 * 1024
 MAX_EXECUTION_RESULT_BYTES = 1024 * 1024
 MAX_APPLICATION_CLAIM_BYTES = 128 * 1024
 MAX_APPLICATION_RESULT_BYTES = 512 * 1024
+MAX_CANARY_CLAIM_BYTES = 128 * 1024
+MAX_CANARY_RESULT_BYTES = 512 * 1024
 
 SUPPORTED_SUFFIXES = frozenset({".json", ".md", ".py", ".yaml", ".yml"})
 
@@ -52,6 +54,8 @@ _EXECUTION_CHALLENGE_ID_RE = re.compile(r"^sixc-[0-9a-f]{32}$")
 _EXECUTION_ID_RE = re.compile(r"^six-[0-9a-f]{32}$")
 _APPLICATION_CHALLENGE_ID_RE = re.compile(r"^siac-[0-9a-f]{32}$")
 _APPLICATION_RESULT_ID_RE = re.compile(r"^siar-[0-9a-f]{32}$")
+_CANARY_CHALLENGE_ID_RE = re.compile(r"^sicc-[0-9a-f]{32}$")
+_CANARY_RESULT_ID_RE = re.compile(r"^sicr-[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TEMP_DIR_RE = re.compile(r"^\.sip-tmp-[A-Za-z0-9_-]+$")
 _IMMUTABLE_TEMP_RE = re.compile(r"^\.immutable-tmp-[0-9]+-[0-9a-f]{32}$")
@@ -1154,6 +1158,122 @@ class PatchSandbox:
                 or result.get("candidate_id") != candidate.name
             ):
                 raise PatchSandboxError("application result binding is malformed")
+            records.append(result)
+        return records
+
+    def claim_canary(
+        self,
+        candidate_id: Any,
+        challenge_id: Any,
+        claim: dict[str, Any],
+    ) -> None:
+        """Atomically consume one transient-canary challenge."""
+        candidate = self._candidate_directory(candidate_id)
+        if not isinstance(challenge_id, str) or not _CANARY_CHALLENGE_ID_RE.fullmatch(
+            challenge_id
+        ):
+            raise PatchSandboxError("canary challenge_id is malformed")
+        if not isinstance(claim, dict) or claim.get("challenge_id") != challenge_id:
+            raise PatchSandboxError("canary claim binding is malformed")
+        encoded = json.dumps(claim, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_CANARY_CLAIM_BYTES:
+            raise PatchSandboxError("canary claim exceeds its size limit")
+        claims = self._artifact_directory(candidate, "canary_claims")
+        destination = claims / f"{challenge_id}.json"
+        try:
+            _exclusive_json_write(destination, claim)
+        except FileExistsError as exc:
+            raise PatchSandboxError(
+                "canary challenge was already claimed; automatic retry is forbidden"
+            ) from exc
+        except OSError as exc:
+            raise PatchSandboxError("canary claim could not be persisted") from exc
+
+    def load_canary_claims(self, candidate_id: Any) -> list[dict[str, Any]]:
+        candidate = self._candidate_directory(candidate_id)
+        claims = candidate / "canary_claims"
+        if not claims.exists():
+            return []
+        if claims.is_symlink() or not claims.is_dir():
+            raise PatchSandboxError("candidate canary_claims directory is malformed")
+        records: list[dict[str, Any]] = []
+        for path in sorted(claims.iterdir(), key=lambda item: item.name):
+            if _IMMUTABLE_TEMP_RE.fullmatch(path.name):
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                raise PatchSandboxError("canary claims contain an invalid entry")
+            challenge_id = path.stem
+            if not _CANARY_CHALLENGE_ID_RE.fullmatch(challenge_id):
+                raise PatchSandboxError("canary claims contain a malformed identifier")
+            raw = self._read_regular(
+                path,
+                maximum=MAX_CANARY_CLAIM_BYTES,
+                label="canary claim",
+            )
+            try:
+                claim = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PatchSandboxError("canary claim is malformed") from exc
+            if not isinstance(claim, dict) or claim.get("challenge_id") != challenge_id:
+                raise PatchSandboxError("canary claim binding is malformed")
+            records.append(claim)
+        return records
+
+    def store_canary_result(self, candidate_id: Any, result: dict[str, Any]) -> None:
+        """Persist one signed canary result without permitting replacement."""
+        candidate = self._candidate_directory(candidate_id)
+        result_id = result.get("canary_result_id") if isinstance(result, dict) else None
+        if not isinstance(result_id, str) or not _CANARY_RESULT_ID_RE.fullmatch(
+            result_id
+        ):
+            raise PatchSandboxError("canary result identifier is malformed")
+        if result.get("candidate_id") != candidate.name:
+            raise PatchSandboxError("canary result candidate binding is malformed")
+        encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode(
+            "utf-8"
+        )
+        if len(encoded) > MAX_CANARY_RESULT_BYTES:
+            raise PatchSandboxError("canary result exceeds its size limit")
+        canaries = self._artifact_directory(candidate, "canaries")
+        destination = canaries / f"{result_id}.json"
+        try:
+            _exclusive_json_write(destination, result)
+        except FileExistsError as exc:
+            raise PatchSandboxError("canary result identifier already exists") from exc
+        except OSError as exc:
+            raise PatchSandboxError("canary result could not be persisted") from exc
+
+    def load_canary_results(self, candidate_id: Any) -> list[dict[str, Any]]:
+        candidate = self._candidate_directory(candidate_id)
+        canaries = candidate / "canaries"
+        if not canaries.exists():
+            return []
+        if canaries.is_symlink() or not canaries.is_dir():
+            raise PatchSandboxError("candidate canaries directory is malformed")
+        records: list[dict[str, Any]] = []
+        for path in sorted(canaries.iterdir(), key=lambda item: item.name):
+            if _IMMUTABLE_TEMP_RE.fullmatch(path.name):
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                raise PatchSandboxError("canary results contain an invalid entry")
+            result_id = path.stem
+            if not _CANARY_RESULT_ID_RE.fullmatch(result_id):
+                raise PatchSandboxError("canary results contain a malformed identifier")
+            raw = self._read_regular(
+                path,
+                maximum=MAX_CANARY_RESULT_BYTES,
+                label="canary result",
+            )
+            try:
+                result = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PatchSandboxError("canary result is malformed") from exc
+            if (
+                not isinstance(result, dict)
+                or result.get("canary_result_id") != result_id
+                or result.get("candidate_id") != candidate.name
+            ):
+                raise PatchSandboxError("canary result binding is malformed")
             records.append(result)
         return records
 

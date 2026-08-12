@@ -7,8 +7,9 @@ proposal, construct a proposal-bound whole-file patch outside the repository,
 run non-executing static checks, execute one narrowly eligible Python candidate
 in a digest-pinned networkless Docker container after separate signed approval,
 and create one reviewed commit on a dedicated Git branch without checkout.  It
-never edits the live worktree, executes candidate code in the host process,
-pushes, merges, restarts, or deploys code.
+may request one signed transient canary from an external supervisor that must
+restore the baseline. It never edits the live worktree, executes candidate code
+in the host process, retains live activation, pushes, merges, or deploys code.
 
 The boundary is architectural rather than prompt-based. Its only repository
 writes are immutable Git objects and one create-only dedicated ref; it exposes
@@ -50,6 +51,22 @@ from .self_iteration_application import (
     validate_application_approval,
     validate_signed_application_result,
     verify_application_approval_signature,
+)
+from .self_iteration_canary import (
+    CANARY_SIGNER_ID_ENV,
+    CanaryError,
+    CanarySupervisor,
+    UnixSocketCanarySupervisor,
+    build_canary_approval,
+    build_canary_request,
+    canary_approval_sha256,
+    canary_contract,
+    canary_signature_record,
+    canary_signing_input_b64,
+    validate_canary_approval,
+    validate_signed_canary_result,
+    validate_supervisor_identity,
+    verify_canary_approval_signature,
 )
 from .self_iteration_execution import (
     RUNNER_SIGNER_ID_ENV,
@@ -96,7 +113,8 @@ from .self_iteration_sandbox import (
     sandbox_contract,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+APPLICATION_SCHEMA_VERSION = 6
 EXECUTION_SCHEMA_VERSION = 5
 SANDBOX_SCHEMA_VERSION = 4
 VERIFICATION_SCHEMA_VERSION = 3
@@ -166,6 +184,10 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
         "src/anima_mcp/self_iteration_application.py",
         "reviewed Git application boundary",
     ),
+    (
+        "src/anima_mcp/self_iteration_canary.py",
+        "transient canary supervisor boundary",
+    ),
     ("src/anima_mcp/self_iteration_execution.py", "isolated execution boundary"),
     ("src/anima_mcp/self_iteration_sandbox.py", "self-iteration evaluator"),
     ("src/anima_mcp/self_iteration_verification.py", "self-iteration evaluator"),
@@ -188,9 +210,8 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
     ("anima_broker/lib/**/governance/**", "governance boundary"),
 )
 
-# Initial autonomous eligibility is intentionally narrow.  This module still
-# only proposes changes; a future isolated runner may use this field without
-# silently expanding its own authority.
+# Autonomous candidate eligibility is intentionally narrow. Every later stage
+# revalidates this allowlist and adds its own signed, no-authority boundary.
 _AUTO_ELIGIBLE_RULES: tuple[tuple[str, str], ...] = (
     ("docs/**", "documentation-only"),
     ("README.md", "documentation-only"),
@@ -615,6 +636,7 @@ class SelfIterationSystem:
         isolation_runner: IsolationRunner | None = None,
         workspace_builder: SourceWorkspaceBuilder | None = None,
         application_writer: ApplicationWriter | None = None,
+        canary_supervisor: CanarySupervisor | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve() if repo_root else _discover_repo_root()
         self.ledger_path = ledger_path or Path.home() / ".anima" / "self_iteration.json"
@@ -632,6 +654,9 @@ class SelfIterationSystem:
         self._workspace_builder = workspace_builder or SourceWorkspaceBuilder()
         self._application_writer = (
             application_writer or GitPlumbingApplicationWriter.from_environment()
+        )
+        self._canary_supervisor = (
+            canary_supervisor or UnixSocketCanarySupervisor.from_environment()
         )
         self._patch_sandbox = PatchSandbox(
             repo_root=self.repo_root,
@@ -929,7 +954,7 @@ class SelfIterationSystem:
         manifest = self._manifest(include_files=include_files, file_limit=file_limit)
         return {
             "mode": "bounded_self_iteration",
-            "autonomy_level": "reviewed_dedicated_branch_application",
+            "autonomy_level": "signed_transient_canary_evaluation",
             "runtime": {
                 "package": "anima-mcp",
                 "package_version": self._package_version(self.repo_root),
@@ -951,6 +976,7 @@ class SelfIterationSystem:
                 "run_nonexecuting_static_evaluation": True,
                 "prepare_signed_execution_approval": True,
                 "prepare_signed_application_review": True,
+                "prepare_signed_transient_canary_review": True,
                 "execute_candidate_code_on_host": False,
                 "execute_candidate_code_in_pinned_container": True,
                 "execute_tests_in_pinned_container": True,
@@ -960,6 +986,8 @@ class SelfIterationSystem:
                 "write_source": False,
                 "write_live_worktree": False,
                 "create_reviewed_dedicated_branch": True,
+                "request_external_transient_canary": True,
+                "retain_persistent_activation": False,
                 "execute_proposal_text": False,
                 "execute_candidate_code": True,
                 "execute_tests": True,
@@ -980,7 +1008,9 @@ class SelfIterationSystem:
                     "This process may construct an inert patch artifact, run static parsers, "
                     "orchestrate one externally approved fixed test profile in a local "
                     "Docker boundary, and create one separately reviewed dedicated Git "
-                    "branch. A caretaker still owns canary activation, merge, and deployment."
+                    "branch. It may request one separately reviewed transient canary from "
+                    "an external supervisor that must restore the baseline. A caretaker "
+                    "still owns merge and deployment."
                 ),
                 "provenance_rule": (
                     "Caller labels, narratives, and evidence remain zero-weight claims. "
@@ -1010,6 +1040,14 @@ class SelfIterationSystem:
                     "and a temporary index to create only a server-derived dedicated branch; "
                     "it performs no checkout, hooks, worktree writes, push, merge, restart, "
                     "or deployment."
+                ),
+                "canary_rule": (
+                    "A new authenticated reviewer must sign a ten-minute, one-use plan "
+                    "bound to the exact reviewed branch and a fixed external-supervisor "
+                    "profile. The local Unix-socket supervisor owns transient activation, "
+                    "fixed health measurement, and mandatory baseline restoration. This "
+                    "process has no shell, service-control, persistent activation, push, "
+                    "merge, or deployment primitive."
                 ),
             },
             "ledger": self._ledger_summary(),
@@ -1045,6 +1083,7 @@ class SelfIterationSystem:
                 "sandbox_contract": ledger["sandbox_contract"],
                 "execution_contract": ledger["execution_contract"],
                 "application_contract": ledger["application_contract"],
+                "canary_contract": ledger["canary_contract"],
             }
         except SelfIterationError as exc:
             return {
@@ -1185,6 +1224,7 @@ class SelfIterationSystem:
             "sandbox_contract": sandbox_contract(),
             "execution_contract": execution_contract(),
             "application_contract": application_contract(),
+            "canary_contract": canary_contract(),
             "migrations": [],
             "proposals": [],
         }
@@ -1356,19 +1396,46 @@ class SelfIterationSystem:
                     "type": "application_schema_migrated",
                     "at": migrated_at,
                     "from_schema": EXECUTION_SCHEMA_VERSION,
-                    "to_schema": SCHEMA_VERSION,
+                    "to_schema": APPLICATION_SCHEMA_VERSION,
                     "authority_granted": False,
                 }
             )
-        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["schema_version"] = APPLICATION_SCHEMA_VERSION
         ledger["application_contract"] = application_contract()
         ledger["migrations"].append(
             {
                 "type": "schema_migration",
                 "at": migrated_at,
                 "from_schema": EXECUTION_SCHEMA_VERSION,
-                "to_schema": SCHEMA_VERSION,
+                "to_schema": APPLICATION_SCHEMA_VERSION,
                 "classification": "reviewed_dedicated_branch_application_only",
+            }
+        )
+        return ledger
+
+    def _migrate_v6(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Add signed transient canary evaluation without release authority."""
+        migrated_at = _isoformat(self._clock())
+        ledger = copy.deepcopy(data)
+        for proposal in ledger["proposals"]:
+            proposal.setdefault("events", []).append(
+                {
+                    "type": "canary_schema_migrated",
+                    "at": migrated_at,
+                    "from_schema": APPLICATION_SCHEMA_VERSION,
+                    "to_schema": SCHEMA_VERSION,
+                    "authority_granted": False,
+                }
+            )
+        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["canary_contract"] = canary_contract()
+        ledger["migrations"].append(
+            {
+                "type": "schema_migration",
+                "at": migrated_at,
+                "from_schema": APPLICATION_SCHEMA_VERSION,
+                "to_schema": SCHEMA_VERSION,
+                "classification": "signed_transient_canary_with_mandatory_restore",
             }
         )
         return ledger
@@ -2042,7 +2109,7 @@ class SelfIterationSystem:
                         "type": "application_schema_migrated",
                         "at": event.get("at"),
                         "from_schema": EXECUTION_SCHEMA_VERSION,
-                        "to_schema": SCHEMA_VERSION,
+                        "to_schema": APPLICATION_SCHEMA_VERSION,
                         "authority_granted": False,
                     } or not isinstance(event.get("at"), str):
                         raise SelfIterationError(
@@ -2276,6 +2343,288 @@ class SelfIterationSystem:
                     recorded_challenges.add(event["challenge_id"])
                     result_ids.add(result_id)
 
+    def _validate_v7(self, data: dict[str, Any]) -> None:
+        self._validate_v6(data)
+        if data.get("canary_contract") != canary_contract():
+            raise SelfIterationError(
+                "self-iteration ledger canary contract is malformed"
+            )
+        for proposal in data["proposals"]:
+            challenges: dict[str, dict[str, Any]] = {}
+            canary_ids: set[str] = set()
+            recorded_challenges: set[str] = set()
+            result_ids: set[str] = set()
+            for event in proposal["events"]:
+                event_type = event.get("type")
+                if event_type == "canary_schema_migrated":
+                    if event != {
+                        "type": "canary_schema_migrated",
+                        "at": event.get("at"),
+                        "from_schema": APPLICATION_SCHEMA_VERSION,
+                        "to_schema": SCHEMA_VERSION,
+                        "authority_granted": False,
+                    } or not isinstance(event.get("at"), str):
+                        raise SelfIterationError(
+                            "self-iteration canary migration event is malformed"
+                        )
+                    continue
+                if event_type == "canary_review_challenge_issued":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "approval",
+                        "approval_sha256",
+                        "requester_identity",
+                        "provenance",
+                        "activation_performed",
+                        "baseline_restore_attempted",
+                        "persistent_activation_retained",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration canary challenge fields are malformed"
+                        )
+                    try:
+                        approval = validate_canary_approval(event.get("approval"))
+                        approval_digest = canary_approval_sha256(approval)
+                    except CanaryError as exc:
+                        raise SelfIterationError(
+                            "self-iteration canary approval is malformed"
+                        ) from exc
+                    challenge_id = approval["challenge_id"]
+                    application_results = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "reviewed_application_recorded"
+                        and recorded.get("application_result_id")
+                        == approval["application_result_id"]
+                    ]
+                    application_challenges = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "application_review_challenge_issued"
+                        and recorded.get("approval", {}).get("application_id")
+                        == approval["application_id"]
+                    ]
+                    app_approval = (
+                        application_challenges[0].get("approval")
+                        if len(application_challenges) == 1
+                        else None
+                    )
+                    execution_challenges = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if isinstance(app_approval, dict)
+                        and recorded.get("type")
+                        == "execution_approval_challenge_issued"
+                        and recorded.get("approval_sha256")
+                        == app_approval.get("execution_approval_sha256")
+                    ]
+                    active_verifiers = [
+                        attestation.get("verifier_identity")
+                        for recorded in proposal["events"]
+                        if isinstance(app_approval, dict)
+                        and recorded.get("type") == "verification_attested"
+                        and isinstance(recorded.get("attestation"), dict)
+                        and (attestation := recorded["attestation"]).get(
+                            "attestation_id"
+                        )
+                        in app_approval.get("active_attestation_ids", [])
+                        and attestation.get("decision") == "verified"
+                    ]
+                    prior_ids = {
+                        identity.get("id")
+                        for identity in [
+                            proposal.get("proposer_identity"),
+                            *active_verifiers,
+                            (
+                                execution_challenges[0]["approval"].get(
+                                    "approver_identity"
+                                )
+                                if len(execution_challenges) == 1
+                                else None
+                            ),
+                            (
+                                app_approval.get("reviewer_identity")
+                                if isinstance(app_approval, dict)
+                                else None
+                            ),
+                        ]
+                        if isinstance(identity, dict)
+                    }
+                    if isinstance(app_approval, dict):
+                        prior_ids.add(app_approval.get("result_signer", {}).get("id"))
+                    execution_results = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if isinstance(app_approval, dict)
+                        and recorded.get("type") == "isolated_execution_recorded"
+                        and recorded.get("execution_id")
+                        == app_approval.get("execution_id")
+                    ]
+                    if len(execution_results) == 1:
+                        prior_ids.add(execution_results[0].get("result_signer_id"))
+                    reviewer_id = approval["reviewer_identity"]["id"]
+                    supervisor_id = approval["supervisor_identity"]["result_signer"][
+                        "id"
+                    ]
+                    if (
+                        challenge_id in challenges
+                        or approval["canary_id"] in canary_ids
+                        or approval["proposal_id"] != proposal.get("id")
+                        or approval["proposal_content_sha256"]
+                        != proposal.get("content_sha256")
+                        or len(application_results) != 1
+                        or application_results[0].get("candidate_id")
+                        != approval["candidate_id"]
+                        or application_results[0].get("application_id")
+                        != approval["application_id"]
+                        or application_results[0].get("result_sha256")
+                        != approval["application_result_sha256"]
+                        or application_results[0].get("approval_sha256")
+                        != approval["application_approval_sha256"]
+                        or application_results[0].get("target_ref")
+                        != approval["target_ref"]
+                        or application_results[0].get("commit_oid")
+                        != approval["candidate_commit_oid"]
+                        or len(application_challenges) != 1
+                        or not isinstance(app_approval, dict)
+                        or app_approval.get("expected_parent_revision")
+                        != approval["baseline_revision"]
+                        or approval["application_reviewer_identity"]
+                        != app_approval.get("reviewer_identity")
+                        or approval["application_result_signer_id"]
+                        != app_approval.get("result_signer", {}).get("id")
+                        or len(active_verifiers)
+                        != len(app_approval.get("active_attestation_ids", []))
+                        or len(execution_challenges) != 1
+                        or len(execution_results) != 1
+                        or reviewer_id in prior_ids
+                        or supervisor_id in {reviewer_id, *prior_ids}
+                        or event.get("at") != approval["issued_at"]
+                        or event.get("approval_sha256") != approval_digest
+                        or event.get("activation_performed") is not False
+                        or event.get("baseline_restore_attempted") is not False
+                        or event.get("persistent_activation_retained") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration canary challenge violates its boundary"
+                        )
+                    self._validate_provenance(
+                        event.get("provenance"), label="canary challenge event"
+                    )
+                    requester = self._identity_from_provenance(
+                        event.get("provenance"),
+                        label="canary challenge event",
+                        required=True,
+                    )
+                    if (
+                        requester != event.get("requester_identity")
+                        or requester != approval["reviewer_identity"]
+                    ):
+                        raise SelfIterationError(
+                            "canary reviewer is not bound to request provenance"
+                        )
+                    challenges[challenge_id] = event
+                    canary_ids.add(approval["canary_id"])
+                    continue
+                if event_type == "transient_canary_recorded":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "challenge_id",
+                        "canary_id",
+                        "approval_sha256",
+                        "approval_signature_sha256",
+                        "canary_result_id",
+                        "result_sha256",
+                        "candidate_id",
+                        "application_result_id",
+                        "application_result_sha256",
+                        "reviewer_identity",
+                        "supervisor_signer_id",
+                        "outcome",
+                        "activation_performed",
+                        "health_checks_sha256",
+                        "baseline_restore_attempted",
+                        "baseline_restored",
+                        "persistent_activation_retained",
+                        "recommended_decision",
+                        "eligible_for_merge_review",
+                        "eligible_for_live_activation",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration canary result fields are malformed"
+                        )
+                    challenge = challenges.get(event.get("challenge_id"))
+                    recorded_approval = challenge.get("approval") if challenge else None
+                    result_id = event.get("canary_result_id")
+                    outcome = event.get("outcome")
+                    baseline_restored = event.get("baseline_restored")
+                    expected_decision = (
+                        "keep_candidate_for_merge_review"
+                        if outcome == "passed" and baseline_restored is True
+                        else (
+                            "operator_recovery_required"
+                            if outcome == "rollback_failed"
+                            or baseline_restored is False
+                            else "reject_candidate"
+                        )
+                    )
+                    eligible = outcome == "passed" and baseline_restored is True
+                    if (
+                        not isinstance(recorded_approval, dict)
+                        or event.get("challenge_id") in recorded_challenges
+                        or not isinstance(result_id, str)
+                        or not re.fullmatch(r"sicr-[0-9a-f]{32}", result_id)
+                        or result_id in result_ids
+                        or event.get("canary_id") != recorded_approval.get("canary_id")
+                        or event.get("approval_sha256")
+                        != canary_approval_sha256(recorded_approval)
+                        or event.get("candidate_id")
+                        != recorded_approval.get("candidate_id")
+                        or event.get("application_result_id")
+                        != recorded_approval.get("application_result_id")
+                        or event.get("application_result_sha256")
+                        != recorded_approval.get("application_result_sha256")
+                        or event.get("reviewer_identity")
+                        != recorded_approval.get("reviewer_identity")
+                        or event.get("supervisor_signer_id")
+                        != recorded_approval.get("supervisor_identity", {})
+                        .get("result_signer", {})
+                        .get("id")
+                        or outcome
+                        not in {
+                            "passed",
+                            "failed",
+                            "activation_failed",
+                            "timed_out",
+                            "supervisor_error",
+                            "rollback_failed",
+                        }
+                        or not isinstance(event.get("activation_performed"), bool)
+                        or not isinstance(event.get("baseline_restore_attempted"), bool)
+                        or not isinstance(baseline_restored, bool)
+                        or event.get("persistent_activation_retained") is not False
+                        or event.get("recommended_decision") != expected_decision
+                        or event.get("eligible_for_merge_review") is not eligible
+                        or event.get("eligible_for_live_activation") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration canary result violates its boundary"
+                        )
+                    for field, label in (
+                        ("approval_signature_sha256", "canary approval signature"),
+                        ("health_checks_sha256", "canary health checks"),
+                        ("result_sha256", "canary result"),
+                    ):
+                        self._validate_hex_digest(event.get(field), label=label)
+                    recorded_challenges.add(event["challenge_id"])
+                    result_ids.add(result_id)
+
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.exists():
             return self._empty_ledger()
@@ -2318,14 +2667,20 @@ class SelfIterationSystem:
             self._validate_v5(data)
             data = self._migrate_v5(data)
             self._validate_v6(data)
+            version = APPLICATION_SCHEMA_VERSION
+            migrated = True
+        if version == APPLICATION_SCHEMA_VERSION:
+            self._validate_v6(data)
+            data = self._migrate_v6(data)
+            self._validate_v7(data)
             version = SCHEMA_VERSION
             migrated = True
         elif version == SCHEMA_VERSION:
-            self._validate_v6(data)
+            self._validate_v7(data)
         else:
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if version != SCHEMA_VERSION:
-            self._validate_v6(data)
+            self._validate_v7(data)
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if migrated:
             self._save_ledger(data)
@@ -2930,6 +3285,210 @@ class SelfIterationSystem:
             "merged": False,
             "deployed": False,
             "eligible_for_canary_review": True,
+            "eligible_for_live_activation": False,
+            "authority_granted": False,
+        }
+
+    def _passing_application_result(
+        self,
+        *,
+        proposal: dict[str, Any],
+        candidate: dict[str, Any],
+        application_result_id: str,
+        expected_result_sha256: str,
+    ) -> dict[str, Any]:
+        try:
+            raw_results = self._patch_sandbox.load_application_results(
+                candidate["candidate_id"]
+            )
+        except PatchSandboxError as exc:
+            raise SelfIterationError(str(exc)) from exc
+        matches: list[dict[str, Any]] = []
+        for raw_result in raw_results:
+            try:
+                result = validate_signed_application_result(
+                    raw_result, self._verifier_key_provider
+                )
+            except ApplicationError as exc:
+                raise SelfIterationError(
+                    "signed application result artifact is invalid"
+                ) from exc
+            if result.get("application_result_id") == application_result_id:
+                matches.append(result)
+        if len(matches) != 1:
+            raise SelfIterationError(
+                "canary review requires one exact signed application result"
+            )
+        result = matches[0]
+        if (
+            result.get("result_sha256") != expected_result_sha256
+            or result.get("candidate_id") != candidate.get("candidate_id")
+            or result.get("candidate_sha256") != candidate.get("candidate_sha256")
+            or result.get("eligible_for_canary_review") is not True
+            or result.get("eligible_for_live_activation") is not False
+            or result.get("branch_created") is not True
+            or result.get("pushed") is not False
+            or result.get("merged") is not False
+            or result.get("deployed") is not False
+        ):
+            raise SelfIterationError(
+                "canary review requires the exact eligible application digest"
+            )
+        recorded = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "reviewed_application_recorded"
+            and event.get("application_result_id") == application_result_id
+        ]
+        if len(recorded) != 1 or recorded[0] != self._application_result_event(result):
+            raise SelfIterationError(
+                "signed application result does not match its ledger event"
+            )
+        challenge = self._application_challenge_event(proposal, result["challenge_id"])
+        if (
+            challenge.get("approval") != result["approval"]
+            or challenge.get("approval_sha256") != result["application_approval_sha256"]
+        ):
+            raise SelfIterationError(
+                "signed application result does not match its ledger approval"
+            )
+        if self.repo_root is None or not self._application_writer.verify_result(
+            repo_root=self.repo_root, result=result
+        ):
+            raise SelfIterationError(
+                "reviewed application Git ref failed integrity verification"
+            )
+        return result
+
+    @staticmethod
+    def _canary_claim_record(
+        *,
+        approval: dict[str, Any],
+        approval_signature: str,
+        reviewer_identity: dict[str, Any],
+        claimed_at: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema": "anima.self_iteration.canary_claim.v1",
+            "challenge_id": approval["challenge_id"],
+            "canary_id": approval["canary_id"],
+            "approval_sha256": canary_approval_sha256(approval),
+            "approval_signature": canary_signature_record(approval, approval_signature),
+            "proposal_id": approval["proposal_id"],
+            "candidate_id": approval["candidate_id"],
+            "application_result_id": approval["application_result_id"],
+            "reviewer_identity": copy.deepcopy(reviewer_identity),
+            "claimed_at": claimed_at,
+            "automatic_retry_allowed": False,
+            "persistent_activation_allowed": False,
+            "authority_granted": False,
+        }
+
+    def _validate_canary_claim(
+        self, claim: Any, *, approval: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not isinstance(claim, dict) or set(claim) != {
+            "schema",
+            "challenge_id",
+            "canary_id",
+            "approval_sha256",
+            "approval_signature",
+            "proposal_id",
+            "candidate_id",
+            "application_result_id",
+            "reviewer_identity",
+            "claimed_at",
+            "automatic_retry_allowed",
+            "persistent_activation_allowed",
+            "authority_granted",
+        }:
+            raise SelfIterationError("canary claim fields are malformed")
+        try:
+            parse_utc_timestamp(claim.get("claimed_at"), "claimed_at")
+        except VerificationError as exc:
+            raise SelfIterationError("canary claim timestamp is malformed") from exc
+        raw_signature = claim.get("approval_signature")
+        try:
+            expected_signature = canary_signature_record(
+                approval,
+                raw_signature.get("value") if isinstance(raw_signature, dict) else None,
+            )
+        except CanaryError as exc:
+            raise SelfIterationError("canary claim signature is malformed") from exc
+        if (
+            claim.get("schema") != "anima.self_iteration.canary_claim.v1"
+            or claim.get("challenge_id") != approval["challenge_id"]
+            or claim.get("canary_id") != approval["canary_id"]
+            or claim.get("approval_sha256") != canary_approval_sha256(approval)
+            or raw_signature != expected_signature
+            or claim.get("proposal_id") != approval["proposal_id"]
+            or claim.get("candidate_id") != approval["candidate_id"]
+            or claim.get("application_result_id") != approval["application_result_id"]
+            or claim.get("reviewer_identity") != approval["reviewer_identity"]
+            or claim.get("automatic_retry_allowed") is not False
+            or claim.get("persistent_activation_allowed") is not False
+            or claim.get("authority_granted") is not False
+        ):
+            raise SelfIterationError("canary claim binding is malformed")
+        signature = claim["approval_signature"]
+        try:
+            key = self._verifier_key_provider(
+                signature["reviewer_id"], signature["key_id"]
+            )
+        except Exception as exc:
+            raise SelfIterationError(
+                "canary reviewer key registry is unavailable"
+            ) from exc
+        if not isinstance(key, VerifierKey) or not verify_canary_approval_signature(
+            approval, signature["value"], key
+        ):
+            raise SelfIterationError("canary claim approval signature is invalid")
+        return copy.deepcopy(claim)
+
+    @staticmethod
+    def _canary_challenge_event(
+        proposal: dict[str, Any], challenge_id: str
+    ) -> dict[str, Any]:
+        matches = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "canary_review_challenge_issued"
+            and isinstance(event.get("approval"), dict)
+            and event["approval"].get("challenge_id") == challenge_id
+        ]
+        if len(matches) != 1:
+            raise SelfIterationError("challenge_id does not name one canary approval")
+        return matches[0]
+
+    @staticmethod
+    def _canary_result_event(result: dict[str, Any]) -> dict[str, Any]:
+        approval = result["approval"]
+        return {
+            "type": "transient_canary_recorded",
+            "at": result["finished_at"],
+            "challenge_id": result["challenge_id"],
+            "canary_id": result["canary_id"],
+            "approval_sha256": canary_approval_sha256(approval),
+            "approval_signature_sha256": hashlib.sha256(
+                canonical_json_bytes(result["approval_signature"])
+            ).hexdigest(),
+            "canary_result_id": result["canary_result_id"],
+            "result_sha256": result["result_sha256"],
+            "candidate_id": result["candidate_id"],
+            "application_result_id": result["application_result_id"],
+            "application_result_sha256": result["application_result_sha256"],
+            "reviewer_identity": approval["reviewer_identity"],
+            "supervisor_signer_id": result["signature"]["signer_id"],
+            "outcome": result["outcome"],
+            "activation_performed": result["activation_performed"],
+            "health_checks_sha256": hashlib.sha256(
+                canonical_json_bytes(result["health_checks"])
+            ).hexdigest(),
+            "baseline_restore_attempted": result["baseline_restore_attempted"],
+            "baseline_restored": result["baseline_restored"],
+            "persistent_activation_retained": False,
+            "recommended_decision": result["recommended_decision"],
+            "eligible_for_merge_review": result["eligible_for_merge_review"],
             "eligible_for_live_activation": False,
             "authority_granted": False,
         }
@@ -4868,6 +5427,518 @@ class SelfIterationSystem:
                 "candidate_sha256": candidate["candidate_sha256"],
                 "applications": statuses,
                 "application_contract": application_contract(),
+                "eligible_for_live_activation": False,
+                "authority_granted": False,
+            }
+
+    def prepare_canary(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+        application_result_id: Any,
+        expected_application_result_sha256: Any,
+    ) -> dict[str, Any]:
+        """Issue a signed plan for one externally supervised transient canary."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        application_result_id_text = _required_text(
+            application_result_id, "application_result_id", max_length=100
+        )
+        application_digest = _required_text(
+            expected_application_result_sha256,
+            "expected_application_result_sha256",
+            max_length=64,
+        ).lower()
+        if not re.fullmatch(r"siar-[0-9a-f]{32}", application_result_id_text):
+            raise SelfIterationError("application_result_id is malformed")
+        if not re.fullmatch(r"[0-9a-f]{64}", application_digest):
+            raise SelfIterationError("expected_application_result_sha256 is malformed")
+
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                now = self._now_utc()
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=proposal["content_sha256"],
+                    now=now,
+                )
+                source_fingerprint = self._assert_current_proposal_source(proposal)
+                candidate = self._patch_sandbox.load_manifest(candidate_id_text)
+                self._assert_candidate_binding(
+                    proposal=proposal, candidate=candidate, state=state
+                )
+                application_result = self._passing_application_result(
+                    proposal=proposal,
+                    candidate=candidate,
+                    application_result_id=application_result_id_text,
+                    expected_result_sha256=application_digest,
+                )
+                application_approval = application_result["approval"]
+                if application_approval[
+                    "source_fingerprint"
+                ] != source_fingerprint or application_approval[
+                    "active_attestation_ids"
+                ] != sorted(
+                    state["active_attestation_ids"]
+                ):
+                    raise SelfIterationError(
+                        "proposal source or verification changed after application"
+                    )
+
+                recorded_at = _isoformat(now)
+                receipt = self._server_provenance(recorded_at)
+                reviewer_identity = self._identity_from_provenance(
+                    receipt,
+                    label="canary review request",
+                    required=True,
+                )
+                assert reviewer_identity is not None
+                verifier_identities = self._active_verifier_identities(proposal, state)
+                execution_events = [
+                    event
+                    for event in proposal["events"]
+                    if event.get("type") == "isolated_execution_recorded"
+                    and event.get("execution_id") == application_result["execution_id"]
+                ]
+                if len(execution_events) != 1:
+                    raise SelfIterationError(
+                        "canary review requires one recorded execution chain"
+                    )
+                execution_event = execution_events[0]
+                prior_ids = {
+                    identity.get("id")
+                    for identity in [
+                        proposal.get("proposer_identity"),
+                        execution_event.get("approver_identity"),
+                        application_approval["reviewer_identity"],
+                        *verifier_identities,
+                    ]
+                    if isinstance(identity, dict)
+                }
+                prior_ids.update(
+                    {
+                        execution_event.get("result_signer_id"),
+                        application_result["signature"]["signer_id"],
+                    }
+                )
+                reviewer_id = reviewer_identity["id"]
+                if reviewer_id in prior_ids:
+                    raise SelfIterationError(
+                        "canary reviewer must differ from all prior participants"
+                    )
+                reviewer_key = self._resolve_verifier_key(reviewer_identity)
+
+                configured_supervisor_id = os.environ.get(CANARY_SIGNER_ID_ENV)
+                if (
+                    not isinstance(configured_supervisor_id, str)
+                    or not configured_supervisor_id
+                ):
+                    raise SelfIterationError(
+                        f"{CANARY_SIGNER_ID_ENV} must name the dedicated supervisor signer"
+                    )
+                if configured_supervisor_id in {reviewer_id, *prior_ids}:
+                    raise SelfIterationError(
+                        "canary supervisor signer must differ from all participants"
+                    )
+                supervisor_identity = validate_supervisor_identity(
+                    self._canary_supervisor.probe()
+                )
+                result_signer = supervisor_identity.get("result_signer")
+                if (
+                    supervisor_identity.get("supervisor_id") != configured_supervisor_id
+                    or not isinstance(result_signer, dict)
+                    or result_signer.get("id") != configured_supervisor_id
+                ):
+                    raise SelfIterationError(
+                        "canary supervisor identity does not match configuration"
+                    )
+                supervisor_key = self._resolve_verifier_key(
+                    {
+                        "kind": "service_signer",
+                        "id": configured_supervisor_id,
+                        "issuer": None,
+                    },
+                    result_signer.get("key_id"),
+                )
+                approval = build_canary_approval(
+                    application_result=application_result,
+                    reviewer_identity=reviewer_identity,
+                    reviewer_key_id=reviewer_key.key_id,
+                    supervisor_identity=supervisor_identity,
+                    issued_at=now,
+                )
+                if (
+                    approval["supervisor_identity"]["result_signer"]["key_id"]
+                    != supervisor_key.key_id
+                ):
+                    raise SelfIterationError(
+                        "canary supervisor signing key binding is malformed"
+                    )
+                event = {
+                    "type": "canary_review_challenge_issued",
+                    "at": recorded_at,
+                    "approval": copy.deepcopy(approval),
+                    "approval_sha256": canary_approval_sha256(approval),
+                    "requester_identity": reviewer_identity,
+                    "provenance": receipt,
+                    "activation_performed": False,
+                    "baseline_restore_attempted": False,
+                    "persistent_activation_retained": False,
+                    "authority_granted": False,
+                }
+                proposal["events"].append(event)
+                self._save_ledger(ledger)
+            except (CanaryError, PatchSandboxError) as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+        return {
+            "approval": approval,
+            "approval_sha256": canary_approval_sha256(approval),
+            "signing_input_b64": canary_signing_input_b64(approval),
+            "signature": {
+                "algorithm": SIGNATURE_ALGORITHM,
+                "key_id": reviewer_key.key_id,
+                "assurance": "symmetric_mac_server_verifiable",
+            },
+            "next_step": (
+                "The authenticated canary reviewer signs these exact bytes, then "
+                "submits run_canary before expiry. The claim is consumed before the "
+                "external supervisor may activate the transient candidate."
+            ),
+            "authority_granted": False,
+        }
+
+    def run_canary(
+        self,
+        *,
+        proposal_id: Any,
+        challenge_id: Any,
+        signature: Any,
+    ) -> dict[str, Any]:
+        """Consume one review and request its fixed transient canary exactly once."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        challenge_id_text = _required_text(challenge_id, "challenge_id", max_length=100)
+        signature_text = _required_text(signature, "signature", max_length=64).lower()
+        if not re.fullmatch(r"sicc-[0-9a-f]{32}", challenge_id_text):
+            raise SelfIterationError("canary challenge_id is malformed")
+        if not re.fullmatch(r"[0-9a-f]{64}", signature_text):
+            raise SelfIterationError("canary approval signature is malformed")
+
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                challenge_event = self._canary_challenge_event(
+                    proposal, challenge_id_text
+                )
+                approval = validate_canary_approval(challenge_event["approval"])
+                now = self._now_utc()
+                issued = parse_utc_timestamp(approval["issued_at"], "issued_at")
+                expires = parse_utc_timestamp(
+                    approval["challenge_expires_at"], "challenge_expires_at"
+                )
+                if now < issued - timedelta(seconds=30) or now > expires:
+                    raise SelfIterationError(
+                        "canary approval is expired or not yet valid"
+                    )
+                receipt = self._server_provenance(_isoformat(now))
+                reviewer_identity = self._identity_from_provenance(
+                    receipt,
+                    label="transient canary request",
+                    required=True,
+                )
+                assert reviewer_identity is not None
+                if reviewer_identity != approval["reviewer_identity"]:
+                    raise SelfIterationError(
+                        "only the authenticated canary reviewer may consume this challenge"
+                    )
+                reviewer_key = self._resolve_verifier_key(
+                    reviewer_identity, approval["reviewer_key_id"]
+                )
+                if not verify_canary_approval_signature(
+                    approval, signature_text, reviewer_key
+                ):
+                    raise SelfIterationError("canary approval signature is invalid")
+
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=approval["proposal_content_sha256"],
+                    now=now,
+                )
+                self._assert_current_proposal_source(proposal)
+                candidate = self._patch_sandbox.load_manifest(approval["candidate_id"])
+                if candidate.get("candidate_sha256") != approval["candidate_sha256"]:
+                    raise SelfIterationError("canary candidate digest is stale")
+                self._assert_candidate_binding(
+                    proposal=proposal, candidate=candidate, state=state
+                )
+                application_result = self._passing_application_result(
+                    proposal=proposal,
+                    candidate=candidate,
+                    application_result_id=approval["application_result_id"],
+                    expected_result_sha256=approval["application_result_sha256"],
+                )
+                if (
+                    application_result["application_id"] != approval["application_id"]
+                    or application_result["application_approval_sha256"]
+                    != approval["application_approval_sha256"]
+                    or application_result["target_ref"] != approval["target_ref"]
+                    or application_result["parent_revision"]
+                    != approval["baseline_revision"]
+                    or application_result["commit_oid"]
+                    != approval["candidate_commit_oid"]
+                    or application_result["tree_oid"] != approval["candidate_tree_oid"]
+                ):
+                    raise SelfIterationError(
+                        "reviewed application changed before canary execution"
+                    )
+                if (
+                    validate_supervisor_identity(self._canary_supervisor.probe())
+                    != approval["supervisor_identity"]
+                ):
+                    raise SelfIterationError(
+                        "canary supervisor identity changed after review"
+                    )
+                supervisor_signer = approval["supervisor_identity"]["result_signer"]
+                self._resolve_verifier_key(
+                    {
+                        "kind": "service_signer",
+                        "id": supervisor_signer["id"],
+                        "issuer": None,
+                    },
+                    supervisor_signer["key_id"],
+                )
+
+                requested_at = _isoformat(now)
+                claim = self._canary_claim_record(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    reviewer_identity=reviewer_identity,
+                    claimed_at=requested_at,
+                )
+                self._patch_sandbox.claim_canary(
+                    approval["candidate_id"], challenge_id_text, claim
+                )
+
+                result = self._canary_supervisor.evaluate(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    requested_at=requested_at,
+                )
+                result = validate_signed_canary_result(
+                    result, self._verifier_key_provider
+                )
+                expected_request = build_canary_request(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    requested_at=requested_at,
+                )
+                if (
+                    result["approval"] != approval
+                    or result["approval_signature"] != claim["approval_signature"]
+                    or result["request_sha256"] != expected_request["request_sha256"]
+                    or result["supervisor_identity"] != approval["supervisor_identity"]
+                ):
+                    raise SelfIterationError(
+                        "signed canary result does not match its one-use request"
+                    )
+                self._patch_sandbox.store_canary_result(
+                    approval["candidate_id"], result
+                )
+
+                fresh_ledger = self._load_ledger()
+                fresh_proposal = self._find_proposal(fresh_ledger, proposal_id_text)
+                self._canary_challenge_event(fresh_proposal, challenge_id_text)
+                if any(
+                    event.get("type") == "transient_canary_recorded"
+                    and event.get("challenge_id") == challenge_id_text
+                    for event in fresh_proposal["events"]
+                ):
+                    raise SelfIterationError(
+                        "canary challenge already has a recorded result"
+                    )
+                fresh_proposal["events"].append(self._canary_result_event(result))
+                self._save_ledger(fresh_ledger)
+            except (CanaryError, PatchSandboxError) as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+        return {
+            "result": result,
+            "canary_contract": canary_contract(),
+            "next_step": (
+                "The candidate is no longer live. A passing restored canary may be "
+                "reviewed for merge; no result grants persistent activation authority."
+            ),
+            "authority_granted": False,
+        }
+
+    def canary_status(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+    ) -> dict[str, Any]:
+        """Reconcile canary reviews, claims, signed results, and ledger events."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            try:
+                candidate = self._patch_sandbox.load_manifest(candidate_id_text)
+                self._assert_candidate_binding(proposal=proposal, candidate=candidate)
+                raw_claims = self._patch_sandbox.load_canary_claims(candidate_id_text)
+                raw_results = self._patch_sandbox.load_canary_results(candidate_id_text)
+            except PatchSandboxError as exc:
+                raise SelfIterationError(str(exc)) from exc
+            challenge_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "canary_review_challenge_issued"
+                and event.get("approval", {}).get("candidate_id") == candidate_id_text
+            ]
+            approvals = {
+                event["approval"]["challenge_id"]: event["approval"]
+                for event in challenge_events
+            }
+            claims: dict[str, dict[str, Any]] = {}
+            for raw_claim in raw_claims:
+                challenge_id_value = raw_claim.get("challenge_id")
+                if not isinstance(challenge_id_value, str):
+                    raise SelfIterationError(
+                        "canary claim challenge identifier is malformed"
+                    )
+                approval = approvals.get(challenge_id_value)
+                if approval is None or challenge_id_value in claims:
+                    raise SelfIterationError(
+                        "canary claim has no unique ledger-recorded approval"
+                    )
+                claims[challenge_id_value] = self._validate_canary_claim(
+                    raw_claim, approval=approval
+                )
+            results: dict[str, dict[str, Any]] = {}
+            for raw_result in raw_results:
+                try:
+                    result = validate_signed_canary_result(
+                        raw_result, self._verifier_key_provider
+                    )
+                except CanaryError as exc:
+                    raise SelfIterationError(
+                        "signed canary result artifact is invalid"
+                    ) from exc
+                challenge_id_value = result["challenge_id"]
+                approval = approvals.get(challenge_id_value)
+                claim = claims.get(challenge_id_value)
+                if approval is None or claim is None or challenge_id_value in results:
+                    raise SelfIterationError(
+                        "signed canary result has no unique one-use approval"
+                    )
+                expected_request = build_canary_request(
+                    approval=approval,
+                    approval_signature=claim["approval_signature"]["value"],
+                    requested_at=claim["claimed_at"],
+                )
+                if (
+                    result["approval"] != approval
+                    or result["approval_signature"] != claim["approval_signature"]
+                    or result["request_sha256"] != expected_request["request_sha256"]
+                ):
+                    raise SelfIterationError(
+                        "signed canary result does not match its one-use approval"
+                    )
+                results[challenge_id_value] = result
+
+            recorded_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "transient_canary_recorded"
+                and event.get("candidate_id") == candidate_id_text
+            ]
+            recorded_by_challenge = {
+                event["challenge_id"]: event for event in recorded_events
+            }
+            now = self._now_utc()
+            statuses: list[dict[str, Any]] = []
+            for challenge_id_value, approval in approvals.items():
+                selected_claim = claims.get(challenge_id_value)
+                selected_result = results.get(challenge_id_value)
+                recorded = recorded_by_challenge.get(challenge_id_value)
+                if recorded is not None and (
+                    selected_result is None
+                    or recorded != self._canary_result_event(selected_result)
+                ):
+                    raise SelfIterationError(
+                        "ledger canary event does not match its signed result artifact"
+                    )
+                application_ref_intact = False
+                try:
+                    application_result = self._passing_application_result(
+                        proposal=proposal,
+                        candidate=candidate,
+                        application_result_id=approval["application_result_id"],
+                        expected_result_sha256=approval["application_result_sha256"],
+                    )
+                except SelfIterationError:
+                    if selected_result is not None:
+                        raise
+                else:
+                    application_ref_intact = bool(
+                        application_result["commit_oid"]
+                        == approval["candidate_commit_oid"]
+                    )
+                if (
+                    selected_result is not None
+                    and selected_result["baseline_restored"] is not True
+                ):
+                    state = "recorded_recovery_required"
+                elif selected_result is not None and recorded is not None:
+                    state = "recorded"
+                elif selected_result is not None:
+                    state = "signed_result_unledgered"
+                elif selected_claim is not None:
+                    state = "claimed_result_indeterminate"
+                elif now > parse_utc_timestamp(
+                    approval["challenge_expires_at"], "challenge_expires_at"
+                ):
+                    state = "expired_unclaimed"
+                else:
+                    state = "awaiting_signature"
+                statuses.append(
+                    {
+                        "challenge_id": challenge_id_value,
+                        "canary_id": approval["canary_id"],
+                        "approval_sha256": canary_approval_sha256(approval),
+                        "issued_at": approval["issued_at"],
+                        "challenge_expires_at": approval["challenge_expires_at"],
+                        "reviewer_identity": approval["reviewer_identity"],
+                        "supervisor_identity": approval["supervisor_identity"],
+                        "state": state,
+                        "claim": copy.deepcopy(selected_claim),
+                        "result": copy.deepcopy(selected_result),
+                        "ledger_recorded": recorded is not None,
+                        "application_ref_intact": application_ref_intact,
+                        "automatic_retry_allowed": False,
+                        "persistent_activation_retained": False,
+                        "eligible_for_merge_review": bool(
+                            selected_result is not None
+                            and recorded is not None
+                            and selected_result["eligible_for_merge_review"] is True
+                            and application_ref_intact
+                        ),
+                        "eligible_for_live_activation": False,
+                        "authority_granted": False,
+                    }
+                )
+            return {
+                "proposal_id": proposal_id_text,
+                "candidate_id": candidate_id_text,
+                "candidate_sha256": candidate["candidate_sha256"],
+                "canaries": statuses,
+                "canary_contract": canary_contract(),
+                "persistent_activation_retained": False,
                 "eligible_for_live_activation": False,
                 "authority_granted": False,
             }

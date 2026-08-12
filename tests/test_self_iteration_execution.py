@@ -893,23 +893,31 @@ class TestIsolatedExecutionLifecycle:
             "proposals"
         ][0]
         on_disk = json.loads(setup.ledger.read_text())
-        assert migrated["events"][-2] == {
+        assert migrated["events"][-3] == {
             "type": "execution_schema_migrated",
             "at": "2026-08-11T22:30:00Z",
             "from_schema": 4,
             "to_schema": 5,
             "authority_granted": False,
         }
-        assert migrated["events"][-1] == {
+        assert migrated["events"][-2] == {
             "type": "application_schema_migrated",
             "at": "2026-08-11T22:30:00Z",
             "from_schema": 5,
             "to_schema": 6,
             "authority_granted": False,
         }
-        assert on_disk["schema_version"] == 6
+        assert migrated["events"][-1] == {
+            "type": "canary_schema_migrated",
+            "at": "2026-08-11T22:30:00Z",
+            "from_schema": 6,
+            "to_schema": 7,
+            "authority_granted": False,
+        }
+        assert on_disk["schema_version"] == 7
         assert on_disk["execution_contract"]["automatic_apply"] is False
         assert on_disk["application_contract"]["push_allowed"] is False
+        assert on_disk["canary_contract"]["persistent_activation_allowed"] is False
 
 
 @pytest.mark.skipif(
