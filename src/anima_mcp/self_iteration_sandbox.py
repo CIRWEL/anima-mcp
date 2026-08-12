@@ -39,13 +39,18 @@ MAX_PATCH_BYTES = 512 * 1024
 MAX_CHANGED_LINES = 800
 MAX_MANIFEST_BYTES = 256 * 1024
 MAX_EVALUATION_BYTES = 256 * 1024
+MAX_EXECUTION_CLAIM_BYTES = 64 * 1024
+MAX_EXECUTION_RESULT_BYTES = 1024 * 1024
 
 SUPPORTED_SUFFIXES = frozenset({".json", ".md", ".py", ".yaml", ".yml"})
 
 _CANDIDATE_ID_RE = re.compile(r"^sip-[0-9a-f]{32}$")
 _EVALUATION_ID_RE = re.compile(r"^sie-[0-9a-f]{32}$")
+_EXECUTION_CHALLENGE_ID_RE = re.compile(r"^sixc-[0-9a-f]{32}$")
+_EXECUTION_ID_RE = re.compile(r"^six-[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TEMP_DIR_RE = re.compile(r"^\.sip-tmp-[A-Za-z0-9_-]+$")
+_IMMUTABLE_TEMP_RE = re.compile(r"^\.immutable-tmp-[0-9]+-[0-9a-f]{32}$")
 
 _MANIFEST_FIELDS = {
     "schema",
@@ -270,6 +275,37 @@ def _write_bytes(path: Path, data: bytes) -> None:
         stream.write(data)
         stream.flush()
         os.fsync(stream.fileno())
+
+
+def _exclusive_json_write(path: Path, data: Any) -> None:
+    """Durably publish one complete immutable JSON record without replacement."""
+    payload = json.dumps(data, indent=2, ensure_ascii=False, allow_nan=False).encode(
+        "utf-8"
+    )
+    temporary = path.parent / f".immutable-tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(temporary, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path, follow_symlinks=False)
+        _fsync_directory(path.parent)
+    except BaseException:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    finally:
+        os.close(descriptor)
+    try:
+        temporary.unlink()
+    except OSError:
+        pass
+    _fsync_directory(path.parent)
 
 
 def _unified_diff(path: str, before: str, after: str) -> str:
@@ -838,6 +874,154 @@ class PatchSandbox:
     def load_manifest(self, candidate_id: Any) -> dict[str, Any]:
         manifest, _patch, _contents = self._load_candidate(candidate_id)
         return copy.deepcopy(manifest)
+
+    def execution_material(
+        self, candidate_id: Any
+    ) -> tuple[dict[str, Any], dict[str, bytes]]:
+        """Return fully revalidated candidate bytes for the isolated runner."""
+        manifest, _patch, contents = self._load_candidate(candidate_id)
+        return copy.deepcopy(manifest), copy.deepcopy(contents)
+
+    @staticmethod
+    def _artifact_directory(candidate: Path, name: str) -> Path:
+        path = candidate / name
+        if path.exists() and (path.is_symlink() or not path.is_dir()):
+            raise PatchSandboxError(f"candidate {name} directory is malformed")
+        path.mkdir(mode=0o700, exist_ok=True)
+        try:
+            if path.resolve(strict=True).parent != candidate:
+                raise PatchSandboxError(
+                    f"candidate {name} directory escaped quarantine"
+                )
+        except OSError as exc:
+            raise PatchSandboxError(
+                f"candidate {name} directory is unavailable"
+            ) from exc
+        return path
+
+    def claim_execution(
+        self,
+        candidate_id: Any,
+        challenge_id: Any,
+        claim: dict[str, Any],
+    ) -> None:
+        """Atomically consume one execution challenge across local processes."""
+        candidate = self._candidate_directory(candidate_id)
+        if not isinstance(
+            challenge_id, str
+        ) or not _EXECUTION_CHALLENGE_ID_RE.fullmatch(challenge_id):
+            raise PatchSandboxError("execution challenge_id is malformed")
+        if not isinstance(claim, dict) or claim.get("challenge_id") != challenge_id:
+            raise PatchSandboxError("execution claim binding is malformed")
+        encoded = json.dumps(claim, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_EXECUTION_CLAIM_BYTES:
+            raise PatchSandboxError("execution claim exceeds its size limit")
+        claims = self._artifact_directory(candidate, "execution_claims")
+        destination = claims / f"{challenge_id}.json"
+        try:
+            _exclusive_json_write(destination, claim)
+        except FileExistsError as exc:
+            raise PatchSandboxError(
+                "execution challenge was already claimed; automatic retry is forbidden"
+            ) from exc
+        except OSError as exc:
+            raise PatchSandboxError(
+                "execution challenge claim could not be persisted"
+            ) from exc
+
+    def load_execution_claims(self, candidate_id: Any) -> list[dict[str, Any]]:
+        candidate = self._candidate_directory(candidate_id)
+        claims = candidate / "execution_claims"
+        if not claims.exists():
+            return []
+        if claims.is_symlink() or not claims.is_dir():
+            raise PatchSandboxError("candidate execution_claims directory is malformed")
+        results: list[dict[str, Any]] = []
+        for path in sorted(claims.iterdir(), key=lambda item: item.name):
+            if _IMMUTABLE_TEMP_RE.fullmatch(path.name):
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                raise PatchSandboxError("execution claims contain an invalid entry")
+            challenge_id = path.stem
+            if not _EXECUTION_CHALLENGE_ID_RE.fullmatch(challenge_id):
+                raise PatchSandboxError(
+                    "execution claims contain a malformed identifier"
+                )
+            raw = self._read_regular(
+                path,
+                maximum=MAX_EXECUTION_CLAIM_BYTES,
+                label="execution claim",
+            )
+            try:
+                claim = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PatchSandboxError("execution claim is malformed") from exc
+            if not isinstance(claim, dict) or claim.get("challenge_id") != challenge_id:
+                raise PatchSandboxError("execution claim binding is malformed")
+            results.append(claim)
+        return results
+
+    def store_execution_result(self, candidate_id: Any, result: dict[str, Any]) -> None:
+        """Persist one signed execution result without permitting replacement."""
+        candidate = self._candidate_directory(candidate_id)
+        execution_id = result.get("execution_id") if isinstance(result, dict) else None
+        if not isinstance(execution_id, str) or not _EXECUTION_ID_RE.fullmatch(
+            execution_id
+        ):
+            raise PatchSandboxError("execution result identifier is malformed")
+        if result.get("candidate_id") != candidate.name:
+            raise PatchSandboxError("execution result candidate binding is malformed")
+        if (
+            len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+            > MAX_EXECUTION_RESULT_BYTES
+        ):
+            raise PatchSandboxError("execution result exceeds its size limit")
+        executions = self._artifact_directory(candidate, "executions")
+        destination = executions / f"{execution_id}.json"
+        try:
+            _exclusive_json_write(destination, result)
+        except FileExistsError as exc:
+            raise PatchSandboxError(
+                "execution result identifier already exists"
+            ) from exc
+        except OSError as exc:
+            raise PatchSandboxError("execution result could not be persisted") from exc
+
+    def load_execution_results(self, candidate_id: Any) -> list[dict[str, Any]]:
+        candidate = self._candidate_directory(candidate_id)
+        executions = candidate / "executions"
+        if not executions.exists():
+            return []
+        if executions.is_symlink() or not executions.is_dir():
+            raise PatchSandboxError("candidate executions directory is malformed")
+        results: list[dict[str, Any]] = []
+        for path in sorted(executions.iterdir(), key=lambda item: item.name):
+            if _IMMUTABLE_TEMP_RE.fullmatch(path.name):
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                raise PatchSandboxError("execution results contain an invalid entry")
+            execution_id = path.stem
+            if not _EXECUTION_ID_RE.fullmatch(execution_id):
+                raise PatchSandboxError(
+                    "execution results contain a malformed identifier"
+                )
+            raw = self._read_regular(
+                path,
+                maximum=MAX_EXECUTION_RESULT_BYTES,
+                label="execution result",
+            )
+            try:
+                result = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PatchSandboxError("execution result is malformed") from exc
+            if (
+                not isinstance(result, dict)
+                or result.get("execution_id") != execution_id
+                or result.get("candidate_id") != candidate.name
+            ):
+                raise PatchSandboxError("execution result binding is malformed")
+            results.append(result)
+        return results
 
     @staticmethod
     def _evaluate_file(path: str, content: bytes) -> dict[str, Any]:

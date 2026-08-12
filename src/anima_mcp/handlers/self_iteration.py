@@ -1,4 +1,4 @@
-"""MCP handler for bounded code awareness and quarantined iteration artifacts."""
+"""MCP handler for bounded code awareness and isolated iteration artifacts."""
 
 from __future__ import annotations
 
@@ -32,9 +32,9 @@ def _claimed_input(
 async def handle_self_iteration(arguments: dict) -> list[TextContent]:
     """Inspect source structure or update the proposal/verification ledger.
 
-    This handler intentionally has no live-source implementation,
-    command-execution, Git mutation, or deployment action. Proposal fields and
-    quarantined candidate files remain inert data.
+    Candidate code can execute only through the fixed, externally approved
+    Docker boundary. This handler has no host execution, live-source write,
+    apply, Git mutation, merge, or deployment action.
     """
     action = arguments.get("action", "inspect")
     system = get_self_iteration_system()
@@ -147,6 +147,36 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 )
             )
 
+        if action == "prepare_execution":
+            result = system.prepare_execution(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                expected_candidate_sha256=arguments.get("expected_candidate_sha256"),
+                evaluation_id=arguments.get("evaluation_id"),
+                expected_evaluation_sha256=arguments.get("expected_evaluation_sha256"),
+                execution_profile_id=arguments.get(
+                    "execution_profile_id", "display_era_pytest_v1"
+                ),
+            )
+            return _text({"success": True, **result})
+
+        if action == "execute_candidate":
+            result = system.execute_candidate(
+                proposal_id=arguments.get("proposal_id"),
+                challenge_id=arguments.get("challenge_id"),
+                signature=arguments.get("signature"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "execution_status":
+            return _text(
+                system.execution_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                    include_output=arguments.get("include_output", False),
+                )
+            )
+
         if action == "record_outcome":
             claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
                 arguments,
@@ -182,6 +212,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                     "construct_patch",
                     "evaluate_patch",
                     "patch_status",
+                    "prepare_execution",
+                    "execute_candidate",
+                    "execution_status",
                     "record_outcome",
                 ],
             }
