@@ -160,6 +160,36 @@ else
 fi
 echo ""
 
+# Step 0c: refuse the legacy REST compatibility mode before changing the
+# deployed checkout.  On an internet-routed host this flag exposes both state
+# and /v1/tools/call without authentication.  Also repair historical modes on
+# the state directory and SQLite sidecars; every runtime service uses the same
+# owner, so group/world access is unnecessary.
+echo -e "${BLUE}[0c/4] Checking runtime security...${NC}"
+if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+    "$PI_USER@$PI_HOST" \
+    'set -e
+if [ -f "$HOME/.anima/anima.env" ] && grep -Eiq "^[[:space:]]*ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN[[:space:]]*=[[:space:]]*(1|true|yes|on)[[:space:]]*(#.*)?$" "$HOME/.anima/anima.env"; then
+    echo "Refusing deploy: ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN enables unauthenticated REST access" >&2
+    echo "Set it to false before deploying" >&2
+    exit 1
+fi
+if [ -f "$HOME/.anima/anima.env" ] && grep -Eiq "^[[:space:]]*ANIMA_OAUTH_DYNAMIC_REGISTRATION[[:space:]]*=[[:space:]]*(1|true|yes|on)[[:space:]]*(#.*)?$" "$HOME/.anima/anima.env"; then
+    echo "Refusing deploy: ANIMA_OAUTH_DYNAMIC_REGISTRATION leaves public client enrollment open" >&2
+    echo "Set it to false after connector onboarding and before deploying" >&2
+    exit 1
+fi
+chmod 700 "$HOME/.anima"
+for sensitive in "$HOME/.anima/anima.env" "$HOME/.anima/anima.env".* "$HOME/.anima/anima.db"* "$HOME/.anima/oauth.db"*; do
+    [ ! -f "$sensitive" ] || chmod 600 "$sensitive"
+done'; then
+    echo -e "${GREEN}  Runtime authentication and secret modes verified${NC}"
+else
+    echo -e "${RED}✗ Runtime security check failed; deployment aborted${NC}"
+    exit 1
+fi
+echo ""
+
 # Step 1: Sync code
 echo -e "${BLUE}[1/4] Syncing code...${NC}"
 rsync -avz \
@@ -171,6 +201,7 @@ rsync -avz \
     --exclude='*.pyc' \
     --exclude='.pytest_cache' \
     --exclude='.mypy_cache' \
+    --exclude='.ruff_cache' \
     --exclude='htmlcov' \
     --exclude='anima_broker/_build' \
     --exclude='anima_broker/deps' \
@@ -237,9 +268,40 @@ while time.time()<end:
  except Exception:pass
  time.sleep(1)
 sys.exit(1)'
+    VERIFY_SECURITY_CODE='import json,sys,time,urllib.error,urllib.request;end=time.time()+45
+while time.time()<end:
+ try:
+  with urllib.request.urlopen("http://127.0.0.1:8766/state",timeout=2) as response:state=json.load(response)
+  mode=(state.get("api_security") or {}).get("mode")
+  oauth_closed=True
+  try:
+   with urllib.request.urlopen("http://127.0.0.1:8766/.well-known/oauth-authorization-server",timeout=2) as response:metadata=json.load(response)
+   oauth_closed="registration_endpoint" not in metadata
+  except urllib.error.HTTPError as error:
+   oauth_closed=error.code==404
+  if mode and mode!="permissive-no-token" and oauth_closed:sys.exit(0)
+ except Exception:pass
+ time.sleep(1)
+sys.exit(1)'
+    # Keep the short restart separate from the longer readiness checks.  A
+    # transient SSH disconnect during verification must be retryable without
+    # restarting Lumen again.
     if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
-        "set -e; sudo systemctl restart anima-broker anima; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; if grep -Eq '^[[:space:]]*ANIMA_ENV_SENSORS_FROM_SHM=[^[:space:]#]+' ~/.anima/anima.env 2>/dev/null; then systemctl is-active --quiet anima-broker-ex; python3 -c '$VERIFY_SHADOW_CODE'; fi; python3 -c '$VERIFY_CODE'"; then
-        echo -e "${GREEN}✓ Services active; fresh broker state verified${NC}"
+        "sudo systemctl restart anima-broker anima"; then
+        VERIFIED=false
+        for _attempt in 1 2 3; do
+            if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+                "set -e; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; if grep -Eq '^[[:space:]]*ANIMA_ENV_SENSORS_FROM_SHM=[^[:space:]#]+' ~/.anima/anima.env 2>/dev/null; then systemctl is-active --quiet anima-broker-ex; python3 -c '$VERIFY_SHADOW_CODE'; fi; python3 -c '$VERIFY_CODE'; python3 -c '$VERIFY_SECURITY_CODE'"; then
+                VERIFIED=true
+                break
+            fi
+            sleep 2
+        done
+    else
+        VERIFIED=false
+    fi
+    if [ "$VERIFIED" = true ]; then
+        echo -e "${GREEN}✓ Services active; fresh state, strict REST, and closed OAuth registration verified${NC}"
     else
         echo -e "${RED}✗ Restart or post-deploy verification failed${NC}"
         echo "  Inspect: systemctl status anima-broker-ex anima-broker anima"

@@ -9,6 +9,7 @@ Wants=network-online.target
 Type=simple
 User=unitares-anima
 Group=unitares-anima
+UMask=0077
 WorkingDirectory=/home/unitares-anima/anima-mcp
 
 # Environment variables (secrets from ~/.anima/anima.env — see config/anima.env.example)

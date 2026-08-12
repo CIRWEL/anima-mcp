@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_systemd_units_pin_single_owners():
     server = (ROOT / "systemd" / "anima.service").read_text()
     broker = (ROOT / "systemd" / "anima-broker.service").read_text()
+    elixir_broker = (ROOT / "anima_broker" / "systemd" / "anima-broker-ex.service").read_text()
 
     assert 'Environment="ANIMA_SENSORS_BACKEND=shm"' in server
     assert 'Environment="ANIMA_CONFIG=/home/unitares-anima/.anima/anima_config.json"' in server
@@ -17,6 +18,9 @@ def test_systemd_units_pin_single_owners():
     assert 'Environment="ANIMA_BROKER_VOICE_ENABLED=false"' in broker
     assert "Requires=anima-restore.service" in broker
     assert "PartOf=anima.service" not in broker
+    assert "UMask=0077" in server
+    assert "UMask=0077" in broker
+    assert "UMask=0077" in elixir_broker
 
 
 def test_deploy_syncs_core_units_before_restart():
@@ -34,6 +38,22 @@ def test_deploy_syncs_core_units_before_restart():
     assert "anima-broker-ex" in script
     assert "--exclude='anima_broker/_build'" in script
     assert "--exclude='anima_broker/deps'" in script
+    assert "--exclude='.ruff_cache'" in script
+
+
+def test_deploy_fails_closed_on_permissive_rest_and_hardens_state_modes():
+    script = (ROOT / "deploy.sh").read_text()
+
+    security_at = script.index("Checking runtime security")
+    sync_at = script.index("Syncing code")
+    assert security_at < sync_at
+    assert "ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN" in script
+    assert "ANIMA_OAUTH_DYNAMIC_REGISTRATION" in script
+    assert "permissive-no-token" in script
+    assert "registration_endpoint" in script
+    assert 'chmod 700 "$HOME/.anima"' in script
+    assert "chmod 600" in script
+    assert "closed OAuth registration verified" in script
 
 
 def test_deploy_fails_closed_on_backup_restart_or_runtime_verification():
@@ -48,6 +68,8 @@ def test_deploy_fails_closed_on_backup_restart_or_runtime_verification():
     assert "systemctl is-active --quiet anima-broker" in script
     assert "ANIMA_SENSORS_BACKEND=shm" in script
     assert "/dev/shm/anima_state.json" in script
+    assert "ServerAliveInterval=10" in script
+    assert "for _attempt in 1 2 3" in script
     assert "Restart or post-deploy verification failed" in script
 
 

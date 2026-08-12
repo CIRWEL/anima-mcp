@@ -33,6 +33,8 @@ sudo systemctl restart anima
 | `ANIMA_OAUTH_ISSUER_URL` | OAuth 2.1 issuer (enables OAuth for Claude.ai web) | Your Cloudflare tunnel URL (e.g. `https://lumen.cirwel.org`) |
 | `ANIMA_OAUTH_AUTO_APPROVE` | Skip consent screen (single-user) | Set to `true` |
 | `ANIMA_OAUTH_SECRET` | OAuth signing secret (optional — auto-generated if unset) | Any random string |
+| `ANIMA_OAUTH_DYNAMIC_REGISTRATION` | Expose OAuth dynamic client registration | Keep `false`; enable only while adding a connector |
+| `ANIMA_OAUTH_ALLOWED_REDIRECT_URIS` | Exact comma-separated OAuth callback allowlist | Defaults to Claude's MCP callback |
 | `ANIMA_GOVERNANCE_INTERVAL_SECONDS` | Broker UNITARES check-in cadence in seconds (default `180`, minimum `30`) | Set in env/service |
 | `ANIMA_HTTP_API_TOKEN` | Bearer token for REST API auth on untrusted networks | Set in env/service |
 | `ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN` | Legacy compatibility for REST auth without token (`false` default, secure) | Set `true` only during migration |
@@ -46,6 +48,8 @@ GROQ_API_KEY=gsk_xxxxxxxxxxxx
 UNITARES_AUTH=unitares:your-password
 ANIMA_OAUTH_ISSUER_URL=https://lumen.cirwel.org
 ANIMA_OAUTH_AUTO_APPROVE=true
+ANIMA_OAUTH_DYNAMIC_REGISTRATION=false
+ANIMA_OAUTH_ALLOWED_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback
 ANIMA_GOVERNANCE_INTERVAL_SECONDS=180
 ANIMA_HTTP_API_TOKEN=replace-with-strong-secret
 ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=false
@@ -59,12 +63,25 @@ ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen.cirwel
 - Untrusted networks require `Authorization: Bearer <ANIMA_HTTP_API_TOKEN>`.
 - If `ANIMA_HTTP_API_TOKEN` is unset, untrusted requests are denied by default.
 - Set `ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=true` only for temporary migration/compatibility windows.
+- `deploy.sh` fails closed while that legacy compatibility switch is enabled and
+  verifies that the running server does not report `permissive-no-token` after restart.
 - `X-Forwarded-For` is ignored unless the immediate peer IP is in `ANIMA_TRUSTED_PROXY_NETWORKS`.
+- Deployed services use `UMask=0077`; deploy also repairs `~/.anima`, environment,
+  identity database, OAuth database, and SQLite sidecar permissions to owner-only.
 
 **OAuth notes:**
 - OAuth is only required for Claude.ai web connections via Cloudflare tunnel.
 - LAN, Tailscale, and localhost connections bypass OAuth entirely.
-- Tokens are in-memory — reset on service restart. Clients re-authenticate automatically.
+- Dynamic registration is disabled by default. Existing registered clients and rotating
+  refresh tokens continue to work; briefly enable it only while adding a new connector,
+  then disable it and restart the mind service again.
+- `deploy.sh` refuses to run while dynamic registration remains enabled and verifies
+  after restart that the authorization-server metadata no longer advertises `/register`.
+- New clients are accepted only when every redirect URI exactly matches
+  `ANIMA_OAUTH_ALLOWED_REDIRECT_URIS`.
+- Access and refresh tokens persist in `~/.anima/oauth.db` across service restarts.
+- `ANIMA_OAUTH_AUTO_APPROVE=false` denies new authorization requests; there is no
+  interactive consent UI.
 - If `ANIMA_OAUTH_ISSUER_URL` is not set, OAuth is disabled and all connections are open.
 
 ---

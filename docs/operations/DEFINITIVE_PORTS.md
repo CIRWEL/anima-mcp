@@ -51,7 +51,7 @@ not merely what is ours.
 **OAuth 2.1 endpoints** (active when `ANIMA_OAUTH_ISSUER_URL` is set):
 - `/.well-known/oauth-authorization-server` — Server metadata
 - `/.well-known/oauth-protected-resource/mcp` — Protected resource metadata
-- `/register` — Dynamic client registration
+- `/register` — Dynamic client registration (only while `ANIMA_OAUTH_DYNAMIC_REGISTRATION=true`)
 - `/authorize` — Authorization (PKCE, auto-approve)
 - `/token` — Token exchange
 - `/revoke` — Token revocation

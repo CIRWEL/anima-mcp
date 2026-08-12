@@ -53,7 +53,9 @@ class TestAuthorize:
         assert "code=" in redirect_url
         assert "state=test-state" in redirect_url
 
-    async def test_authorize_no_auto_approve_returns_consent_page(self, sample_client_info):
+    async def test_authorize_no_auto_approve_denies_request(self, sample_client_info):
+        from mcp.server.auth.provider import AuthorizeError
+
         provider = AnimaOAuthProvider(secret="test-secret", auto_approve=False)
         from mcp.server.auth.provider import AuthorizationParams
         await provider.register_client(sample_client_info)
@@ -64,8 +66,32 @@ class TestAuthorize:
             redirect_uri="https://example.com/callback",
             redirect_uri_provided_explicitly=True,
         )
-        redirect_url = await provider.authorize(sample_client_info, params)
-        assert "code=" in redirect_url
+        with pytest.raises(AuthorizeError) as exc_info:
+            await provider.authorize(sample_client_info, params)
+        assert exc_info.value.error == "access_denied"
+
+    async def test_registration_rejects_unapproved_redirect(self, sample_client_info):
+        from mcp.server.auth.provider import RegistrationError
+
+        provider = AnimaOAuthProvider(
+            secret="test-secret",
+            allowed_redirect_uris={"https://claude.ai/api/mcp/auth_callback"},
+        )
+        with pytest.raises(RegistrationError) as exc_info:
+            await provider.register_client(sample_client_info)
+        assert exc_info.value.error == "invalid_redirect_uri"
+
+    async def test_registration_accepts_approved_redirect(self, sample_client_info):
+        callback = "https://claude.ai/api/mcp/auth_callback"
+        provider = AnimaOAuthProvider(
+            secret="test-secret",
+            allowed_redirect_uris={callback},
+        )
+        approved = sample_client_info.model_copy(update={"redirect_uris": [callback]})
+
+        await provider.register_client(approved)
+
+        assert await provider.get_client(approved.client_id) is approved
 
 
 class TestTokenExchange:

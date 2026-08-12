@@ -1583,6 +1583,9 @@ def run_http_server(host: str, port: int):
         _oauth_issuer_url = os.environ.get("ANIMA_OAUTH_ISSUER_URL")
         _oauth_auth_routes = []
         _oauth_token_verifier = None
+        _oauth_dynamic_registration = os.environ.get(
+            "ANIMA_OAUTH_DYNAMIC_REGISTRATION", "false"
+        ).lower() in ("1", "true", "yes", "on")
 
         if _oauth_issuer_url and hasattr(mcp, '_auth_server_provider') and mcp._auth_server_provider:
             try:
@@ -1595,7 +1598,9 @@ def run_http_server(host: str, port: int):
                 _oauth_auth_routes = create_auth_routes(
                     provider=mcp._auth_server_provider,
                     issuer_url=mcp.settings.auth.issuer_url,
-                    client_registration_options=ClientRegistrationOptions(enabled=True),
+                    client_registration_options=ClientRegistrationOptions(
+                        enabled=_oauth_dynamic_registration
+                    ),
                 )
 
                 _oauth_auth_routes.extend(
@@ -1606,7 +1611,12 @@ def run_http_server(host: str, port: int):
                     )
                 )
 
-                print(f"[Server] OAuth 2.1 routes enabled ({len(_oauth_auth_routes)} routes)", file=sys.stderr, flush=True)
+                print(
+                    f"[Server] OAuth 2.1 routes enabled ({len(_oauth_auth_routes)} routes; "
+                    f"dynamic registration={'on' if _oauth_dynamic_registration else 'off'})",
+                    file=sys.stderr,
+                    flush=True,
+                )
             except Exception as e:
                 print(f"[Server] OAuth setup failed, continuing without auth: {e}", file=sys.stderr, flush=True)
                 _oauth_auth_routes = []

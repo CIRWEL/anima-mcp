@@ -13,6 +13,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=unitares-anima
+UMask=0077
 WorkingDirectory=/home/unitares-anima/anima-mcp/anima_broker
 Environment=ANIMA_SHM_PATH=/dev/shm/anima_state.shadow.json
 Environment=ANIMA_TICK_MS=2000
