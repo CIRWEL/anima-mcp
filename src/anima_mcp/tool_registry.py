@@ -239,15 +239,23 @@ TOOLS = [
         name="self_iteration",
         description=(
             "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
-            "list proposals, or record a measured outcome. Proposal-only: never edits source, executes "
-            "commands, commits, or deploys."
+            "append independently signed verification, list proposals, or record a measured outcome. "
+            "Proposal-only: never edits source, executes commands, commits, or deploys."
         ),
         inputSchema={
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["inspect", "propose", "list", "record_outcome"],
+                    "enum": [
+                        "inspect",
+                        "propose",
+                        "list",
+                        "prepare_verification",
+                        "record_verification",
+                        "verification_status",
+                        "record_outcome",
+                    ],
                     "description": "Operation to perform (default: inspect)",
                     "default": "inspect",
                 },
@@ -343,6 +351,61 @@ TOOLS = [
                     "enum": ["self_observation", "automated_test", "caretaker", "governance"],
                     "description": "Caller-claimed measurement-origin label. It does not verify the outcome or evidence and receives no policy weight",
                     "default": "self_observation",
+                },
+                "verification_decision": {
+                    "type": "string",
+                    "enum": ["verified", "rejected", "revoke"],
+                    "description": "Independent verifier verdict for prepare_verification",
+                },
+                "verification_statement": {
+                    "type": "string",
+                    "description": "Verifier-authored conclusion bound into the signed attestation",
+                },
+                "verification_evidence": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 20,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["kind", "uri", "sha256"],
+                        "properties": {
+                            "kind": {
+                                "type": "string",
+                                "enum": ["artifact", "canary", "ci_run", "review", "test"],
+                            },
+                            "uri": {"type": "string", "maxLength": 1000},
+                            "sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-fA-F]{64}$",
+                            },
+                        },
+                    },
+                    "description": "Verifier-inspected evidence references and content hashes",
+                },
+                "expected_content_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Proposal digest observed by the verifier before challenge issuance",
+                },
+                "expires_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Optional verdict expiry, at most seven days after issuance",
+                },
+                "target_attestation_id": {
+                    "type": "string",
+                    "description": "Existing attestation ID owned by this verifier, required for revoke",
+                },
+                "challenge_id": {
+                    "type": "string",
+                    "pattern": "^sic-[0-9a-f]{32}$",
+                    "description": "One-time challenge returned by prepare_verification",
+                },
+                "signature": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued signing input",
                 },
             },
         },

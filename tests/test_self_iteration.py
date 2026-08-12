@@ -104,6 +104,11 @@ class TestSourceAwareness:
         assert overview["capabilities"]["inspect_structure"] is True
         assert overview["capabilities"]["accept_caller_supplied_provenance"] is False
         assert overview["capabilities"]["weight_unverified_ledger_claims"] is False
+        assert overview["capabilities"]["prepare_signed_verification"] is True
+        assert (
+            overview["capabilities"]["verification_grants_implementation_authority"]
+            is False
+        )
         assert overview["capabilities"]["write_source"] is False
         assert overview["capabilities"]["execute_proposal_text"] is False
         assert overview["capabilities"]["deploy"] is False
@@ -202,6 +207,9 @@ class TestProposalLedger:
         assert proposal["trust_policy"]["automation_eligible"] is False
         assert proposal["trust_policy"]["authority_eligible"] is False
         assert len(proposal["code_fingerprint"]["manifest_sha256"]) == 64
+        assert len(proposal["content_sha256"]) == 64
+        assert proposal["verification_state"]["status"] == "unverified"
+        assert proposal["verification_state"]["effective_weight"] == 0.0
         assert proposal["implementation_policy"]["source_writes_performed"] is False
         assert proposal["implementation_policy"]["commands_executed"] is False
         assert (
@@ -334,6 +342,7 @@ class TestProposalLedger:
         proposal = result["proposals"][0]
         outcome = proposal["events"][1]
         migration = proposal["events"][2]
+        verification_migration = proposal["events"][3]
 
         assert "source" not in proposal
         assert proposal["source_claim"]["value"] == "governance"
@@ -348,10 +357,15 @@ class TestProposalLedger:
         assert outcome["provenance"]["trust"]["classification"] == "legacy_unverified"
         assert migration["type"] == "provenance_migrated"
         assert migration["authority_granted"] is False
+        assert verification_migration["type"] == "verification_schema_migrated"
+        assert verification_migration["authority_granted"] is False
+        assert proposal["proposer_identity"] is None
+        assert proposal["verification_state"]["status"] == "unverified"
 
         on_disk = json.loads(system.ledger_path.read_text())
-        assert on_disk["schema_version"] == 2
+        assert on_disk["schema_version"] == 3
         assert on_disk["provenance_contract"]["unverified_effective_weight"] == 0.0
+        assert on_disk["verification_contract"]["verified_priority_eligible"] is True
         assert on_disk["migrations"] == [
             {
                 "type": "schema_migration",
@@ -359,7 +373,14 @@ class TestProposalLedger:
                 "from_schema": 1,
                 "to_schema": 2,
                 "classification": "legacy_unverified",
-            }
+            },
+            {
+                "type": "schema_migration",
+                "at": "2026-08-11T21:30:00Z",
+                "from_schema": 2,
+                "to_schema": 3,
+                "classification": "verification_requires_signed_attestation",
+            },
         ]
 
         migrated_once = system.ledger_path.read_text()
@@ -599,7 +620,15 @@ def test_tool_registry_exposes_only_bounded_self_iteration_actions():
     actions = tool.inputSchema["properties"]["action"]["enum"]
     properties = tool.inputSchema["properties"]
 
-    assert actions == ["inspect", "propose", "list", "record_outcome"]
+    assert actions == [
+        "inspect",
+        "propose",
+        "list",
+        "prepare_verification",
+        "record_verification",
+        "verification_status",
+        "record_outcome",
+    ]
     assert "implement" not in actions
     assert "deploy" not in actions
     assert "claimed_source" in properties
@@ -607,6 +636,8 @@ def test_tool_registry_exposes_only_bounded_self_iteration_actions():
     assert "claimed_measurement_source" in properties
     assert "measurement_source" not in properties
     assert "provenance" not in properties
+    assert properties["verification_evidence"]["items"]["additionalProperties"] is False
+    assert properties["signature"]["pattern"] == "^[0-9a-fA-F]{64}$"
     assert "self_iteration" in HANDLERS
 
 
