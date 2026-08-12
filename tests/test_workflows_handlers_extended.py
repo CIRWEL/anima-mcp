@@ -37,6 +37,9 @@ class TestNextStepsExtended:
         readings = SimpleNamespace()
         display = SimpleNamespace(is_available=lambda: True)
         eisv = SimpleNamespace(to_dict=lambda: {"E": 0.7})
+        attention_system = SimpleNamespace(
+            attention=lambda **_: {"items": [], "active_count": 0}
+        )
 
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace()), \
              patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace()), \
@@ -45,6 +48,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
+             patch("anima_mcp.self_iteration.get_self_iteration_system", return_value=attention_system), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = parse_result(await handle_next_steps({}))
 
@@ -67,6 +71,9 @@ class TestNextStepsExtended:
         readings = SimpleNamespace()
         display = SimpleNamespace(is_available=lambda: False)
         eisv = SimpleNamespace(to_dict=lambda: {"E": 0.1})
+        attention_system = SimpleNamespace(
+            attention=lambda **_: {"items": [], "active_count": 0}
+        )
 
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace()), \
              patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace()), \
@@ -75,6 +82,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
+             patch("anima_mcp.self_iteration.get_self_iteration_system", return_value=attention_system), \
              patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
             data = parse_result(await handle_next_steps({}))
 

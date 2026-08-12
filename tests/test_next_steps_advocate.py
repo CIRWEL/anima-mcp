@@ -1,10 +1,13 @@
 """Tests for next_steps_advocate.py — state reporting and drive expression."""
 
-
 from conftest import make_anima, make_readings
 
 from anima_mcp.next_steps_advocate import (
-    NextStep, NextStepsAdvocate, Priority, StepCategory, get_advocate,
+    NextStep,
+    NextStepsAdvocate,
+    Priority,
+    StepCategory,
+    get_advocate,
 )
 from anima_mcp.eisv_mapper import EISVMetrics
 
@@ -13,37 +16,61 @@ from anima_mcp.eisv_mapper import EISVMetrics
 # Dataclass & enum basics
 # ---------------------------------------------------------------------------
 
+
 class TestNextStepDataclass:
     def test_defaults_for_blockers_and_related_files(self):
         step = NextStep(
-            feeling="f", desire="d", action="a",
-            priority=Priority.HIGH, category=StepCategory.HARDWARE, reason="r",
+            feeling="f",
+            desire="d",
+            action="a",
+            priority=Priority.HIGH,
+            category=StepCategory.HARDWARE,
+            reason="r",
         )
         assert step.blockers == []
         assert step.related_files == []
 
     def test_to_dict_has_all_keys(self):
         step = NextStep(
-            feeling="warm", desire="explore", action="go",
-            priority=Priority.LOW, category=StepCategory.TESTING, reason="curious",
+            feeling="warm",
+            desire="explore",
+            action="go",
+            priority=Priority.LOW,
+            category=StepCategory.TESTING,
+            reason="curious",
         )
         d = step.to_dict()
         assert set(d.keys()) == {
-            "feeling", "desire", "action", "priority", "category",
-            "reason", "blockers", "estimated_time", "related_files",
+            "feeling",
+            "desire",
+            "action",
+            "priority",
+            "category",
+            "reason",
+            "blockers",
+            "estimated_time",
+            "related_files",
         }
 
     def test_to_dict_priority_is_string(self):
         step = NextStep(
-            feeling="f", desire="d", action="a",
-            priority=Priority.CRITICAL, category=StepCategory.HARDWARE, reason="r",
+            feeling="f",
+            desire="d",
+            action="a",
+            priority=Priority.CRITICAL,
+            category=StepCategory.HARDWARE,
+            reason="r",
         )
         assert step.to_dict()["priority"] == "critical"
 
     def test_to_dict_category_is_string(self):
         step = NextStep(
-            feeling="f", desire="d", action="a",
-            priority=Priority.LOW, category=StepCategory.OPTIMIZATION, reason="r",
+            feeling="f",
+            desire="d",
+            action="a",
+            priority=Priority.LOW,
+            category=StepCategory.OPTIMIZATION,
+            reason="r",
         )
         assert step.to_dict()["category"] == "optimization"
 
@@ -68,6 +95,7 @@ class TestEnums:
 # analyze_current_state — display branch
 # ---------------------------------------------------------------------------
 
+
 class TestDisplayBranch:
     def test_no_args_returns_display_and_unitares_steps(self):
         """Defaults: display_available=False, unitares_connected=False → 2 steps."""
@@ -81,7 +109,9 @@ class TestDisplayBranch:
     def test_all_good_no_issues_returns_empty(self):
         """display + unitares on, no anima → nothing to suggest."""
         adv = NextStepsAdvocate()
-        steps = adv.analyze_current_state(display_available=True, unitares_connected=True)
+        steps = adv.analyze_current_state(
+            display_available=True, unitares_connected=True
+        )
         assert steps == []
 
     def test_display_unavailable_adds_high_hardware_step(self):
@@ -103,6 +133,7 @@ class TestDisplayBranch:
 # analyze_current_state — unitares branch
 # ---------------------------------------------------------------------------
 
+
 class TestUnitaresBranch:
     def test_unitares_disconnected_adds_integration_step(self):
         adv = NextStepsAdvocate()
@@ -121,6 +152,7 @@ class TestUnitaresBranch:
 # ---------------------------------------------------------------------------
 # analyze_current_state — proprioception branches
 # ---------------------------------------------------------------------------
+
 
 class TestProprioceptionBranches:
     def test_low_clarity_adds_high_step(self):
@@ -215,11 +247,13 @@ class TestProprioceptionBranches:
 # analyze_current_state — drive reporting
 # ---------------------------------------------------------------------------
 
+
 class TestDriveReporting:
     def test_active_drive_creates_step(self):
         adv = NextStepsAdvocate()
         steps = adv.analyze_current_state(
-            display_available=True, unitares_connected=True,
+            display_available=True,
+            unitares_connected=True,
             drives={"warmth": 0.4, "clarity": 0.0, "stability": 0.0, "presence": 0.0},
             strongest_drive="warmth",
         )
@@ -230,7 +264,8 @@ class TestDriveReporting:
     def test_multiple_active_drives_lists_others(self):
         adv = NextStepsAdvocate()
         steps = adv.analyze_current_state(
-            display_available=True, unitares_connected=True,
+            display_available=True,
+            unitares_connected=True,
             drives={"warmth": 0.5, "clarity": 0.3, "stability": 0.0, "presence": 0.0},
             strongest_drive="warmth",
         )
@@ -241,7 +276,8 @@ class TestDriveReporting:
     def test_no_drives_no_drive_step(self):
         adv = NextStepsAdvocate()
         steps = adv.analyze_current_state(
-            display_available=True, unitares_connected=True,
+            display_available=True,
+            unitares_connected=True,
             drives={"warmth": 0.0, "clarity": 0.0, "stability": 0.0, "presence": 0.0},
             strongest_drive=None,
         )
@@ -250,7 +286,8 @@ class TestDriveReporting:
     def test_low_drive_below_threshold_no_step(self):
         adv = NextStepsAdvocate()
         steps = adv.analyze_current_state(
-            display_available=True, unitares_connected=True,
+            display_available=True,
+            unitares_connected=True,
             drives={"warmth": 0.1, "clarity": 0.0, "stability": 0.0, "presence": 0.0},
             strongest_drive="warmth",
         )
@@ -259,8 +296,10 @@ class TestDriveReporting:
     def test_drives_none_no_drive_step(self):
         adv = NextStepsAdvocate()
         steps = adv.analyze_current_state(
-            display_available=True, unitares_connected=True,
-            drives=None, strongest_drive=None,
+            display_available=True,
+            unitares_connected=True,
+            drives=None,
+            strongest_drive=None,
         )
         assert steps == []
 
@@ -268,7 +307,8 @@ class TestDriveReporting:
         """Verify determinism — same input, same output."""
         adv = NextStepsAdvocate()
         kwargs = dict(
-            display_available=True, unitares_connected=True,
+            display_available=True,
+            unitares_connected=True,
             drives={"warmth": 0.4, "clarity": 0.2, "stability": 0.0, "presence": 0.0},
             strongest_drive="warmth",
         )
@@ -278,9 +318,69 @@ class TestDriveReporting:
         assert s1[0].desire == s2[0].desire
 
 
+class TestSelfIterationAttention:
+    def test_active_attention_becomes_software_step(self):
+        adv = NextStepsAdvocate()
+        steps = adv.analyze_current_state(
+            display_available=True,
+            unitares_connected=True,
+            self_iteration_attention={
+                "schema": "anima.self_iteration.attention.v1",
+                "acknowledgement_is_approval": False,
+                "authority_granted": False,
+                "items": [
+                    {
+                        "active": True,
+                        "priority": "high",
+                        "proposal_id": "si-1",
+                        "candidate_id": "sip-1",
+                        "stage": "canary",
+                        "state": "awaiting_signature",
+                        "summary": "Candidate awaits canary review.",
+                        "next_action": "A distinct reviewer must sign.",
+                        "required_role": "canary_reviewer",
+                        "target_paths": ["src/anima_mcp/display/eras/geometric.py"],
+                        "acknowledgement_is_approval": False,
+                        "authority_granted": False,
+                    }
+                ],
+            },
+        )
+
+        assert len(steps) == 1
+        assert steps[0].category == StepCategory.SOFTWARE
+        assert steps[0].priority == Priority.HIGH
+        assert "canary_reviewer" in steps[0].blockers[0]
+        assert "si-1" in steps[0].reason
+
+    def test_inactive_notification_is_not_a_next_step(self):
+        adv = NextStepsAdvocate()
+        steps = adv.analyze_current_state(
+            display_available=True,
+            unitares_connected=True,
+            self_iteration_attention={
+                "schema": "anima.self_iteration.attention.v1",
+                "acknowledgement_is_approval": False,
+                "authority_granted": False,
+                "items": [
+                    {
+                        "active": False,
+                        "priority": "low",
+                        "proposal_id": "si-1",
+                        "acknowledgement_is_approval": False,
+                        "authority_granted": False,
+                    }
+                ],
+            },
+        )
+
+        assert steps == []
+
+
 # ---------------------------------------------------------------------------
 # Sort order and caching
 # ---------------------------------------------------------------------------
+
 
 class TestSortAndCaching:
     def test_steps_sorted_by_priority(self):
@@ -289,14 +389,25 @@ class TestSortAndCaching:
         readings = make_readings()
         eisv = EISVMetrics(energy=0.5, integrity=0.5, entropy=0.7, valence=0.1)
         steps = adv.analyze_current_state(
-            anima=anima, readings=readings, eisv=eisv,
-            display_available=False, unitares_connected=False,
+            anima=anima,
+            readings=readings,
+            eisv=eisv,
+            display_available=False,
+            unitares_connected=False,
         )
         assert len(steps) >= 3
         assert steps[0].priority == Priority.CRITICAL
         priorities = [s.priority for s in steps]
-        order = {Priority.CRITICAL: 0, Priority.HIGH: 1, Priority.MEDIUM: 2, Priority.LOW: 3}
-        assert all(order[priorities[i]] <= order[priorities[i + 1]] for i in range(len(priorities) - 1))
+        order = {
+            Priority.CRITICAL: 0,
+            Priority.HIGH: 1,
+            Priority.MEDIUM: 2,
+            Priority.LOW: 3,
+        }
+        assert all(
+            order[priorities[i]] <= order[priorities[i + 1]]
+            for i in range(len(priorities) - 1)
+        )
 
     def test_caching_updates_after_analysis(self):
         adv = NextStepsAdvocate()
@@ -310,6 +421,7 @@ class TestSortAndCaching:
 # ---------------------------------------------------------------------------
 # get_next_steps_summary
 # ---------------------------------------------------------------------------
+
 
 class TestGetNextStepsSummary:
     def test_returns_message_when_no_analysis(self):
@@ -333,8 +445,11 @@ class TestGetNextStepsSummary:
         readings = make_readings()
         eisv = EISVMetrics(energy=0.5, integrity=0.5, entropy=0.7, valence=0.1)
         steps = adv.analyze_current_state(
-            anima=anima, readings=readings, eisv=eisv,
-            display_available=False, unitares_connected=False,
+            anima=anima,
+            readings=readings,
+            eisv=eisv,
+            display_available=False,
+            unitares_connected=False,
         )
         summary = adv.get_next_steps_summary()
         expected_critical = len([s for s in steps if s.priority == Priority.CRITICAL])
@@ -349,9 +464,11 @@ class TestGetNextStepsSummary:
 # Singleton
 # ---------------------------------------------------------------------------
 
+
 class TestGetAdvocate:
     def test_returns_same_instance(self):
         import anima_mcp.next_steps_advocate as mod
+
         old = mod._advocate
         mod._advocate = None
         try:

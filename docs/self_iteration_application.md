@@ -73,7 +73,9 @@ database, key registry, and Python process remain trusted computing base.
 inspect an indeterminate or integrity-failed application and deliberately
 create a new candidate/review path if recovery is warranted.
 
-Even a fully recorded result is only `eligible_for_canary_review`. It always
-records `eligible_for_live_activation=false`, `pushed=false`, `merged=false`,
-`deployed=false`, and `authority_granted=false`.
-
+Even a fully recorded result is only `eligible_for_canary_review`. Phase 6 may
+submit it to a separately configured transient-canary supervisor, but the
+baseline must be restored before a healthy result becomes eligible for human
+merge review. Application always records `eligible_for_live_activation=false`,
+`pushed=false`, `merged=false`, `deployed=false`, and
+`authority_granted=false`.

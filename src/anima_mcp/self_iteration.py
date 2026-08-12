@@ -7,8 +7,9 @@ proposal, construct a proposal-bound whole-file patch outside the repository,
 run non-executing static checks, execute one narrowly eligible Python candidate
 in a digest-pinned networkless Docker container after separate signed approval,
 and create one reviewed commit on a dedicated Git branch without checkout.  It
-never edits the live worktree, executes candidate code in the host process,
-pushes, merges, restarts, or deploys code.
+may request one signed transient canary from an external supervisor that must
+restore the baseline. It never edits the live worktree, executes candidate code
+in the host process, retains live activation, pushes, merges, or deploys code.
 
 The boundary is architectural rather than prompt-based. Its only repository
 writes are immutable Git objects and one create-only dedicated ref; it exposes
@@ -50,6 +51,22 @@ from .self_iteration_application import (
     validate_application_approval,
     validate_signed_application_result,
     verify_application_approval_signature,
+)
+from .self_iteration_canary import (
+    CANARY_SIGNER_ID_ENV,
+    CanaryError,
+    CanarySupervisor,
+    UnixSocketCanarySupervisor,
+    build_canary_approval,
+    build_canary_request,
+    canary_approval_sha256,
+    canary_contract,
+    canary_signature_record,
+    canary_signing_input_b64,
+    validate_canary_approval,
+    validate_signed_canary_result,
+    validate_supervisor_identity,
+    verify_canary_approval_signature,
 )
 from .self_iteration_execution import (
     RUNNER_SIGNER_ID_ENV,
@@ -96,14 +113,23 @@ from .self_iteration_sandbox import (
     sandbox_contract,
 )
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
+APPLICATION_SCHEMA_VERSION = 6
 EXECUTION_SCHEMA_VERSION = 5
 SANDBOX_SCHEMA_VERSION = 4
 VERIFICATION_SCHEMA_VERSION = 3
 PROVENANCE_SCHEMA_VERSION = 2
 PROVENANCE_SCHEMA = "anima.self_iteration.provenance.v1"
+ATTENTION_SCHEMA = "anima.self_iteration.attention.v1"
 MAX_INSPECT_BYTES = 1_000_000
 MAX_FILE_DETAILS = 200
+
+_ATTENTION_PRIORITY_ORDER = {
+    "critical": 0,
+    "high": 1,
+    "medium": 2,
+    "low": 3,
+}
 
 _SOURCE_SUFFIXES = {
     ".ex": "elixir",
@@ -166,6 +192,10 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
         "src/anima_mcp/self_iteration_application.py",
         "reviewed Git application boundary",
     ),
+    (
+        "src/anima_mcp/self_iteration_canary.py",
+        "transient canary supervisor boundary",
+    ),
     ("src/anima_mcp/self_iteration_execution.py", "isolated execution boundary"),
     ("src/anima_mcp/self_iteration_sandbox.py", "self-iteration evaluator"),
     ("src/anima_mcp/self_iteration_verification.py", "self-iteration evaluator"),
@@ -188,9 +218,8 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
     ("anima_broker/lib/**/governance/**", "governance boundary"),
 )
 
-# Initial autonomous eligibility is intentionally narrow.  This module still
-# only proposes changes; a future isolated runner may use this field without
-# silently expanding its own authority.
+# Autonomous candidate eligibility is intentionally narrow. Every later stage
+# revalidates this allowlist and adds its own signed, no-authority boundary.
 _AUTO_ELIGIBLE_RULES: tuple[tuple[str, str], ...] = (
     ("docs/**", "documentation-only"),
     ("README.md", "documentation-only"),
@@ -615,6 +644,7 @@ class SelfIterationSystem:
         isolation_runner: IsolationRunner | None = None,
         workspace_builder: SourceWorkspaceBuilder | None = None,
         application_writer: ApplicationWriter | None = None,
+        canary_supervisor: CanarySupervisor | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve() if repo_root else _discover_repo_root()
         self.ledger_path = ledger_path or Path.home() / ".anima" / "self_iteration.json"
@@ -632,6 +662,9 @@ class SelfIterationSystem:
         self._workspace_builder = workspace_builder or SourceWorkspaceBuilder()
         self._application_writer = (
             application_writer or GitPlumbingApplicationWriter.from_environment()
+        )
+        self._canary_supervisor = (
+            canary_supervisor or UnixSocketCanarySupervisor.from_environment()
         )
         self._patch_sandbox = PatchSandbox(
             repo_root=self.repo_root,
@@ -929,7 +962,7 @@ class SelfIterationSystem:
         manifest = self._manifest(include_files=include_files, file_limit=file_limit)
         return {
             "mode": "bounded_self_iteration",
-            "autonomy_level": "reviewed_dedicated_branch_application",
+            "autonomy_level": "signed_transient_canary_evaluation",
             "runtime": {
                 "package": "anima-mcp",
                 "package_version": self._package_version(self.repo_root),
@@ -951,6 +984,7 @@ class SelfIterationSystem:
                 "run_nonexecuting_static_evaluation": True,
                 "prepare_signed_execution_approval": True,
                 "prepare_signed_application_review": True,
+                "prepare_signed_transient_canary_review": True,
                 "execute_candidate_code_on_host": False,
                 "execute_candidate_code_in_pinned_container": True,
                 "execute_tests_in_pinned_container": True,
@@ -960,6 +994,8 @@ class SelfIterationSystem:
                 "write_source": False,
                 "write_live_worktree": False,
                 "create_reviewed_dedicated_branch": True,
+                "request_external_transient_canary": True,
+                "retain_persistent_activation": False,
                 "execute_proposal_text": False,
                 "execute_candidate_code": True,
                 "execute_tests": True,
@@ -980,7 +1016,9 @@ class SelfIterationSystem:
                     "This process may construct an inert patch artifact, run static parsers, "
                     "orchestrate one externally approved fixed test profile in a local "
                     "Docker boundary, and create one separately reviewed dedicated Git "
-                    "branch. A caretaker still owns canary activation, merge, and deployment."
+                    "branch. It may request one separately reviewed transient canary from "
+                    "an external supervisor that must restore the baseline. A caretaker "
+                    "still owns merge and deployment."
                 ),
                 "provenance_rule": (
                     "Caller labels, narratives, and evidence remain zero-weight claims. "
@@ -1010,6 +1048,14 @@ class SelfIterationSystem:
                     "and a temporary index to create only a server-derived dedicated branch; "
                     "it performs no checkout, hooks, worktree writes, push, merge, restart, "
                     "or deployment."
+                ),
+                "canary_rule": (
+                    "A new authenticated reviewer must sign a ten-minute, one-use plan "
+                    "bound to the exact reviewed branch and a fixed external-supervisor "
+                    "profile. The local Unix-socket supervisor owns transient activation, "
+                    "fixed health measurement, and mandatory baseline restoration. This "
+                    "process has no shell, service-control, persistent activation, push, "
+                    "merge, or deployment primitive."
                 ),
             },
             "ledger": self._ledger_summary(),
@@ -1045,6 +1091,7 @@ class SelfIterationSystem:
                 "sandbox_contract": ledger["sandbox_contract"],
                 "execution_contract": ledger["execution_contract"],
                 "application_contract": ledger["application_contract"],
+                "canary_contract": ledger["canary_contract"],
             }
         except SelfIterationError as exc:
             return {
@@ -1185,6 +1232,7 @@ class SelfIterationSystem:
             "sandbox_contract": sandbox_contract(),
             "execution_contract": execution_contract(),
             "application_contract": application_contract(),
+            "canary_contract": canary_contract(),
             "migrations": [],
             "proposals": [],
         }
@@ -1356,19 +1404,46 @@ class SelfIterationSystem:
                     "type": "application_schema_migrated",
                     "at": migrated_at,
                     "from_schema": EXECUTION_SCHEMA_VERSION,
-                    "to_schema": SCHEMA_VERSION,
+                    "to_schema": APPLICATION_SCHEMA_VERSION,
                     "authority_granted": False,
                 }
             )
-        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["schema_version"] = APPLICATION_SCHEMA_VERSION
         ledger["application_contract"] = application_contract()
         ledger["migrations"].append(
             {
                 "type": "schema_migration",
                 "at": migrated_at,
                 "from_schema": EXECUTION_SCHEMA_VERSION,
-                "to_schema": SCHEMA_VERSION,
+                "to_schema": APPLICATION_SCHEMA_VERSION,
                 "classification": "reviewed_dedicated_branch_application_only",
+            }
+        )
+        return ledger
+
+    def _migrate_v6(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Add signed transient canary evaluation without release authority."""
+        migrated_at = _isoformat(self._clock())
+        ledger = copy.deepcopy(data)
+        for proposal in ledger["proposals"]:
+            proposal.setdefault("events", []).append(
+                {
+                    "type": "canary_schema_migrated",
+                    "at": migrated_at,
+                    "from_schema": APPLICATION_SCHEMA_VERSION,
+                    "to_schema": SCHEMA_VERSION,
+                    "authority_granted": False,
+                }
+            )
+        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["canary_contract"] = canary_contract()
+        ledger["migrations"].append(
+            {
+                "type": "schema_migration",
+                "at": migrated_at,
+                "from_schema": APPLICATION_SCHEMA_VERSION,
+                "to_schema": SCHEMA_VERSION,
+                "classification": "signed_transient_canary_with_mandatory_restore",
             }
         )
         return ledger
@@ -2042,7 +2117,7 @@ class SelfIterationSystem:
                         "type": "application_schema_migrated",
                         "at": event.get("at"),
                         "from_schema": EXECUTION_SCHEMA_VERSION,
-                        "to_schema": SCHEMA_VERSION,
+                        "to_schema": APPLICATION_SCHEMA_VERSION,
                         "authority_granted": False,
                     } or not isinstance(event.get("at"), str):
                         raise SelfIterationError(
@@ -2276,6 +2351,288 @@ class SelfIterationSystem:
                     recorded_challenges.add(event["challenge_id"])
                     result_ids.add(result_id)
 
+    def _validate_v7(self, data: dict[str, Any]) -> None:
+        self._validate_v6(data)
+        if data.get("canary_contract") != canary_contract():
+            raise SelfIterationError(
+                "self-iteration ledger canary contract is malformed"
+            )
+        for proposal in data["proposals"]:
+            challenges: dict[str, dict[str, Any]] = {}
+            canary_ids: set[str] = set()
+            recorded_challenges: set[str] = set()
+            result_ids: set[str] = set()
+            for event in proposal["events"]:
+                event_type = event.get("type")
+                if event_type == "canary_schema_migrated":
+                    if event != {
+                        "type": "canary_schema_migrated",
+                        "at": event.get("at"),
+                        "from_schema": APPLICATION_SCHEMA_VERSION,
+                        "to_schema": SCHEMA_VERSION,
+                        "authority_granted": False,
+                    } or not isinstance(event.get("at"), str):
+                        raise SelfIterationError(
+                            "self-iteration canary migration event is malformed"
+                        )
+                    continue
+                if event_type == "canary_review_challenge_issued":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "approval",
+                        "approval_sha256",
+                        "requester_identity",
+                        "provenance",
+                        "activation_performed",
+                        "baseline_restore_attempted",
+                        "persistent_activation_retained",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration canary challenge fields are malformed"
+                        )
+                    try:
+                        approval = validate_canary_approval(event.get("approval"))
+                        approval_digest = canary_approval_sha256(approval)
+                    except CanaryError as exc:
+                        raise SelfIterationError(
+                            "self-iteration canary approval is malformed"
+                        ) from exc
+                    challenge_id = approval["challenge_id"]
+                    application_results = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "reviewed_application_recorded"
+                        and recorded.get("application_result_id")
+                        == approval["application_result_id"]
+                    ]
+                    application_challenges = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "application_review_challenge_issued"
+                        and recorded.get("approval", {}).get("application_id")
+                        == approval["application_id"]
+                    ]
+                    app_approval = (
+                        application_challenges[0].get("approval")
+                        if len(application_challenges) == 1
+                        else None
+                    )
+                    execution_challenges = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if isinstance(app_approval, dict)
+                        and recorded.get("type")
+                        == "execution_approval_challenge_issued"
+                        and recorded.get("approval_sha256")
+                        == app_approval.get("execution_approval_sha256")
+                    ]
+                    active_verifiers = [
+                        attestation.get("verifier_identity")
+                        for recorded in proposal["events"]
+                        if isinstance(app_approval, dict)
+                        and recorded.get("type") == "verification_attested"
+                        and isinstance(recorded.get("attestation"), dict)
+                        and (attestation := recorded["attestation"]).get(
+                            "attestation_id"
+                        )
+                        in app_approval.get("active_attestation_ids", [])
+                        and attestation.get("decision") == "verified"
+                    ]
+                    prior_ids = {
+                        identity.get("id")
+                        for identity in [
+                            proposal.get("proposer_identity"),
+                            *active_verifiers,
+                            (
+                                execution_challenges[0]["approval"].get(
+                                    "approver_identity"
+                                )
+                                if len(execution_challenges) == 1
+                                else None
+                            ),
+                            (
+                                app_approval.get("reviewer_identity")
+                                if isinstance(app_approval, dict)
+                                else None
+                            ),
+                        ]
+                        if isinstance(identity, dict)
+                    }
+                    if isinstance(app_approval, dict):
+                        prior_ids.add(app_approval.get("result_signer", {}).get("id"))
+                    execution_results = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if isinstance(app_approval, dict)
+                        and recorded.get("type") == "isolated_execution_recorded"
+                        and recorded.get("execution_id")
+                        == app_approval.get("execution_id")
+                    ]
+                    if len(execution_results) == 1:
+                        prior_ids.add(execution_results[0].get("result_signer_id"))
+                    reviewer_id = approval["reviewer_identity"]["id"]
+                    supervisor_id = approval["supervisor_identity"]["result_signer"][
+                        "id"
+                    ]
+                    if (
+                        challenge_id in challenges
+                        or approval["canary_id"] in canary_ids
+                        or approval["proposal_id"] != proposal.get("id")
+                        or approval["proposal_content_sha256"]
+                        != proposal.get("content_sha256")
+                        or len(application_results) != 1
+                        or application_results[0].get("candidate_id")
+                        != approval["candidate_id"]
+                        or application_results[0].get("application_id")
+                        != approval["application_id"]
+                        or application_results[0].get("result_sha256")
+                        != approval["application_result_sha256"]
+                        or application_results[0].get("approval_sha256")
+                        != approval["application_approval_sha256"]
+                        or application_results[0].get("target_ref")
+                        != approval["target_ref"]
+                        or application_results[0].get("commit_oid")
+                        != approval["candidate_commit_oid"]
+                        or len(application_challenges) != 1
+                        or not isinstance(app_approval, dict)
+                        or app_approval.get("expected_parent_revision")
+                        != approval["baseline_revision"]
+                        or approval["application_reviewer_identity"]
+                        != app_approval.get("reviewer_identity")
+                        or approval["application_result_signer_id"]
+                        != app_approval.get("result_signer", {}).get("id")
+                        or len(active_verifiers)
+                        != len(app_approval.get("active_attestation_ids", []))
+                        or len(execution_challenges) != 1
+                        or len(execution_results) != 1
+                        or reviewer_id in prior_ids
+                        or supervisor_id in {reviewer_id, *prior_ids}
+                        or event.get("at") != approval["issued_at"]
+                        or event.get("approval_sha256") != approval_digest
+                        or event.get("activation_performed") is not False
+                        or event.get("baseline_restore_attempted") is not False
+                        or event.get("persistent_activation_retained") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration canary challenge violates its boundary"
+                        )
+                    self._validate_provenance(
+                        event.get("provenance"), label="canary challenge event"
+                    )
+                    requester = self._identity_from_provenance(
+                        event.get("provenance"),
+                        label="canary challenge event",
+                        required=True,
+                    )
+                    if (
+                        requester != event.get("requester_identity")
+                        or requester != approval["reviewer_identity"]
+                    ):
+                        raise SelfIterationError(
+                            "canary reviewer is not bound to request provenance"
+                        )
+                    challenges[challenge_id] = event
+                    canary_ids.add(approval["canary_id"])
+                    continue
+                if event_type == "transient_canary_recorded":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "challenge_id",
+                        "canary_id",
+                        "approval_sha256",
+                        "approval_signature_sha256",
+                        "canary_result_id",
+                        "result_sha256",
+                        "candidate_id",
+                        "application_result_id",
+                        "application_result_sha256",
+                        "reviewer_identity",
+                        "supervisor_signer_id",
+                        "outcome",
+                        "activation_performed",
+                        "health_checks_sha256",
+                        "baseline_restore_attempted",
+                        "baseline_restored",
+                        "persistent_activation_retained",
+                        "recommended_decision",
+                        "eligible_for_merge_review",
+                        "eligible_for_live_activation",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration canary result fields are malformed"
+                        )
+                    challenge = challenges.get(event.get("challenge_id"))
+                    recorded_approval = challenge.get("approval") if challenge else None
+                    result_id = event.get("canary_result_id")
+                    outcome = event.get("outcome")
+                    baseline_restored = event.get("baseline_restored")
+                    expected_decision = (
+                        "keep_candidate_for_merge_review"
+                        if outcome == "passed" and baseline_restored is True
+                        else (
+                            "operator_recovery_required"
+                            if outcome == "rollback_failed"
+                            or baseline_restored is False
+                            else "reject_candidate"
+                        )
+                    )
+                    eligible = outcome == "passed" and baseline_restored is True
+                    if (
+                        not isinstance(recorded_approval, dict)
+                        or event.get("challenge_id") in recorded_challenges
+                        or not isinstance(result_id, str)
+                        or not re.fullmatch(r"sicr-[0-9a-f]{32}", result_id)
+                        or result_id in result_ids
+                        or event.get("canary_id") != recorded_approval.get("canary_id")
+                        or event.get("approval_sha256")
+                        != canary_approval_sha256(recorded_approval)
+                        or event.get("candidate_id")
+                        != recorded_approval.get("candidate_id")
+                        or event.get("application_result_id")
+                        != recorded_approval.get("application_result_id")
+                        or event.get("application_result_sha256")
+                        != recorded_approval.get("application_result_sha256")
+                        or event.get("reviewer_identity")
+                        != recorded_approval.get("reviewer_identity")
+                        or event.get("supervisor_signer_id")
+                        != recorded_approval.get("supervisor_identity", {})
+                        .get("result_signer", {})
+                        .get("id")
+                        or outcome
+                        not in {
+                            "passed",
+                            "failed",
+                            "activation_failed",
+                            "timed_out",
+                            "supervisor_error",
+                            "rollback_failed",
+                        }
+                        or not isinstance(event.get("activation_performed"), bool)
+                        or not isinstance(event.get("baseline_restore_attempted"), bool)
+                        or not isinstance(baseline_restored, bool)
+                        or event.get("persistent_activation_retained") is not False
+                        or event.get("recommended_decision") != expected_decision
+                        or event.get("eligible_for_merge_review") is not eligible
+                        or event.get("eligible_for_live_activation") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration canary result violates its boundary"
+                        )
+                    for field, label in (
+                        ("approval_signature_sha256", "canary approval signature"),
+                        ("health_checks_sha256", "canary health checks"),
+                        ("result_sha256", "canary result"),
+                    ):
+                        self._validate_hex_digest(event.get(field), label=label)
+                    recorded_challenges.add(event["challenge_id"])
+                    result_ids.add(result_id)
+
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.exists():
             return self._empty_ledger()
@@ -2318,14 +2675,20 @@ class SelfIterationSystem:
             self._validate_v5(data)
             data = self._migrate_v5(data)
             self._validate_v6(data)
+            version = APPLICATION_SCHEMA_VERSION
+            migrated = True
+        if version == APPLICATION_SCHEMA_VERSION:
+            self._validate_v6(data)
+            data = self._migrate_v6(data)
+            self._validate_v7(data)
             version = SCHEMA_VERSION
             migrated = True
         elif version == SCHEMA_VERSION:
-            self._validate_v6(data)
+            self._validate_v7(data)
         else:
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if version != SCHEMA_VERSION:
-            self._validate_v6(data)
+            self._validate_v7(data)
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if migrated:
             self._save_ledger(data)
@@ -2934,6 +3297,210 @@ class SelfIterationSystem:
             "authority_granted": False,
         }
 
+    def _passing_application_result(
+        self,
+        *,
+        proposal: dict[str, Any],
+        candidate: dict[str, Any],
+        application_result_id: str,
+        expected_result_sha256: str,
+    ) -> dict[str, Any]:
+        try:
+            raw_results = self._patch_sandbox.load_application_results(
+                candidate["candidate_id"]
+            )
+        except PatchSandboxError as exc:
+            raise SelfIterationError(str(exc)) from exc
+        matches: list[dict[str, Any]] = []
+        for raw_result in raw_results:
+            try:
+                result = validate_signed_application_result(
+                    raw_result, self._verifier_key_provider
+                )
+            except ApplicationError as exc:
+                raise SelfIterationError(
+                    "signed application result artifact is invalid"
+                ) from exc
+            if result.get("application_result_id") == application_result_id:
+                matches.append(result)
+        if len(matches) != 1:
+            raise SelfIterationError(
+                "canary review requires one exact signed application result"
+            )
+        result = matches[0]
+        if (
+            result.get("result_sha256") != expected_result_sha256
+            or result.get("candidate_id") != candidate.get("candidate_id")
+            or result.get("candidate_sha256") != candidate.get("candidate_sha256")
+            or result.get("eligible_for_canary_review") is not True
+            or result.get("eligible_for_live_activation") is not False
+            or result.get("branch_created") is not True
+            or result.get("pushed") is not False
+            or result.get("merged") is not False
+            or result.get("deployed") is not False
+        ):
+            raise SelfIterationError(
+                "canary review requires the exact eligible application digest"
+            )
+        recorded = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "reviewed_application_recorded"
+            and event.get("application_result_id") == application_result_id
+        ]
+        if len(recorded) != 1 or recorded[0] != self._application_result_event(result):
+            raise SelfIterationError(
+                "signed application result does not match its ledger event"
+            )
+        challenge = self._application_challenge_event(proposal, result["challenge_id"])
+        if (
+            challenge.get("approval") != result["approval"]
+            or challenge.get("approval_sha256") != result["application_approval_sha256"]
+        ):
+            raise SelfIterationError(
+                "signed application result does not match its ledger approval"
+            )
+        if self.repo_root is None or not self._application_writer.verify_result(
+            repo_root=self.repo_root, result=result
+        ):
+            raise SelfIterationError(
+                "reviewed application Git ref failed integrity verification"
+            )
+        return result
+
+    @staticmethod
+    def _canary_claim_record(
+        *,
+        approval: dict[str, Any],
+        approval_signature: str,
+        reviewer_identity: dict[str, Any],
+        claimed_at: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema": "anima.self_iteration.canary_claim.v1",
+            "challenge_id": approval["challenge_id"],
+            "canary_id": approval["canary_id"],
+            "approval_sha256": canary_approval_sha256(approval),
+            "approval_signature": canary_signature_record(approval, approval_signature),
+            "proposal_id": approval["proposal_id"],
+            "candidate_id": approval["candidate_id"],
+            "application_result_id": approval["application_result_id"],
+            "reviewer_identity": copy.deepcopy(reviewer_identity),
+            "claimed_at": claimed_at,
+            "automatic_retry_allowed": False,
+            "persistent_activation_allowed": False,
+            "authority_granted": False,
+        }
+
+    def _validate_canary_claim(
+        self, claim: Any, *, approval: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not isinstance(claim, dict) or set(claim) != {
+            "schema",
+            "challenge_id",
+            "canary_id",
+            "approval_sha256",
+            "approval_signature",
+            "proposal_id",
+            "candidate_id",
+            "application_result_id",
+            "reviewer_identity",
+            "claimed_at",
+            "automatic_retry_allowed",
+            "persistent_activation_allowed",
+            "authority_granted",
+        }:
+            raise SelfIterationError("canary claim fields are malformed")
+        try:
+            parse_utc_timestamp(claim.get("claimed_at"), "claimed_at")
+        except VerificationError as exc:
+            raise SelfIterationError("canary claim timestamp is malformed") from exc
+        raw_signature = claim.get("approval_signature")
+        try:
+            expected_signature = canary_signature_record(
+                approval,
+                raw_signature.get("value") if isinstance(raw_signature, dict) else None,
+            )
+        except CanaryError as exc:
+            raise SelfIterationError("canary claim signature is malformed") from exc
+        if (
+            claim.get("schema") != "anima.self_iteration.canary_claim.v1"
+            or claim.get("challenge_id") != approval["challenge_id"]
+            or claim.get("canary_id") != approval["canary_id"]
+            or claim.get("approval_sha256") != canary_approval_sha256(approval)
+            or raw_signature != expected_signature
+            or claim.get("proposal_id") != approval["proposal_id"]
+            or claim.get("candidate_id") != approval["candidate_id"]
+            or claim.get("application_result_id") != approval["application_result_id"]
+            or claim.get("reviewer_identity") != approval["reviewer_identity"]
+            or claim.get("automatic_retry_allowed") is not False
+            or claim.get("persistent_activation_allowed") is not False
+            or claim.get("authority_granted") is not False
+        ):
+            raise SelfIterationError("canary claim binding is malformed")
+        signature = claim["approval_signature"]
+        try:
+            key = self._verifier_key_provider(
+                signature["reviewer_id"], signature["key_id"]
+            )
+        except Exception as exc:
+            raise SelfIterationError(
+                "canary reviewer key registry is unavailable"
+            ) from exc
+        if not isinstance(key, VerifierKey) or not verify_canary_approval_signature(
+            approval, signature["value"], key
+        ):
+            raise SelfIterationError("canary claim approval signature is invalid")
+        return copy.deepcopy(claim)
+
+    @staticmethod
+    def _canary_challenge_event(
+        proposal: dict[str, Any], challenge_id: str
+    ) -> dict[str, Any]:
+        matches = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "canary_review_challenge_issued"
+            and isinstance(event.get("approval"), dict)
+            and event["approval"].get("challenge_id") == challenge_id
+        ]
+        if len(matches) != 1:
+            raise SelfIterationError("challenge_id does not name one canary approval")
+        return matches[0]
+
+    @staticmethod
+    def _canary_result_event(result: dict[str, Any]) -> dict[str, Any]:
+        approval = result["approval"]
+        return {
+            "type": "transient_canary_recorded",
+            "at": result["finished_at"],
+            "challenge_id": result["challenge_id"],
+            "canary_id": result["canary_id"],
+            "approval_sha256": canary_approval_sha256(approval),
+            "approval_signature_sha256": hashlib.sha256(
+                canonical_json_bytes(result["approval_signature"])
+            ).hexdigest(),
+            "canary_result_id": result["canary_result_id"],
+            "result_sha256": result["result_sha256"],
+            "candidate_id": result["candidate_id"],
+            "application_result_id": result["application_result_id"],
+            "application_result_sha256": result["application_result_sha256"],
+            "reviewer_identity": approval["reviewer_identity"],
+            "supervisor_signer_id": result["signature"]["signer_id"],
+            "outcome": result["outcome"],
+            "activation_performed": result["activation_performed"],
+            "health_checks_sha256": hashlib.sha256(
+                canonical_json_bytes(result["health_checks"])
+            ).hexdigest(),
+            "baseline_restore_attempted": result["baseline_restore_attempted"],
+            "baseline_restored": result["baseline_restored"],
+            "persistent_activation_retained": False,
+            "recommended_decision": result["recommended_decision"],
+            "eligible_for_merge_review": result["eligible_for_merge_review"],
+            "eligible_for_live_activation": False,
+            "authority_granted": False,
+        }
+
     def propose(
         self,
         *,
@@ -3067,6 +3634,695 @@ class SelfIterationSystem:
             self._public_proposal(item) for item in list(reversed(proposals))[:limit]
         ]
         return {"count": len(proposals), "proposals": proposals}
+
+    @staticmethod
+    def _attention_item(
+        *,
+        proposal: dict[str, Any],
+        stage: str,
+        state: str,
+        priority: str,
+        summary: str,
+        next_action: str,
+        required_role: str | None,
+        status_action: str,
+        candidate_id: str | None = None,
+        reference_id: str | None = None,
+        occurred_at: str | None = None,
+        active: bool = True,
+        detail: str | None = None,
+    ) -> dict[str, Any]:
+        """Build one stable, non-authoritative attention record.
+
+        Attention records deliberately contain only read-only status-query
+        coordinates. They never contain signatures, signing payloads, patch
+        contents, or an action that can consume an approval.
+        """
+        if priority not in _ATTENTION_PRIORITY_ORDER:
+            raise SelfIterationError("self-iteration attention priority is malformed")
+
+        proposal_id = proposal.get("id")
+        if not isinstance(proposal_id, str) or not proposal_id:
+            raise SelfIterationError("self-iteration attention proposal is malformed")
+        reference = reference_id or str(proposal.get("content_sha256") or proposal_id)
+        identity = {
+            "proposal_id": proposal_id,
+            "candidate_id": candidate_id,
+            "stage": stage,
+            "state": state,
+            "reference_id": reference,
+        }
+        attention_id = (
+            "si-attn-" + hashlib.sha256(canonical_json_bytes(identity)).hexdigest()[:24]
+        )
+        arguments: dict[str, Any] = {
+            "action": status_action,
+            "proposal_id": proposal_id,
+        }
+        if candidate_id is not None:
+            arguments["candidate_id"] = candidate_id
+
+        source_claim_raw = proposal.get("source_claim")
+        source_claim: dict[str, Any] = (
+            source_claim_raw if isinstance(source_claim_raw, dict) else {}
+        )
+        provenance_raw = proposal.get("provenance")
+        provenance: dict[str, Any] = (
+            provenance_raw if isinstance(provenance_raw, dict) else {}
+        )
+        trust_raw = provenance.get("trust")
+        trust: dict[str, Any] = trust_raw if isinstance(trust_raw, dict) else {}
+        verification_raw = proposal.get("verification_state")
+        verification: dict[str, Any] = (
+            verification_raw if isinstance(verification_raw, dict) else {}
+        )
+
+        return {
+            "attention_id": attention_id,
+            "proposal_id": proposal_id,
+            "candidate_id": candidate_id,
+            "stage": stage,
+            "state": state,
+            "priority": priority,
+            "active": active,
+            "summary": summary,
+            "next_action": next_action,
+            "required_role": required_role,
+            "reference_id": reference,
+            "occurred_at": occurred_at or proposal.get("created_at"),
+            "target_paths": copy.deepcopy(proposal.get("target_paths", [])),
+            "claim_provenance": {
+                "source_epistemic_status": source_claim.get(
+                    "epistemic_status", "unknown"
+                ),
+                "request_trust_classification": trust.get("classification", "unknown"),
+                "request_actor_authenticated": trust.get("actor_authenticated") is True,
+                "claims_verified_by_request_provenance": trust.get("claims_verified")
+                is True,
+                "independent_verification_status": verification.get(
+                    "status", "unknown"
+                ),
+                "effective_weight": verification.get("effective_weight", 0.0),
+                "authority_granted": False,
+            },
+            "status_query": {
+                "tool": "self_iteration",
+                "arguments": arguments,
+                "read_only": True,
+            },
+            "detail": detail,
+            "acknowledgement_is_approval": False,
+            "signed_approval_required": required_role
+            in {
+                "independent_verifier",
+                "execution_approver",
+                "application_reviewer",
+                "canary_reviewer",
+            },
+            "authority_granted": False,
+        }
+
+    @staticmethod
+    def _latest_attention_status(records: Any) -> dict[str, Any] | None:
+        if not isinstance(records, list):
+            return None
+        valid = [item for item in records if isinstance(item, dict)]
+        if not valid:
+            return None
+        return max(
+            valid,
+            key=lambda item: str(
+                item.get("issued_at") or item.get("occurred_at") or ""
+            ),
+        )
+
+    def _proposal_attention(self, proposal: dict[str, Any]) -> list[dict[str, Any]]:
+        proposal_id = proposal["id"]
+        status = proposal.get("status")
+        terminal = {
+            "retained": "The measured change was retained.",
+            "reverted": "The measured change was reverted.",
+            "measurement_inconclusive": "The measured outcome was inconclusive.",
+        }
+        if status in terminal:
+            outcome_events = [
+                event
+                for event in proposal.get("events", [])
+                if isinstance(event, dict) and event.get("type") == "outcome_recorded"
+            ]
+            latest = outcome_events[-1] if outcome_events else {}
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    stage="outcome",
+                    state=str(status),
+                    priority="low",
+                    summary=terminal[str(status)],
+                    next_action="No self-iteration action is pending.",
+                    required_role=None,
+                    status_action="list",
+                    reference_id=str(
+                        latest.get("at") or proposal.get("content_sha256")
+                    ),
+                    occurred_at=latest.get("at"),
+                    active=False,
+                )
+            ]
+
+        if status in {"protected_review_required", "human_review_required"}:
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    stage="proposal",
+                    state=str(status),
+                    priority="high",
+                    summary=f"Proposal {proposal_id} requires caretaker review.",
+                    next_action=(
+                        "Review the proposal and its protected boundary; do not treat "
+                        "this notification as approval."
+                    ),
+                    required_role="caretaker",
+                    status_action="verification_status",
+                )
+            ]
+
+        verification = proposal.get("verification_state")
+        verification_state = (
+            verification.get("status") if isinstance(verification, dict) else "invalid"
+        )
+        if verification_state == "invalid":
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    stage="verification",
+                    state="verification_integrity_failed",
+                    priority="critical",
+                    summary=f"Proposal {proposal_id} has invalid verification evidence.",
+                    next_action="Inspect the signed verification ledger before proceeding.",
+                    required_role="operator_recovery",
+                    status_action="verification_status",
+                )
+            ]
+        if verification_state in {"rejected", "conflicted"}:
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    stage="verification",
+                    state=str(verification_state),
+                    priority="high",
+                    summary=(
+                        f"Proposal {proposal_id} verification is {verification_state}."
+                    ),
+                    next_action="Resolve the independent verdict before constructing code.",
+                    required_role="caretaker",
+                    status_action="verification_status",
+                )
+            ]
+        if verification_state != "verified":
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    stage="verification",
+                    state=str(verification_state),
+                    priority="high",
+                    summary=f"Proposal {proposal_id} awaits independent verification.",
+                    next_action=(
+                        "A distinct authenticated verifier must inspect and sign an exact "
+                        "verification challenge."
+                    ),
+                    required_role="independent_verifier",
+                    status_action="verification_status",
+                )
+            ]
+
+        return [
+            self._attention_item(
+                proposal=proposal,
+                stage="candidate",
+                state="ready_for_candidate_construction",
+                priority="medium",
+                summary=f"Verified proposal {proposal_id} is ready for a quarantined candidate.",
+                next_action=(
+                    "The authenticated proposer may construct a bounded patch artifact; "
+                    "the live worktree must remain unchanged."
+                ),
+                required_role="authenticated_proposer",
+                status_action="verification_status",
+            )
+        ]
+
+    def _candidate_attention(
+        self, proposal: dict[str, Any], candidate_id: str
+    ) -> list[dict[str, Any]]:
+        proposal_id = proposal["id"]
+        queries: tuple[tuple[str, str, Callable[..., dict[str, Any]]], ...] = (
+            ("patch", "patch_status", self.patch_status),
+            ("execution", "execution_status", self.execution_status),
+            ("application", "application_status", self.application_status),
+            ("canary", "canary_status", self.canary_status),
+        )
+        snapshots: dict[str, dict[str, Any]] = {}
+        for stage, action, query in queries:
+            try:
+                snapshots[stage] = query(
+                    proposal_id=proposal_id,
+                    candidate_id=candidate_id,
+                )
+            except Exception as exc:
+                return [
+                    self._attention_item(
+                        proposal=proposal,
+                        candidate_id=candidate_id,
+                        stage=stage,
+                        state=f"{stage}_integrity_check_failed",
+                        priority="critical",
+                        summary=(
+                            f"Candidate {candidate_id} failed {stage} integrity reconciliation."
+                        ),
+                        next_action=(
+                            "An operator must inspect the ledger and artifacts; automatic "
+                            "retry is not allowed."
+                        ),
+                        required_role="operator_recovery",
+                        status_action=action,
+                        detail=str(exc),
+                    )
+                ]
+
+        patch = snapshots["patch"]
+        if patch.get("unledgered_evaluation_artifact_count", 0):
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="patch",
+                    state="unledgered_evaluation_artifact",
+                    priority="critical",
+                    summary=f"Candidate {candidate_id} has an unledgered evaluation artifact.",
+                    next_action="Inspect the artifact and ledger before any further review.",
+                    required_role="operator_recovery",
+                    status_action="patch_status",
+                    reference_id=str(patch.get("unledgered_evaluation_artifact_count")),
+                )
+            ]
+
+        stage_records = (
+            (
+                "execution",
+                "execution_status",
+                snapshots["execution"].get("executions", []),
+            ),
+            (
+                "application",
+                "application_status",
+                snapshots["application"].get("applications", []),
+            ),
+            ("canary", "canary_status", snapshots["canary"].get("canaries", [])),
+        )
+        critical_states = {
+            "claimed_result_indeterminate",
+            "signed_result_unledgered",
+            "ref_integrity_failed",
+            "recorded_recovery_required",
+        }
+        anomalies: list[dict[str, Any]] = []
+        for stage, action, records in stage_records:
+            for record in records if isinstance(records, list) else []:
+                state = record.get("state") if isinstance(record, dict) else None
+                if state not in critical_states:
+                    continue
+                challenge_id = str(record.get("challenge_id") or candidate_id)
+                anomalies.append(
+                    self._attention_item(
+                        proposal=proposal,
+                        candidate_id=candidate_id,
+                        stage=stage,
+                        state=str(state),
+                        priority="critical",
+                        summary=(
+                            f"Candidate {candidate_id} requires operator recovery at the "
+                            f"{stage} stage ({state})."
+                        ),
+                        next_action=(
+                            "Establish actual state and reconcile signed artifacts before "
+                            "creating any new review path."
+                        ),
+                        required_role="operator_recovery",
+                        status_action=action,
+                        reference_id=challenge_id,
+                        occurred_at=record.get("issued_at"),
+                    )
+                )
+        if anomalies:
+            return anomalies
+
+        canary = self._latest_attention_status(snapshots["canary"].get("canaries"))
+        if canary is not None:
+            state = str(canary.get("state"))
+            challenge_id = str(canary.get("challenge_id") or candidate_id)
+            if state == "awaiting_signature":
+                return [
+                    self._attention_item(
+                        proposal=proposal,
+                        candidate_id=candidate_id,
+                        stage="canary",
+                        state=state,
+                        priority="high",
+                        summary=f"Candidate {candidate_id} awaits signed canary review.",
+                        next_action=(
+                            "The distinct canary reviewer must sign the exact transient plan."
+                        ),
+                        required_role="canary_reviewer",
+                        status_action="canary_status",
+                        reference_id=challenge_id,
+                        occurred_at=canary.get("issued_at"),
+                    )
+                ]
+            if state == "expired_unclaimed":
+                return [
+                    self._attention_item(
+                        proposal=proposal,
+                        candidate_id=candidate_id,
+                        stage="canary",
+                        state=state,
+                        priority="medium",
+                        summary=f"Candidate {candidate_id} has an expired canary review.",
+                        next_action="A distinct reviewer may prepare a new canary challenge.",
+                        required_role="canary_reviewer",
+                        status_action="canary_status",
+                        reference_id=challenge_id,
+                        occurred_at=canary.get("issued_at"),
+                    )
+                ]
+            result_raw = canary.get("result")
+            result: dict[str, Any] = result_raw if isinstance(result_raw, dict) else {}
+            if canary.get("eligible_for_merge_review") is True:
+                return [
+                    self._attention_item(
+                        proposal=proposal,
+                        candidate_id=candidate_id,
+                        stage="merge_review",
+                        state="eligible_for_human_merge_review",
+                        priority="high",
+                        summary=(
+                            f"Candidate {candidate_id} passed its restored transient canary."
+                        ),
+                        next_action=(
+                            "A human may review the dedicated branch for merge; the candidate "
+                            "is not live and this notice grants no authority."
+                        ),
+                        required_role="human_merge_reviewer",
+                        status_action="canary_status",
+                        reference_id=str(
+                            result.get("canary_result_id") or challenge_id
+                        ),
+                        occurred_at=result.get("finished_at")
+                        or canary.get("issued_at"),
+                    )
+                ]
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="canary",
+                    state="candidate_rejected_by_canary",
+                    priority="medium",
+                    summary=f"Candidate {candidate_id} did not pass its transient canary.",
+                    next_action="Review the signed result and record a measured outcome.",
+                    required_role="caretaker",
+                    status_action="canary_status",
+                    reference_id=str(result.get("canary_result_id") or challenge_id),
+                    occurred_at=result.get("finished_at") or canary.get("issued_at"),
+                )
+            ]
+
+        application = self._latest_attention_status(
+            snapshots["application"].get("applications")
+        )
+        if application is not None:
+            state = str(application.get("state"))
+            challenge_id = str(application.get("challenge_id") or candidate_id)
+            if state == "awaiting_signature":
+                summary = f"Candidate {candidate_id} awaits signed application review."
+                next_action = (
+                    "The distinct application reviewer must sign the exact plan."
+                )
+                priority = "high"
+            elif state == "expired_unclaimed":
+                summary = f"Candidate {candidate_id} has an expired application review."
+                next_action = (
+                    "A distinct reviewer may prepare a new application challenge."
+                )
+                priority = "medium"
+            else:
+                summary = (
+                    f"Candidate {candidate_id} is ready for transient canary review."
+                )
+                next_action = "A new distinct reviewer may prepare the fixed external-supervisor canary."
+                priority = "high"
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="application",
+                    state=state,
+                    priority=priority,
+                    summary=summary,
+                    next_action=next_action,
+                    required_role=(
+                        "application_reviewer"
+                        if state in {"awaiting_signature", "expired_unclaimed"}
+                        else "canary_reviewer"
+                    ),
+                    status_action="application_status",
+                    reference_id=challenge_id,
+                    occurred_at=application.get("issued_at"),
+                )
+            ]
+
+        execution = self._latest_attention_status(
+            snapshots["execution"].get("executions")
+        )
+        if execution is not None:
+            state = str(execution.get("state"))
+            challenge_id = str(execution.get("challenge_id") or candidate_id)
+            if state == "awaiting_signature":
+                summary = f"Candidate {candidate_id} awaits signed isolated execution."
+                next_action = (
+                    "The distinct execution approver must sign the exact plan."
+                )
+                priority = "high"
+                role = "execution_approver"
+            elif state == "expired_unclaimed":
+                summary = f"Candidate {candidate_id} has an expired execution approval."
+                next_action = (
+                    "A distinct approver may prepare a new execution challenge."
+                )
+                priority = "medium"
+                role = "execution_approver"
+            else:
+                result_raw = execution.get("result")
+                result = result_raw if isinstance(result_raw, dict) else {}
+                if result.get("outcome") == "passed":
+                    summary = f"Candidate {candidate_id} passed isolated execution."
+                    next_action = (
+                        "A new distinct reviewer may prepare application review."
+                    )
+                    priority = "high"
+                    role = "application_reviewer"
+                else:
+                    summary = f"Candidate {candidate_id} failed isolated execution."
+                    next_action = (
+                        "Review the signed result and revise or reject the candidate."
+                    )
+                    priority = "medium"
+                    role = "caretaker"
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="execution",
+                    state=state,
+                    priority=priority,
+                    summary=summary,
+                    next_action=next_action,
+                    required_role=role,
+                    status_action="execution_status",
+                    reference_id=challenge_id,
+                    occurred_at=execution.get("issued_at"),
+                )
+            ]
+
+        current = patch.get("current_state")
+        current = current if isinstance(current, dict) else {}
+        if current.get("source_fingerprint_current") is False:
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="patch",
+                    state="source_fingerprint_stale",
+                    priority="high",
+                    summary=f"Candidate {candidate_id} no longer matches the running source.",
+                    next_action="Create a new proposal and candidate against current source.",
+                    required_role="authenticated_proposer",
+                    status_action="patch_status",
+                )
+            ]
+        evaluations = patch.get("evaluations")
+        evaluations = evaluations if isinstance(evaluations, list) else []
+        evaluation = evaluations[-1] if evaluations else None
+        if evaluation is None:
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="patch",
+                    state="awaiting_static_evaluation",
+                    priority="medium",
+                    summary=f"Candidate {candidate_id} awaits non-executing static evaluation.",
+                    next_action="Run the fixed static evaluator; do not execute candidate code.",
+                    required_role="static_evaluator",
+                    status_action="patch_status",
+                )
+            ]
+        evaluation_id = str(evaluation.get("evaluation_id") or candidate_id)
+        if (
+            evaluation.get("status") == "static_checks_passed"
+            and current.get("eligible_for_execution_approval") is True
+        ):
+            return [
+                self._attention_item(
+                    proposal=proposal,
+                    candidate_id=candidate_id,
+                    stage="execution",
+                    state="ready_for_execution_approval",
+                    priority="high",
+                    summary=f"Candidate {candidate_id} passed static evaluation.",
+                    next_action=(
+                        "A distinct execution approver may prepare the fixed Docker test plan."
+                    ),
+                    required_role="execution_approver",
+                    status_action="patch_status",
+                    reference_id=evaluation_id,
+                    occurred_at=evaluation.get("evaluated_at"),
+                )
+            ]
+        return [
+            self._attention_item(
+                proposal=proposal,
+                candidate_id=candidate_id,
+                stage="patch",
+                state="static_evaluation_rejected",
+                priority="medium",
+                summary=f"Candidate {candidate_id} did not pass static evaluation.",
+                next_action="Review the findings and construct a new candidate if warranted.",
+                required_role="authenticated_proposer",
+                status_action="patch_status",
+                reference_id=evaluation_id,
+                occurred_at=evaluation.get("evaluated_at"),
+            )
+        ]
+
+    def attention(self, *, limit: int = 20) -> dict[str, Any]:
+        """Return bounded, stable attention records for agents and observers.
+
+        This is a server-derived, read-only projection of an integrity-checked
+        ledger plus reconciled artifacts. Caller claims retain their explicit
+        epistemic status; only separate review artifacts are signed. The
+        projection grants no authority, and acknowledgement of a record is
+        never equivalent to a review signature.
+        """
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 50
+        ):
+            raise SelfIterationError("attention limit must be between 1 and 50")
+
+        listed = self.list_proposals(limit=limit)
+        items: list[dict[str, Any]] = []
+        remaining_candidate_budget = limit
+        unexamined_candidate_count = 0
+        for proposal in listed["proposals"]:
+            if proposal.get("status") in {
+                "retained",
+                "reverted",
+                "measurement_inconclusive",
+            }:
+                items.extend(self._proposal_attention(proposal))
+                continue
+            candidate_ids: list[str] = []
+            for event in proposal.get("events", []):
+                if not isinstance(event, dict):
+                    continue
+                candidate_id = event.get("candidate_id")
+                if (
+                    event.get("type") == "patch_candidate_constructed"
+                    and isinstance(candidate_id, str)
+                    and candidate_id not in candidate_ids
+                ):
+                    candidate_ids.append(candidate_id)
+            if candidate_ids:
+                unexamined_candidate_count += max(
+                    0, len(candidate_ids) - remaining_candidate_budget
+                )
+                selected_candidates = (
+                    candidate_ids[-remaining_candidate_budget:]
+                    if remaining_candidate_budget > 0
+                    else []
+                )
+                remaining_candidate_budget -= len(selected_candidates)
+                for candidate_id in reversed(selected_candidates):
+                    items.extend(self._candidate_attention(proposal, candidate_id))
+            else:
+                items.extend(self._proposal_attention(proposal))
+
+        # Stable sorts keep critical work first and favor newer records within
+        # one priority. The public limit applies to returned records as well as
+        # proposal/candidate examination, so downstream polling is bounded.
+        items.sort(
+            key=lambda item: (
+                "" if item.get("occurred_at") is None else str(item["occurred_at"]),
+                item["attention_id"],
+            ),
+            reverse=True,
+        )
+        items.sort(key=lambda item: (_ATTENTION_PRIORITY_ORDER[item["priority"]],))
+        total_item_count = len(items)
+        total_active_count = sum(item["active"] is True for item in items)
+        items = items[:limit]
+        active = [item for item in items if item["active"] is True]
+        return {
+            "schema": ATTENTION_SCHEMA,
+            "generated_at": _isoformat(self._now_utc()),
+            "projection_provenance": {
+                "derivation": (
+                    "server_computed_from_integrity_checked_ledger_and_"
+                    "reconciled_artifacts"
+                ),
+                "caller_claims_preserve_epistemic_status": True,
+                "request_provenance_verifies_claim_truth": False,
+                "signed_review_artifacts_reconciled_where_present": True,
+                "authority_granted": False,
+            },
+            "proposal_count": listed["count"],
+            "item_count": len(items),
+            "active_count": len(active),
+            "total_item_count": total_item_count,
+            "total_active_count": total_active_count,
+            "unexamined_candidate_count": unexamined_candidate_count,
+            "truncated": (
+                total_item_count > len(items) or unexamined_candidate_count > 0
+            ),
+            "counts": {
+                priority: sum(item["priority"] == priority for item in active)
+                for priority in _ATTENTION_PRIORITY_ORDER
+            },
+            "items": items,
+            "acknowledgement_is_approval": False,
+            "authority_granted": False,
+        }
 
     def prepare_verification(
         self,
@@ -4415,9 +5671,7 @@ class SelfIterationSystem:
                     "source_fingerprint"
                 ] != source_fingerprint or execution_approval[
                     "active_attestation_ids"
-                ] != sorted(
-                    state["active_attestation_ids"]
-                ):
+                ] != sorted(state["active_attestation_ids"]):
                     raise SelfIterationError(
                         "proposal source or verification changed after execution"
                     )
@@ -4872,6 +6126,516 @@ class SelfIterationSystem:
                 "authority_granted": False,
             }
 
+    def prepare_canary(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+        application_result_id: Any,
+        expected_application_result_sha256: Any,
+    ) -> dict[str, Any]:
+        """Issue a signed plan for one externally supervised transient canary."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        application_result_id_text = _required_text(
+            application_result_id, "application_result_id", max_length=100
+        )
+        application_digest = _required_text(
+            expected_application_result_sha256,
+            "expected_application_result_sha256",
+            max_length=64,
+        ).lower()
+        if not re.fullmatch(r"siar-[0-9a-f]{32}", application_result_id_text):
+            raise SelfIterationError("application_result_id is malformed")
+        if not re.fullmatch(r"[0-9a-f]{64}", application_digest):
+            raise SelfIterationError("expected_application_result_sha256 is malformed")
+
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                now = self._now_utc()
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=proposal["content_sha256"],
+                    now=now,
+                )
+                source_fingerprint = self._assert_current_proposal_source(proposal)
+                candidate = self._patch_sandbox.load_manifest(candidate_id_text)
+                self._assert_candidate_binding(
+                    proposal=proposal, candidate=candidate, state=state
+                )
+                application_result = self._passing_application_result(
+                    proposal=proposal,
+                    candidate=candidate,
+                    application_result_id=application_result_id_text,
+                    expected_result_sha256=application_digest,
+                )
+                application_approval = application_result["approval"]
+                if application_approval[
+                    "source_fingerprint"
+                ] != source_fingerprint or application_approval[
+                    "active_attestation_ids"
+                ] != sorted(state["active_attestation_ids"]):
+                    raise SelfIterationError(
+                        "proposal source or verification changed after application"
+                    )
+
+                recorded_at = _isoformat(now)
+                receipt = self._server_provenance(recorded_at)
+                reviewer_identity = self._identity_from_provenance(
+                    receipt,
+                    label="canary review request",
+                    required=True,
+                )
+                assert reviewer_identity is not None
+                verifier_identities = self._active_verifier_identities(proposal, state)
+                execution_events = [
+                    event
+                    for event in proposal["events"]
+                    if event.get("type") == "isolated_execution_recorded"
+                    and event.get("execution_id") == application_result["execution_id"]
+                ]
+                if len(execution_events) != 1:
+                    raise SelfIterationError(
+                        "canary review requires one recorded execution chain"
+                    )
+                execution_event = execution_events[0]
+                prior_ids = {
+                    identity.get("id")
+                    for identity in [
+                        proposal.get("proposer_identity"),
+                        execution_event.get("approver_identity"),
+                        application_approval["reviewer_identity"],
+                        *verifier_identities,
+                    ]
+                    if isinstance(identity, dict)
+                }
+                prior_ids.update(
+                    {
+                        execution_event.get("result_signer_id"),
+                        application_result["signature"]["signer_id"],
+                    }
+                )
+                reviewer_id = reviewer_identity["id"]
+                if reviewer_id in prior_ids:
+                    raise SelfIterationError(
+                        "canary reviewer must differ from all prior participants"
+                    )
+                reviewer_key = self._resolve_verifier_key(reviewer_identity)
+
+                configured_supervisor_id = os.environ.get(CANARY_SIGNER_ID_ENV)
+                if (
+                    not isinstance(configured_supervisor_id, str)
+                    or not configured_supervisor_id
+                ):
+                    raise SelfIterationError(
+                        f"{CANARY_SIGNER_ID_ENV} must name the dedicated supervisor signer"
+                    )
+                if configured_supervisor_id in {reviewer_id, *prior_ids}:
+                    raise SelfIterationError(
+                        "canary supervisor signer must differ from all participants"
+                    )
+                supervisor_identity = validate_supervisor_identity(
+                    self._canary_supervisor.probe()
+                )
+                result_signer = supervisor_identity.get("result_signer")
+                if (
+                    supervisor_identity.get("supervisor_id") != configured_supervisor_id
+                    or not isinstance(result_signer, dict)
+                    or result_signer.get("id") != configured_supervisor_id
+                ):
+                    raise SelfIterationError(
+                        "canary supervisor identity does not match configuration"
+                    )
+                supervisor_key = self._resolve_verifier_key(
+                    {
+                        "kind": "service_signer",
+                        "id": configured_supervisor_id,
+                        "issuer": None,
+                    },
+                    result_signer.get("key_id"),
+                )
+                approval = build_canary_approval(
+                    application_result=application_result,
+                    reviewer_identity=reviewer_identity,
+                    reviewer_key_id=reviewer_key.key_id,
+                    supervisor_identity=supervisor_identity,
+                    issued_at=now,
+                )
+                if (
+                    approval["supervisor_identity"]["result_signer"]["key_id"]
+                    != supervisor_key.key_id
+                ):
+                    raise SelfIterationError(
+                        "canary supervisor signing key binding is malformed"
+                    )
+                event = {
+                    "type": "canary_review_challenge_issued",
+                    "at": recorded_at,
+                    "approval": copy.deepcopy(approval),
+                    "approval_sha256": canary_approval_sha256(approval),
+                    "requester_identity": reviewer_identity,
+                    "provenance": receipt,
+                    "activation_performed": False,
+                    "baseline_restore_attempted": False,
+                    "persistent_activation_retained": False,
+                    "authority_granted": False,
+                }
+                proposal["events"].append(event)
+                self._save_ledger(ledger)
+            except (CanaryError, PatchSandboxError) as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+        return {
+            "approval": approval,
+            "approval_sha256": canary_approval_sha256(approval),
+            "signing_input_b64": canary_signing_input_b64(approval),
+            "signature": {
+                "algorithm": SIGNATURE_ALGORITHM,
+                "key_id": reviewer_key.key_id,
+                "assurance": "symmetric_mac_server_verifiable",
+            },
+            "next_step": (
+                "The authenticated canary reviewer signs these exact bytes, then "
+                "submits run_canary before expiry. The claim is consumed before the "
+                "external supervisor may activate the transient candidate."
+            ),
+            "authority_granted": False,
+        }
+
+    def run_canary(
+        self,
+        *,
+        proposal_id: Any,
+        challenge_id: Any,
+        signature: Any,
+    ) -> dict[str, Any]:
+        """Consume one review and request its fixed transient canary exactly once."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        challenge_id_text = _required_text(challenge_id, "challenge_id", max_length=100)
+        signature_text = _required_text(signature, "signature", max_length=64).lower()
+        if not re.fullmatch(r"sicc-[0-9a-f]{32}", challenge_id_text):
+            raise SelfIterationError("canary challenge_id is malformed")
+        if not re.fullmatch(r"[0-9a-f]{64}", signature_text):
+            raise SelfIterationError("canary approval signature is malformed")
+
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                challenge_event = self._canary_challenge_event(
+                    proposal, challenge_id_text
+                )
+                approval = validate_canary_approval(challenge_event["approval"])
+                now = self._now_utc()
+                issued = parse_utc_timestamp(approval["issued_at"], "issued_at")
+                expires = parse_utc_timestamp(
+                    approval["challenge_expires_at"], "challenge_expires_at"
+                )
+                if now < issued - timedelta(seconds=30) or now > expires:
+                    raise SelfIterationError(
+                        "canary approval is expired or not yet valid"
+                    )
+                receipt = self._server_provenance(_isoformat(now))
+                reviewer_identity = self._identity_from_provenance(
+                    receipt,
+                    label="transient canary request",
+                    required=True,
+                )
+                assert reviewer_identity is not None
+                if reviewer_identity != approval["reviewer_identity"]:
+                    raise SelfIterationError(
+                        "only the authenticated canary reviewer may consume this challenge"
+                    )
+                reviewer_key = self._resolve_verifier_key(
+                    reviewer_identity, approval["reviewer_key_id"]
+                )
+                if not verify_canary_approval_signature(
+                    approval, signature_text, reviewer_key
+                ):
+                    raise SelfIterationError("canary approval signature is invalid")
+
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=approval["proposal_content_sha256"],
+                    now=now,
+                )
+                self._assert_current_proposal_source(proposal)
+                candidate = self._patch_sandbox.load_manifest(approval["candidate_id"])
+                if candidate.get("candidate_sha256") != approval["candidate_sha256"]:
+                    raise SelfIterationError("canary candidate digest is stale")
+                self._assert_candidate_binding(
+                    proposal=proposal, candidate=candidate, state=state
+                )
+                application_result = self._passing_application_result(
+                    proposal=proposal,
+                    candidate=candidate,
+                    application_result_id=approval["application_result_id"],
+                    expected_result_sha256=approval["application_result_sha256"],
+                )
+                if (
+                    application_result["application_id"] != approval["application_id"]
+                    or application_result["application_approval_sha256"]
+                    != approval["application_approval_sha256"]
+                    or application_result["target_ref"] != approval["target_ref"]
+                    or application_result["parent_revision"]
+                    != approval["baseline_revision"]
+                    or application_result["commit_oid"]
+                    != approval["candidate_commit_oid"]
+                    or application_result["tree_oid"] != approval["candidate_tree_oid"]
+                ):
+                    raise SelfIterationError(
+                        "reviewed application changed before canary execution"
+                    )
+                if (
+                    validate_supervisor_identity(self._canary_supervisor.probe())
+                    != approval["supervisor_identity"]
+                ):
+                    raise SelfIterationError(
+                        "canary supervisor identity changed after review"
+                    )
+                supervisor_signer = approval["supervisor_identity"]["result_signer"]
+                self._resolve_verifier_key(
+                    {
+                        "kind": "service_signer",
+                        "id": supervisor_signer["id"],
+                        "issuer": None,
+                    },
+                    supervisor_signer["key_id"],
+                )
+
+                requested_at = _isoformat(now)
+                claim = self._canary_claim_record(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    reviewer_identity=reviewer_identity,
+                    claimed_at=requested_at,
+                )
+                self._patch_sandbox.claim_canary(
+                    approval["candidate_id"], challenge_id_text, claim
+                )
+
+                result = self._canary_supervisor.evaluate(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    requested_at=requested_at,
+                )
+                result = validate_signed_canary_result(
+                    result, self._verifier_key_provider
+                )
+                expected_request = build_canary_request(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    requested_at=requested_at,
+                )
+                if (
+                    result["approval"] != approval
+                    or result["approval_signature"] != claim["approval_signature"]
+                    or result["request_sha256"] != expected_request["request_sha256"]
+                    or result["supervisor_identity"] != approval["supervisor_identity"]
+                ):
+                    raise SelfIterationError(
+                        "signed canary result does not match its one-use request"
+                    )
+                self._patch_sandbox.store_canary_result(
+                    approval["candidate_id"], result
+                )
+
+                fresh_ledger = self._load_ledger()
+                fresh_proposal = self._find_proposal(fresh_ledger, proposal_id_text)
+                self._canary_challenge_event(fresh_proposal, challenge_id_text)
+                if any(
+                    event.get("type") == "transient_canary_recorded"
+                    and event.get("challenge_id") == challenge_id_text
+                    for event in fresh_proposal["events"]
+                ):
+                    raise SelfIterationError(
+                        "canary challenge already has a recorded result"
+                    )
+                fresh_proposal["events"].append(self._canary_result_event(result))
+                self._save_ledger(fresh_ledger)
+            except (CanaryError, PatchSandboxError) as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+        return {
+            "result": result,
+            "canary_contract": canary_contract(),
+            "next_step": (
+                "The candidate is no longer live. A passing restored canary may be "
+                "reviewed for merge; no result grants persistent activation authority."
+            ),
+            "authority_granted": False,
+        }
+
+    def canary_status(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+    ) -> dict[str, Any]:
+        """Reconcile canary reviews, claims, signed results, and ledger events."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            try:
+                candidate = self._patch_sandbox.load_manifest(candidate_id_text)
+                self._assert_candidate_binding(proposal=proposal, candidate=candidate)
+                raw_claims = self._patch_sandbox.load_canary_claims(candidate_id_text)
+                raw_results = self._patch_sandbox.load_canary_results(candidate_id_text)
+            except PatchSandboxError as exc:
+                raise SelfIterationError(str(exc)) from exc
+            challenge_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "canary_review_challenge_issued"
+                and event.get("approval", {}).get("candidate_id") == candidate_id_text
+            ]
+            approvals = {
+                event["approval"]["challenge_id"]: event["approval"]
+                for event in challenge_events
+            }
+            claims: dict[str, dict[str, Any]] = {}
+            for raw_claim in raw_claims:
+                challenge_id_value = raw_claim.get("challenge_id")
+                if not isinstance(challenge_id_value, str):
+                    raise SelfIterationError(
+                        "canary claim challenge identifier is malformed"
+                    )
+                approval = approvals.get(challenge_id_value)
+                if approval is None or challenge_id_value in claims:
+                    raise SelfIterationError(
+                        "canary claim has no unique ledger-recorded approval"
+                    )
+                claims[challenge_id_value] = self._validate_canary_claim(
+                    raw_claim, approval=approval
+                )
+            results: dict[str, dict[str, Any]] = {}
+            for raw_result in raw_results:
+                try:
+                    result = validate_signed_canary_result(
+                        raw_result, self._verifier_key_provider
+                    )
+                except CanaryError as exc:
+                    raise SelfIterationError(
+                        "signed canary result artifact is invalid"
+                    ) from exc
+                challenge_id_value = result["challenge_id"]
+                approval = approvals.get(challenge_id_value)
+                claim = claims.get(challenge_id_value)
+                if approval is None or claim is None or challenge_id_value in results:
+                    raise SelfIterationError(
+                        "signed canary result has no unique one-use approval"
+                    )
+                expected_request = build_canary_request(
+                    approval=approval,
+                    approval_signature=claim["approval_signature"]["value"],
+                    requested_at=claim["claimed_at"],
+                )
+                if (
+                    result["approval"] != approval
+                    or result["approval_signature"] != claim["approval_signature"]
+                    or result["request_sha256"] != expected_request["request_sha256"]
+                ):
+                    raise SelfIterationError(
+                        "signed canary result does not match its one-use approval"
+                    )
+                results[challenge_id_value] = result
+
+            recorded_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "transient_canary_recorded"
+                and event.get("candidate_id") == candidate_id_text
+            ]
+            recorded_by_challenge = {
+                event["challenge_id"]: event for event in recorded_events
+            }
+            now = self._now_utc()
+            statuses: list[dict[str, Any]] = []
+            for challenge_id_value, approval in approvals.items():
+                selected_claim = claims.get(challenge_id_value)
+                selected_result = results.get(challenge_id_value)
+                recorded = recorded_by_challenge.get(challenge_id_value)
+                if recorded is not None and (
+                    selected_result is None
+                    or recorded != self._canary_result_event(selected_result)
+                ):
+                    raise SelfIterationError(
+                        "ledger canary event does not match its signed result artifact"
+                    )
+                application_ref_intact = False
+                try:
+                    application_result = self._passing_application_result(
+                        proposal=proposal,
+                        candidate=candidate,
+                        application_result_id=approval["application_result_id"],
+                        expected_result_sha256=approval["application_result_sha256"],
+                    )
+                except SelfIterationError:
+                    if selected_result is not None:
+                        raise
+                else:
+                    application_ref_intact = bool(
+                        application_result["commit_oid"]
+                        == approval["candidate_commit_oid"]
+                    )
+                if (
+                    selected_result is not None
+                    and selected_result["baseline_restored"] is not True
+                ):
+                    state = "recorded_recovery_required"
+                elif selected_result is not None and recorded is not None:
+                    state = "recorded"
+                elif selected_result is not None:
+                    state = "signed_result_unledgered"
+                elif selected_claim is not None:
+                    state = "claimed_result_indeterminate"
+                elif now > parse_utc_timestamp(
+                    approval["challenge_expires_at"], "challenge_expires_at"
+                ):
+                    state = "expired_unclaimed"
+                else:
+                    state = "awaiting_signature"
+                statuses.append(
+                    {
+                        "challenge_id": challenge_id_value,
+                        "canary_id": approval["canary_id"],
+                        "approval_sha256": canary_approval_sha256(approval),
+                        "issued_at": approval["issued_at"],
+                        "challenge_expires_at": approval["challenge_expires_at"],
+                        "reviewer_identity": approval["reviewer_identity"],
+                        "supervisor_identity": approval["supervisor_identity"],
+                        "state": state,
+                        "claim": copy.deepcopy(selected_claim),
+                        "result": copy.deepcopy(selected_result),
+                        "ledger_recorded": recorded is not None,
+                        "application_ref_intact": application_ref_intact,
+                        "automatic_retry_allowed": False,
+                        "persistent_activation_retained": False,
+                        "eligible_for_merge_review": bool(
+                            selected_result is not None
+                            and recorded is not None
+                            and selected_result["eligible_for_merge_review"] is True
+                            and application_ref_intact
+                        ),
+                        "eligible_for_live_activation": False,
+                        "authority_granted": False,
+                    }
+                )
+            return {
+                "proposal_id": proposal_id_text,
+                "candidate_id": candidate_id_text,
+                "candidate_sha256": candidate["candidate_sha256"],
+                "canaries": statuses,
+                "canary_contract": canary_contract(),
+                "persistent_activation_retained": False,
+                "eligible_for_live_activation": False,
+                "authority_granted": False,
+            }
+
     def record_outcome(
         self,
         *,
@@ -4957,6 +6721,7 @@ def get_self_iteration_system() -> SelfIterationSystem:
 
 
 __all__ = [
+    "ATTENTION_SCHEMA",
     "SelfIterationError",
     "SelfIterationSystem",
     "get_self_iteration_system",

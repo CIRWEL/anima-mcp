@@ -68,7 +68,7 @@ TOOLS = [
     ),
     Tool(
         name="next_steps",
-        description="Get proactive next steps - analyzes current state and suggests what to do",
+        description="Get proactive next steps from embodied state, drives, governance connectivity, and read-only self-iteration attention",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
@@ -164,7 +164,7 @@ TOOLS = [
     ),
     Tool(
         name="get_lumen_context",
-        description="Get Lumen's complete context: identity, anima state, sensors, mood in one call",
+        description="Get Lumen's complete context: identity, anima state, sensors, mood, and self-iteration attention in one call",
         inputSchema={
             "type": "object",
             "properties": {
@@ -172,9 +172,16 @@ TOOLS = [
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["identity", "anima", "sensors", "mood", "code"],
+                        "enum": [
+                            "identity",
+                            "anima",
+                            "sensors",
+                            "mood",
+                            "attention",
+                            "code",
+                        ],
                     },
-                    "description": "What to include (default: identity, anima, sensors, mood; code is opt-in)",
+                    "description": "What to include (default: identity, anima, sensors, mood, attention; code is opt-in)",
                 }
             },
         },
@@ -327,12 +334,14 @@ TOOLS = [
     Tool(
         name="self_iteration",
         description=(
-            "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
+            "Inspect Lumen's own code structure and version, read a bounded attention projection, persist an evidence-backed change proposal, "
             "append independently signed verification, construct a quarantined whole-file patch artifact, "
             "run non-executing static checks, or execute an eligible Python candidate once in a fixed, "
             "networkless, digest-pinned Docker test profile after distinct signed approval. A further distinct "
             "review may create one local dedicated branch through Git plumbing. Never executes candidate code "
-            "on the host, edits the live worktree, checks out, pushes, merges, restarts, or deploys."
+            "on the host, edits the live worktree, or checks out. A final distinct review may request one "
+            "externally supervised transient canary with mandatory baseline restoration; there is no shell, "
+            "service control, persistent activation, push, merge, restart, or deployment action."
         ),
         inputSchema={
             "type": "object",
@@ -341,6 +350,7 @@ TOOLS = [
                     "type": "string",
                     "enum": [
                         "inspect",
+                        "attention",
                         "propose",
                         "list",
                         "prepare_verification",
@@ -355,6 +365,9 @@ TOOLS = [
                         "prepare_application",
                         "apply_candidate",
                         "application_status",
+                        "prepare_canary",
+                        "run_canary",
+                        "canary_status",
                         "record_outcome",
                     ],
                     "description": "Operation to perform (default: inspect)",
@@ -436,7 +449,7 @@ TOOLS = [
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 100,
-                    "description": "Maximum proposals returned by list mode (default: 10)",
+                    "description": "Maximum proposals returned by list mode (default: 10), or examined by attention mode (default: 20; maximum: 50)",
                     "default": 10,
                 },
                 "decision": {
@@ -516,13 +529,13 @@ TOOLS = [
                 },
                 "challenge_id": {
                     "type": "string",
-                    "pattern": "^si(?:c|xc|ac)-[0-9a-f]{32}$",
-                    "description": "One-time challenge returned by a verification, execution, or application preparation action",
+                    "pattern": "^si(?:c|xc|ac|cc)-[0-9a-f]{32}$",
+                    "description": "One-time challenge returned by a verification, execution, application, or canary preparation action",
                 },
                 "signature": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued verification, execution, or application signing input",
+                    "description": "Lowercase hexadecimal HMAC-SHA256 over an issued verification, execution, application, or canary signing input",
                 },
                 "changes": {
                     "type": "array",
@@ -596,6 +609,16 @@ TOOLS = [
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
                     "description": "Signed execution result digest observed before prepare_application",
+                },
+                "application_result_id": {
+                    "type": "string",
+                    "pattern": "^siar-[0-9a-f]{32}$",
+                    "description": "Exact reviewed application result for prepare_canary",
+                },
+                "expected_application_result_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Signed application result digest observed before prepare_canary",
                 },
             },
         },

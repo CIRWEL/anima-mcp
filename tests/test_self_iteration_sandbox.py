@@ -543,22 +543,27 @@ class TestPatchGatesAndIntegrity:
         ][0]
         on_disk = json.loads(setup.ledger.read_text())
 
-        assert migrated["events"][-3]["type"] == "sandbox_schema_migrated"
+        assert migrated["events"][-4]["type"] == "sandbox_schema_migrated"
+        assert migrated["events"][-4]["authority_granted"] is False
+        assert migrated["events"][-3]["type"] == "execution_schema_migrated"
         assert migrated["events"][-3]["authority_granted"] is False
-        assert migrated["events"][-2]["type"] == "execution_schema_migrated"
+        assert migrated["events"][-2]["type"] == "application_schema_migrated"
         assert migrated["events"][-2]["authority_granted"] is False
-        assert migrated["events"][-1]["type"] == "application_schema_migrated"
+        assert migrated["events"][-1]["type"] == "canary_schema_migrated"
         assert migrated["events"][-1]["authority_granted"] is False
-        assert on_disk["schema_version"] == 6
+        assert on_disk["schema_version"] == 7
         assert on_disk["sandbox_contract"] == sandbox_contract()
-        assert on_disk["migrations"][-3]["classification"] == (
+        assert on_disk["migrations"][-4]["classification"] == (
             "quarantined_patch_static_evaluation_only"
         )
-        assert on_disk["migrations"][-2]["classification"] == (
+        assert on_disk["migrations"][-3]["classification"] == (
             "externally_approved_isolated_execution_only"
         )
-        assert on_disk["migrations"][-1]["classification"] == (
+        assert on_disk["migrations"][-2]["classification"] == (
             "reviewed_dedicated_branch_application_only"
+        )
+        assert on_disk["migrations"][-1]["classification"] == (
+            "signed_transient_canary_with_mandatory_restore"
         )
 
     def test_ledger_cannot_flip_patch_authority_bits(self, sandbox_setup):

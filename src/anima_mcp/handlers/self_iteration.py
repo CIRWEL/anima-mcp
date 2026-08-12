@@ -34,8 +34,10 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
 
     Candidate code can execute only through the fixed, externally approved
     Docker boundary. A separately reviewed action may create one dedicated Git
-    branch through plumbing, but this handler has no host execution, live-source
-    write, checkout, push, merge, restart, or deployment action.
+    branch through plumbing, and a further review may request a transient canary
+    from an external supervisor that must restore the baseline. This handler has
+    no host execution, live-source write, checkout, shell, service control,
+    persistent activation, push, merge, restart, or deployment action.
     """
     action = arguments.get("action", "inspect")
     system = get_self_iteration_system()
@@ -49,6 +51,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                     file_limit=arguments.get("file_limit", 100),
                 )
             )
+
+        if action == "attention":
+            return _text(system.attention(limit=arguments.get("limit", 20)))
 
         if action == "propose":
             claimed_source, used_legacy_source = _claimed_input(
@@ -205,6 +210,33 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 )
             )
 
+        if action == "prepare_canary":
+            result = system.prepare_canary(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                application_result_id=arguments.get("application_result_id"),
+                expected_application_result_sha256=arguments.get(
+                    "expected_application_result_sha256"
+                ),
+            )
+            return _text({"success": True, **result})
+
+        if action == "run_canary":
+            result = system.run_canary(
+                proposal_id=arguments.get("proposal_id"),
+                challenge_id=arguments.get("challenge_id"),
+                signature=arguments.get("signature"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "canary_status":
+            return _text(
+                system.canary_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                )
+            )
+
         if action == "record_outcome":
             claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
                 arguments,
@@ -232,6 +264,7 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 "error": f"unknown self_iteration action: {action}",
                 "allowed_actions": [
                     "inspect",
+                    "attention",
                     "propose",
                     "list",
                     "prepare_verification",
@@ -246,6 +279,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                     "prepare_application",
                     "apply_candidate",
                     "application_status",
+                    "prepare_canary",
+                    "run_canary",
+                    "canary_status",
                     "record_outcome",
                 ],
             }

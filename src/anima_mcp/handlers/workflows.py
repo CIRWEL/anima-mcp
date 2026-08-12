@@ -5,6 +5,7 @@ Handlers: unified_workflow, next_steps, set_calibration, get_lumen_context, lear
 
 import json
 import sys
+from typing import Any
 
 from mcp.types import TextContent
 
@@ -24,9 +25,12 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
 
     store = _get_store()
     if store is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Server not initialized - wake() failed"
-        }))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({"error": "Server not initialized - wake() failed"}),
+            )
+        ]
 
     unitares_url = os.environ.get("UNITARES_URL")
 
@@ -45,11 +49,22 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
     if not workflow:
         templates = WorkflowTemplates(orchestrator)
         template_list = templates.list_templates()
-        return [TextContent(type="text", text=json.dumps({
-            "available_workflows": ["check_state_and_governance", "monitor_and_govern"],
-            "available_templates": [t["name"] for t in template_list],
-            "usage": "Call with workflow=<name> to execute"
-        }, indent=2))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "available_workflows": [
+                            "check_state_and_governance",
+                            "monitor_and_govern",
+                        ],
+                        "available_templates": [t["name"] for t in template_list],
+                        "usage": "Call with workflow=<name> to execute",
+                    },
+                    indent=2,
+                ),
+            )
+        ]
 
     interval = arguments.get("interval", 60.0)
 
@@ -73,7 +88,9 @@ async def handle_unified_workflow(arguments: dict) -> list[TextContent]:
     elif workflow == "monitor_and_govern":
         # Original workflow
         result = await orchestrator.workflow_check_state_and_governance()
-        result["note"] = f"Single check performed. Use interval={interval}s for continuous monitoring."
+        result["note"] = (
+            f"Single check performed. Use interval={interval}s for continuous monitoring."
+        )
     else:
         # Unknown - suggest alternatives
         template_list = templates.list_templates()
@@ -94,18 +111,23 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
 
     store = _get_store()
     if store is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Server not initialized - wake() failed"
-        }))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({"error": "Server not initialized - wake() failed"}),
+            )
+        ]
 
     display = _get_display()
 
     # Read from shared memory (broker) or fallback to sensors
     readings, anima = _get_readings_and_anima()
     if readings is None or anima is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Unable to read sensor data"
-        }))]
+        return [
+            TextContent(
+                type="text", text=json.dumps({"error": "Unable to read sensor data"})
+            )
+        ]
 
     eisv = anima_to_eisv(anima, readings)
 
@@ -113,20 +135,31 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
     display_available = display.is_available()
     # BrainCraft HAT hardware (display + LEDs + sensors) is available if display is available
     # Note: No physical EEG hardware exists - neural signals come from computational proprioception
-    brain_hat_hardware_available = display_available  # BrainCraft HAT = display hardware (not EEG)
+    brain_hat_hardware_available = (
+        display_available  # BrainCraft HAT = display hardware (not EEG)
+    )
     # Check UNITARES (use shared server bridge)
     unitares_connected = False
     unitares_status = "not_configured"
     try:
         from ..accessors import _get_server_bridge
+
         bridge = _get_server_bridge()
         if bridge is not None:
             unitares_connected = await bridge.check_availability()
             unitares_status = "connected" if unitares_connected else "unavailable"
             if unitares_connected:
-                print("[Diagnostics] UNITARES connected via shared bridge", file=sys.stderr, flush=True)
+                print(
+                    "[Diagnostics] UNITARES connected via shared bridge",
+                    file=sys.stderr,
+                    flush=True,
+                )
             else:
-                print("[Diagnostics] UNITARES URL set but unavailable", file=sys.stderr, flush=True)
+                print(
+                    "[Diagnostics] UNITARES URL set but unavailable",
+                    file=sys.stderr,
+                    flush=True,
+                )
         else:
             unitares_status = "not_configured"
             print("[Diagnostics] UNITARES_URL not set", file=sys.stderr, flush=True)
@@ -136,8 +169,54 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
 
     # Get advocate recommendations (with actual drives from SHM)
     from ..accessors import _get_last_shm_data
+
     _shm = _get_last_shm_data()
     _il = (_shm.get("inner_life") or {}) if _shm else {}
+    try:
+        from ..self_iteration import get_self_iteration_system
+
+        self_iteration_attention = get_self_iteration_system().attention(limit=20)
+    except Exception as e:
+        self_iteration_attention = {
+            "schema": "anima.self_iteration.attention.v1",
+            "error": str(e),
+            "items": [
+                {
+                    "attention_id": "si-attn-9e0a644a451afd525f5a0e2a",
+                    "proposal_id": "self-iteration-ledger",
+                    "candidate_id": None,
+                    "stage": "attention",
+                    "state": "attention_projection_failed",
+                    "priority": "critical",
+                    "active": True,
+                    "summary": "The self-iteration attention projection failed.",
+                    "next_action": "An operator must inspect the ledger and artifacts.",
+                    "required_role": "operator_recovery",
+                    "reference_id": "self-iteration-ledger",
+                    "occurred_at": None,
+                    "target_paths": [],
+                    "claim_provenance": {
+                        "source_epistemic_status": "unknown",
+                        "request_trust_classification": "unknown",
+                        "request_actor_authenticated": False,
+                        "claims_verified_by_request_provenance": False,
+                        "independent_verification_status": "unknown",
+                        "effective_weight": 0.0,
+                        "authority_granted": False,
+                    },
+                    "status_query": {
+                        "tool": "self_iteration",
+                        "arguments": {"action": "attention", "limit": 20},
+                        "read_only": True,
+                    },
+                    "signed_approval_required": False,
+                    "acknowledgement_is_approval": False,
+                    "authority_granted": False,
+                }
+            ],
+            "acknowledgement_is_approval": False,
+            "authority_granted": False,
+        }
     advocate = get_advocate()
     advocate.analyze_current_state(
         anima=anima,
@@ -148,6 +227,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
         unitares_connected=unitares_connected,
         drives=_il.get("drives"),
         strongest_drive=_il.get("strongest_drive"),
+        self_iteration_attention=self_iteration_attention,
     )
 
     summary = advocate.get_next_steps_summary()
@@ -157,7 +237,9 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
 
     result = {
         "summary": {
-            "priority": next_action.get("priority", "unknown") if next_action else "none",
+            "priority": next_action.get("priority", "unknown")
+            if next_action
+            else "none",
             "feeling": next_action.get("feeling", "unknown") if next_action else "none",
             "desire": next_action.get("desire", "unknown") if next_action else "none",
             "action": next_action.get("action", "unknown") if next_action else "none",
@@ -181,6 +263,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
             },
             "eisv": eisv.to_dict(),
         },
+        "self_iteration_attention": self_iteration_attention,
     }
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -196,16 +279,23 @@ async def handle_set_calibration(arguments: dict) -> list[TextContent]:
     # Allow partial updates
     updates = arguments.get("updates", {})
     if not updates:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "updates parameter required",
-            "example": {
-                "updates": {
-                    "ambient_temp_min": 10.0,
-                    "ambient_temp_max": 30.0,
-                    "pressure_ideal": 833.0
-                }
-            }
-        }))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": "updates parameter required",
+                        "example": {
+                            "updates": {
+                                "ambient_temp_min": 10.0,
+                                "ambient_temp_max": 30.0,
+                                "pressure_ideal": 833.0,
+                            }
+                        },
+                    }
+                ),
+            )
+        ]
 
     # Track who/what is updating (for metadata)
     update_source = arguments.get("source", "agent")  # "agent", "manual", "automatic"
@@ -220,10 +310,17 @@ async def handle_set_calibration(arguments: dict) -> list[TextContent]:
         # Validate
         valid, error = updated_cal.validate()
         if not valid:
-            return [TextContent(type="text", text=json.dumps({
-                "error": f"Invalid calibration: {error}",
-                "current": calibration.to_dict(),
-            }))]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "error": f"Invalid calibration: {error}",
+                            "current": calibration.to_dict(),
+                        }
+                    ),
+                )
+            ]
 
         # Update config
         config = config_manager.load()
@@ -234,25 +331,52 @@ async def handle_set_calibration(arguments: dict) -> list[TextContent]:
             updated_config = config_manager.reload()
             metadata = updated_config.metadata
 
-            return [TextContent(type="text", text=json.dumps({
-                "success": True,
-                "message": "Calibration updated",
-                "calibration": updated_cal.to_dict(),
-                "metadata": {
-                    "last_updated": metadata.get("calibration_last_updated"),
-                    "last_updated_by": metadata.get("calibration_last_updated_by"),
-                    "update_count": metadata.get("calibration_update_count", 0),
-                },
-            }))]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "success": True,
+                            "message": "Calibration updated",
+                            "calibration": updated_cal.to_dict(),
+                            "metadata": {
+                                "last_updated": metadata.get(
+                                    "calibration_last_updated"
+                                ),
+                                "last_updated_by": metadata.get(
+                                    "calibration_last_updated_by"
+                                ),
+                                "update_count": metadata.get(
+                                    "calibration_update_count", 0
+                                ),
+                            },
+                        }
+                    ),
+                )
+            ]
         else:
-            return [TextContent(type="text", text=json.dumps({
-                "error": "Failed to save calibration",
-            }))]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "error": "Failed to save calibration",
+                        }
+                    ),
+                )
+            ]
 
     except Exception as e:
-        return [TextContent(type="text", text=json.dumps({
-            "error": f"Error updating calibration: {e}",
-        }))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps(
+                    {
+                        "error": f"Error updating calibration: {e}",
+                    }
+                ),
+            )
+        ]
 
 
 async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
@@ -265,11 +389,13 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
     store = _get_store()
     sensors = _get_sensors()
 
-    include = arguments.get("include", ["identity", "anima", "sensors", "mood"])
+    include = arguments.get(
+        "include", ["identity", "anima", "sensors", "mood", "attention"]
+    )
     if isinstance(include, str):
         include = [include]
 
-    result = {}
+    result: dict[str, Any] = {}
 
     # Always need readings/anima for most queries
     readings, anima = _get_readings_and_anima()
@@ -330,7 +456,9 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
                 "capabilities": overview["capabilities"],
                 "boundary_summary": {
                     "protected_surface_count": len(boundaries["protected_surfaces"]),
-                    "auto_eligible_surface_count": len(boundaries["initial_auto_eligible_surfaces"]),
+                    "auto_eligible_surface_count": len(
+                        boundaries["initial_auto_eligible_surfaces"]
+                    ),
                     "implementation_rule": boundaries["implementation_rule"],
                 },
                 "ledger": overview["ledger"],
@@ -338,10 +466,21 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         except Exception as e:
             result["code"] = {"error": str(e)}
 
+    if "attention" in include:
+        try:
+            from ..self_iteration import get_self_iteration_system
+
+            result["self_iteration_attention"] = get_self_iteration_system().attention(
+                limit=20
+            )
+        except Exception as e:
+            result["self_iteration_attention"] = {"error": str(e)}
+
     # Include EISV metrics when anima is available
     if ("eisv" in include or "anima" in include) and anima and readings:
         try:
             from ..eisv_mapper import anima_to_eisv
+
             eisv = anima_to_eisv(anima, readings)
             result["eisv"] = eisv.to_dict()
         except Exception as e:
@@ -356,11 +495,13 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         if sensors_for_history.get("led_brightness") is None:
             try:
                 from ..accessors import _get_led_brightness
+
                 sensors_for_history["led_brightness"] = _get_led_brightness()
             except Exception as e:
                 note_suppressed("workflows.led_brightness", e)
         try:
             from ..accessors import _get_growth
+
             growth = _get_growth()
             if growth is not None:
                 level = growth.interaction_level()
@@ -369,8 +510,11 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         except Exception as e:
             note_suppressed("workflows.interaction_level", e)
         store.record_state(
-            anima.warmth, anima.clarity, anima.stability, anima.presence,
-            sensors_for_history
+            anima.warmth,
+            anima.clarity,
+            anima.stability,
+            anima.presence,
+            sensors_for_history,
         )
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -383,16 +527,21 @@ async def handle_learning_visualization(arguments: dict) -> list[TextContent]:
 
     store = _get_store()
     if store is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Server not initialized - wake() failed"
-        }))]
+        return [
+            TextContent(
+                type="text",
+                text=json.dumps({"error": "Server not initialized - wake() failed"}),
+            )
+        ]
 
     # Get current state
     readings, anima = _get_readings_and_anima()
     if readings is None or anima is None:
-        return [TextContent(type="text", text=json.dumps({
-            "error": "Unable to read sensor data"
-        }))]
+        return [
+            TextContent(
+                type="text", text=json.dumps({"error": "Unable to read sensor data"})
+            )
+        ]
 
     # Create visualizer
     visualizer = LearningVisualizer(db_path=str(store.db_path))
