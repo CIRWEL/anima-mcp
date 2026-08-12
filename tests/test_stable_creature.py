@@ -27,6 +27,7 @@ import threading
 import pytest
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import (
     MagicMock, AsyncMock, patch,
 )
@@ -128,6 +129,46 @@ class TestBrokerAgencyFlag:
         from anima_mcp.stable_creature import broker_agency_enabled
         monkeypatch.setenv("ANIMA_BROKER_AGENCY_ENABLED", value)
         assert broker_agency_enabled() is False
+
+
+class TestBrokerStartupIntegrity:
+    """Identity and sensor ownership stay truthful during broker startup."""
+
+    def test_existing_identity_keeps_store_connection_open(self, tmp_path, monkeypatch):
+        from anima_mcp.identity import IdentityStore
+        from anima_mcp.stable_creature import _load_persistent_identity
+
+        db_path = tmp_path / "anima.db"
+        seed = IdentityStore(str(db_path))
+        seed.wake("persistent-creature-id")
+        seed.close()
+
+        monkeypatch.setenv("ANIMA_DB", str(db_path))
+        monkeypatch.delenv("ANIMA_ID", raising=False)
+
+        identity, store = _load_persistent_identity()
+        try:
+            assert identity.creature_id == "persistent-creature-id"
+            assert store._connect().execute("SELECT 1").fetchone()[0] == 1
+        finally:
+            store.close()
+
+    def test_shadow_mode_is_not_reported_as_direct_i2c_failure(self, tmp_path):
+        from anima_mcp.stable_creature import _direct_i2c_initialization_failed
+
+        sensors = SimpleNamespace(
+            _i2c=None,
+            _env_shadow_path=tmp_path / "anima_state.shadow.json",
+        )
+
+        assert _direct_i2c_initialization_failed(sensors) is False
+
+    def test_missing_direct_i2c_is_reported(self):
+        from anima_mcp.stable_creature import _direct_i2c_initialization_failed
+
+        sensors = SimpleNamespace(_i2c=None, _env_shadow_path=None)
+
+        assert _direct_i2c_initialization_failed(sensors) is True
 
 
 # =====================================================================
