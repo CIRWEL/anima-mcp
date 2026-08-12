@@ -192,11 +192,12 @@ class TestSignedVerification:
 
         assert migrated["proposer_identity"]["id"] == "proposer-1"
         assert len(migrated["content_sha256"]) == 64
-        assert migrated["events"][-4]["type"] == "verification_schema_migrated"
-        assert migrated["events"][-3]["type"] == "sandbox_schema_migrated"
-        assert migrated["events"][-2]["type"] == "execution_schema_migrated"
-        assert migrated["events"][-1]["type"] == "application_schema_migrated"
-        assert on_disk["schema_version"] == 6
+        assert migrated["events"][-5]["type"] == "verification_schema_migrated"
+        assert migrated["events"][-4]["type"] == "sandbox_schema_migrated"
+        assert migrated["events"][-3]["type"] == "execution_schema_migrated"
+        assert migrated["events"][-2]["type"] == "application_schema_migrated"
+        assert migrated["events"][-1]["type"] == "canary_schema_migrated"
+        assert on_disk["schema_version"] == 7
 
     def test_valid_independent_attestation_enables_priority_only(
         self, verification_setup
