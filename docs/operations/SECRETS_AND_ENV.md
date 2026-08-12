@@ -59,7 +59,11 @@ ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen.cirwel
 - Untrusted networks require `Authorization: Bearer <ANIMA_HTTP_API_TOKEN>`.
 - If `ANIMA_HTTP_API_TOKEN` is unset, untrusted requests are denied by default.
 - Set `ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN=true` only for temporary migration/compatibility windows.
+- `deploy.sh` fails closed while that legacy compatibility switch is enabled and
+  verifies that the running server does not report `permissive-no-token` after restart.
 - `X-Forwarded-For` is ignored unless the immediate peer IP is in `ANIMA_TRUSTED_PROXY_NETWORKS`.
+- Deployed services use `UMask=0077`; deploy also repairs `~/.anima`, environment,
+  identity database, OAuth database, and SQLite sidecar permissions to owner-only.
 
 **OAuth notes:**
 - OAuth is only required for Claude.ai web connections via Cloudflare tunnel.
