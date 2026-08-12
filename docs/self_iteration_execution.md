@@ -138,9 +138,10 @@ connection attempts fail.
 ## Deliberate non-capabilities
 
 A passing signed result is only `eligible_for_external_review`. Neither the
-approval nor the result can make a candidate eligible for apply. There is no
-action in this subsystem to write live source, apply a patch, create a commit,
-push, merge, restart the service, or deploy.
+execution approval nor its result grants application authority. Phase 5 may
+consume that result only after a new distinct review, and may create one
+dedicated local branch; it still cannot write the live worktree, push, merge,
+restart the service, or deploy.
 
 Docker and the configured runner image remain trusted computing base. Anyone
 with control of the Docker daemon is effectively a host administrator, and an

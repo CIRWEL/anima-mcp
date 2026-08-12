@@ -330,8 +330,9 @@ TOOLS = [
             "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
             "append independently signed verification, construct a quarantined whole-file patch artifact, "
             "run non-executing static checks, or execute an eligible Python candidate once in a fixed, "
-            "networkless, digest-pinned Docker test profile after distinct signed approval. Never executes "
-            "candidate code on the host, edits or applies live source, commits, merges, pushes, or deploys."
+            "networkless, digest-pinned Docker test profile after distinct signed approval. A further distinct "
+            "review may create one local dedicated branch through Git plumbing. Never executes candidate code "
+            "on the host, edits the live worktree, checks out, pushes, merges, restarts, or deploys."
         ),
         inputSchema={
             "type": "object",
@@ -351,6 +352,9 @@ TOOLS = [
                         "prepare_execution",
                         "execute_candidate",
                         "execution_status",
+                        "prepare_application",
+                        "apply_candidate",
+                        "application_status",
                         "record_outcome",
                     ],
                     "description": "Operation to perform (default: inspect)",
@@ -512,13 +516,13 @@ TOOLS = [
                 },
                 "challenge_id": {
                     "type": "string",
-                    "pattern": "^si(?:c|xc)-[0-9a-f]{32}$",
-                    "description": "One-time challenge returned by prepare_verification or prepare_execution",
+                    "pattern": "^si(?:c|xc|ac)-[0-9a-f]{32}$",
+                    "description": "One-time challenge returned by a verification, execution, or application preparation action",
                 },
                 "signature": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued verification or execution signing input",
+                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued verification, execution, or application signing input",
                 },
                 "changes": {
                     "type": "array",
@@ -582,6 +586,16 @@ TOOLS = [
                     "type": "boolean",
                     "description": "Include bounded stdout/stderr prefixes in execution_status; requires authentication (default: false)",
                     "default": False,
+                },
+                "execution_id": {
+                    "type": "string",
+                    "pattern": "^six-[0-9a-f]{32}$",
+                    "description": "Exact passing signed execution result for prepare_application",
+                },
+                "expected_execution_result_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Signed execution result digest observed before prepare_application",
                 },
             },
         },

@@ -539,12 +539,15 @@ def execution_setup(tmp_path, monkeypatch):
         "approver": VerifierKey("approver-1", "key-a", b"a" * 32),
         "other": VerifierKey("other-1", "key-o", b"o" * 32),
         "signer": VerifierKey("runner-signer", "key-r", b"r" * 32),
+        "reviewer": VerifierKey("reviewer-1", "key-w", b"w" * 32),
+        "app_signer": VerifierKey("application-signer", "key-s", b"s" * 32),
     }
     registry = KeyRegistry(*keys.values())
     runner = FakeIsolationRunner()
     ledger = tmp_path / "state" / "self_iteration.json"
     sandbox_root = tmp_path / "quarantine"
     monkeypatch.setenv("ANIMA_SELF_ITERATION_RUNNER_SIGNER_ID", "runner-signer")
+    monkeypatch.setenv("ANIMA_SELF_ITERATION_APPLIER_SIGNER_ID", "application-signer")
 
     def system(actor_id: str | None) -> SelfIterationSystem:
         return SelfIterationSystem(
@@ -568,6 +571,7 @@ def execution_setup(tmp_path, monkeypatch):
         proposer=system("proposer-1"),
         verifier=system("verifier-1"),
         approver=system("approver-1"),
+        reviewer=system("reviewer-1"),
         other=system("other-1"),
         unauthenticated=system(None),
     )
@@ -889,15 +893,23 @@ class TestIsolatedExecutionLifecycle:
             "proposals"
         ][0]
         on_disk = json.loads(setup.ledger.read_text())
-        assert migrated["events"][-1] == {
+        assert migrated["events"][-2] == {
             "type": "execution_schema_migrated",
             "at": "2026-08-11T22:30:00Z",
             "from_schema": 4,
             "to_schema": 5,
             "authority_granted": False,
         }
-        assert on_disk["schema_version"] == 5
+        assert migrated["events"][-1] == {
+            "type": "application_schema_migrated",
+            "at": "2026-08-11T22:30:00Z",
+            "from_schema": 5,
+            "to_schema": 6,
+            "authority_granted": False,
+        }
+        assert on_disk["schema_version"] == 6
         assert on_disk["execution_contract"]["automatic_apply"] is False
+        assert on_disk["application_contract"]["push_allowed"] is False
 
 
 @pytest.mark.skipif(

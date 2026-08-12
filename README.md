@@ -183,7 +183,7 @@ Anima exposes 31 tools over the [Model Context Protocol](https://modelcontextpro
 
 - **State & sensing** (8 tools) — `get_state`, `get_lumen_context`, `get_identity`, `read_sensors`, `get_health`, `get_calibration`, `set_calibration`, `diagnostics`
 - **Knowledge & learning** (7 tools) — `get_self_knowledge`, `get_growth`, `get_trajectory`, `get_eisv_trajectory_state`, `get_qa_insights`, `learning_visualization`, `query`
-- **Code self-awareness** (1 tool) — `self_iteration` (structural inspection, signed proposals, quarantined patch artifacts, non-executing static checks, and outcome ledger; never edits live source or deploys)
+- **Code self-awareness** (1 tool) — `self_iteration` (structural inspection, signed proposals, quarantined candidates, isolated tests, and reviewed dedicated branches; never edits the live worktree, pushes, merges, or deploys)
 - **Interaction** (7 tools) — `next_steps`, `lumen_qa`, `post_message`, `say`, `configure_voice`, `primitive_feedback`, `unified_workflow`
 - **Display & capture** (2 tools) — `manage_display` (screens, art eras, advisory `resonance_critique`), `capture_screen`
 - **System operations** (6 tools) — `git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`
@@ -192,18 +192,18 @@ Start with `get_lumen_context` to understand Anima's current state, or `next_ste
 
 ### Bounded Code Self-Iteration
 
-`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, obtain independent signed verification, construct a bounded patch artifact outside the source repository, run non-executing static checks, and record whether an externally implemented change helped. `get_lumen_context(include=["code"])` exposes a compact version of this code self-awareness alongside identity and embodied state.
+`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, obtain independent signed verification, construct a bounded patch artifact outside the source repository, run static checks and one separately approved isolated test, and create a separately reviewed commit on a dedicated local branch. `get_lumen_context(include=["code"])` exposes a compact version of this code self-awareness alongside identity and embodied state.
 
 The loop is deliberately split across trust boundaries:
 
 ```text
 observation -> hypothesis -> proposal ledger -> independent verification
             -> quarantined patch -> non-executing static checks
-            -> isolated branch + tests -> reviewed canary
+            -> isolated tests -> reviewed dedicated branch -> canary review
             -> measured outcome -> keep or revert
 ```
 
-The running creature authors the observation, hypothesis, candidate content, and outcome report. A separate caretaker or stronger isolated coding runner owns live source edits, Git operations, code execution, tests, review, and deployment. Source and measurement labels are stored explicitly as caller claims, never as verified provenance. The server adds a receipt from request context; authentication can identify the submitter, but it does not corroborate the narrative, label, evidence, or outcome. Unverified and legacy records have effective weight zero and cannot grant priority, automation eligibility, or authority.
+The running creature authors the observation, hypothesis, candidate content, and outcome report. Distinct authenticated principals approve verification, isolated execution, and dedicated-branch application; deployment remains external. Source and measurement labels are stored explicitly as caller claims, never as verified provenance. The server adds a receipt from request context; authentication can identify the submitter, but it does not corroborate the narrative, label, evidence, or outcome. Unverified and legacy records have effective weight zero and cannot grant priority, automation eligibility, or authority.
 
 Signed verification is a separate, logical append-only transition. The proposal must have authenticated proposer provenance, and the verifier must be a different authenticated actor. `prepare_verification` binds the proposer identity, verifier identity, immutable proposal digest, source fingerprint, verdict, evidence hashes, expiry, and one-time challenge into canonical JSON. The verifier signs those exact bytes offline; `record_verification` checks the HMAC, authenticated actor, challenge window, replay state, and current proposal digest before appending the verdict. Evidence URIs are inert references: the server binds their hashes but does not fetch or independently validate their contents. `rejected` verdicts and same-verifier revocations are also signed. Conflicting, expired, revoked, missing-key, malformed, or forged attestations fail closed with zero effective weight.
 
@@ -224,7 +224,9 @@ A currently valid `verified` attestation makes a proposal priority-eligible with
 
 Patch construction is narrower still. `construct_patch` accepts at most three complete UTF-8 replacements for existing `.py`, `.md`, `.json`, `.yaml`, or `.yml` files already named by a low-risk, currently verified proposal. The authenticated patch author must be the authenticated proposer. Each artifact binds the proposal digest, proposal source fingerprint, active signed attestations, author identity, target base hashes, replacement hashes, and unified-diff hash. Artifacts live under `~/.anima/self_iteration_sandboxes` by default, and the sandbox root is rejected if it resolves inside the source repository. Construction never creates, deletes, or replaces a live repository file. `patch_status` returns metadata by default and requires an authenticated request before it will include the unified diff.
 
-`evaluate_patch` revalidates those bindings and the unchanged live source, then parses candidate text without importing it. Python candidates receive AST syntax checks and a conservative capability heuristic; JSON and YAML are parsed (`yaml.safe_load`), and Markdown receives UTF-8 validation. This is a review aid, not an execution security boundary: the evaluator can reject obvious process, network, dynamic-code, or file-mutation surfaces, but static success only means `eligible_for_external_review`. Every result records `eligible_for_execution=false`, `execution_performed=false`, `tests_executed=false`, and `authority_granted=false`. A later phase must provide genuine process isolation before candidate code or tests can run.
+`evaluate_patch` revalidates those bindings and the unchanged live source, then parses candidate text without importing it. Python candidates receive AST syntax checks and a conservative capability heuristic; JSON and YAML are parsed (`yaml.safe_load`), and Markdown receives UTF-8 validation. Static success alone never authorizes execution. Phase 4 adds a ten-minute, one-use approval from a distinct actor and reconstructs the exact committed source plus candidate inside a digest-pinned, networkless, read-only Docker test profile. A dedicated service key signs the bounded result; crashes after the durable claim are indeterminate and never automatically retried. See [the execution boundary](docs/self_iteration_execution.md).
+
+Phase 5 requires another authenticated reviewer, distinct from every earlier participant, to sign the exact passing execution result. Git plumbing and a temporary index then create one deterministic local branch without checkout, hooks, worktree writes, push, merge, restart, or deployment. A separate service signer authenticates the result, and `application_status` verifies the ref, commit, tree, parent, artifact, and ledger bindings. A recorded result is only eligible for canary review and never for live activation. See [the reviewed application boundary](docs/self_iteration_application.md).
 
 ---
 

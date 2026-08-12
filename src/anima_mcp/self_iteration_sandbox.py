@@ -41,6 +41,8 @@ MAX_MANIFEST_BYTES = 256 * 1024
 MAX_EVALUATION_BYTES = 256 * 1024
 MAX_EXECUTION_CLAIM_BYTES = 64 * 1024
 MAX_EXECUTION_RESULT_BYTES = 1024 * 1024
+MAX_APPLICATION_CLAIM_BYTES = 128 * 1024
+MAX_APPLICATION_RESULT_BYTES = 512 * 1024
 
 SUPPORTED_SUFFIXES = frozenset({".json", ".md", ".py", ".yaml", ".yml"})
 
@@ -48,6 +50,8 @@ _CANDIDATE_ID_RE = re.compile(r"^sip-[0-9a-f]{32}$")
 _EVALUATION_ID_RE = re.compile(r"^sie-[0-9a-f]{32}$")
 _EXECUTION_CHALLENGE_ID_RE = re.compile(r"^sixc-[0-9a-f]{32}$")
 _EXECUTION_ID_RE = re.compile(r"^six-[0-9a-f]{32}$")
+_APPLICATION_CHALLENGE_ID_RE = re.compile(r"^siac-[0-9a-f]{32}$")
+_APPLICATION_RESULT_ID_RE = re.compile(r"^siar-[0-9a-f]{32}$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _TEMP_DIR_RE = re.compile(r"^\.sip-tmp-[A-Za-z0-9_-]+$")
 _IMMUTABLE_TEMP_RE = re.compile(r"^\.immutable-tmp-[0-9]+-[0-9a-f]{32}$")
@@ -1022,6 +1026,136 @@ class PatchSandbox:
                 raise PatchSandboxError("execution result binding is malformed")
             results.append(result)
         return results
+
+    def claim_application(
+        self,
+        candidate_id: Any,
+        challenge_id: Any,
+        claim: dict[str, Any],
+    ) -> None:
+        """Atomically consume one reviewed application challenge."""
+        candidate = self._candidate_directory(candidate_id)
+        if not isinstance(
+            challenge_id, str
+        ) or not _APPLICATION_CHALLENGE_ID_RE.fullmatch(challenge_id):
+            raise PatchSandboxError("application challenge_id is malformed")
+        if not isinstance(claim, dict) or claim.get("challenge_id") != challenge_id:
+            raise PatchSandboxError("application claim binding is malformed")
+        encoded = json.dumps(claim, ensure_ascii=False, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_APPLICATION_CLAIM_BYTES:
+            raise PatchSandboxError("application claim exceeds its size limit")
+        claims = self._artifact_directory(candidate, "application_claims")
+        destination = claims / f"{challenge_id}.json"
+        try:
+            _exclusive_json_write(destination, claim)
+        except FileExistsError as exc:
+            raise PatchSandboxError(
+                "application challenge was already claimed; automatic retry is forbidden"
+            ) from exc
+        except OSError as exc:
+            raise PatchSandboxError("application claim could not be persisted") from exc
+
+    def load_application_claims(self, candidate_id: Any) -> list[dict[str, Any]]:
+        candidate = self._candidate_directory(candidate_id)
+        claims = candidate / "application_claims"
+        if not claims.exists():
+            return []
+        if claims.is_symlink() or not claims.is_dir():
+            raise PatchSandboxError(
+                "candidate application_claims directory is malformed"
+            )
+        records: list[dict[str, Any]] = []
+        for path in sorted(claims.iterdir(), key=lambda item: item.name):
+            if _IMMUTABLE_TEMP_RE.fullmatch(path.name):
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                raise PatchSandboxError("application claims contain an invalid entry")
+            challenge_id = path.stem
+            if not _APPLICATION_CHALLENGE_ID_RE.fullmatch(challenge_id):
+                raise PatchSandboxError(
+                    "application claims contain a malformed identifier"
+                )
+            raw = self._read_regular(
+                path,
+                maximum=MAX_APPLICATION_CLAIM_BYTES,
+                label="application claim",
+            )
+            try:
+                claim = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PatchSandboxError("application claim is malformed") from exc
+            if not isinstance(claim, dict) or claim.get("challenge_id") != challenge_id:
+                raise PatchSandboxError("application claim binding is malformed")
+            records.append(claim)
+        return records
+
+    def store_application_result(
+        self, candidate_id: Any, result: dict[str, Any]
+    ) -> None:
+        """Persist one signed application result without permitting replacement."""
+        candidate = self._candidate_directory(candidate_id)
+        result_id = (
+            result.get("application_result_id") if isinstance(result, dict) else None
+        )
+        if not isinstance(result_id, str) or not _APPLICATION_RESULT_ID_RE.fullmatch(
+            result_id
+        ):
+            raise PatchSandboxError("application result identifier is malformed")
+        if result.get("candidate_id") != candidate.name:
+            raise PatchSandboxError("application result candidate binding is malformed")
+        encoded = json.dumps(result, ensure_ascii=False, allow_nan=False).encode(
+            "utf-8"
+        )
+        if len(encoded) > MAX_APPLICATION_RESULT_BYTES:
+            raise PatchSandboxError("application result exceeds its size limit")
+        applications = self._artifact_directory(candidate, "applications")
+        destination = applications / f"{result_id}.json"
+        try:
+            _exclusive_json_write(destination, result)
+        except FileExistsError as exc:
+            raise PatchSandboxError(
+                "application result identifier already exists"
+            ) from exc
+        except OSError as exc:
+            raise PatchSandboxError(
+                "application result could not be persisted"
+            ) from exc
+
+    def load_application_results(self, candidate_id: Any) -> list[dict[str, Any]]:
+        candidate = self._candidate_directory(candidate_id)
+        applications = candidate / "applications"
+        if not applications.exists():
+            return []
+        if applications.is_symlink() or not applications.is_dir():
+            raise PatchSandboxError("candidate applications directory is malformed")
+        records: list[dict[str, Any]] = []
+        for path in sorted(applications.iterdir(), key=lambda item: item.name):
+            if _IMMUTABLE_TEMP_RE.fullmatch(path.name):
+                continue
+            if path.is_symlink() or not path.is_file() or path.suffix != ".json":
+                raise PatchSandboxError("application results contain an invalid entry")
+            result_id = path.stem
+            if not _APPLICATION_RESULT_ID_RE.fullmatch(result_id):
+                raise PatchSandboxError(
+                    "application results contain a malformed identifier"
+                )
+            raw = self._read_regular(
+                path,
+                maximum=MAX_APPLICATION_RESULT_BYTES,
+                label="application result",
+            )
+            try:
+                result = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise PatchSandboxError("application result is malformed") from exc
+            if (
+                not isinstance(result, dict)
+                or result.get("application_result_id") != result_id
+                or result.get("candidate_id") != candidate.name
+            ):
+                raise PatchSandboxError("application result binding is malformed")
+            records.append(result)
+        return records
 
     @staticmethod
     def _evaluate_file(path: str, content: bytes) -> dict[str, Any]:

@@ -33,8 +33,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
     """Inspect source structure or update the proposal/verification ledger.
 
     Candidate code can execute only through the fixed, externally approved
-    Docker boundary. This handler has no host execution, live-source write,
-    apply, Git mutation, merge, or deployment action.
+    Docker boundary. A separately reviewed action may create one dedicated Git
+    branch through plumbing, but this handler has no host execution, live-source
+    write, checkout, push, merge, restart, or deployment action.
     """
     action = arguments.get("action", "inspect")
     system = get_self_iteration_system()
@@ -177,6 +178,33 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 )
             )
 
+        if action == "prepare_application":
+            result = system.prepare_application(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                execution_id=arguments.get("execution_id"),
+                expected_execution_result_sha256=arguments.get(
+                    "expected_execution_result_sha256"
+                ),
+            )
+            return _text({"success": True, **result})
+
+        if action == "apply_candidate":
+            result = system.apply_candidate(
+                proposal_id=arguments.get("proposal_id"),
+                challenge_id=arguments.get("challenge_id"),
+                signature=arguments.get("signature"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "application_status":
+            return _text(
+                system.application_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                )
+            )
+
         if action == "record_outcome":
             claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
                 arguments,
@@ -215,6 +243,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                     "prepare_execution",
                     "execute_candidate",
                     "execution_status",
+                    "prepare_application",
+                    "apply_candidate",
+                    "application_status",
                     "record_outcome",
                 ],
             }
