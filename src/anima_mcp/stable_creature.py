@@ -9,12 +9,14 @@ Continuous loop that:
 
 Designed to run continuously on the Pi.
 
-✅ HARDWARE BROKER MODE ✅
+✅ BODY BROKER MODE ✅
 ─────────────────────────────────────────────────────────────
-This script acts as the HARDWARE BROKER for Lumen's sensors.
+This script acts as Lumen's body-state broker.
 
 HOW IT WORKS:
-- This script owns I2C sensors exclusively (no conflicts)
+- In direct mode this script owns the environmental I2C sensors
+- In deployed shadow mode, anima-broker-ex owns those sensors and this script
+  consumes its fresh readings without opening I2C
 - Reads sensors every 2 seconds
 - Writes data to shared memory (/dev/shm or Redis)
 - The MCP server (anima --http) reads from shared memory
@@ -270,6 +272,47 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
+
+def _load_persistent_identity():
+    """Open the canonical identity store and wake its existing identity.
+
+    ``IdentityStore._connect()`` owns and caches its connection. Callers must
+    not close the handle returned by that method while the store is still in
+    use; doing so leaves ``store._conn`` pointing at a closed SQLite object.
+    """
+    db_path = resolve_db_path()
+    store = IdentityStore(db_path)
+    print(f"[StableCreature] Identity persistence: {db_path}")
+
+    anima_id = os.environ.get("ANIMA_ID")
+    if not anima_id:
+        conn = store._connect()
+        existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
+        if existing:
+            anima_id = existing[0]
+            print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
+        else:
+            import uuid
+
+            anima_id = str(uuid.uuid4())
+            print(f"[StableCreature] Creating new identity: {anima_id[:8]}...")
+
+    return store.wake(anima_id), store
+
+
+def _direct_i2c_initialization_failed(sensors) -> bool:
+    """Whether a direct-I2C backend unexpectedly failed to open its bus.
+
+    ``PiSensors`` deliberately keeps ``_i2c`` unset when it consumes the
+    Elixir broker's shadow file. That is the healthy deployed ownership mode,
+    not a hardware failure.
+    """
+    return (
+        getattr(sensors, "_i2c", object()) is None
+        and not getattr(sensors, "_env_shadow_path", None)
+    )
+
+
 def run_creature():
     print("[StableCreature] Starting up...")
     legacy_broker_agency = broker_agency_enabled()
@@ -278,32 +321,8 @@ def run_creature():
     identity = None
     store = None
     try:
-        # $ANIMA_DB, else ~/.anima/anima.db — never the working directory (#123).
-        db_path = resolve_db_path()
-
-        store = IdentityStore(db_path)
-        print(f"[StableCreature] Identity persistence: {db_path}")
-
-        # Identity preservation: check database first, then env var, then generate new
-        # This ensures Lumen's identity persists even if config is missing
-        anima_id = os.environ.get("ANIMA_ID")
-        if not anima_id:
-            # Check if identity already exists in database
-            conn = store._connect()
-            try:
-                existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
-                if existing:
-                    anima_id = existing[0]
-                    print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
-                else:
-                    # Only generate new UUID if truly first boot
-                    import uuid
-                    anima_id = str(uuid.uuid4())
-                    print(f"[StableCreature] Creating new identity: {anima_id[:8]}...")
-            finally:
-                conn.close()
-
-        identity = store.wake(anima_id)
+        identity, store = _load_persistent_identity()
+        db_path = str(store.db_path)
     except Exception as e:
         print(f"[StableCreature] WARNING: Identity store failed ({e}) - using fallback identity")
         print("[StableCreature] Broker will continue (sensors -> shared memory). Server can repair DB.")
@@ -327,8 +346,9 @@ def run_creature():
     # Initialize sensors - allow graceful degradation if hardware unavailable
     try:
         sensors = get_sensors()
-        # Check if sensors initialized (at least I2C should be available)
-        if hasattr(sensors, '_i2c') and sensors._i2c is None:
+        # Direct mode requires I2C. Shadow mode deliberately leaves it unopened
+        # because anima-broker-ex is the sole environmental-sensor owner.
+        if _direct_i2c_initialization_failed(sensors):
             print("[StableCreature] WARNING: I2C initialization failed - hardware may be disconnected")
             print("[StableCreature] Continuing with degraded sensor access (CPU-only readings)")
     except Exception as e:

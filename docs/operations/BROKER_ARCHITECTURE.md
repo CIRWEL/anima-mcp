@@ -6,14 +6,19 @@
 
 ## Overview
 
-Lumen runs as two systemd services:
+Lumen's live body/mind path currently spans three systemd services:
 
-1. **`anima-broker.service`** -- Lumen's **Body** (Hardware Broker)
-   - Owns I2C sensors, writes to shared memory
+1. **`anima-broker-ex.service`** -- environmental sensor owner
+   - Sole owner of AHT20, VEML7700, and BMP280 on `/dev/i2c-1`
+   - Writes `/dev/shm/anima_state.shadow.json`
+
+2. **`anima-broker.service`** -- Lumen's **Body** (state broker)
+   - Consumes fresh Elixir shadow readings and adds computational sensors
+   - Writes the authoritative `/dev/shm/anima_state.json`
    - Sole writer for embodied learning snapshots
    - Command: `anima-creature` (`stable_creature.py`)
 
-2. **`anima.service`** -- Lumen's **Mind** (MCP Server)
+3. **`anima.service`** -- Lumen's **Mind** (MCP Server)
    - Reads from shared memory, serves MCP tools
    - Owns TFT display + LEDs
    - Command: `anima --http` (`server.py`)
@@ -28,9 +33,14 @@ Lumen runs as two systemd services:
 Hardware Layer (I2C Sensors: AHT20, BMP280, VEML7700)
          |
          v
-anima-broker.service (Body)
+anima-broker-ex.service (Elixir environmental-sensor owner)
+  - Writes /dev/shm/anima_state.shadow.json
+         |
+         v
+anima-broker.service (Python body/state broker)
   stable_creature.py
-  - Reads sensors (exclusive I2C for sensors)
+  - Reads fresh environmental shadow values
+  - Adds CPU, memory, disk, throttle, and neural-band readings
   - Computes anima state
   - Writes preferences + self-model snapshots
   - Drains durable server learning events
@@ -59,7 +69,9 @@ External MCP Clients (Claude Code, Cursor, Claude.ai)
 
 ## Service Dependencies
 
-- **Startup:** `anima-broker` starts first, then `anima`
+- **Startup:** the Elixir sensor owner and Python body broker start before the
+  mind; the Python broker fails environmental channels to unknown if the
+  Elixir shadow is missing or older than its staleness bound
 - **Stopping `anima`** does NOT stop broker -- sensors keep reading, face keeps displaying
 - **Stopping `anima-broker`** -- server has no fresh sensor state. Its deployed
   `ANIMA_SENSORS_BACKEND=shm` safeguard and the server accessor's fail-closed
@@ -180,6 +192,7 @@ unless `ANIMA_BROKER_AGENCY_ENABLED=true` is explicitly set.
 
 | Service | File | Location |
 |---------|------|----------|
+| `anima-broker-ex.service` | `anima_broker/systemd/anima-broker-ex.service` | `/etc/systemd/system/anima-broker-ex.service` |
 | `anima.service` | `systemd/anima.service` | `/etc/systemd/system/anima.service` |
 | `anima-broker.service` | `systemd/anima-broker.service` | `/etc/systemd/system/anima-broker.service` |
 
@@ -187,6 +200,8 @@ unless `ANIMA_BROKER_AGENCY_ENABLED=true` is explicitly set.
 # Install
 sudo cp systemd/anima-broker.service /etc/systemd/system/
 sudo cp systemd/anima.service /etc/systemd/system/
+# Only on hosts using the deployed Elixir sensor cutover:
+sudo cp anima_broker/systemd/anima-broker-ex.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable anima-broker anima
 sudo systemctl start anima-broker anima
