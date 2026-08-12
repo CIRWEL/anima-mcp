@@ -90,7 +90,7 @@ class TestSourceAwareness:
     ):
         overview = system.inspect()
 
-        assert overview["autonomy_level"] == "reviewed_dedicated_branch_application"
+        assert overview["autonomy_level"] == "signed_transient_canary_evaluation"
         assert overview["source"]["available"] is True
         assert overview["source"]["manifest"]["file_count"] == 7
         assert len(overview["source"]["manifest"]["sha256"]) == 64
@@ -358,6 +358,7 @@ class TestProposalLedger:
         sandbox_migration = proposal["events"][4]
         execution_migration = proposal["events"][5]
         application_migration = proposal["events"][6]
+        canary_migration = proposal["events"][7]
 
         assert "source" not in proposal
         assert proposal["source_claim"]["value"] == "governance"
@@ -380,11 +381,13 @@ class TestProposalLedger:
         assert execution_migration["authority_granted"] is False
         assert application_migration["type"] == "application_schema_migrated"
         assert application_migration["authority_granted"] is False
+        assert canary_migration["type"] == "canary_schema_migrated"
+        assert canary_migration["authority_granted"] is False
         assert proposal["proposer_identity"] is None
         assert proposal["verification_state"]["status"] == "unverified"
 
         on_disk = json.loads(system.ledger_path.read_text())
-        assert on_disk["schema_version"] == 6
+        assert on_disk["schema_version"] == 7
         assert on_disk["provenance_contract"]["unverified_effective_weight"] == 0.0
         assert on_disk["verification_contract"]["verified_priority_eligible"] is True
         assert on_disk["migrations"] == [
@@ -422,6 +425,13 @@ class TestProposalLedger:
                 "from_schema": 5,
                 "to_schema": 6,
                 "classification": "reviewed_dedicated_branch_application_only",
+            },
+            {
+                "type": "schema_migration",
+                "at": "2026-08-11T21:30:00Z",
+                "from_schema": 6,
+                "to_schema": 7,
+                "classification": "signed_transient_canary_with_mandatory_restore",
             },
         ]
 
@@ -678,6 +688,9 @@ def test_tool_registry_exposes_only_bounded_self_iteration_actions():
         "prepare_application",
         "apply_candidate",
         "application_status",
+        "prepare_canary",
+        "run_canary",
+        "canary_status",
         "record_outcome",
     ]
     assert "implement" not in actions
@@ -717,7 +730,7 @@ async def test_lumen_context_can_include_compact_code_awareness(system, monkeypa
 
     result = parse_result(await handle_get_lumen_context({"include": ["code"]}))
 
-    assert result["code"]["autonomy_level"] == ("reviewed_dedicated_branch_application")
+    assert result["code"]["autonomy_level"] == ("signed_transient_canary_evaluation")
     assert result["code"]["source"]["available"] is True
     assert result["code"]["capabilities"]["write_source"] is False
     assert result["code"]["boundary_summary"]["protected_surface_count"] > 0

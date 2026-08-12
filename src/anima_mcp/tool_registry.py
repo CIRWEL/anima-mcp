@@ -332,7 +332,9 @@ TOOLS = [
             "run non-executing static checks, or execute an eligible Python candidate once in a fixed, "
             "networkless, digest-pinned Docker test profile after distinct signed approval. A further distinct "
             "review may create one local dedicated branch through Git plumbing. Never executes candidate code "
-            "on the host, edits the live worktree, checks out, pushes, merges, restarts, or deploys."
+            "on the host, edits the live worktree, or checks out. A final distinct review may request one "
+            "externally supervised transient canary with mandatory baseline restoration; there is no shell, "
+            "service control, persistent activation, push, merge, restart, or deployment action."
         ),
         inputSchema={
             "type": "object",
@@ -355,6 +357,9 @@ TOOLS = [
                         "prepare_application",
                         "apply_candidate",
                         "application_status",
+                        "prepare_canary",
+                        "run_canary",
+                        "canary_status",
                         "record_outcome",
                     ],
                     "description": "Operation to perform (default: inspect)",
@@ -516,13 +521,13 @@ TOOLS = [
                 },
                 "challenge_id": {
                     "type": "string",
-                    "pattern": "^si(?:c|xc|ac)-[0-9a-f]{32}$",
-                    "description": "One-time challenge returned by a verification, execution, or application preparation action",
+                    "pattern": "^si(?:c|xc|ac|cc)-[0-9a-f]{32}$",
+                    "description": "One-time challenge returned by a verification, execution, application, or canary preparation action",
                 },
                 "signature": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued verification, execution, or application signing input",
+                    "description": "Lowercase hexadecimal HMAC-SHA256 over an issued verification, execution, application, or canary signing input",
                 },
                 "changes": {
                     "type": "array",
@@ -596,6 +601,16 @@ TOOLS = [
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
                     "description": "Signed execution result digest observed before prepare_application",
+                },
+                "application_result_id": {
+                    "type": "string",
+                    "pattern": "^siar-[0-9a-f]{32}$",
+                    "description": "Exact reviewed application result for prepare_canary",
+                },
+                "expected_application_result_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Signed application result digest observed before prepare_canary",
                 },
             },
         },
