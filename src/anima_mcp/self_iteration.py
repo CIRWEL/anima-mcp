@@ -4,9 +4,11 @@ This module deliberately separates *understanding*, *requesting*, and
 constructing a quarantined patch from implementing one.  The running creature
 may inspect a structural map of its source, persist an evidence-backed
 proposal, construct a proposal-bound whole-file patch outside the repository,
-run non-executing static checks, and record the measured outcome of an
-externally implemented change.  It never edits live source, executes candidate
-code or proposal text, invokes Git mutation commands, or deploys code.
+run non-executing static checks, execute one narrowly eligible Python candidate
+in a digest-pinned networkless Docker container after separate signed approval,
+and record measured outcomes.  It never edits live source, executes candidate
+code in the host process, invokes Git mutation commands, applies a candidate,
+or deploys code.
 
 The boundary is architectural rather than prompt-based: this module exposes no
 method that writes inside the repository.  Its writes are an atomic ledger and
@@ -32,6 +34,23 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable
 
 from .atomic_write import atomic_json_write
+from .self_iteration_execution import (
+    RUNNER_SIGNER_ID_ENV,
+    DockerIsolationRunner,
+    ExecutionError,
+    IsolationRunner,
+    SourceWorkspaceBuilder,
+    approval_signature_record,
+    approval_signing_input_b64,
+    build_execution_approval,
+    build_signed_execution_result,
+    execution_approval_sha256,
+    execution_contract,
+    execution_profile,
+    validate_execution_approval,
+    validate_signed_execution_result,
+    verify_execution_approval_signature,
+)
 from .self_iteration_verification import (
     ATTESTATION_SCHEMA,
     MAX_ATTESTATION_VALIDITY,
@@ -60,7 +79,8 @@ from .self_iteration_sandbox import (
     sandbox_contract,
 )
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
+SANDBOX_SCHEMA_VERSION = 4
 VERIFICATION_SCHEMA_VERSION = 3
 PROVENANCE_SCHEMA_VERSION = 2
 PROVENANCE_SCHEMA = "anima.self_iteration.provenance.v1"
@@ -124,6 +144,7 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
     ("src/anima_mcp/tool_registry.py", "capability boundary"),
     ("src/anima_mcp/handlers/system_ops.py", "deployment and system control"),
     ("src/anima_mcp/self_iteration.py", "self-iteration evaluator"),
+    ("src/anima_mcp/self_iteration_execution.py", "isolated execution boundary"),
     ("src/anima_mcp/self_iteration_sandbox.py", "self-iteration evaluator"),
     ("src/anima_mcp/self_iteration_verification.py", "self-iteration evaluator"),
     ("src/anima_mcp/handlers/self_iteration.py", "self-iteration evaluator"),
@@ -569,6 +590,8 @@ class SelfIterationSystem:
             [str], dict[str, Any]
         ] = _collect_server_provenance,
         verifier_key_provider: VerifierKeyProvider = verifier_key_from_env,
+        isolation_runner: IsolationRunner | None = None,
+        workspace_builder: SourceWorkspaceBuilder | None = None,
     ) -> None:
         self.repo_root = repo_root.resolve() if repo_root else _discover_repo_root()
         self.ledger_path = ledger_path or Path.home() / ".anima" / "self_iteration.json"
@@ -580,6 +603,10 @@ class SelfIterationSystem:
         self._clock = clock
         self._provenance_provider = provenance_provider
         self._verifier_key_provider = verifier_key_provider
+        self._isolation_runner = (
+            isolation_runner or DockerIsolationRunner.from_environment()
+        )
+        self._workspace_builder = workspace_builder or SourceWorkspaceBuilder()
         self._patch_sandbox = PatchSandbox(
             repo_root=self.repo_root,
             sandbox_root=self.sandbox_root,
@@ -876,7 +903,7 @@ class SelfIterationSystem:
         manifest = self._manifest(include_files=include_files, file_limit=file_limit)
         return {
             "mode": "bounded_self_iteration",
-            "autonomy_level": "quarantined_patch_only",
+            "autonomy_level": "externally_approved_isolated_execution",
             "runtime": {
                 "package": "anima-mcp",
                 "package_version": self._package_version(self.repo_root),
@@ -896,13 +923,17 @@ class SelfIterationSystem:
                 "record_signed_verification": True,
                 "construct_quarantined_patch_artifacts": True,
                 "run_nonexecuting_static_evaluation": True,
+                "prepare_signed_execution_approval": True,
+                "execute_candidate_code_on_host": False,
+                "execute_candidate_code_in_pinned_container": True,
+                "execute_tests_in_pinned_container": True,
                 "accept_caller_supplied_provenance": False,
                 "weight_unverified_ledger_claims": False,
                 "verification_grants_implementation_authority": False,
                 "write_source": False,
                 "execute_proposal_text": False,
-                "execute_candidate_code": False,
-                "execute_tests": False,
+                "execute_candidate_code": True,
+                "execute_tests": True,
                 "commit_or_push": False,
                 "deploy": False,
             },
@@ -916,9 +947,10 @@ class SelfIterationSystem:
                     for pattern, reason in _AUTO_ELIGIBLE_RULES
                 ],
                 "implementation_rule": (
-                    "This process may construct an inert patch artifact and run static "
-                    "parsers. A separate isolated runner or caretaker must execute, test, "
-                    "review, and deploy every candidate."
+                    "This process may construct an inert patch artifact, run static parsers, "
+                    "and orchestrate one externally approved fixed test profile in a local "
+                    "Docker boundary. A caretaker still must review, apply, merge, and deploy "
+                    "every candidate."
                 ),
                 "provenance_rule": (
                     "Caller labels, narratives, and evidence remain zero-weight claims. "
@@ -934,6 +966,13 @@ class SelfIterationSystem:
                     "Patch artifacts are whole-file replacements stored outside the source "
                     "repository. Static evaluation is heuristic and never makes a candidate "
                     "eligible for execution."
+                ),
+                "execution_rule": (
+                    "A separate authenticated approver must sign a ten-minute, one-use plan "
+                    "that binds a passing static evaluation, clean committed source, fixed "
+                    "test profile, and locally present digest-pinned Docker image. Execution "
+                    "has no host fallback, network, secrets, source writes, apply, merge, or "
+                    "deployment authority."
                 ),
             },
             "ledger": self._ledger_summary(),
@@ -967,6 +1006,7 @@ class SelfIterationSystem:
                 "provenance_contract": ledger["provenance_contract"],
                 "verification_contract": ledger["verification_contract"],
                 "sandbox_contract": ledger["sandbox_contract"],
+                "execution_contract": ledger["execution_contract"],
             }
         except SelfIterationError as exc:
             return {
@@ -1105,6 +1145,7 @@ class SelfIterationSystem:
             "provenance_contract": _provenance_contract(),
             "verification_contract": verification_contract(),
             "sandbox_contract": sandbox_contract(),
+            "execution_contract": execution_contract(),
             "migrations": [],
             "proposals": [],
         }
@@ -1222,19 +1263,46 @@ class SelfIterationSystem:
                     "type": "sandbox_schema_migrated",
                     "at": migrated_at,
                     "from_schema": VERIFICATION_SCHEMA_VERSION,
-                    "to_schema": SCHEMA_VERSION,
+                    "to_schema": SANDBOX_SCHEMA_VERSION,
                     "authority_granted": False,
                 }
             )
-        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["schema_version"] = SANDBOX_SCHEMA_VERSION
         ledger["sandbox_contract"] = sandbox_contract()
         ledger["migrations"].append(
             {
                 "type": "schema_migration",
                 "at": migrated_at,
                 "from_schema": VERIFICATION_SCHEMA_VERSION,
-                "to_schema": SCHEMA_VERSION,
+                "to_schema": SANDBOX_SCHEMA_VERSION,
                 "classification": "quarantined_patch_static_evaluation_only",
+            }
+        )
+        return ledger
+
+    def _migrate_v4(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Add signed isolated execution without adding apply authority."""
+        migrated_at = _isoformat(self._clock())
+        ledger = copy.deepcopy(data)
+        for proposal in ledger["proposals"]:
+            proposal.setdefault("events", []).append(
+                {
+                    "type": "execution_schema_migrated",
+                    "at": migrated_at,
+                    "from_schema": SANDBOX_SCHEMA_VERSION,
+                    "to_schema": SCHEMA_VERSION,
+                    "authority_granted": False,
+                }
+            )
+        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["execution_contract"] = execution_contract()
+        ledger["migrations"].append(
+            {
+                "type": "schema_migration",
+                "at": migrated_at,
+                "from_schema": SANDBOX_SCHEMA_VERSION,
+                "to_schema": SCHEMA_VERSION,
+                "classification": "externally_approved_isolated_execution_only",
             }
         )
         return ledger
@@ -1490,7 +1558,7 @@ class SelfIterationSystem:
                             "type": "sandbox_schema_migrated",
                             "at": event.get("at"),
                             "from_schema": VERIFICATION_SCHEMA_VERSION,
-                            "to_schema": SCHEMA_VERSION,
+                            "to_schema": SANDBOX_SCHEMA_VERSION,
                             "authority_granted": False,
                         }
                         or not isinstance(event.get("at"), str)
@@ -1660,6 +1728,234 @@ class SelfIterationSystem:
                         )
                     evaluation_ids.add(evaluation_id)
 
+    def _validate_v5(self, data: dict[str, Any]) -> None:
+        self._validate_v4(data)
+        if data.get("execution_contract") != execution_contract():
+            raise SelfIterationError(
+                "self-iteration ledger execution contract is malformed"
+            )
+        for proposal in data["proposals"]:
+            challenges: dict[str, dict[str, Any]] = {}
+            approval_ids: set[str] = set()
+            executions: set[str] = set()
+            executed_challenges: set[str] = set()
+            for event in proposal["events"]:
+                event_type = event.get("type")
+                if event_type == "execution_schema_migrated":
+                    if event != {
+                        "type": "execution_schema_migrated",
+                        "at": event.get("at"),
+                        "from_schema": SANDBOX_SCHEMA_VERSION,
+                        "to_schema": SCHEMA_VERSION,
+                        "authority_granted": False,
+                    } or not isinstance(event.get("at"), str):
+                        raise SelfIterationError(
+                            "self-iteration execution migration event is malformed"
+                        )
+                    continue
+                if event_type == "execution_approval_challenge_issued":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "approval",
+                        "approval_sha256",
+                        "requester_identity",
+                        "provenance",
+                        "execution_performed",
+                        "tests_executed",
+                        "live_source_writes",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration execution challenge fields are malformed"
+                        )
+                    try:
+                        approval = validate_execution_approval(event.get("approval"))
+                        approval_digest = execution_approval_sha256(approval)
+                    except ExecutionError as exc:
+                        raise SelfIterationError(
+                            "self-iteration execution approval is malformed"
+                        ) from exc
+                    challenge_id = approval["challenge_id"]
+                    active_verifiers = [
+                        attestation.get("verifier_identity")
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "verification_attested"
+                        and isinstance(recorded.get("attestation"), dict)
+                        and (attestation := recorded["attestation"]).get(
+                            "attestation_id"
+                        )
+                        in approval["active_attestation_ids"]
+                        and attestation.get("decision") == "verified"
+                    ]
+                    construction_matches = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "patch_candidate_constructed"
+                        and recorded.get("candidate_id") == approval["candidate_id"]
+                    ]
+                    evaluation_matches = [
+                        recorded
+                        for recorded in proposal["events"]
+                        if recorded.get("type") == "patch_candidate_evaluated"
+                        and recorded.get("candidate_id") == approval["candidate_id"]
+                        and recorded.get("evaluation_id") == approval["evaluation_id"]
+                    ]
+                    if (
+                        challenge_id in challenges
+                        or approval["approval_id"] in approval_ids
+                        or approval["proposal_id"] != proposal.get("id")
+                        or approval["proposal_content_sha256"]
+                        != proposal.get("content_sha256")
+                        or approval["source_fingerprint"]
+                        != proposal_subject_fingerprint(proposal)
+                        or len(active_verifiers)
+                        != len(approval["active_attestation_ids"])
+                        or approval["approver_identity"]
+                        in [proposal.get("proposer_identity"), *active_verifiers]
+                        or approval["result_signer"]["id"]
+                        in {
+                            identity.get("id")
+                            for identity in [
+                                proposal.get("proposer_identity"),
+                                approval["approver_identity"],
+                                *active_verifiers,
+                            ]
+                            if isinstance(identity, dict)
+                        }
+                        or len(construction_matches) != 1
+                        or construction_matches[0].get("candidate_sha256")
+                        != approval["candidate_sha256"]
+                        or construction_matches[0].get("active_attestation_ids")
+                        != approval["active_attestation_ids"]
+                        or len(evaluation_matches) != 1
+                        or evaluation_matches[0].get("evaluation_sha256")
+                        != approval["evaluation_sha256"]
+                        or evaluation_matches[0].get("status") != "static_checks_passed"
+                        or event.get("at") != approval["issued_at"]
+                        or event.get("approval_sha256") != approval_digest
+                        or event.get("execution_performed") is not False
+                        or event.get("tests_executed") is not False
+                        or event.get("live_source_writes") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration execution challenge violates its boundary"
+                        )
+                    self._validate_provenance(
+                        event.get("provenance"), label="execution challenge event"
+                    )
+                    requester = self._identity_from_provenance(
+                        event.get("provenance"),
+                        label="execution challenge event",
+                        required=True,
+                    )
+                    if requester != event.get("requester_identity"):
+                        raise SelfIterationError(
+                            "execution challenge requester is not bound to provenance"
+                        )
+                    challenges[challenge_id] = event
+                    approval_ids.add(approval["approval_id"])
+                    continue
+                if event_type == "isolated_execution_recorded":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "challenge_id",
+                        "approval_id",
+                        "approval_sha256",
+                        "approval_signature_sha256",
+                        "execution_id",
+                        "result_sha256",
+                        "candidate_id",
+                        "candidate_sha256",
+                        "evaluation_id",
+                        "evaluation_sha256",
+                        "approver_identity",
+                        "result_signer_id",
+                        "outcome",
+                        "execution_performed",
+                        "tests_executed",
+                        "cleanup_confirmed",
+                        "eligible_for_external_review",
+                        "eligible_for_apply",
+                        "live_source_writes",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration execution result fields are malformed"
+                        )
+                    challenge = challenges.get(event.get("challenge_id"))
+                    approval = challenge.get("approval") if challenge else None
+                    execution_id = event.get("execution_id")
+                    outcome = event.get("outcome")
+                    if (
+                        not isinstance(approval, dict)
+                        or not isinstance(execution_id, str)
+                        or not re.fullmatch(r"six-[0-9a-f]{32}", execution_id)
+                        or execution_id in executions
+                        or event.get("challenge_id") in executed_challenges
+                        or event.get("approval_id") != approval.get("approval_id")
+                        or event.get("approval_sha256")
+                        != challenge.get("approval_sha256")
+                        or not isinstance(event.get("approval_signature_sha256"), str)
+                        or event.get("candidate_id") != approval.get("candidate_id")
+                        or event.get("candidate_sha256")
+                        != approval.get("candidate_sha256")
+                        or event.get("evaluation_id") != approval.get("evaluation_id")
+                        or event.get("evaluation_sha256")
+                        != approval.get("evaluation_sha256")
+                        or event.get("approver_identity")
+                        != approval.get("approver_identity")
+                        or event.get("result_signer_id")
+                        != approval.get("result_signer", {}).get("id")
+                        or outcome
+                        not in {
+                            "passed",
+                            "failed",
+                            "timed_out",
+                            "output_limit_exceeded",
+                            "runner_error",
+                        }
+                        or not isinstance(event.get("execution_performed"), bool)
+                        or event.get("tests_executed")
+                        is not event.get("execution_performed")
+                        or not isinstance(event.get("cleanup_confirmed"), bool)
+                        or event.get("eligible_for_external_review")
+                        is not (outcome == "passed")
+                        or (
+                            outcome == "passed"
+                            and (
+                                event.get("execution_performed") is not True
+                                or event.get("cleanup_confirmed") is not True
+                            )
+                        )
+                        or (
+                            outcome
+                            in {
+                                "failed",
+                                "timed_out",
+                                "output_limit_exceeded",
+                            }
+                            and event.get("execution_performed") is not True
+                        )
+                        or event.get("eligible_for_apply") is not False
+                        or event.get("live_source_writes") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration execution result violates its boundary"
+                        )
+                    self._validate_hex_digest(
+                        event.get("result_sha256"), label="execution result"
+                    )
+                    self._validate_hex_digest(
+                        event.get("approval_signature_sha256"),
+                        label="execution approval signature",
+                    )
+                    executions.add(execution_id)
+                    executed_challenges.add(event["challenge_id"])
+
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.exists():
             return self._empty_ledger()
@@ -1690,10 +1986,20 @@ class SelfIterationSystem:
             self._validate_v3(data)
             data = self._migrate_v3(data)
             self._validate_v4(data)
+            version = SANDBOX_SCHEMA_VERSION
+            migrated = True
+        if version == SANDBOX_SCHEMA_VERSION:
+            self._validate_v4(data)
+            data = self._migrate_v4(data)
+            self._validate_v5(data)
+            version = SCHEMA_VERSION
             migrated = True
         elif version == SCHEMA_VERSION:
-            self._validate_v4(data)
+            self._validate_v5(data)
         else:
+            raise SelfIterationError("self-iteration ledger has an unsupported schema")
+        if version != SCHEMA_VERSION:
+            self._validate_v4(data)
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if migrated:
             self._save_ledger(data)
@@ -1917,6 +2223,182 @@ class SelfIterationSystem:
                 "candidate verification binding is stale; construct a new candidate"
             )
         return construction
+
+    @staticmethod
+    def _active_verifier_identities(
+        proposal: dict[str, Any], state: dict[str, Any]
+    ) -> list[dict[str, str | None]]:
+        active_ids = set(state.get("active_attestation_ids", []))
+        identities: list[dict[str, str | None]] = []
+        for event in proposal["events"]:
+            attestation = event.get("attestation")
+            if (
+                event.get("type") != "verification_attested"
+                or not isinstance(attestation, dict)
+                or attestation.get("attestation_id") not in active_ids
+                or attestation.get("decision") != "verified"
+            ):
+                continue
+            identity = attestation.get("verifier_identity")
+            if not isinstance(identity, dict):
+                raise SelfIterationError("active verifier identity is malformed")
+            identities.append(copy.deepcopy(identity))
+        if len(identities) != len(active_ids):
+            raise SelfIterationError("active verifier identity binding is incomplete")
+        return identities
+
+    def _passing_evaluation(
+        self,
+        *,
+        proposal: dict[str, Any],
+        candidate: dict[str, Any],
+        evaluation_id: str,
+        expected_evaluation_sha256: str,
+    ) -> dict[str, Any]:
+        matches = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "patch_candidate_evaluated"
+            and event.get("candidate_id") == candidate.get("candidate_id")
+            and event.get("evaluation_id") == evaluation_id
+        ]
+        if len(matches) != 1:
+            raise SelfIterationError(
+                "execution requires one recorded static evaluation event"
+            )
+        event = matches[0]
+        if (
+            event.get("status") != "static_checks_passed"
+            or event.get("eligible_for_external_review") is not True
+            or event.get("eligible_for_execution") is not False
+            or event.get("evaluation_sha256") != expected_evaluation_sha256
+        ):
+            raise SelfIterationError(
+                "execution requires the exact passing static evaluation digest"
+            )
+        try:
+            artifacts = self._patch_sandbox.load_evaluations(candidate["candidate_id"])
+        except PatchSandboxError as exc:
+            raise SelfIterationError(str(exc)) from exc
+        artifact_matches = [
+            item for item in artifacts if item.get("evaluation_id") == evaluation_id
+        ]
+        if len(artifact_matches) != 1:
+            raise SelfIterationError(
+                "recorded static evaluation artifact is unavailable"
+            )
+        evaluation = artifact_matches[0]
+        if (
+            evaluation.get("evaluation_sha256") != expected_evaluation_sha256
+            or evaluation.get("candidate_sha256") != candidate.get("candidate_sha256")
+            or evaluation.get("status") != "static_checks_passed"
+        ):
+            raise SelfIterationError(
+                "static evaluation artifact does not match its ledger event"
+            )
+        return evaluation
+
+    @staticmethod
+    def _execution_claim_record(
+        *,
+        approval: dict[str, Any],
+        approval_signature: str,
+        approver_identity: dict[str, Any],
+        claimed_at: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema": "anima.self_iteration.execution_claim.v1",
+            "challenge_id": approval["challenge_id"],
+            "approval_id": approval["approval_id"],
+            "approval_sha256": execution_approval_sha256(approval),
+            "approval_signature": approval_signature_record(
+                approval, approval_signature
+            ),
+            "proposal_id": approval["proposal_id"],
+            "candidate_id": approval["candidate_id"],
+            "approver_identity": copy.deepcopy(approver_identity),
+            "claimed_at": claimed_at,
+            "automatic_retry_allowed": False,
+            "authority_granted": False,
+        }
+
+    def _validate_execution_claim(
+        self, claim: Any, *, approval: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not isinstance(claim, dict) or set(claim) != {
+            "schema",
+            "challenge_id",
+            "approval_id",
+            "approval_sha256",
+            "approval_signature",
+            "proposal_id",
+            "candidate_id",
+            "approver_identity",
+            "claimed_at",
+            "automatic_retry_allowed",
+            "authority_granted",
+        }:
+            raise SelfIterationError("execution claim fields are malformed")
+        try:
+            parse_utc_timestamp(claim.get("claimed_at"), "claimed_at")
+        except VerificationError as exc:
+            raise SelfIterationError("execution claim timestamp is malformed") from exc
+        raw_signature = claim.get("approval_signature")
+        try:
+            expected_signature = approval_signature_record(
+                approval,
+                (
+                    raw_signature.get("value")
+                    if isinstance(raw_signature, dict)
+                    else None
+                ),
+            )
+        except ExecutionError as exc:
+            raise SelfIterationError("execution claim signature is malformed") from exc
+        if (
+            claim.get("schema") != "anima.self_iteration.execution_claim.v1"
+            or claim.get("challenge_id") != approval["challenge_id"]
+            or claim.get("approval_id") != approval["approval_id"]
+            or claim.get("approval_sha256") != execution_approval_sha256(approval)
+            or raw_signature != expected_signature
+            or claim.get("proposal_id") != approval["proposal_id"]
+            or claim.get("candidate_id") != approval["candidate_id"]
+            or claim.get("approver_identity") != approval["approver_identity"]
+            or claim.get("automatic_retry_allowed") is not False
+            or claim.get("authority_granted") is not False
+        ):
+            raise SelfIterationError("execution claim binding is malformed")
+        approval_signature = claim["approval_signature"]
+        try:
+            key = self._verifier_key_provider(
+                approval_signature["approver_id"], approval_signature["key_id"]
+            )
+        except Exception as exc:
+            raise SelfIterationError(
+                "execution approval signing key registry is unavailable"
+            ) from exc
+        if not isinstance(key, VerifierKey) or not verify_execution_approval_signature(
+            approval, approval_signature["value"], key
+        ):
+            raise SelfIterationError("execution claim approval signature is invalid")
+        return copy.deepcopy(claim)
+
+    @staticmethod
+    def _execution_challenge_event(
+        proposal: dict[str, Any], challenge_id: str
+    ) -> dict[str, Any]:
+        matches = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "execution_approval_challenge_issued"
+            and isinstance(event.get("approval"), dict)
+            and event["approval"].get("challenge_id") == challenge_id
+        ]
+        if len(matches) != 1:
+            raise SelfIterationError(
+                "challenge_id does not name one execution approval"
+            )
+        return matches[0]
 
     def propose(
         self,
@@ -2533,8 +3015,8 @@ class SelfIterationSystem:
             "candidate": candidate,
             "sandbox_contract": sandbox_contract(),
             "next_step": (
-                "Run evaluate_patch for non-executing static checks, then hand the "
-                "artifact to an independent reviewer or stronger isolated runner."
+                "Run evaluate_patch for non-executing static checks. Eligible Python era "
+                "candidates may then be submitted to a distinct approver with prepare_execution."
             ),
             "authority_granted": False,
         }
@@ -2656,8 +3138,9 @@ class SelfIterationSystem:
         return {
             "evaluation": evaluation,
             "next_step": (
-                "Static success permits external review only. Candidate execution and "
-                "tests require a later, stronger isolated runner."
+                "Static success permits external review only. An eligible Python era "
+                "candidate still requires a distinct signed prepare_execution approval "
+                "before its fixed tests may run in Docker."
             ),
             "authority_granted": False,
         }
@@ -2739,23 +3222,604 @@ class SelfIterationSystem:
             attestation_binding_current = candidate["proposal_binding"][
                 "active_attestation_ids"
             ] == verification_state.get("active_attestation_ids")
+            execution_profile_supported = execution_profile(
+                "display_era_pytest_v1"
+            ).supports([item["path"] for item in candidate["files"]])
+            static_pass_recorded = any(
+                item.get("status") == "static_checks_passed"
+                for item in recorded_evaluations
+            )
+            base_eligible = bool(
+                proposal["status"] == "ready_for_isolated_implementation"
+                and proposal.get("risk", {}).get("effective") == "low"
+                and verification_state["status"] == "verified"
+                and source_current
+                and attestation_binding_current
+            )
             artifact["current_state"] = {
                 "proposal_status": proposal["status"],
                 "verification_status": verification_state["status"],
                 "source_fingerprint_current": source_current,
                 "active_attestation_binding_current": attestation_binding_current,
-                "eligible_for_new_static_evaluation": bool(
-                    proposal["status"] == "ready_for_isolated_implementation"
-                    and proposal.get("risk", {}).get("effective") == "low"
-                    and verification_state["status"] == "verified"
-                    and source_current
-                    and attestation_binding_current
+                "eligible_for_new_static_evaluation": base_eligible,
+                "eligible_for_execution_approval": bool(
+                    base_eligible
+                    and static_pass_recorded
+                    and execution_profile_supported
                 ),
+                "execution_profile_supported": execution_profile_supported,
                 "eligible_for_execution": False,
                 "authority_granted": False,
             }
             artifact["sandbox_contract"] = sandbox_contract()
             return artifact
+
+    def prepare_execution(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+        expected_candidate_sha256: Any,
+        evaluation_id: Any,
+        expected_evaluation_sha256: Any,
+        execution_profile_id: Any = "display_era_pytest_v1",
+    ) -> dict[str, Any]:
+        """Issue a short-lived plan for one externally approved execution."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        candidate_digest = _required_text(
+            expected_candidate_sha256,
+            "expected_candidate_sha256",
+            max_length=64,
+        ).lower()
+        evaluation_id_text = _required_text(
+            evaluation_id, "evaluation_id", max_length=100
+        )
+        evaluation_digest = _required_text(
+            expected_evaluation_sha256,
+            "expected_evaluation_sha256",
+            max_length=64,
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", candidate_digest):
+            raise SelfIterationError("expected_candidate_sha256 is malformed")
+        if not re.fullmatch(r"sie-[0-9a-f]{32}", evaluation_id_text):
+            raise SelfIterationError("evaluation_id is malformed")
+        if not re.fullmatch(r"[0-9a-f]{64}", evaluation_digest):
+            raise SelfIterationError("expected_evaluation_sha256 is malformed")
+        try:
+            profile = execution_profile(execution_profile_id)
+        except ExecutionError as exc:
+            raise SelfIterationError(str(exc)) from exc
+
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                now = self._now_utc()
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=proposal["content_sha256"],
+                    now=now,
+                )
+                source_fingerprint = self._assert_current_proposal_source(proposal)
+                candidate, contents = self._patch_sandbox.execution_material(
+                    candidate_id_text
+                )
+                if candidate.get("candidate_sha256") != candidate_digest:
+                    raise SelfIterationError(
+                        "candidate digest changed; inspect the candidate again"
+                    )
+                self._assert_candidate_binding(
+                    proposal=proposal, candidate=candidate, state=state
+                )
+                self._passing_evaluation(
+                    proposal=proposal,
+                    candidate=candidate,
+                    evaluation_id=evaluation_id_text,
+                    expected_evaluation_sha256=evaluation_digest,
+                )
+                candidate_paths = [item["path"] for item in candidate["files"]]
+                if not profile.supports(candidate_paths):
+                    raise SelfIterationError(
+                        "candidate paths are outside the fixed execution profile"
+                    )
+
+                recorded_at = _isoformat(now)
+                receipt = self._server_provenance(recorded_at)
+                approver_identity = self._identity_from_provenance(
+                    receipt,
+                    label="execution approval request",
+                    required=True,
+                )
+                assert approver_identity is not None
+                proposer_identity = proposal.get("proposer_identity")
+                verifier_identities = self._active_verifier_identities(proposal, state)
+                if approver_identity == proposer_identity or approver_identity in (
+                    verifier_identities
+                ):
+                    raise SelfIterationError(
+                        "execution approver must differ from the proposer and active verifiers"
+                    )
+                approval_key = self._resolve_verifier_key(approver_identity)
+
+                result_signer_id = os.environ.get(RUNNER_SIGNER_ID_ENV)
+                if not isinstance(result_signer_id, str) or not result_signer_id:
+                    raise SelfIterationError(
+                        f"{RUNNER_SIGNER_ID_ENV} must name a dedicated result signer"
+                    )
+                participant_ids = {
+                    identity.get("id")
+                    for identity in [
+                        proposer_identity,
+                        approver_identity,
+                        *verifier_identities,
+                    ]
+                    if isinstance(identity, dict)
+                }
+                if result_signer_id in participant_ids:
+                    raise SelfIterationError(
+                        "execution result signer must differ from all proposal participants"
+                    )
+                result_signer_identity = {
+                    "kind": "service_signer",
+                    "id": result_signer_id,
+                    "issuer": None,
+                }
+                result_key = self._resolve_verifier_key(result_signer_identity)
+
+                runner_identity = self._isolation_runner.probe()
+                if self.repo_root is None:
+                    raise SelfIterationError("source repository not found")
+                revision = source_fingerprint.get("revision")
+                if not isinstance(revision, str):
+                    raise SelfIterationError(
+                        "isolated execution requires a committed source revision"
+                    )
+                snapshot = self._workspace_builder.fingerprint(
+                    repo_root=self.repo_root,
+                    expected_revision=revision,
+                    candidate_manifest=candidate,
+                    candidate_contents=contents,
+                )
+                approval = build_execution_approval(
+                    proposal_id=proposal_id_text,
+                    proposal_content_sha256=proposal["content_sha256"],
+                    source_fingerprint=source_fingerprint,
+                    active_attestation_ids=state["active_attestation_ids"],
+                    candidate_id=candidate_id_text,
+                    candidate_sha256=candidate_digest,
+                    evaluation_id=evaluation_id_text,
+                    evaluation_sha256=evaluation_digest,
+                    approver_identity=approver_identity,
+                    approval_key_id=approval_key.key_id,
+                    runner_identity=runner_identity,
+                    profile=profile,
+                    source_snapshot=snapshot,
+                    result_signer_id=result_signer_id,
+                    result_signer_key_id=result_key.key_id,
+                    issued_at=now,
+                )
+                event = {
+                    "type": "execution_approval_challenge_issued",
+                    "at": recorded_at,
+                    "approval": copy.deepcopy(approval),
+                    "approval_sha256": execution_approval_sha256(approval),
+                    "requester_identity": approver_identity,
+                    "provenance": receipt,
+                    "execution_performed": False,
+                    "tests_executed": False,
+                    "live_source_writes": False,
+                    "authority_granted": False,
+                }
+                proposal["events"].append(event)
+                self._save_ledger(ledger)
+            except (ExecutionError, PatchSandboxError) as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+        return {
+            "approval": approval,
+            "approval_sha256": execution_approval_sha256(approval),
+            "signing_input_b64": approval_signing_input_b64(approval),
+            "signature": {
+                "algorithm": SIGNATURE_ALGORITHM,
+                "key_id": approval_key.key_id,
+                "assurance": "symmetric_mac_server_verifiable",
+            },
+            "next_step": (
+                "The authenticated external approver signs these exact bytes, then submits "
+                "execute_candidate before expiry. The challenge is consumed before execution."
+            ),
+            "authority_granted": False,
+        }
+
+    def execute_candidate(
+        self,
+        *,
+        proposal_id: Any,
+        challenge_id: Any,
+        signature: Any,
+    ) -> dict[str, Any]:
+        """Consume an approval and run its exact candidate once in Docker."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        challenge_id_text = _required_text(challenge_id, "challenge_id", max_length=100)
+        signature_text = _required_text(signature, "signature", max_length=64).lower()
+        if not re.fullmatch(r"sixc-[0-9a-f]{32}", challenge_id_text):
+            raise SelfIterationError("execution challenge_id is malformed")
+        if not re.fullmatch(r"[0-9a-f]{64}", signature_text):
+            raise SelfIterationError("execution approval signature is malformed")
+
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                challenge_event = self._execution_challenge_event(
+                    proposal, challenge_id_text
+                )
+                approval = validate_execution_approval(challenge_event["approval"])
+                now = self._now_utc()
+                issued = parse_utc_timestamp(approval["issued_at"], "issued_at")
+                expires = parse_utc_timestamp(
+                    approval["challenge_expires_at"], "challenge_expires_at"
+                )
+                if now < issued - timedelta(seconds=30) or now > expires:
+                    raise SelfIterationError(
+                        "execution approval is expired or not yet valid"
+                    )
+                receipt = self._server_provenance(_isoformat(now))
+                approver_identity = self._identity_from_provenance(
+                    receipt,
+                    label="candidate execution request",
+                    required=True,
+                )
+                assert approver_identity is not None
+                if approver_identity != approval["approver_identity"]:
+                    raise SelfIterationError(
+                        "only the authenticated execution approver may consume this challenge"
+                    )
+                approval_key = self._resolve_verifier_key(
+                    approver_identity, approval["approval_key_id"]
+                )
+                if not verify_execution_approval_signature(
+                    approval, signature_text, approval_key
+                ):
+                    raise SelfIterationError("execution approval signature is invalid")
+
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=approval["proposal_content_sha256"],
+                    now=now,
+                )
+                source_fingerprint = self._assert_current_proposal_source(proposal)
+                if (
+                    source_fingerprint != approval["source_fingerprint"]
+                    or sorted(state["active_attestation_ids"])
+                    != approval["active_attestation_ids"]
+                ):
+                    raise SelfIterationError(
+                        "proposal source or verification changed after execution approval"
+                    )
+                candidate, contents = self._patch_sandbox.execution_material(
+                    approval["candidate_id"]
+                )
+                if candidate.get("candidate_sha256") != approval["candidate_sha256"]:
+                    raise SelfIterationError("approved candidate digest is stale")
+                self._assert_candidate_binding(
+                    proposal=proposal, candidate=candidate, state=state
+                )
+                self._passing_evaluation(
+                    proposal=proposal,
+                    candidate=candidate,
+                    evaluation_id=approval["evaluation_id"],
+                    expected_evaluation_sha256=approval["evaluation_sha256"],
+                )
+                result_signer = approval["result_signer"]
+                result_key = self._resolve_verifier_key(
+                    {
+                        "kind": "service_signer",
+                        "id": result_signer["id"],
+                        "issuer": None,
+                    },
+                    result_signer["key_id"],
+                )
+                if self._isolation_runner.probe() != approval["runner_identity"]:
+                    raise SelfIterationError(
+                        "Docker runner identity changed after execution approval"
+                    )
+                if self.repo_root is None:
+                    raise SelfIterationError("source repository not found")
+                current_snapshot = self._workspace_builder.fingerprint(
+                    repo_root=self.repo_root,
+                    expected_revision=approval["source_snapshot"]["revision"],
+                    candidate_manifest=candidate,
+                    candidate_contents=contents,
+                )
+                if current_snapshot != approval["source_snapshot"]:
+                    raise SelfIterationError(
+                        "source snapshot changed after execution approval"
+                    )
+
+                claimed_at = _isoformat(now)
+                claim = self._execution_claim_record(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    approver_identity=approver_identity,
+                    claimed_at=claimed_at,
+                )
+                self._patch_sandbox.claim_execution(
+                    approval["candidate_id"], challenge_id_text, claim
+                )
+
+                started_at = _isoformat(self._now_utc())
+                profile = execution_profile(approval["profile"]["profile_id"])
+                with self._workspace_builder.materialize(
+                    repo_root=self.repo_root,
+                    expected_revision=approval["source_snapshot"]["revision"],
+                    candidate_manifest=candidate,
+                    candidate_contents=contents,
+                    expected_snapshot=approval["source_snapshot"],
+                ) as workspace:
+                    runner_receipt = self._isolation_runner.run(
+                        workspace=workspace,
+                        profile=profile,
+                        expected_identity=approval["runner_identity"],
+                    )
+                finished_at = _isoformat(self._now_utc())
+                result = build_signed_execution_result(
+                    approval=approval,
+                    approval_signature=signature_text,
+                    approval_key=approval_key,
+                    runner_receipt=runner_receipt,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    signer_key=result_key,
+                )
+                validate_signed_execution_result(result, self._verifier_key_provider)
+                self._patch_sandbox.store_execution_result(
+                    approval["candidate_id"], result
+                )
+
+                fresh_ledger = self._load_ledger()
+                fresh_proposal = self._find_proposal(fresh_ledger, proposal_id_text)
+                self._execution_challenge_event(fresh_proposal, challenge_id_text)
+                if any(
+                    event.get("type") == "isolated_execution_recorded"
+                    and event.get("challenge_id") == challenge_id_text
+                    for event in fresh_proposal["events"]
+                ):
+                    raise SelfIterationError(
+                        "execution challenge already has a recorded result"
+                    )
+                result_event = {
+                    "type": "isolated_execution_recorded",
+                    "at": finished_at,
+                    "challenge_id": challenge_id_text,
+                    "approval_id": approval["approval_id"],
+                    "approval_sha256": execution_approval_sha256(approval),
+                    "approval_signature_sha256": hashlib.sha256(
+                        canonical_json_bytes(result["approval_signature"])
+                    ).hexdigest(),
+                    "execution_id": result["execution_id"],
+                    "result_sha256": result["result_sha256"],
+                    "candidate_id": approval["candidate_id"],
+                    "candidate_sha256": approval["candidate_sha256"],
+                    "evaluation_id": approval["evaluation_id"],
+                    "evaluation_sha256": approval["evaluation_sha256"],
+                    "approver_identity": approval["approver_identity"],
+                    "result_signer_id": result_signer["id"],
+                    "outcome": result["outcome"],
+                    "execution_performed": result["execution_performed"],
+                    "tests_executed": result["tests_executed"],
+                    "cleanup_confirmed": result["cleanup_confirmed"],
+                    "eligible_for_external_review": result[
+                        "eligible_for_external_review"
+                    ],
+                    "eligible_for_apply": False,
+                    "live_source_writes": False,
+                    "authority_granted": False,
+                }
+                fresh_proposal["events"].append(result_event)
+                self._save_ledger(fresh_ledger)
+            except (ExecutionError, PatchSandboxError) as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+        return {
+            "result": result,
+            "execution_contract": execution_contract(),
+            "next_step": (
+                "A passing signed result is eligible for external review only. It does not "
+                "apply, commit, merge, deploy, or grant authority."
+            ),
+            "authority_granted": False,
+        }
+
+    def execution_status(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+        include_output: Any = False,
+    ) -> dict[str, Any]:
+        """Reconcile approvals, one-use claims, signed results, and ledger events."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        if not isinstance(include_output, bool):
+            raise SelfIterationError("include_output must be a boolean")
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            if include_output:
+                receipt = self._server_provenance(_isoformat(self._now_utc()))
+                self._identity_from_provenance(
+                    receipt, label="execution output request", required=True
+                )
+            try:
+                candidate = self._patch_sandbox.load_manifest(candidate_id_text)
+                self._assert_candidate_binding(proposal=proposal, candidate=candidate)
+                raw_claims = self._patch_sandbox.load_execution_claims(
+                    candidate_id_text
+                )
+                raw_results = self._patch_sandbox.load_execution_results(
+                    candidate_id_text
+                )
+            except PatchSandboxError as exc:
+                raise SelfIterationError(str(exc)) from exc
+
+            challenge_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "execution_approval_challenge_issued"
+                and event.get("approval", {}).get("candidate_id") == candidate_id_text
+            ]
+            approvals = {
+                event["approval"]["challenge_id"]: event["approval"]
+                for event in challenge_events
+            }
+            claims: dict[str, dict[str, Any]] = {}
+            for claim in raw_claims:
+                challenge = claim.get("challenge_id")
+                approval = approvals.get(challenge)
+                if approval is None:
+                    raise SelfIterationError(
+                        "execution claim has no ledger-recorded approval"
+                    )
+                claims[challenge] = self._validate_execution_claim(
+                    claim, approval=approval
+                )
+            results: dict[str, dict[str, Any]] = {}
+            for raw_result in raw_results:
+                try:
+                    result = validate_signed_execution_result(
+                        raw_result, self._verifier_key_provider
+                    )
+                except ExecutionError as exc:
+                    raise SelfIterationError(
+                        "signed execution result artifact is invalid"
+                    ) from exc
+                challenge = result["challenge_id"]
+                approval = approvals.get(challenge)
+                if (
+                    approval is None
+                    or challenge not in claims
+                    or result["approval"] != approval
+                    or result["approval_signature"]
+                    != claims[challenge]["approval_signature"]
+                    or result["approval_id"] != approval["approval_id"]
+                    or result["approval_sha256"] != execution_approval_sha256(approval)
+                    or result["candidate_sha256"] != approval["candidate_sha256"]
+                    or result["evaluation_sha256"] != approval["evaluation_sha256"]
+                    or result["runner_identity"] != approval["runner_identity"]
+                    or result["profile"] != approval["profile"]
+                    or result["signature"]["signer_id"]
+                    != approval["result_signer"]["id"]
+                    or result["signature"]["key_id"]
+                    != approval["result_signer"]["key_id"]
+                    or challenge in results
+                ):
+                    raise SelfIterationError(
+                        "signed execution result does not match its one-use approval"
+                    )
+                results[challenge] = result
+
+            result_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "isolated_execution_recorded"
+                and event.get("candidate_id") == candidate_id_text
+            ]
+            recorded_by_challenge = {
+                event["challenge_id"]: event for event in result_events
+            }
+            now = self._now_utc()
+            statuses: list[dict[str, Any]] = []
+            for challenge_id_text, approval in approvals.items():
+                claim = claims.get(challenge_id_text)
+                result = results.get(challenge_id_text)
+                recorded = recorded_by_challenge.get(challenge_id_text)
+                if recorded is not None:
+                    expected_recorded = (
+                        None
+                        if result is None
+                        else {
+                            "type": "isolated_execution_recorded",
+                            "at": result["finished_at"],
+                            "challenge_id": challenge_id_text,
+                            "approval_id": approval["approval_id"],
+                            "approval_sha256": execution_approval_sha256(approval),
+                            "approval_signature_sha256": hashlib.sha256(
+                                canonical_json_bytes(result["approval_signature"])
+                            ).hexdigest(),
+                            "execution_id": result["execution_id"],
+                            "result_sha256": result["result_sha256"],
+                            "candidate_id": result["candidate_id"],
+                            "candidate_sha256": result["candidate_sha256"],
+                            "evaluation_id": result["evaluation_id"],
+                            "evaluation_sha256": result["evaluation_sha256"],
+                            "approver_identity": approval["approver_identity"],
+                            "result_signer_id": result["signature"]["signer_id"],
+                            "outcome": result["outcome"],
+                            "execution_performed": result["execution_performed"],
+                            "tests_executed": result["tests_executed"],
+                            "cleanup_confirmed": result["cleanup_confirmed"],
+                            "eligible_for_external_review": result[
+                                "eligible_for_external_review"
+                            ],
+                            "eligible_for_apply": False,
+                            "live_source_writes": False,
+                            "authority_granted": False,
+                        }
+                    )
+                    if recorded != expected_recorded:
+                        raise SelfIterationError(
+                            "ledger execution event does not match its signed result artifact"
+                        )
+                if result is not None and recorded is not None:
+                    state = "recorded"
+                elif result is not None:
+                    state = "signed_result_unledgered"
+                elif claim is not None:
+                    state = "claimed_result_indeterminate"
+                elif now > parse_utc_timestamp(
+                    approval["challenge_expires_at"], "challenge_expires_at"
+                ):
+                    state = "expired_unclaimed"
+                else:
+                    state = "awaiting_signature"
+                public_result: dict[str, Any] | None = None
+                if result is not None:
+                    public_result = copy.deepcopy(result)
+                    if not include_output:
+                        for stream_name in ("stdout", "stderr"):
+                            stream = public_result[stream_name]
+                            stream.pop("captured", None)
+                        public_result["output_omitted"] = True
+                statuses.append(
+                    {
+                        "challenge_id": challenge_id_text,
+                        "approval_id": approval["approval_id"],
+                        "approval_sha256": execution_approval_sha256(approval),
+                        "issued_at": approval["issued_at"],
+                        "challenge_expires_at": approval["challenge_expires_at"],
+                        "approver_identity": approval["approver_identity"],
+                        "profile_id": approval["profile"]["profile_id"],
+                        "state": state,
+                        "claim": copy.deepcopy(claim),
+                        "result": public_result,
+                        "ledger_recorded": recorded is not None,
+                        "automatic_retry_allowed": False,
+                        "eligible_for_apply": False,
+                        "authority_granted": False,
+                    }
+                )
+            return {
+                "proposal_id": proposal_id_text,
+                "candidate_id": candidate_id_text,
+                "candidate_sha256": candidate["candidate_sha256"],
+                "executions": statuses,
+                "output_included": include_output,
+                "execution_contract": execution_contract(),
+                "eligible_for_apply": False,
+                "authority_granted": False,
+            }
 
     def record_outcome(
         self,

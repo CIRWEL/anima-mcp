@@ -543,12 +543,17 @@ class TestPatchGatesAndIntegrity:
         ][0]
         on_disk = json.loads(setup.ledger.read_text())
 
-        assert migrated["events"][-1]["type"] == "sandbox_schema_migrated"
+        assert migrated["events"][-2]["type"] == "sandbox_schema_migrated"
+        assert migrated["events"][-2]["authority_granted"] is False
+        assert migrated["events"][-1]["type"] == "execution_schema_migrated"
         assert migrated["events"][-1]["authority_granted"] is False
-        assert on_disk["schema_version"] == 4
+        assert on_disk["schema_version"] == 5
         assert on_disk["sandbox_contract"] == sandbox_contract()
-        assert on_disk["migrations"][-1]["classification"] == (
+        assert on_disk["migrations"][-2]["classification"] == (
             "quarantined_patch_static_evaluation_only"
+        )
+        assert on_disk["migrations"][-1]["classification"] == (
+            "externally_approved_isolated_execution_only"
         )
 
     def test_ledger_cannot_flip_patch_authority_bits(self, sandbox_setup):
