@@ -1,4 +1,4 @@
-"""MCP handler for bounded code self-awareness and iteration proposals."""
+"""MCP handler for bounded code awareness and quarantined iteration artifacts."""
 
 from __future__ import annotations
 
@@ -32,8 +32,9 @@ def _claimed_input(
 async def handle_self_iteration(arguments: dict) -> list[TextContent]:
     """Inspect source structure or update the proposal/verification ledger.
 
-    This handler intentionally has no implementation, command-execution, Git
-    mutation, or deployment action.  Proposal fields remain inert JSON.
+    This handler intentionally has no live-source implementation,
+    command-execution, Git mutation, or deployment action. Proposal fields and
+    quarantined candidate files remain inert data.
     """
     action = arguments.get("action", "inspect")
     system = get_self_iteration_system()
@@ -121,6 +122,31 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 system.verification_status(proposal_id=arguments.get("proposal_id"))
             )
 
+        if action == "construct_patch":
+            result = system.construct_patch(
+                proposal_id=arguments.get("proposal_id"),
+                expected_content_sha256=arguments.get("expected_content_sha256"),
+                changes=arguments.get("changes"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "evaluate_patch":
+            result = system.evaluate_patch(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                expected_candidate_sha256=arguments.get("expected_candidate_sha256"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "patch_status":
+            return _text(
+                system.patch_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                    include_patch=arguments.get("include_patch", False),
+                )
+            )
+
         if action == "record_outcome":
             claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
                 arguments,
@@ -153,6 +179,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                     "prepare_verification",
                     "record_verification",
                     "verification_status",
+                    "construct_patch",
+                    "evaluate_patch",
+                    "patch_status",
                     "record_outcome",
                 ],
             }

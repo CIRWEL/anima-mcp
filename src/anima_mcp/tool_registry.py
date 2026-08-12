@@ -239,8 +239,9 @@ TOOLS = [
         name="self_iteration",
         description=(
             "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
-            "append independently signed verification, list proposals, or record a measured outcome. "
-            "Proposal-only: never edits source, executes commands, commits, or deploys."
+            "append independently signed verification, construct a quarantined whole-file patch artifact, "
+            "run non-executing static checks, list records, or record a measured outcome. Never edits live "
+            "source, executes candidate code or tests, commits, pushes, or deploys."
         ),
         inputSchema={
             "type": "object",
@@ -254,6 +255,9 @@ TOOLS = [
                         "prepare_verification",
                         "record_verification",
                         "verification_status",
+                        "construct_patch",
+                        "evaluate_patch",
+                        "patch_status",
                         "record_outcome",
                     ],
                     "description": "Operation to perform (default: inspect)",
@@ -406,6 +410,48 @@ TOOLS = [
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
                     "description": "Lowercase hexadecimal HMAC-SHA256 over the issued signing input",
+                },
+                "changes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["path", "expected_sha256", "content"],
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Exact proposal-bound repository path to replace in quarantine",
+                            },
+                            "expected_sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-fA-F]{64}$",
+                                "description": "SHA-256 of the current live source file",
+                            },
+                            "content": {
+                                "type": "string",
+                                "maxLength": 131072,
+                                "description": "Complete UTF-8 replacement content stored only in quarantine",
+                            },
+                        },
+                    },
+                    "description": "Whole-file candidate replacements for construct_patch; never applied to live source",
+                },
+                "candidate_id": {
+                    "type": "string",
+                    "pattern": "^sip-[0-9a-f]{32}$",
+                    "description": "Server-generated quarantined patch candidate identifier",
+                },
+                "expected_candidate_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Candidate manifest digest observed before evaluate_patch",
+                },
+                "include_patch": {
+                    "type": "boolean",
+                    "description": "Include the bounded unified diff in patch_status; requires authentication (default: false)",
+                    "default": False,
                 },
             },
         },
