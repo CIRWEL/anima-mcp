@@ -1069,10 +1069,19 @@ def get_fastmcp() -> "FastMCP":
             oauth_db_path = os.environ.get(
                 "ANIMA_OAUTH_DB_PATH", str(Path.home() / ".anima" / "oauth.db")
             )
+            oauth_allowed_redirect_uris = {
+                uri.strip()
+                for uri in os.environ.get(
+                    "ANIMA_OAUTH_ALLOWED_REDIRECT_URIS",
+                    "https://claude.ai/api/mcp/auth_callback",
+                ).split(",")
+                if uri.strip()
+            }
             oauth_provider = AnimaOAuthProvider(
                 secret=oauth_secret,
                 auto_approve=auto_approve,
                 db_path=oauth_db_path,
+                allowed_redirect_uris=oauth_allowed_redirect_uris,
             )
             # Resource server URL must include the MCP transport path so the
             # generated `.well-known/oauth-protected-resource/<path>` matches

@@ -1,7 +1,9 @@
 """Integration test: OAuth endpoints respond correctly on the HTTP server."""
 import os
-import pytest
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 
 class TestOAuthEndpointsExist:
@@ -26,6 +28,16 @@ class TestOAuthEndpointsExist:
         """Smoke test: provider can be created."""
         provider = self._build_app_with_oauth()
         assert provider is not None
+
+    def test_server_disables_dynamic_registration_by_default(self):
+        server_source = (
+            Path(__file__).resolve().parents[1]
+            / "src"
+            / "anima_mcp"
+            / "server.py"
+        ).read_text()
+        assert '"ANIMA_OAUTH_DYNAMIC_REGISTRATION", "false"' in server_source
+        assert "enabled=_oauth_dynamic_registration" in server_source
 
     @pytest.mark.asyncio
     async def test_full_oauth_flow_unit(self):

@@ -15,14 +15,17 @@ import json
 import secrets
 import sqlite3
 import time
+from collections.abc import Collection
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlencode
 
 from mcp.server.auth.provider import (
     AccessToken,
+    AuthorizeError,
     AuthorizationParams,
     OAuthToken,
+    RegistrationError,
 )
 from mcp.shared.auth import OAuthClientInformationFull
 
@@ -103,12 +106,18 @@ class AnimaOAuthProvider:
         refresh_token_ttl: int = 604800,
         auth_code_ttl: int = 300,
         db_path: str | Path | None = None,
+        allowed_redirect_uris: Collection[str] | None = None,
     ):
         self._secret = secret or secrets.token_hex(32)
         self._auto_approve = auto_approve
         self._access_token_ttl = access_token_ttl
         self._refresh_token_ttl = refresh_token_ttl
         self._auth_code_ttl = auth_code_ttl
+        self._allowed_redirect_uris = (
+            None
+            if allowed_redirect_uris is None
+            else frozenset(str(uri) for uri in allowed_redirect_uris)
+        )
 
         self._db_path: Path | None = Path(db_path) if db_path else None
         self._clients: dict[str, OAuthClientInformationFull] = {}
@@ -137,13 +146,17 @@ class AnimaOAuthProvider:
         with self._connect() as conn:
             for row in conn.execute("SELECT client_id, data FROM oauth_clients"):
                 try:
-                    self._clients[row["client_id"]] = OAuthClientInformationFull.model_validate_json(row["data"])
+                    client = OAuthClientInformationFull.model_validate_json(row["data"])
+                    if self._redirects_allowed(client):
+                        self._clients[row["client_id"]] = client
                 except Exception:
                     continue
 
             for row in conn.execute(
                 "SELECT token, client_id, scopes, expires_at, resource FROM oauth_access_tokens"
             ):
+                if row["client_id"] not in self._clients:
+                    continue
                 if row["expires_at"] and row["expires_at"] < now:
                     continue
                 self._access_tokens[row["token"]] = AccessToken(
@@ -158,6 +171,8 @@ class AnimaOAuthProvider:
             for row in conn.execute(
                 "SELECT token, client_id, scopes, created_at FROM oauth_refresh_tokens"
             ):
+                if row["client_id"] not in self._clients:
+                    continue
                 if row["created_at"] < refresh_cutoff:
                     continue
                 self._refresh_tokens[row["token"]] = RefreshTokenEntry(
@@ -234,10 +249,21 @@ class AnimaOAuthProvider:
 
     # --- Client Registration ---
 
+    def _redirects_allowed(self, client_info: OAuthClientInformationFull) -> bool:
+        if self._allowed_redirect_uris is None:
+            return True
+        requested = {str(uri) for uri in client_info.redirect_uris}
+        return bool(requested) and requested.issubset(self._allowed_redirect_uris)
+
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         return self._clients.get(client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
+        if not self._redirects_allowed(client_info):
+            raise RegistrationError(
+                error="invalid_redirect_uri",
+                error_description="Client redirect URI is not approved by this server",
+            )
         if not client_info.client_id:
             client_info.client_id = f"anima_{secrets.token_hex(16)}"
         if not client_info.client_secret:
@@ -252,6 +278,11 @@ class AnimaOAuthProvider:
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
+        if not self._auto_approve:
+            raise AuthorizeError(
+                error="access_denied",
+                error_description="Automatic authorization approval is disabled",
+            )
         code = secrets.token_hex(24)
 
         entry = AuthCodeEntry(

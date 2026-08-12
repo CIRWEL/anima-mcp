@@ -58,6 +58,22 @@ class TestClientPersistence:
         assert loaded.client_name == "Test"
         assert "https://example.com/cb" in [str(u) for u in loaded.redirect_uris]
 
+    async def test_unapproved_persisted_client_and_tokens_are_not_loaded(self, db_path):
+        unrestricted = AnimaOAuthProvider(secret="s", db_path=db_path)
+        client = _client()
+        await unrestricted.register_client(client)
+        token = await _complete_auth(unrestricted, client)
+
+        restricted = AnimaOAuthProvider(
+            secret="s",
+            db_path=db_path,
+            allowed_redirect_uris={"https://claude.ai/api/mcp/auth_callback"},
+        )
+
+        assert await restricted.get_client(client.client_id) is None
+        assert await restricted.load_access_token(token.access_token) is None
+        assert await restricted.load_refresh_token(client, token.refresh_token) is None
+
     async def test_unknown_client_after_restart_returns_none(self, db_path):
         AnimaOAuthProvider(secret="s", db_path=db_path)
         p2 = AnimaOAuthProvider(secret="s", db_path=db_path)
