@@ -18,27 +18,44 @@ from mcp.types import Tool, TextContent
 # Handler imports — all resolved via handlers/ package
 from .handlers import (
     # System operations
-    handle_git_pull, handle_system_service, handle_fix_ssh_port,
-    handle_deploy_from_github, handle_setup_tailscale, handle_system_power,
+    handle_git_pull,
+    handle_system_service,
+    handle_fix_ssh_port,
+    handle_deploy_from_github,
+    handle_setup_tailscale,
+    handle_system_power,
     # State queries
-    handle_get_state, handle_get_identity, handle_read_sensors,
-    handle_get_health, handle_get_calibration,
+    handle_get_state,
+    handle_get_identity,
+    handle_read_sensors,
+    handle_get_health,
+    handle_get_calibration,
     # Knowledge
-    handle_get_self_knowledge, handle_get_growth, handle_get_qa_insights,
-    handle_get_trajectory, handle_get_eisv_trajectory_state, handle_query,
+    handle_get_self_knowledge,
+    handle_get_growth,
+    handle_get_qa_insights,
+    handle_get_trajectory,
+    handle_get_eisv_trajectory_state,
+    handle_query,
     # Code self-awareness
     handle_self_iteration,
     # Display operations
-    handle_capture_screen, handle_diagnostics,
+    handle_capture_screen,
+    handle_diagnostics,
     handle_manage_display,
     # Communication
-    handle_lumen_qa, handle_post_message, handle_say,
-    handle_configure_voice, handle_primitive_feedback,
+    handle_lumen_qa,
+    handle_post_message,
+    handle_say,
+    handle_configure_voice,
+    handle_primitive_feedback,
     # Workflows
-    handle_unified_workflow, handle_next_steps, handle_set_calibration,
-    handle_get_lumen_context, handle_learning_visualization,
+    handle_unified_workflow,
+    handle_next_steps,
+    handle_set_calibration,
+    handle_get_lumen_context,
+    handle_learning_visualization,
 )
-
 
 # ============================================================
 # Tool Definitions
@@ -96,10 +113,23 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "message": {"type": "string", "description": "The message content"},
-                "source": {"type": "string", "enum": ["human", "agent"], "description": "Who is posting (default: agent)"},
-                "agent_name": {"type": "string", "description": "Agent name (if source=agent)"},
-                "responds_to": {"type": "string", "description": "REQUIRED when answering: question ID from get_questions"},
-                "client_session_id": {"type": "string", "description": "Your UNITARES session ID for verified identity resolution"}
+                "source": {
+                    "type": "string",
+                    "enum": ["human", "agent"],
+                    "description": "Who is posting (default: agent)",
+                },
+                "agent_name": {
+                    "type": "string",
+                    "description": "Agent name (if source=agent)",
+                },
+                "responds_to": {
+                    "type": "string",
+                    "description": "REQUIRED when answering: question ID from get_questions",
+                },
+                "client_session_id": {
+                    "type": "string",
+                    "description": "Your UNITARES session ID for verified identity resolution",
+                },
             },
             "required": ["message"],
         },
@@ -115,8 +145,14 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "updates": {"type": "object", "description": "Calibration fields to update (partial update)"},
-                "source": {"type": "string", "description": "Who is making the change (e.g. 'agent', 'human')"},
+                "updates": {
+                    "type": "object",
+                    "description": "Calibration fields to update (partial update)",
+                },
+                "source": {
+                    "type": "string",
+                    "description": "Who is making the change (e.g. 'agent', 'human')",
+                },
             },
             "required": ["updates"],
         },
@@ -134,8 +170,11 @@ TOOLS = [
             "properties": {
                 "include": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["identity", "anima", "sensors", "mood", "code"]},
-                    "description": "What to include (default: identity, anima, sensors, mood; code is opt-in)"
+                    "items": {
+                        "type": "string",
+                        "enum": ["identity", "anima", "sensors", "mood", "code"],
+                    },
+                    "description": "What to include (default: identity, anima, sensors, mood; code is opt-in)",
                 }
             },
         },
@@ -146,9 +185,30 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["switch", "face", "next", "previous", "list_eras", "get_era", "set_era", "set_auto_rotate", "resonance_critique", "calibrate_leds"], "description": "Action to perform"},
-                "screen": {"type": "string", "description": "Screen name (for action=switch) or era name (for action=set_era)"},
-                "enabled": {"type": "boolean", "description": "Enable or disable automatic era rotation (for action=set_auto_rotate)"}
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "switch",
+                        "face",
+                        "next",
+                        "previous",
+                        "list_eras",
+                        "get_era",
+                        "set_era",
+                        "set_auto_rotate",
+                        "resonance_critique",
+                        "calibrate_leds",
+                    ],
+                    "description": "Action to perform",
+                },
+                "screen": {
+                    "type": "string",
+                    "description": "Screen name (for action=switch) or era name (for action=set_era)",
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "description": "Enable or disable automatic era rotation (for action=set_auto_rotate)",
+                },
             },
             "required": ["action"],
             "allOf": [
@@ -168,10 +228,23 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["status", "configure"], "description": "Action (default: status)"},
-                "always_listening": {"type": "boolean", "description": "Enable/disable always-listening mode"},
-                "chattiness": {"type": "number", "description": "Chattiness level (0.0-1.0)"},
-                "wake_word": {"type": "string", "description": "Wake word for voice activation"},
+                "action": {
+                    "type": "string",
+                    "enum": ["status", "configure"],
+                    "description": "Action (default: status)",
+                },
+                "always_listening": {
+                    "type": "boolean",
+                    "description": "Enable/disable always-listening mode",
+                },
+                "chattiness": {
+                    "type": "number",
+                    "description": "Chattiness level (0.0-1.0)",
+                },
+                "wake_word": {
+                    "type": "string",
+                    "description": "Wake word for voice activation",
+                },
             },
         },
     ),
@@ -181,7 +254,10 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "text": {"type": "string", "description": "What Lumen should say/express"},
+                "text": {
+                    "type": "string",
+                    "description": "What Lumen should say/express",
+                },
             },
             "required": ["text"],
         },
@@ -207,8 +283,15 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "workflow": {"type": "string", "description": "Workflow name: health_check, full_system_check, learning_check, etc."},
-                "interval": {"type": "number", "description": "For monitor_and_govern: seconds between checks", "default": 60.0}
+                "workflow": {
+                    "type": "string",
+                    "description": "Workflow name: health_check, full_system_check, learning_check, etc.",
+                },
+                "interval": {
+                    "type": "number",
+                    "description": "For monitor_and_govern: seconds between checks",
+                    "default": 60.0,
+                },
             },
         },
     ),
@@ -225,13 +308,19 @@ TOOLS = [
             "properties": {
                 "category": {
                     "type": "string",
-                    "enum": ["environment", "temporal", "behavioral", "wellness", "social"],
-                    "description": "Filter by insight category (optional)"
+                    "enum": [
+                        "environment",
+                        "temporal",
+                        "behavioral",
+                        "wellness",
+                        "social",
+                    ],
+                    "description": "Filter by insight category (optional)",
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max insights to return (default: 10)"
-                }
+                    "description": "Max insights to return (default: 10)",
+                },
             },
         },
     ),
@@ -239,8 +328,11 @@ TOOLS = [
         name="self_iteration",
         description=(
             "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
-            "append independently signed verification, list proposals, or record a measured outcome. "
-            "Proposal-only: never edits source, executes commands, commits, or deploys."
+            "append independently signed verification, construct a quarantined whole-file patch artifact, "
+            "run non-executing static checks, or execute an eligible Python candidate once in a fixed, "
+            "networkless, digest-pinned Docker test profile after distinct signed approval. A further distinct "
+            "review may create one local dedicated branch through Git plumbing. Never executes candidate code "
+            "on the host, edits the live worktree, checks out, pushes, merges, restarts, or deploys."
         ),
         inputSchema={
             "type": "object",
@@ -254,6 +346,15 @@ TOOLS = [
                         "prepare_verification",
                         "record_verification",
                         "verification_status",
+                        "construct_patch",
+                        "evaluate_patch",
+                        "patch_status",
+                        "prepare_execution",
+                        "execute_candidate",
+                        "execution_status",
+                        "prepare_application",
+                        "apply_candidate",
+                        "application_status",
                         "record_outcome",
                     ],
                     "description": "Operation to perform (default: inspect)",
@@ -314,7 +415,12 @@ TOOLS = [
                 },
                 "claimed_source": {
                     "type": "string",
-                    "enum": ["self_observation", "test_failure", "caretaker", "governance"],
+                    "enum": [
+                        "self_observation",
+                        "test_failure",
+                        "caretaker",
+                        "governance",
+                    ],
                     "description": "Caller-claimed origin label. Stored as unverified, zero-weight data; server provenance is derived separately and cannot be supplied here",
                     "default": "self_observation",
                 },
@@ -348,7 +454,12 @@ TOOLS = [
                 },
                 "claimed_measurement_source": {
                     "type": "string",
-                    "enum": ["self_observation", "automated_test", "caretaker", "governance"],
+                    "enum": [
+                        "self_observation",
+                        "automated_test",
+                        "caretaker",
+                        "governance",
+                    ],
                     "description": "Caller-claimed measurement-origin label. It does not verify the outcome or evidence and receives no policy weight",
                     "default": "self_observation",
                 },
@@ -372,7 +483,13 @@ TOOLS = [
                         "properties": {
                             "kind": {
                                 "type": "string",
-                                "enum": ["artifact", "canary", "ci_run", "review", "test"],
+                                "enum": [
+                                    "artifact",
+                                    "canary",
+                                    "ci_run",
+                                    "review",
+                                    "test",
+                                ],
                             },
                             "uri": {"type": "string", "maxLength": 1000},
                             "sha256": {
@@ -399,13 +516,86 @@ TOOLS = [
                 },
                 "challenge_id": {
                     "type": "string",
-                    "pattern": "^sic-[0-9a-f]{32}$",
-                    "description": "One-time challenge returned by prepare_verification",
+                    "pattern": "^si(?:c|xc|ac)-[0-9a-f]{32}$",
+                    "description": "One-time challenge returned by a verification, execution, or application preparation action",
                 },
                 "signature": {
                     "type": "string",
                     "pattern": "^[0-9a-fA-F]{64}$",
-                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued signing input",
+                    "description": "Lowercase hexadecimal HMAC-SHA256 over the issued verification, execution, or application signing input",
+                },
+                "changes": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["path", "expected_sha256", "content"],
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "Exact proposal-bound repository path to replace in quarantine",
+                            },
+                            "expected_sha256": {
+                                "type": "string",
+                                "pattern": "^[0-9a-fA-F]{64}$",
+                                "description": "SHA-256 of the current live source file",
+                            },
+                            "content": {
+                                "type": "string",
+                                "maxLength": 131072,
+                                "description": "Complete UTF-8 replacement content stored only in quarantine",
+                            },
+                        },
+                    },
+                    "description": "Whole-file candidate replacements for construct_patch; never applied to live source",
+                },
+                "candidate_id": {
+                    "type": "string",
+                    "pattern": "^sip-[0-9a-f]{32}$",
+                    "description": "Server-generated quarantined patch candidate identifier",
+                },
+                "expected_candidate_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Candidate manifest digest observed before evaluate_patch",
+                },
+                "include_patch": {
+                    "type": "boolean",
+                    "description": "Include the bounded unified diff in patch_status; requires authentication (default: false)",
+                    "default": False,
+                },
+                "evaluation_id": {
+                    "type": "string",
+                    "pattern": "^sie-[0-9a-f]{32}$",
+                    "description": "Exact recorded passing static evaluation for prepare_execution",
+                },
+                "expected_evaluation_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Static evaluation digest observed before prepare_execution",
+                },
+                "execution_profile_id": {
+                    "type": "string",
+                    "enum": ["display_era_pytest_v1"],
+                    "description": "Server-owned fixed Docker test profile",
+                    "default": "display_era_pytest_v1",
+                },
+                "include_output": {
+                    "type": "boolean",
+                    "description": "Include bounded stdout/stderr prefixes in execution_status; requires authentication (default: false)",
+                    "default": False,
+                },
+                "execution_id": {
+                    "type": "string",
+                    "pattern": "^six-[0-9a-f]{32}$",
+                    "description": "Exact passing signed execution result for prepare_application",
+                },
+                "expected_execution_result_sha256": {
+                    "type": "string",
+                    "pattern": "^[0-9a-fA-F]{64}$",
+                    "description": "Signed execution result digest observed before prepare_application",
                 },
             },
         },
@@ -418,8 +608,19 @@ TOOLS = [
             "properties": {
                 "include": {
                     "type": "array",
-                    "items": {"type": "string", "enum": ["preferences", "relationships", "goals", "memories", "curiosities", "autobiography", "all"]},
-                    "description": "What to include (default: all)"
+                    "items": {
+                        "type": "string",
+                        "enum": [
+                            "preferences",
+                            "relationships",
+                            "goals",
+                            "memories",
+                            "curiosities",
+                            "autobiography",
+                            "all",
+                        ],
+                    },
+                    "description": "What to include (default: all)",
                 }
             },
         },
@@ -433,13 +634,20 @@ TOOLS = [
                 "limit": {
                     "type": "integer",
                     "description": "Max insights to return (default: 10)",
-                    "default": 10
+                    "default": 10,
                 },
                 "category": {
                     "type": "string",
-                    "enum": ["self", "sensations", "relationships", "existence", "world", "general"],
-                    "description": "Filter by insight category (optional)"
-                }
+                    "enum": [
+                        "self",
+                        "sensations",
+                        "relationships",
+                        "existence",
+                        "world",
+                        "general",
+                    ],
+                    "description": "Filter by insight category (optional)",
+                },
             },
         },
     ),
@@ -482,7 +690,11 @@ TOOLS = [
                     "enum": ["cognitive", "insights", "growth", "self"],
                     "description": "Query type: cognitive/insights adds self-knowledge, growth adds autobiography (default: cognitive)",
                 },
-                "limit": {"type": "integer", "description": "Max insights to return (default: 10)", "default": 10},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max insights to return (default: 10)",
+                    "default": 10,
+                },
             },
             "required": ["text"],
         },
@@ -525,7 +737,15 @@ TOOLS = [
                 "service": {
                     "type": "string",
                     "description": "Service name (rpi-connect, ssh, anima, etc)",
-                    "enum": ["rpi-connect", "rpi-connect-wayvnc", "anima", "anima-broker", "anima-mcp", "ssh", "sshd"],
+                    "enum": [
+                        "rpi-connect",
+                        "rpi-connect-wayvnc",
+                        "anima",
+                        "anima-broker",
+                        "anima-mcp",
+                        "ssh",
+                        "sshd",
+                    ],
                 },
                 "action": {
                     "type": "string",
@@ -675,6 +895,7 @@ HANDLERS = {
 
 try:
     from mcp.server import FastMCP
+
     HAS_FASTMCP = True
 except ImportError:
     HAS_FASTMCP = False
@@ -714,7 +935,9 @@ def _parse_csv_env_list(var_name: str, default: list[str]) -> list[str]:
 def _get_transport_security_settings() -> TransportSecuritySettings:
     """Build transport security settings from env with sane defaults."""
     allowed_hosts = _parse_csv_env_list("ANIMA_ALLOWED_HOSTS", _DEFAULT_ALLOWED_HOSTS)
-    allowed_origins = _parse_csv_env_list("ANIMA_ALLOWED_ORIGINS", _DEFAULT_ALLOWED_ORIGINS)
+    allowed_origins = _parse_csv_env_list(
+        "ANIMA_ALLOWED_ORIGINS", _DEFAULT_ALLOWED_ORIGINS
+    )
     return TransportSecuritySettings(
         enable_dns_rebinding_protection=True,
         allowed_hosts=allowed_hosts,
@@ -764,7 +987,7 @@ def _create_tool_wrapper(handler, tool_name: str, tool_def=None):
 
     # Extract parameter info from tool definition's inputSchema
     param_info = []
-    if tool_def and hasattr(tool_def, 'inputSchema'):
+    if tool_def and hasattr(tool_def, "inputSchema"):
         schema = tool_def.inputSchema
         properties = schema.get("properties", {})
         required = set(schema.get("required", []))
@@ -803,7 +1026,7 @@ def _create_tool_wrapper(handler, tool_name: str, tool_def=None):
 
             result = await handler(args)
             # Extract text from TextContent
-            if result and len(result) > 0 and hasattr(result[0], 'text'):
+            if result and len(result) > 0 and hasattr(result[0], "text"):
                 text = result[0].text
                 # Try to return as parsed JSON for structured output
                 try:
@@ -814,6 +1037,7 @@ def _create_tool_wrapper(handler, tool_name: str, tool_def=None):
         except Exception as e:
             print(f"[FastMCP] Tool {tool_name} error: {e}", file=sys.stderr, flush=True)
             import traceback
+
             traceback.print_exc()
             return {"error": str(e)}
 
@@ -839,8 +1063,12 @@ def get_fastmcp() -> "FastMCP":
             from .oauth_provider import AnimaOAuthProvider
 
             oauth_secret = os.environ.get("ANIMA_OAUTH_SECRET")
-            auto_approve = os.environ.get("ANIMA_OAUTH_AUTO_APPROVE", "true").lower() in ("true", "1", "yes")
-            oauth_db_path = os.environ.get("ANIMA_OAUTH_DB_PATH", str(Path.home() / ".anima" / "oauth.db"))
+            auto_approve = os.environ.get(
+                "ANIMA_OAUTH_AUTO_APPROVE", "true"
+            ).lower() in ("true", "1", "yes")
+            oauth_db_path = os.environ.get(
+                "ANIMA_OAUTH_DB_PATH", str(Path.home() / ".anima" / "oauth.db")
+            )
             oauth_provider = AnimaOAuthProvider(
                 secret=oauth_secret,
                 auto_approve=auto_approve,
@@ -875,7 +1103,11 @@ def get_fastmcp() -> "FastMCP":
             transport_security=_get_transport_security_settings(),
         )
 
-        print(f"[FastMCP] Registering {len(HANDLERS)} tools...", file=sys.stderr, flush=True)
+        print(
+            f"[FastMCP] Registering {len(HANDLERS)} tools...",
+            file=sys.stderr,
+            flush=True,
+        )
 
         # Register all tools dynamically from HANDLERS
         for tool_name, handler in HANDLERS.items():
@@ -917,6 +1149,7 @@ def create_server() -> Server:
         # Any MCP tool call = external interaction → wake Lumen
         try:
             from .accessors import _get_activity
+
             _activity = _get_activity()
             if _activity:
                 _activity.record_interaction()
@@ -924,10 +1157,17 @@ def create_server() -> Server:
             pass
         handler = HANDLERS.get(name)
         if not handler:
-            return [TextContent(type="text", text=json.dumps({
-                "error": f"Unknown tool: {name}",
-                "available": list(HANDLERS.keys()),
-            }))]
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(
+                        {
+                            "error": f"Unknown tool: {name}",
+                            "available": list(HANDLERS.keys()),
+                        }
+                    ),
+                )
+            ]
         return await handler(arguments or {})
 
     return server

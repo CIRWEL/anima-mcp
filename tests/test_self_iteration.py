@@ -90,7 +90,7 @@ class TestSourceAwareness:
     ):
         overview = system.inspect()
 
-        assert overview["autonomy_level"] == "proposal_only"
+        assert overview["autonomy_level"] == "reviewed_dedicated_branch_application"
         assert overview["source"]["available"] is True
         assert overview["source"]["manifest"]["file_count"] == 7
         assert len(overview["source"]["manifest"]["sha256"]) == 64
@@ -105,12 +105,24 @@ class TestSourceAwareness:
         assert overview["capabilities"]["accept_caller_supplied_provenance"] is False
         assert overview["capabilities"]["weight_unverified_ledger_claims"] is False
         assert overview["capabilities"]["prepare_signed_verification"] is True
+        assert overview["capabilities"]["construct_quarantined_patch_artifacts"] is True
+        assert overview["capabilities"]["run_nonexecuting_static_evaluation"] is True
         assert (
             overview["capabilities"]["verification_grants_implementation_authority"]
             is False
         )
         assert overview["capabilities"]["write_source"] is False
         assert overview["capabilities"]["execute_proposal_text"] is False
+        assert overview["capabilities"]["execute_candidate_code"] is True
+        assert overview["capabilities"]["execute_tests"] is True
+        assert overview["capabilities"]["create_reviewed_dedicated_branch"] is True
+        assert overview["capabilities"]["write_live_worktree"] is False
+        assert overview["capabilities"]["push"] is False
+        assert overview["capabilities"]["execute_candidate_code_on_host"] is False
+        assert (
+            overview["capabilities"]["execute_candidate_code_in_pinned_container"]
+            is True
+        )
         assert overview["capabilities"]["deploy"] is False
 
     def test_optional_file_manifest_is_bounded(self, system):
@@ -343,6 +355,9 @@ class TestProposalLedger:
         outcome = proposal["events"][1]
         migration = proposal["events"][2]
         verification_migration = proposal["events"][3]
+        sandbox_migration = proposal["events"][4]
+        execution_migration = proposal["events"][5]
+        application_migration = proposal["events"][6]
 
         assert "source" not in proposal
         assert proposal["source_claim"]["value"] == "governance"
@@ -359,11 +374,17 @@ class TestProposalLedger:
         assert migration["authority_granted"] is False
         assert verification_migration["type"] == "verification_schema_migrated"
         assert verification_migration["authority_granted"] is False
+        assert sandbox_migration["type"] == "sandbox_schema_migrated"
+        assert sandbox_migration["authority_granted"] is False
+        assert execution_migration["type"] == "execution_schema_migrated"
+        assert execution_migration["authority_granted"] is False
+        assert application_migration["type"] == "application_schema_migrated"
+        assert application_migration["authority_granted"] is False
         assert proposal["proposer_identity"] is None
         assert proposal["verification_state"]["status"] == "unverified"
 
         on_disk = json.loads(system.ledger_path.read_text())
-        assert on_disk["schema_version"] == 3
+        assert on_disk["schema_version"] == 6
         assert on_disk["provenance_contract"]["unverified_effective_weight"] == 0.0
         assert on_disk["verification_contract"]["verified_priority_eligible"] is True
         assert on_disk["migrations"] == [
@@ -380,6 +401,27 @@ class TestProposalLedger:
                 "from_schema": 2,
                 "to_schema": 3,
                 "classification": "verification_requires_signed_attestation",
+            },
+            {
+                "type": "schema_migration",
+                "at": "2026-08-11T21:30:00Z",
+                "from_schema": 3,
+                "to_schema": 4,
+                "classification": "quarantined_patch_static_evaluation_only",
+            },
+            {
+                "type": "schema_migration",
+                "at": "2026-08-11T21:30:00Z",
+                "from_schema": 4,
+                "to_schema": 5,
+                "classification": "externally_approved_isolated_execution_only",
+            },
+            {
+                "type": "schema_migration",
+                "at": "2026-08-11T21:30:00Z",
+                "from_schema": 5,
+                "to_schema": 6,
+                "classification": "reviewed_dedicated_branch_application_only",
             },
         ]
 
@@ -627,6 +669,15 @@ def test_tool_registry_exposes_only_bounded_self_iteration_actions():
         "prepare_verification",
         "record_verification",
         "verification_status",
+        "construct_patch",
+        "evaluate_patch",
+        "patch_status",
+        "prepare_execution",
+        "execute_candidate",
+        "execution_status",
+        "prepare_application",
+        "apply_candidate",
+        "application_status",
         "record_outcome",
     ]
     assert "implement" not in actions
@@ -638,6 +689,11 @@ def test_tool_registry_exposes_only_bounded_self_iteration_actions():
     assert "provenance" not in properties
     assert properties["verification_evidence"]["items"]["additionalProperties"] is False
     assert properties["signature"]["pattern"] == "^[0-9a-fA-F]{64}$"
+    assert properties["changes"]["maxItems"] == 3
+    assert properties["changes"]["items"]["additionalProperties"] is False
+    assert properties["candidate_id"]["pattern"] == "^sip-[0-9a-f]{32}$"
+    assert properties["execution_profile_id"]["enum"] == ["display_era_pytest_v1"]
+    assert properties["include_output"]["default"] is False
     assert "self_iteration" in HANDLERS
 
 
@@ -661,7 +717,7 @@ async def test_lumen_context_can_include_compact_code_awareness(system, monkeypa
 
     result = parse_result(await handle_get_lumen_context({"include": ["code"]}))
 
-    assert result["code"]["autonomy_level"] == "proposal_only"
+    assert result["code"]["autonomy_level"] == ("reviewed_dedicated_branch_application")
     assert result["code"]["source"]["available"] is True
     assert result["code"]["capabilities"]["write_source"] is False
     assert result["code"]["boundary_summary"]["protected_surface_count"] > 0

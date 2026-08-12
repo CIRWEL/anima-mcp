@@ -1,4 +1,4 @@
-"""MCP handler for bounded code self-awareness and iteration proposals."""
+"""MCP handler for bounded code awareness and isolated iteration artifacts."""
 
 from __future__ import annotations
 
@@ -32,8 +32,10 @@ def _claimed_input(
 async def handle_self_iteration(arguments: dict) -> list[TextContent]:
     """Inspect source structure or update the proposal/verification ledger.
 
-    This handler intentionally has no implementation, command-execution, Git
-    mutation, or deployment action.  Proposal fields remain inert JSON.
+    Candidate code can execute only through the fixed, externally approved
+    Docker boundary. A separately reviewed action may create one dedicated Git
+    branch through plumbing, but this handler has no host execution, live-source
+    write, checkout, push, merge, restart, or deployment action.
     """
     action = arguments.get("action", "inspect")
     system = get_self_iteration_system()
@@ -121,6 +123,88 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 system.verification_status(proposal_id=arguments.get("proposal_id"))
             )
 
+        if action == "construct_patch":
+            result = system.construct_patch(
+                proposal_id=arguments.get("proposal_id"),
+                expected_content_sha256=arguments.get("expected_content_sha256"),
+                changes=arguments.get("changes"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "evaluate_patch":
+            result = system.evaluate_patch(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                expected_candidate_sha256=arguments.get("expected_candidate_sha256"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "patch_status":
+            return _text(
+                system.patch_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                    include_patch=arguments.get("include_patch", False),
+                )
+            )
+
+        if action == "prepare_execution":
+            result = system.prepare_execution(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                expected_candidate_sha256=arguments.get("expected_candidate_sha256"),
+                evaluation_id=arguments.get("evaluation_id"),
+                expected_evaluation_sha256=arguments.get("expected_evaluation_sha256"),
+                execution_profile_id=arguments.get(
+                    "execution_profile_id", "display_era_pytest_v1"
+                ),
+            )
+            return _text({"success": True, **result})
+
+        if action == "execute_candidate":
+            result = system.execute_candidate(
+                proposal_id=arguments.get("proposal_id"),
+                challenge_id=arguments.get("challenge_id"),
+                signature=arguments.get("signature"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "execution_status":
+            return _text(
+                system.execution_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                    include_output=arguments.get("include_output", False),
+                )
+            )
+
+        if action == "prepare_application":
+            result = system.prepare_application(
+                proposal_id=arguments.get("proposal_id"),
+                candidate_id=arguments.get("candidate_id"),
+                execution_id=arguments.get("execution_id"),
+                expected_execution_result_sha256=arguments.get(
+                    "expected_execution_result_sha256"
+                ),
+            )
+            return _text({"success": True, **result})
+
+        if action == "apply_candidate":
+            result = system.apply_candidate(
+                proposal_id=arguments.get("proposal_id"),
+                challenge_id=arguments.get("challenge_id"),
+                signature=arguments.get("signature"),
+            )
+            return _text({"success": True, **result})
+
+        if action == "application_status":
+            return _text(
+                system.application_status(
+                    proposal_id=arguments.get("proposal_id"),
+                    candidate_id=arguments.get("candidate_id"),
+                )
+            )
+
         if action == "record_outcome":
             claimed_measurement_source, used_legacy_measurement_source = _claimed_input(
                 arguments,
@@ -153,6 +237,15 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                     "prepare_verification",
                     "record_verification",
                     "verification_status",
+                    "construct_patch",
+                    "evaluate_patch",
+                    "patch_status",
+                    "prepare_execution",
+                    "execute_candidate",
+                    "execution_status",
+                    "prepare_application",
+                    "apply_candidate",
+                    "application_status",
                     "record_outcome",
                 ],
             }
