@@ -75,6 +75,8 @@ ANIMA_ALLOWED_ORIGINS=http://127.0.0.1:*,http://localhost:*,https://lumen.cirwel
 - Dynamic registration is disabled by default. Existing registered clients and rotating
   refresh tokens continue to work; briefly enable it only while adding a new connector,
   then disable it and restart the mind service again.
+- `deploy.sh` refuses to run while dynamic registration remains enabled and verifies
+  after restart that the authorization-server metadata no longer advertises `/register`.
 - New clients are accepted only when every redirect URI exactly matches
   `ANIMA_OAUTH_ALLOWED_REDIRECT_URIS`.
 - Access and refresh tokens persist in `~/.anima/oauth.db` across service restarts.

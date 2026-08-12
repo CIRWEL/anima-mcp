@@ -48,10 +48,12 @@ def test_deploy_fails_closed_on_permissive_rest_and_hardens_state_modes():
     sync_at = script.index("Syncing code")
     assert security_at < sync_at
     assert "ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN" in script
+    assert "ANIMA_OAUTH_DYNAMIC_REGISTRATION" in script
     assert "permissive-no-token" in script
+    assert "registration_endpoint" in script
     assert 'chmod 700 "$HOME/.anima"' in script
     assert "chmod 600" in script
-    assert "strict REST mode verified" in script
+    assert "closed OAuth registration verified" in script
 
 
 def test_deploy_fails_closed_on_backup_restart_or_runtime_verification():

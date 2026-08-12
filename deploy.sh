@@ -174,6 +174,11 @@ if [ -f "$HOME/.anima/anima.env" ] && grep -Eiq "^[[:space:]]*ANIMA_HTTP_ALLOW_U
     echo "Set it to false before deploying" >&2
     exit 1
 fi
+if [ -f "$HOME/.anima/anima.env" ] && grep -Eiq "^[[:space:]]*ANIMA_OAUTH_DYNAMIC_REGISTRATION[[:space:]]*=[[:space:]]*(1|true|yes|on)[[:space:]]*(#.*)?$" "$HOME/.anima/anima.env"; then
+    echo "Refusing deploy: ANIMA_OAUTH_DYNAMIC_REGISTRATION leaves public client enrollment open" >&2
+    echo "Set it to false after connector onboarding and before deploying" >&2
+    exit 1
+fi
 chmod 700 "$HOME/.anima"
 for sensitive in "$HOME/.anima/anima.env" "$HOME/.anima/anima.env".* "$HOME/.anima/anima.db"* "$HOME/.anima/oauth.db"*; do
     [ ! -f "$sensitive" ] || chmod 600 "$sensitive"
@@ -263,12 +268,18 @@ while time.time()<end:
  except Exception:pass
  time.sleep(1)
 sys.exit(1)'
-    VERIFY_SECURITY_CODE='import json,sys,time,urllib.request;end=time.time()+45
+    VERIFY_SECURITY_CODE='import json,sys,time,urllib.error,urllib.request;end=time.time()+45
 while time.time()<end:
  try:
   with urllib.request.urlopen("http://127.0.0.1:8766/state",timeout=2) as response:state=json.load(response)
   mode=(state.get("api_security") or {}).get("mode")
-  if mode and mode!="permissive-no-token":sys.exit(0)
+  oauth_closed=True
+  try:
+   with urllib.request.urlopen("http://127.0.0.1:8766/.well-known/oauth-authorization-server",timeout=2) as response:metadata=json.load(response)
+   oauth_closed="registration_endpoint" not in metadata
+  except urllib.error.HTTPError as error:
+   oauth_closed=error.code==404
+  if mode and mode!="permissive-no-token" and oauth_closed:sys.exit(0)
  except Exception:pass
  time.sleep(1)
 sys.exit(1)'
@@ -290,7 +301,7 @@ sys.exit(1)'
         VERIFIED=false
     fi
     if [ "$VERIFIED" = true ]; then
-        echo -e "${GREEN}✓ Services active; fresh broker state and strict REST mode verified${NC}"
+        echo -e "${GREEN}✓ Services active; fresh state, strict REST, and closed OAuth registration verified${NC}"
     else
         echo -e "${RED}✗ Restart or post-deploy verification failed${NC}"
         echo "  Inspect: systemctl status anima-broker-ex anima-broker anima"
