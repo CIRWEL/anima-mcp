@@ -56,6 +56,11 @@ class ActivityManager:
         self._last_interaction_time: float = time.time()
         self._current_level: ActivityLevel = ActivityLevel.ACTIVE
         self._state_since: float = time.time()
+        # Per-call cadence for reduced-activity updates.  This must not be
+        # derived from wall-clock parity: the broker runs every ~2 seconds, so
+        # a ``time * 10 % 2`` gate can phase-lock on one residue and suppress
+        # every DROWSY update indefinitely.
+        self._reduced_update_cycle = 0
 
         # Sleep tracking
         self._sleep_sessions: List[dict] = []  # {start, end, duration_hours}
@@ -251,6 +256,9 @@ class ActivityManager:
 
         self._current_level = new_level
         self._state_since = time.time()
+        # Publish the first state after every transition, then begin the
+        # level-specific skip pattern from a known phase.
+        self._reduced_update_cycle = 0
 
         print(f"[Activity] {old_level.value} -> {new_level.value} ({reason})", file=sys.stderr, flush=True)
 
@@ -324,15 +332,22 @@ class ActivityManager:
         """
         Whether to skip this update cycle (for power saving).
 
-        When resting, we can skip some updates entirely.
+        When resting, we can skip some updates entirely.  The sequence is
+        call-count based rather than time based so it cannot alias with the
+        broker's fixed two-second loop and starve shared-memory heartbeats.
         """
+        if self._current_level == ActivityLevel.ACTIVE:
+            return False
+
+        cycle = self._reduced_update_cycle
+        self._reduced_update_cycle += 1
+
         if self._current_level == ActivityLevel.RESTING:
-            # Skip 2 out of 3 updates when resting
-            return (int(time.time() * 10) % 3) != 0
-        elif self._current_level == ActivityLevel.DROWSY:
-            # Skip 1 out of 2 updates when drowsy
-            return (int(time.time() * 10) % 2) != 0
-        return False
+            # Write immediately, then skip 2 out of each 3 updates.
+            return cycle % 3 != 0
+
+        # DROWSY: write immediately, then skip every other update.
+        return cycle % 2 != 0
 
     def get_status(self) -> dict:
         """Get current activity status for display/debugging."""

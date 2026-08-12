@@ -20,6 +20,7 @@ Covers:
 
 import json
 import signal
+import sqlite3
 import time
 import asyncio
 import concurrent.futures
@@ -131,10 +132,28 @@ class TestBrokerAgencyFlag:
         assert broker_agency_enabled() is False
 
 
+class TestBrokerVoiceFlag:
+    """Deployed audio ownership can be separated from standalone defaults."""
+
+    def test_standalone_defaults_to_legacy_voice_setting(self, monkeypatch):
+        from anima_mcp.stable_creature import broker_voice_enabled
+
+        monkeypatch.delenv("ANIMA_BROKER_VOICE_ENABLED", raising=False)
+        monkeypatch.delenv("ANIMA_VOICE_ENABLED", raising=False)
+        assert broker_voice_enabled() is True
+
+    def test_broker_specific_flag_takes_precedence(self, monkeypatch):
+        from anima_mcp.stable_creature import broker_voice_enabled
+
+        monkeypatch.setenv("ANIMA_VOICE_ENABLED", "true")
+        monkeypatch.setenv("ANIMA_BROKER_VOICE_ENABLED", "false")
+        assert broker_voice_enabled() is False
+
+
 class TestBrokerStartupIntegrity:
     """Identity and sensor ownership stay truthful during broker startup."""
 
-    def test_existing_identity_keeps_store_connection_open(self, tmp_path, monkeypatch):
+    def test_existing_identity_is_loaded_without_a_second_wake(self, tmp_path, monkeypatch):
         from anima_mcp.identity import IdentityStore
         from anima_mcp.stable_creature import _load_persistent_identity
 
@@ -146,12 +165,24 @@ class TestBrokerStartupIntegrity:
         monkeypatch.setenv("ANIMA_DB", str(db_path))
         monkeypatch.delenv("ANIMA_ID", raising=False)
 
-        identity, store = _load_persistent_identity()
-        try:
-            assert identity.creature_id == "persistent-creature-id"
-            assert store._connect().execute("SELECT 1").fetchone()[0] == 1
-        finally:
-            store.close()
+        with sqlite3.connect(db_path) as conn:
+            events_before = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            awakenings_before = conn.execute(
+                "SELECT total_awakenings FROM identity"
+            ).fetchone()[0]
+
+        identity = _load_persistent_identity()
+
+        with sqlite3.connect(db_path) as conn:
+            events_after = conn.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+            awakenings_after = conn.execute(
+                "SELECT total_awakenings FROM identity"
+            ).fetchone()[0]
+
+        assert identity.creature_id == "persistent-creature-id"
+        assert identity.total_awakenings == awakenings_before
+        assert events_after == events_before
+        assert awakenings_after == awakenings_before
 
     def test_shadow_mode_is_not_reported_as_direct_i2c_failure(self, tmp_path):
         from anima_mcp.stable_creature import _direct_i2c_initialization_failed

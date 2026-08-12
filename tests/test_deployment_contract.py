@@ -14,7 +14,9 @@ def test_systemd_units_pin_single_owners():
     assert 'Environment="ANIMA_CONFIG=/home/unitares-anima/.anima/anima_config.json"' in server
     assert 'Environment="ANIMA_CONFIG=/home/unitares-anima/.anima/anima_config.json"' in broker
     assert 'Environment="ANIMA_BROKER_AGENCY_ENABLED=false"' in broker
+    assert 'Environment="ANIMA_BROKER_VOICE_ENABLED=false"' in broker
     assert "Requires=anima-restore.service" in broker
+    assert "PartOf=anima.service" not in broker
 
 
 def test_deploy_syncs_core_units_before_restart():
@@ -28,6 +30,10 @@ def test_deploy_syncs_core_units_before_restart():
     assert "sudo install -m 0644" in script
     assert "sudo systemctl daemon-reload" in script
     assert "sudo systemctl enable anima-restore.service" in script
+    assert "scripts/deploy_elixir_broker.sh" in script
+    assert "anima-broker-ex" in script
+    assert "--exclude='anima_broker/_build'" in script
+    assert "--exclude='anima_broker/deps'" in script
 
 
 def test_deploy_fails_closed_on_backup_restart_or_runtime_verification():
@@ -57,6 +63,9 @@ def test_restore_quiesces_writers_and_restores_durable_event_inbox():
     assert "lumen-restore.XXXXXX" in script
     assert "--no-restart --skip-backup" in script
     assert "systemd/anima-restore.service" in script
+    assert "scripts/deploy_elixir_broker.sh" in script
+    assert "anima-broker-ex" in script
+    assert "/dev/shm/anima_state.shadow.json" in script
     assert ".restore-anima.db" in script
     assert "PRAGMA integrity_check" in script
     assert '"$BACKUP/learning_inbox/"' in script
@@ -123,7 +132,20 @@ def test_bootstrap_restarts_both_services_after_unit_install():
     install_at = script.index("Synchronizing core systemd units")
     restart_at = script.index("Restarting broker and anima services")
     assert install_at < restart_at
+    assert "deploy_elixir_broker.sh" in script
     assert '["sudo", "systemctl", "restart", "anima-broker", "anima"]' in script
+
+
+def test_elixir_deploy_is_change_aware_and_verifies_shadow_state():
+    script = (ROOT / "scripts" / "deploy_elixir_broker.sh").read_text()
+
+    assert ".source-sha256" in script
+    assert ".restart-required" in script
+    assert "mix compile --warnings-as-errors" in script
+    assert "mix release --overwrite" in script
+    assert "sudo systemctl restart anima-broker-ex" in script
+    assert "/dev/shm/anima_state.shadow.json" in script
+    assert "Elixir broker is active but did not publish fresh shadow state" in script
 
 
 def test_server_never_initializes_a_direct_sensor_backend():

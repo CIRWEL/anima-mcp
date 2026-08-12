@@ -45,7 +45,7 @@ sudo systemctl enable anima-broker anima
 # Broker must start first
 sudo systemctl start anima-broker
 sudo systemctl start anima
-sudo systemctl status anima-broker anima
+sudo systemctl status anima-broker-ex anima-broker anima
 ```
 
 ### 5. Verify
@@ -192,13 +192,16 @@ sudo systemctl status anima-broker anima
 # Logs
 sudo journalctl -u anima -f          # Follow MCP server
 sudo journalctl -u anima-broker -f   # Follow broker
+sudo journalctl -u anima-broker-ex -f # Follow Elixir sensor owner
 sudo journalctl -u anima -n 50       # Last 50 lines
 
 # Health
 curl http://localhost:8766/health
 
-# Update code (preferred)
-git pull && sudo systemctl restart anima-broker anima
+# Update directly on the Pi (also rebuilds changed Elixir release inputs)
+git pull
+./scripts/deploy_elixir_broker.sh
+sudo systemctl restart anima-broker anima
 
 # Or via deploy script from Mac
 ./deploy.sh
