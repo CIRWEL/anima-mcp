@@ -64,13 +64,19 @@ class TestConfigureVoice:
             is_speaking=False,
             last_heard=SimpleNamespace(text="hello"),
         )
-        voice = SimpleNamespace(is_running=True, chattiness=0.4, state=state)
+        voice = SimpleNamespace(
+            is_running=True,
+            chattiness=0.4,
+            state=state,
+            capabilities={"hearing": True, "speaking": False},
+        )
 
         with patch("anima_mcp.accessors._get_voice", return_value=voice):
             data = parse_result(await handle_configure_voice({"action": "status"}))
 
         assert data["action"] == "status"
         assert data["available"] is True
+        assert data["capabilities"] == {"hearing": True, "speaking": False}
         assert data["running"] is True
         assert data["is_listening"] is True
         assert data["last_heard"] == "hello"
@@ -507,6 +513,7 @@ class TestSayAndPrimitiveFeedbackEdges:
         voice_inner.say.assert_called_once()
         assert data["success"] is True
         assert data["mode"] == "audio"
+        assert data["audio_spoken"] is True
 
     async def test_primitive_feedback_confused_and_no_recent_paths(self):
         from anima_mcp.handlers.communication import handle_primitive_feedback

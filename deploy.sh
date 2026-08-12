@@ -172,6 +172,8 @@ rsync -avz \
     --exclude='.pytest_cache' \
     --exclude='.mypy_cache' \
     --exclude='htmlcov' \
+    --exclude='anima_broker/_build' \
+    --exclude='anima_broker/deps' \
     -e "ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new" \
     ./ "$PI_USER@$PI_HOST:$PI_PATH/"
 
@@ -187,12 +189,28 @@ fi
 # A code-only rsync left the live anima.service on its April 7 definition while
 # the checkout contained the April 28 I2C single-owner safeguard.
 echo ""
-echo -e "${BLUE}[2/4] Syncing core systemd units...${NC}"
+echo -e "${BLUE}[2/4] Syncing core systemd units and runtime releases...${NC}"
 if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
     "set -e; changed=0; for unit in anima-restore.service anima-broker.service anima.service; do src=$PI_PATH/systemd/\$unit; dst=/etc/systemd/system/\$unit; if ! cmp -s \"\$src\" \"\$dst\"; then sudo install -m 0644 \"\$src\" \"\$dst\"; changed=1; fi; done; if [ \"\$changed\" -eq 1 ]; then sudo systemctl daemon-reload; fi; sudo systemctl enable anima-restore.service >/dev/null"; then
     echo -e "${GREEN}✓ Core service definitions synchronized${NC}"
 else
     echo -e "${RED}✗ Could not synchronize core service definitions${NC}"
+    exit 1
+fi
+
+# The Elixir process is the deployed environmental-sensor owner. Its source is
+# rsynced with the Python tree, but a running OTP release does not consume that
+# source directly. Build and restart it only when its hashed release inputs or
+# unit changed; unconfigured development hosts are skipped.
+ELIXIR_DEPLOY_ARGS=""
+if [ "$RESTART" != true ]; then
+    ELIXIR_DEPLOY_ARGS="--no-restart"
+fi
+if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+    "bash $PI_PATH/scripts/deploy_elixir_broker.sh $ELIXIR_DEPLOY_ARGS"; then
+    echo -e "${GREEN}✓ Elixir sensor broker release synchronized${NC}"
+else
+    echo -e "${RED}✗ Elixir sensor broker synchronization failed${NC}"
     exit 1
 fi
 
@@ -211,12 +229,20 @@ while time.time()<end:
  except Exception:pass
  time.sleep(1)
 sys.exit(1)'
+    VERIFY_SHADOW_CODE='import json,os,sys,time;p="/dev/shm/anima_state.shadow.json";end=time.time()+15
+while time.time()<end:
+ try:
+  envelope=json.load(open(p));data=envelope.get("data",{});fresh=time.time()-os.path.getmtime(p)<15
+  if fresh and isinstance(data.get("readings"),dict):sys.exit(0)
+ except Exception:pass
+ time.sleep(1)
+sys.exit(1)'
     if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
-        "set -e; sudo systemctl restart anima-broker anima; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; python3 -c '$VERIFY_CODE'"; then
+        "set -e; sudo systemctl restart anima-broker anima; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; if grep -Eq '^[[:space:]]*ANIMA_ENV_SENSORS_FROM_SHM=[^[:space:]#]+' ~/.anima/anima.env 2>/dev/null; then systemctl is-active --quiet anima-broker-ex; python3 -c '$VERIFY_SHADOW_CODE'; fi; python3 -c '$VERIFY_CODE'"; then
         echo -e "${GREEN}✓ Services active; fresh broker state verified${NC}"
     else
         echo -e "${RED}✗ Restart or post-deploy verification failed${NC}"
-        echo "  Inspect: systemctl status anima-broker anima"
+        echo "  Inspect: systemctl status anima-broker-ex anima-broker anima"
         exit 1
     fi
 else
@@ -230,7 +256,7 @@ if [ "$SHOW_LOGS" = true ]; then
     echo -e "${BLUE}[4/4] Showing logs...${NC}"
     echo -e "${BLUE}=========================================${NC}"
     ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
-        "$PI_USER@$PI_HOST" "journalctl -u anima -u anima-broker -n 50 --no-pager" || \
+        "$PI_USER@$PI_HOST" "journalctl -u anima -u anima-broker -u anima-broker-ex -n 50 --no-pager" || \
         echo -e "${BLUE}ℹ Could not read logs${NC}"
 else
     echo ""
@@ -245,10 +271,10 @@ echo ""
 
 if [ "$SHOW_LOGS" = false ]; then
     echo "To view logs, run:"
-    echo "  ssh $PI_USER@$PI_HOST 'journalctl -u anima -u anima-broker -f'"
+    echo "  ssh $PI_USER@$PI_HOST 'journalctl -u anima -u anima-broker -u anima-broker-ex -f'"
     echo ""
 fi
 
 echo "To check status:"
-echo "  ssh $PI_USER@$PI_HOST 'systemctl status anima anima-broker'"
+echo "  ssh $PI_USER@$PI_HOST 'systemctl status anima-broker-ex anima-broker anima'"
 echo ""

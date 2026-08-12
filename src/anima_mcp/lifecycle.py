@@ -71,7 +71,16 @@ def _register_health_probes():
     _health.register("governance", probe=_gov_probe, stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
     _health.register("drawing", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and hasattr(_get_ctx().screen_renderer, '_canvas'), debounce_seconds=6.0)
     _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
-    _health.register("voice", probe=lambda: _get_ctx() and _get_ctx().voice_instance is not None, debounce_seconds=6.0)
+    def _voice_probe():
+        ctx = _get_ctx()
+        voice = ctx.voice_instance if ctx else None
+        return bool(
+            voice
+            and voice.is_running
+            and (voice.can_hear or voice.can_speak)
+        )
+
+    _health.register("voice", probe=_voice_probe, debounce_seconds=6.0)
     _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None, debounce_seconds=6.0)
 
     # Rate-of-change probes — bridge system_metrics → health

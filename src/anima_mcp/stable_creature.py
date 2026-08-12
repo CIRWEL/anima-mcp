@@ -63,7 +63,7 @@ from .display.leds.brightness import estimate_instantaneous_brightness
 # Agency LED brightness is communicated via shared memory.
 from .display.face import derive_face_state, face_to_ascii, EyeState
 # NOTE: LEDs are handled by MCP server, not broker (prevents I2C conflicts)
-from .identity import IdentityStore
+from .identity import CreatureIdentity
 from .db_paths import BROKER_AGENCY_DB, resolve_db_path
 from .unitares_bridge import UnitaresBridge
 from .governance_passthrough import (
@@ -261,6 +261,20 @@ def broker_agency_enabled() -> bool:
         "1", "true", "yes", "on",
     }
 
+
+def broker_voice_enabled() -> bool:
+    """Whether this body broker should own audio devices.
+
+    Standalone ``anima-creature`` keeps its historical voice default. The
+    deployed systemd unit disables it explicitly because the MCP mind service
+    is the sole voice owner; two processes probing the same microphone and
+    speaker is not a capability.
+    """
+    configured = os.environ.get("ANIMA_BROKER_VOICE_ENABLED")
+    if configured is None:
+        configured = os.environ.get("ANIMA_VOICE_ENABLED", "true")
+    return configured.strip().lower() in {"1", "true", "yes", "on"}
+
 # Global shutdown flag
 running = True
 
@@ -274,30 +288,58 @@ signal.signal(signal.SIGTERM, signal_handler)
 
 
 def _load_persistent_identity():
-    """Open the canonical identity store and wake its existing identity.
+    """Load the canonical identity without claiming an awakening.
 
-    ``IdentityStore._connect()`` owns and caches its connection. Callers must
-    not close the handle returned by that method while the store is still in
-    use; doing so leaves ``store._conn`` pointing at a closed SQLite object.
+    The MCP server owns the identity lifecycle and its SQLite writes. The body
+    broker only needs a snapshot for SHM metadata and experiential thresholds;
+    calling ``IdentityStore.wake()`` here made both services race through the
+    same write transaction at startup.
     """
-    db_path = resolve_db_path()
-    store = IdentityStore(db_path)
+    import sqlite3
+
+    db_path = Path(resolve_db_path())
     print(f"[StableCreature] Identity persistence: {db_path}")
 
-    anima_id = os.environ.get("ANIMA_ID")
-    if not anima_id:
-        conn = store._connect()
-        existing = conn.execute("SELECT creature_id FROM identity LIMIT 1").fetchone()
-        if existing:
-            anima_id = existing[0]
-            print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
+    uri = f"{db_path.resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, timeout=5.0)
+    conn.row_factory = sqlite3.Row
+    try:
+        anima_id = os.environ.get("ANIMA_ID")
+        if anima_id:
+            row = conn.execute(
+                "SELECT * FROM identity WHERE creature_id = ?", (anima_id,)
+            ).fetchone()
         else:
-            import uuid
+            row = conn.execute("SELECT * FROM identity LIMIT 1").fetchone()
 
-            anima_id = str(uuid.uuid4())
-            print(f"[StableCreature] Creating new identity: {anima_id[:8]}...")
+        if row is None:
+            raise LookupError("canonical identity has not been created yet")
 
-    return store.wake(anima_id), store
+        anima_id = row["creature_id"]
+        print(f"[StableCreature] Using existing identity: {anima_id[:8]}...")
+
+        row_keys = set(row.keys())
+        last_heartbeat_at = None
+        raw_heartbeat = row["last_heartbeat_at"] if "last_heartbeat_at" in row_keys else None
+        if raw_heartbeat:
+            try:
+                last_heartbeat_at = datetime.fromisoformat(raw_heartbeat)
+            except (TypeError, ValueError):
+                pass
+
+        return CreatureIdentity(
+            creature_id=anima_id,
+            born_at=datetime.fromisoformat(row["born_at"]),
+            total_awakenings=int(row["total_awakenings"] or 0),
+            total_alive_seconds=float(row["total_alive_seconds"] or 0.0),
+            name=row["name"],
+            name_history=json.loads(row["name_history"] or "[]"),
+            current_awakening_at=None,
+            last_heartbeat_at=last_heartbeat_at,
+            metadata=json.loads(row["metadata"] or "{}"),
+        )
+    finally:
+        conn.close()
 
 
 def _direct_i2c_initialization_failed(sensors) -> bool:
@@ -319,15 +361,13 @@ def run_creature():
     
     # Initialize components with error handling
     identity = None
-    store = None
+    db_path = str(resolve_db_path())
     try:
-        identity, store = _load_persistent_identity()
-        db_path = str(store.db_path)
+        identity = _load_persistent_identity()
     except Exception as e:
         print(f"[StableCreature] WARNING: Identity store failed ({e}) - using fallback identity")
         print("[StableCreature] Broker will continue (sensors -> shared memory). Server can repair DB.")
         import uuid
-        from .identity import CreatureIdentity
         anima_id = os.environ.get("ANIMA_ID") or str(uuid.uuid4())
         now = datetime.now()
         identity = CreatureIdentity(
@@ -341,7 +381,6 @@ def run_creature():
             last_heartbeat_at=None,
             metadata={},
         )
-        store = None  # No DB connection when using fallback
     
     # Initialize sensors - allow graceful degradation if hardware unavailable
     try:
@@ -402,11 +441,19 @@ def run_creature():
 
     # Initialize Voice (optional - Lumen's ability to hear and speak)
     voice = None
-    if VOICE_AVAILABLE and os.environ.get("ANIMA_VOICE_ENABLED", "true").lower() == "true":
+    if VOICE_AVAILABLE and broker_voice_enabled():
         try:
-            voice = AutonomousVoice()
-            voice.start()
-            print("[StableCreature] Voice active - Lumen can hear and speak")
+            candidate = AutonomousVoice()
+            if candidate.start():
+                voice = candidate
+                caps = voice.capabilities
+                print(
+                    "[StableCreature] Voice active "
+                    f"(hearing={'yes' if caps['hearing'] else 'no'}, "
+                    f"speaking={'yes' if caps['speaking'] else 'no'})"
+                )
+            else:
+                print("[StableCreature] Voice unavailable; body broker continuing silently")
         except Exception as e:
             print(f"[StableCreature] WARNING: Voice initialization failed: {e}")
             voice = None
@@ -1414,11 +1461,6 @@ def run_creature():
                 voice.stop()
             except Exception:
                 pass
-
-        # Persist store state first (synchronous SQLite, no event loop needed)
-        if store:
-            store.sleep()
-            store.close()
 
         # Close UNITARES bridge session while event loop is still running
         if bridge:

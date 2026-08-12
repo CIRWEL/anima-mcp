@@ -193,3 +193,31 @@ class TestActivityState:
         assert "duration_seconds" in status
         assert "last_interaction_seconds_ago" in status
         assert "settings" in status
+
+
+class TestReducedUpdateCadence:
+    """Reduced activity never phase-locks against the broker loop."""
+
+    def test_drowsy_alternates_by_call_count(self, manager):
+        manager._transition_to(ActivityLevel.DROWSY, "test")
+
+        with patch("anima_mcp.activity_state.time.time", return_value=1234.1):
+            decisions = [manager.should_skip_update() for _ in range(6)]
+
+        assert decisions == [False, True, False, True, False, True]
+
+    def test_resting_writes_once_per_three_calls(self, manager):
+        manager._transition_to(ActivityLevel.RESTING, "test")
+
+        with patch("anima_mcp.activity_state.time.time", return_value=1234.1):
+            decisions = [manager.should_skip_update() for _ in range(7)]
+
+        assert decisions == [False, True, True, False, True, True, False]
+
+    def test_transition_resets_to_an_immediate_write(self, manager):
+        manager._transition_to(ActivityLevel.DROWSY, "test")
+        assert manager.should_skip_update() is False
+        assert manager.should_skip_update() is True
+
+        manager._transition_to(ActivityLevel.RESTING, "test")
+        assert manager.should_skip_update() is False

@@ -103,6 +103,9 @@ def mock_voice():
 def autonomous():
     """AutonomousVoice with voice fully mocked."""
     mock_v = MagicMock(spec=LumenVoice)
+    mock_v.start.return_value = True
+    mock_v.can_hear = True
+    mock_v.can_speak = True
     av = AutonomousVoice(voice=mock_v)
     return av
 
@@ -1056,6 +1059,14 @@ class TestLumenVoiceInitialize:
             result = mock_voice.initialize()
         assert result is True
 
+    def test_initialize_reports_unavailable_when_both_engines_fail(self, mock_voice):
+        with patch.object(mock_voice._stt, "initialize", return_value=False), \
+             patch.object(mock_voice._tts, "initialize", return_value=False):
+            mock_voice._initialized = False
+            result = mock_voice.initialize()
+
+        assert result is False
+
 
 class TestLumenVoiceStartStop:
     """Test voice start/stop lifecycle."""
@@ -1074,10 +1085,20 @@ class TestLumenVoiceStartStop:
         result = mock_voice.start()
         assert result is True
 
-    def test_start_mic_failure(self, mock_voice):
+    def test_start_mic_failure_keeps_speaking_capability(self, mock_voice):
         with patch.object(mock_voice._mic, "start", return_value=False):
             result = mock_voice.start()
+        assert result is True
+        assert mock_voice.can_hear is False
+        assert mock_voice.can_speak is True
+
+    def test_start_fails_when_no_complete_audio_path_exists(self, mock_voice):
+        with patch.object(mock_voice._stt, "initialize", return_value=False), \
+             patch.object(mock_voice._tts, "initialize", return_value=False):
+            result = mock_voice.start()
+
         assert result is False
+        assert mock_voice.capabilities == {"hearing": False, "speaking": False}
 
     def test_stop_cleans_up(self, mock_voice):
         mock_voice._running = True
@@ -1096,6 +1117,8 @@ class TestLumenVoiceSay:
 
     def test_say_calls_tts_and_speaker(self, mock_voice):
         audio = b"\x00" * 100
+        mock_voice._tts_available = True
+        mock_voice._speaker_started = True
         with patch.object(mock_voice._tts, "set_from_anima_state"), \
              patch.object(mock_voice._tts, "synthesize", return_value=audio), \
              patch.object(mock_voice._speaker, "play"):
@@ -1103,6 +1126,8 @@ class TestLumenVoiceSay:
         assert mock_voice._state.last_spoken == "hello"
 
     def test_say_tts_returns_none(self, mock_voice):
+        mock_voice._tts_available = True
+        mock_voice._speaker_started = True
         with patch.object(mock_voice._tts, "set_from_anima_state"), \
              patch.object(mock_voice._tts, "synthesize", return_value=None), \
              patch.object(mock_voice._speaker, "play") as mock_play:
@@ -1111,11 +1136,17 @@ class TestLumenVoiceSay:
 
     def test_say_blocking_flag(self, mock_voice):
         audio = b"\x00" * 100
+        mock_voice._tts_available = True
+        mock_voice._speaker_started = True
         with patch.object(mock_voice._tts, "set_from_anima_state"), \
              patch.object(mock_voice._tts, "synthesize", return_value=audio), \
              patch.object(mock_voice._speaker, "play") as mock_play:
             mock_voice.say("hello", blocking=False)
         mock_play.assert_called_once_with(audio, sample_rate=22050, blocking=False)
+
+    def test_say_does_not_record_silent_output(self, mock_voice):
+        assert mock_voice.say("hello") is False
+        assert mock_voice.state.last_spoken is None
 
 
 class TestLumenVoiceAnimaState:
@@ -1423,11 +1454,17 @@ class TestAutonomousVoiceStartStop:
 
     def test_start_initializes_voice(self, autonomous):
         autonomous.start()
-        autonomous._voice.initialize.assert_called_once()
         autonomous._voice.set_on_hear.assert_called_once()
         autonomous._voice.start.assert_called_once()
         assert autonomous._running is True
         autonomous.stop()
+
+    def test_start_reports_unavailable_voice(self, autonomous):
+        autonomous._voice.start.return_value = False
+
+        assert autonomous.start() is False
+        assert autonomous.is_running is False
+        assert autonomous._thought_thread is None
 
     def test_start_idempotent(self, autonomous):
         autonomous._running = True

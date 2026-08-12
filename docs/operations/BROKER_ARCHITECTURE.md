@@ -16,11 +16,14 @@ Lumen's live body/mind path currently spans three systemd services:
    - Consumes fresh Elixir shadow readings and adds computational sensors
    - Writes the authoritative `/dev/shm/anima_state.json`
    - Sole writer for embodied learning snapshots
+   - Reads identity metadata without claiming an awakening or holding a writer connection
+   - Does not own microphone/speaker devices in the deployed systemd topology
    - Command: `anima-creature` (`stable_creature.py`)
 
 3. **`anima.service`** -- Lumen's **Mind** (MCP Server)
    - Reads from shared memory, serves MCP tools
    - Owns TFT display + LEDs
+   - Sole owner of identity wake/sleep persistence and deployed voice devices
    - Command: `anima --http` (`server.py`)
 
 **Key benefit:** Restart the MCP server without interrupting sensors or learning. No I2C conflicts.
@@ -45,6 +48,7 @@ anima-broker.service (Python body/state broker)
   - Writes preferences + self-model snapshots
   - Drains durable server learning events
   - Runs an in-memory, read-only metacognitive observer
+  - Reads identity metadata; never records a second wake/sleep lifecycle
   - Writes to shared memory
          |
          | /dev/shm/anima_state.json
@@ -54,6 +58,7 @@ anima.service (Mind)
   - Reads from shared memory
   - Owns TFT display + LEDs (exclusive I2C for display)
   - Owns the action policy and growth database
+  - Owns identity lifecycle persistence and optional microphone/speaker access
   - Owns metacognition baseline/curiosity persistence
   - Reads broker-owned learning snapshots
   - Provides MCP tools
@@ -63,7 +68,9 @@ anima.service (Mind)
 External MCP Clients (Claude Code, Cursor, Claude.ai)
 ```
 
-**Shared memory backends:** Prefers Redis if available, falls back to JSON file in `/dev/shm/`. Both are atomic and fast.
+**Shared memory backend:** Atomic JSON files in `/dev/shm/`. The Python live
+state uses `anima_state.json`; the Elixir sensor slice uses
+`anima_state.shadow.json`.
 
 ---
 
@@ -206,6 +213,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable anima-broker anima
 sudo systemctl start anima-broker anima
 ```
+
+Normal deployments use `scripts/deploy_elixir_broker.sh`. It hashes the Elixir
+release inputs, rebuilds only when they changed, carries a durable
+`.restart-required` marker across `--no-restart` deployments, and verifies a
+fresh shadow reading after any restart. This avoids both stale BEAM releases
+and gratuitous sensor interruptions.
 
 ---
 

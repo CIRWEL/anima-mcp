@@ -416,10 +416,12 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" "python3 -c '$REMOTE_DB_CHECK'" || {
     exit 1
 }
 
-# 5. Install and enable broker (sensors) + anima (MCP server)
-# Broker owns sensors, writes to shared memory; server owns DB (Option 1 - no contention)
-log "Installing systemd services (broker + anima)..."
-ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo install -m 0644 ~/anima-mcp/systemd/anima-restore.service /etc/systemd/system/anima-restore.service && sudo install -m 0644 ~/anima-mcp/systemd/anima-broker.service /etc/systemd/system/anima-broker.service && sudo install -m 0644 ~/anima-mcp/systemd/anima.service /etc/systemd/system/anima.service && sudo systemctl daemon-reload && sudo systemctl enable anima-restore anima-broker anima && sudo systemctl start anima-broker && sudo systemctl start anima"
+# 5. Install and enable every configured runtime owner. The deploy above used
+# --no-restart while state was being restored, so the Elixir helper now consumes
+# any pending release marker and verifies fresh shadow state before the Python
+# body and mind start.
+log "Installing systemd services (sensor owner + broker + anima)..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "set -e; sudo install -m 0644 ~/anima-mcp/systemd/anima-restore.service /etc/systemd/system/anima-restore.service; sudo install -m 0644 ~/anima-mcp/systemd/anima-broker.service /etc/systemd/system/anima-broker.service; sudo install -m 0644 ~/anima-mcp/systemd/anima.service /etc/systemd/system/anima.service; sudo systemctl daemon-reload; bash ~/anima-mcp/scripts/deploy_elixir_broker.sh; sudo systemctl enable anima-restore anima-broker anima; sudo systemctl start anima-broker; sudo systemctl start anima"
 
 # 5b. Install WiFi resilience stack (power management, watchdog, TCP tuning, hardware watchdog)
 log "Installing WiFi resilience services..."
@@ -521,12 +523,20 @@ while time.time()<end:
  except Exception:pass
  time.sleep(1)
 sys.exit(1)'
+VERIFY_SHADOW_CODE='import json,os,sys,time;p="/dev/shm/anima_state.shadow.json";end=time.time()+15
+while time.time()<end:
+ try:
+  envelope=json.load(open(p));data=envelope.get("data",{});fresh=time.time()-os.path.getmtime(p)<15
+  if fresh and isinstance(data.get("readings"),dict):sys.exit(0)
+ except Exception:pass
+ time.sleep(1)
+sys.exit(1)'
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" \
-    "set -e; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; python3 -c '$VERIFY_RUNTIME_CODE'" || {
+    "set -e; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; if grep -Eq '^[[:space:]]*ANIMA_ENV_SENSORS_FROM_SHM=[^[:space:]#]+' ~/.anima/anima.env 2>/dev/null; then systemctl is-active --quiet anima-broker-ex; python3 -c '$VERIFY_SHADOW_CODE'; fi; python3 -c '$VERIFY_RUNTIME_CODE'" || {
         log "  ERROR: restored services did not publish fresh broker state"
         exit 1
     }
-log "  broker + mind active; fresh shared state verified"
+log "  configured sensor owner + broker + mind active; fresh shared state verified"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-watchdog.timer" 2>/dev/null && log "  watchdog timer active" || log "  watchdog timer not running"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "crontab -l 2>/dev/null | grep -c 'anima-mcp/scripts'" | xargs -I{} log "  {} cron jobs installed"
 

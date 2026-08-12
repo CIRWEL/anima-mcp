@@ -73,6 +73,16 @@ def main():
         ["sudo", "systemctl", "daemon-reload"], timeout=15, check=True
     )
 
+    # The Elixir sensor owner executes a compiled OTP release, not the synced
+    # source tree. The helper is change-aware, skips unconfigured hosts, and
+    # verifies fresh shadow state before returning after a rebuild/restart.
+    print("Synchronizing Elixir sensor broker release...")
+    subprocess.run(
+        ["bash", str(REPO_ROOT / "scripts" / "deploy_elixir_broker.sh")],
+        timeout=600,
+        check=True,
+    )
+
     print("Restarting broker and anima services...")
     verification_started = time.time()
     subprocess.run(

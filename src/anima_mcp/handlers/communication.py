@@ -550,11 +550,12 @@ async def handle_say(arguments: dict) -> list[TextContent]:
         pass
 
     # Only use audio TTS if mode is "audio" or "both"
+    audio_spoken = False
     if VOICE_MODE in ("audio", "both"):
         voice = _get_voice()
         if voice and hasattr(voice, '_voice'):
             try:
-                voice._voice.say(text, blocking=False)
+                audio_spoken = bool(voice._voice.say(text, blocking=False))
             except Exception as e:
                 print(f"[Say] TTS error (text still posted): {e}", file=sys.stderr, flush=True)
 
@@ -564,7 +565,8 @@ async def handle_say(arguments: dict) -> list[TextContent]:
         "success": True,
         "said": text,
         "mode": VOICE_MODE,
-        "posted_to": "message_board"
+        "posted_to": "message_board",
+        "audio_spoken": audio_spoken,
     }))]
 
 
@@ -585,9 +587,14 @@ async def handle_configure_voice(arguments: dict) -> list[TextContent]:
 
     if action == "status":
         state = voice.state if hasattr(voice, 'state') else None
+        capabilities = voice.capabilities if hasattr(voice, "capabilities") else {
+            "hearing": False,
+            "speaking": False,
+        }
         return [TextContent(type="text", text=json.dumps({
             "action": "status",
-            "available": True,
+            "available": any(capabilities.values()),
+            "capabilities": capabilities,
             "running": voice.is_running,
             "is_listening": state.is_listening if state else False,
             "is_speaking": state.is_speaking if state else False,

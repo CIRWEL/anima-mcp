@@ -90,53 +90,87 @@ class LumenVoice:
         self._voice_thread: Optional[threading.Thread] = None
         self._initialized = False
         self._warnings_logged = False  # Suppress repeated warnings
+        self._stt_available = False
+        self._tts_available = False
+        self._mic_started = False
+        self._speaker_started = False
 
     def initialize(self) -> bool:
-        """Initialize all voice components."""
+        """Initialize speech engines and report whether either is usable."""
         # Only initialize once
         if self._initialized:
-            return True
+            return self._stt_available or self._tts_available
 
         print("[Voice] Initializing Lumen's voice...", file=sys.stderr, flush=True)
 
         # Initialize STT
-        stt_ok = self._stt.initialize()
-        if not stt_ok and not self._warnings_logged:
+        self._stt_available = self._stt.initialize()
+        if not self._stt_available and not self._warnings_logged:
             print("[Voice] Warning: STT not available (speech-to-text disabled)", file=sys.stderr, flush=True)
 
         # Initialize TTS
-        tts_ok = self._tts.initialize()
-        if not tts_ok and not self._warnings_logged:
+        self._tts_available = self._tts.initialize()
+        if not self._tts_available and not self._warnings_logged:
             print("[Voice] Warning: TTS not available (text-to-speech disabled)", file=sys.stderr, flush=True)
 
         self._warnings_logged = True
         self._initialized = True
 
-        print("[Voice] Voice system ready", file=sys.stderr, flush=True)
-        return True
+        available = self._stt_available or self._tts_available
+        if available:
+            print(
+                "[Voice] Speech engines ready "
+                f"(STT={'yes' if self._stt_available else 'no'}, "
+                f"TTS={'yes' if self._tts_available else 'no'})",
+                file=sys.stderr,
+                flush=True,
+            )
+        else:
+            print("[Voice] No speech engines available", file=sys.stderr, flush=True)
+        return available
 
     def start(self) -> bool:
-        """Start the voice system."""
+        """Start usable audio paths and return whether voice is operational."""
         if self._running:
             return True
 
-        # Start mic capture
-        if not self._mic.start():
-            print("[Voice] Failed to start microphone", file=sys.stderr, flush=True)
-            return False
+        self.initialize()
 
-        # Start speaker
-        self._speaker.start()
+        # Hearing requires both an STT engine and a live microphone. Speaking
+        # requires both a TTS engine and a live speaker. Partial capability is
+        # useful, but must not be described as full voice.
+        self._mic_started = bool(self._stt_available and self._mic.start())
+        if self._stt_available and not self._mic_started:
+            print("[Voice] Failed to start microphone", file=sys.stderr, flush=True)
+
+        self._speaker_started = bool(self._tts_available and self._speaker.start())
+        if self._tts_available and not self._speaker_started:
+            print("[Voice] Failed to start speaker", file=sys.stderr, flush=True)
 
         # Set up speech callbacks
-        self._mic.on_speech_start(self._on_speech_start)
-        self._mic.on_speech_end(self._on_speech_end)
+        if self._mic_started:
+            self._mic.on_speech_start(self._on_speech_start)
+            self._mic.on_speech_end(self._on_speech_end)
 
-        self._running = True
-        print("[Voice] Lumen is now listening", file=sys.stderr, flush=True)
+        self._running = self.can_hear or self.can_speak
+        if not self._running:
+            print(
+                "[Voice] Voice unavailable (hearing=no, speaking=no)",
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
+
+        print(
+            "[Voice] Voice active "
+            f"(hearing={'yes' if self.can_hear else 'no'}, "
+            f"speaking={'yes' if self.can_speak else 'no'})",
+            file=sys.stderr,
+            flush=True,
+        )
 
         # Announce we're ready (if speaking enabled)
-        if self._config.speak_responses:
+        if self._config.speak_responses and self.can_hear and self.can_speak:
             self.say("I'm listening")
 
         return True
@@ -146,11 +180,15 @@ class LumenVoice:
         self._running = False
 
         # Say goodbye
-        if self._config.speak_responses and self._tts.is_initialized:
+        if self._config.speak_responses and self.can_speak:
             self.say("Goodbye", blocking=True)
 
-        self._mic.stop()
-        self._speaker.stop()
+        if self._mic_started:
+            self._mic.stop()
+        if self._speaker_started:
+            self._speaker.stop()
+        self._mic_started = False
+        self._speaker_started = False
         print("[Voice] Voice system stopped", file=sys.stderr, flush=True)
 
     def _on_speech_start(self):
@@ -225,7 +263,7 @@ class LumenVoice:
         # For speed, we could pre-generate these
         self.say(ack, blocking=False)
 
-    def say(self, text: str, blocking: bool = True):
+    def say(self, text: str, blocking: bool = True) -> bool:
         """
         Have Lumen speak.
 
@@ -233,23 +271,25 @@ class LumenVoice:
             text: What to say
             blocking: Wait for speech to complete
         """
-        if not text:
-            return
+        if not text or not self.can_speak:
+            return False
 
         self._state.is_speaking = True
-        self._state.last_spoken = text
+        try:
+            # Adjust TTS based on anima state
+            self._tts.set_from_anima_state(self._warmth, self._clarity, self._stability)
 
-        # Adjust TTS based on anima state
-        self._tts.set_from_anima_state(self._warmth, self._clarity, self._stability)
+            # Synthesize
+            audio_bytes = self._tts.synthesize(text)
+            if not audio_bytes:
+                return False
 
-        # Synthesize
-        audio_bytes = self._tts.synthesize(text)
-
-        if audio_bytes:
             print(f"[Voice] Speaking: \"{text}\"", file=sys.stderr, flush=True)
             self._speaker.play(audio_bytes, sample_rate=22050, blocking=blocking)
-
-        self._state.is_speaking = False
+            self._state.last_spoken = text
+            return True
+        finally:
+            self._state.is_speaking = False
 
     def update_anima_state(self, warmth: float, clarity: float, stability: float):
         """Update anima state to affect voice characteristics."""
@@ -284,6 +324,21 @@ class LumenVoice:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def can_hear(self) -> bool:
+        """Whether microphone capture and speech recognition both started."""
+        return self._stt_available and self._mic_started
+
+    @property
+    def can_speak(self) -> bool:
+        """Whether synthesis and audio playback both started."""
+        return self._tts_available and self._speaker_started
+
+    @property
+    def capabilities(self) -> dict[str, bool]:
+        """Truthful, machine-readable voice capability status."""
+        return {"hearing": self.can_hear, "speaking": self.can_speak}
 
     @property
     def config(self) -> VoiceConfig:

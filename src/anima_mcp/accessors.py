@@ -451,13 +451,31 @@ def _get_voice():
         try:
             from .audio import AutonomousVoice
 
-            _cr._ctx.voice_instance = AutonomousVoice()
+            voice = AutonomousVoice()
 
             # Autonomous voice canned phrases ("I'm curious about something", etc.)
             # are not posted to message board — primitives are more authentic.
             # Voice system still runs for listening capability.
-            _cr._ctx.voice_instance.start()
-            print(f"[Server] Voice system initialized (mode={VOICE_MODE}, listening enabled)", file=sys.stderr, flush=True)
+            started = voice.start()
+            # Retain the attempted instance even when no audio path is usable;
+            # this prevents repeated dependency/device probes every ten loop
+            # iterations and lets status report exact capabilities.
+            _cr._ctx.voice_instance = voice
+            if started:
+                caps = voice.capabilities
+                print(
+                    f"[Server] Voice initialized (mode={VOICE_MODE}, "
+                    f"hearing={'yes' if caps['hearing'] else 'no'}, "
+                    f"speaking={'yes' if caps['speaking'] else 'no'})",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            else:
+                print(
+                    f"[Server] Voice unavailable (mode={VOICE_MODE}, text remains active)",
+                    file=sys.stderr,
+                    flush=True,
+                )
         except ImportError:
             print("[Server] Voice module not available (missing dependencies)", file=sys.stderr, flush=True)
             return None

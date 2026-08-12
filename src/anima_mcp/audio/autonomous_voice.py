@@ -91,23 +91,36 @@ class AutonomousVoice:
         self._on_autonomous_speech: Optional[Callable[[str, SpeechIntent], None]] = None
         self._get_response: Optional[Callable[[str], Optional[str]]] = None
 
-    def start(self):
-        """Start autonomous voice system."""
+    def start(self) -> bool:
+        """Start available voice paths and report whether any are usable."""
         if self._running:
-            return
+            return True
+
+        self._voice.set_on_hear(self._on_hear)
+        if not self._voice.start():
+            print(
+                "[AutonomousVoice] Voice unavailable; autonomous audio disabled",
+                file=sys.stderr,
+                flush=True,
+            )
+            return False
 
         self._running = True
 
-        # Initialize voice
-        self._voice.initialize()
-        self._voice.set_on_hear(self._on_hear)
-        self._voice.start()
+        # A hearing-only installation can still receive speech, but must not
+        # run a thought loop that records silent phrases as spoken.
+        if self.can_speak:
+            self._thought_thread = threading.Thread(target=self._thought_loop, daemon=True)
+            self._thought_thread.start()
 
-        # Start thought generation thread
-        self._thought_thread = threading.Thread(target=self._thought_loop, daemon=True)
-        self._thought_thread.start()
-
-        print("[AutonomousVoice] Lumen's voice is alive", file=sys.stderr, flush=True)
+        print(
+            "[AutonomousVoice] Voice active "
+            f"(hearing={'yes' if self.can_hear else 'no'}, "
+            f"speaking={'yes' if self.can_speak else 'no'})",
+            file=sys.stderr,
+            flush=True,
+        )
+        return True
 
     def stop(self):
         """Stop autonomous voice system."""
@@ -303,7 +316,7 @@ class AutonomousVoice:
 
     def _maybe_speak(self):
         """Decide if any pending thought should be spoken."""
-        if not self._pending_thoughts:
+        if not self.can_speak or not self._pending_thoughts:
             return
 
         now = time.time()
@@ -352,6 +365,9 @@ class AutonomousVoice:
 
     def _speak(self, thought: SpeechMoment):
         """Actually speak a thought."""
+        if not self.can_speak:
+            return
+
         # Skip if too similar to recent speech
         if self._is_phrase_recent(thought.text):
             print(f"[AutonomousVoice] Skipping (recently said similar): \"{thought.text}\"",
@@ -459,6 +475,23 @@ class AutonomousVoice:
     @property
     def is_running(self) -> bool:
         return self._running
+
+    @property
+    def can_hear(self) -> bool:
+        return bool(self._voice.can_hear)
+
+    @property
+    def can_speak(self) -> bool:
+        return bool(self._voice.can_speak)
+
+    @property
+    def capabilities(self) -> dict[str, bool]:
+        return {"hearing": self.can_hear, "speaking": self.can_speak}
+
+    @property
+    def state(self):
+        """Expose the underlying live voice state to status handlers."""
+        return self._voice.state
 
     @property
     def chattiness(self) -> float:

@@ -5,8 +5,6 @@ Wants=network-online.target
 Requires=anima-restore.service
 # Broker must start before MCP server (mind)
 Before=anima.service
-# PartOf: when anima is restarted (e.g. deploy), broker also restarts
-PartOf=anima.service
 # Prevent rapid restarts - wait for hardware to stabilize
 OnFailure=anima-broker-failed.service
 
@@ -32,6 +30,9 @@ Environment="ANIMA_GOVERNANCE_INTERVAL_SECONDS=180"
 # retained behind an explicit rollback flag but must not silently reopen its
 # second SQLite store or reinforce the server's pathways table.
 Environment="ANIMA_BROKER_AGENCY_ENABLED=false"
+# The MCP mind service owns microphone/speaker access. The body broker retains
+# standalone voice support, but must not become a second deployed audio owner.
+Environment="ANIMA_BROKER_VOICE_ENABLED=false"
 Environment="PYTHONUNBUFFERED=1"
 Environment="PYTHONIOENCODING=utf-8"
 Environment="LC_ALL=C.UTF-8"
