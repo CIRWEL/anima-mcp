@@ -286,20 +286,35 @@ sys.exit(1)'
     # Keep the short restart separate from the longer readiness checks.  A
     # transient SSH disconnect during verification must be retryable without
     # restarting Lumen again.
-    if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
-        "sudo systemctl restart anima-broker anima"; then
-        VERIFIED=false
-        for _attempt in 1 2 3; do
-            if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
-                "set -e; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; if grep -Eq '^[[:space:]]*ANIMA_ENV_SENSORS_FROM_SHM=[^[:space:]#]+' ~/.anima/anima.env 2>/dev/null; then systemctl is-active --quiet anima-broker-ex; python3 -c '$VERIFY_SHADOW_CODE'; fi; python3 -c '$VERIFY_CODE'; python3 -c '$VERIFY_SECURITY_CODE'"; then
-                VERIFIED=true
-                break
-            fi
-            sleep 2
-        done
-    else
-        VERIFIED=false
+    # Capture the old PIDs first. If WiFi drops while systemctl is restarting
+    # the services, a later readiness check may still prove that the requested
+    # restart completed. Requiring both PIDs to change prevents an untouched,
+    # already-healthy runtime from being mistaken for a successful deploy.
+    if ! OLD_PIDS=$(ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+        "printf '%s %s\n' \"\$(systemctl show anima-broker -p MainPID --value)\" \"\$(systemctl show anima -p MainPID --value)\""); then
+        echo -e "${RED}✗ Could not capture pre-restart service PIDs${NC}"
+        exit 1
     fi
+    read -r OLD_BROKER_PID OLD_ANIMA_PID <<< "$OLD_PIDS"
+    if [[ ! "$OLD_BROKER_PID" =~ ^[1-9][0-9]*$ ]] || [[ ! "$OLD_ANIMA_PID" =~ ^[1-9][0-9]*$ ]]; then
+        echo -e "${RED}✗ Invalid pre-restart service PIDs: broker=$OLD_BROKER_PID anima=$OLD_ANIMA_PID${NC}"
+        exit 1
+    fi
+
+    if ! ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+        "sudo systemctl restart anima-broker anima"; then
+        echo -e "${YELLOW}  Restart connection interrupted; verifying changed service PIDs${NC}"
+    fi
+
+    VERIFIED=false
+    for _attempt in 1 2 3; do
+        if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=6 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
+            "set -e; new_broker_pid=\$(systemctl show anima-broker -p MainPID --value); new_anima_pid=\$(systemctl show anima -p MainPID --value); test \"\$new_broker_pid\" -gt 0; test \"\$new_anima_pid\" -gt 0; test \"\$new_broker_pid\" != '$OLD_BROKER_PID'; test \"\$new_anima_pid\" != '$OLD_ANIMA_PID'; systemctl is-active --quiet anima-broker; systemctl is-active --quiet anima; systemctl show anima -p Environment --value | tr ' ' '\n' | grep -qx 'ANIMA_SENSORS_BACKEND=shm'; if grep -Eq '^[[:space:]]*ANIMA_ENV_SENSORS_FROM_SHM=[^[:space:]#]+' ~/.anima/anima.env 2>/dev/null; then systemctl is-active --quiet anima-broker-ex; python3 -c '$VERIFY_SHADOW_CODE'; fi; python3 -c '$VERIFY_CODE'; python3 -c '$VERIFY_SECURITY_CODE'"; then
+            VERIFIED=true
+            break
+        fi
+        sleep 2
+    done
     if [ "$VERIFIED" = true ]; then
         echo -e "${GREEN}✓ Services active; fresh state, strict REST, and closed OAuth registration verified${NC}"
     else

@@ -70,6 +70,13 @@ def test_deploy_fails_closed_on_backup_restart_or_runtime_verification():
     assert "/dev/shm/anima_state.json" in script
     assert "ServerAliveInterval=10" in script
     assert "for _attempt in 1 2 3" in script
+    assert "Could not capture pre-restart service PIDs" in script
+    assert "Restart connection interrupted; verifying changed service PIDs" in script
+    assert "new_broker_pid" in script
+    assert r'test \"\$new_broker_pid\" != ' in script
+    assert r'test \"\$new_anima_pid\" != ' in script
+    assert "'$OLD_BROKER_PID'" in script
+    assert "'$OLD_ANIMA_PID'" in script
     assert "Restart or post-deploy verification failed" in script
 
 
