@@ -1,14 +1,16 @@
 """Bounded source awareness and self-iteration proposals for Lumen.
 
-This module deliberately separates *understanding* and *requesting* a code
-change from implementing one.  The running creature may inspect a structural
-map of its source, persist an evidence-backed proposal, and record the measured
-outcome of an externally implemented change.  It never edits source, executes
-proposal text, invokes Git mutation commands, or deploys code.
+This module deliberately separates *understanding*, *requesting*, and
+constructing a quarantined patch from implementing one.  The running creature
+may inspect a structural map of its source, persist an evidence-backed
+proposal, construct a proposal-bound whole-file patch outside the repository,
+run non-executing static checks, and record the measured outcome of an
+externally implemented change.  It never edits live source, executes candidate
+code or proposal text, invokes Git mutation commands, or deploys code.
 
 The boundary is architectural rather than prompt-based: this module exposes no
-method that writes inside the repository.  Its only write is an atomic ledger
-under ``~/.anima``.
+method that writes inside the repository.  Its writes are an atomic ledger and
+quarantined artifacts under ``~/.anima`` by default.
 """
 
 from __future__ import annotations
@@ -44,14 +46,22 @@ from .self_iteration_verification import (
     evaluate_verification,
     parse_utc_timestamp,
     proposal_content_sha256,
+    proposal_subject_fingerprint,
     validate_evidence,
     validate_recorded_attestation,
     verification_contract,
     verifier_key_from_env,
     verify_attestation_signature,
 )
+from .self_iteration_sandbox import (
+    STATIC_EVALUATOR_ID,
+    PatchSandbox,
+    PatchSandboxError,
+    sandbox_contract,
+)
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+VERIFICATION_SCHEMA_VERSION = 3
 PROVENANCE_SCHEMA_VERSION = 2
 PROVENANCE_SCHEMA = "anima.self_iteration.provenance.v1"
 MAX_INSPECT_BYTES = 1_000_000
@@ -114,6 +124,7 @@ _PROTECTED_RULES: tuple[tuple[str, str], ...] = (
     ("src/anima_mcp/tool_registry.py", "capability boundary"),
     ("src/anima_mcp/handlers/system_ops.py", "deployment and system control"),
     ("src/anima_mcp/self_iteration.py", "self-iteration evaluator"),
+    ("src/anima_mcp/self_iteration_sandbox.py", "self-iteration evaluator"),
     ("src/anima_mcp/self_iteration_verification.py", "self-iteration evaluator"),
     ("src/anima_mcp/handlers/self_iteration.py", "self-iteration evaluator"),
     ("src/anima_mcp/anima.py", "embodied self-measurement boundary"),
@@ -552,6 +563,7 @@ class SelfIterationSystem:
         *,
         repo_root: Path | None = None,
         ledger_path: Path | None = None,
+        sandbox_root: Path | None = None,
         clock: Callable[[], datetime] = _utc_now,
         provenance_provider: Callable[
             [str], dict[str, Any]
@@ -560,9 +572,18 @@ class SelfIterationSystem:
     ) -> None:
         self.repo_root = repo_root.resolve() if repo_root else _discover_repo_root()
         self.ledger_path = ledger_path or Path.home() / ".anima" / "self_iteration.json"
+        self.sandbox_root = (
+            sandbox_root
+            if sandbox_root is not None
+            else Path.home() / ".anima" / "self_iteration_sandboxes"
+        )
         self._clock = clock
         self._provenance_provider = provenance_provider
         self._verifier_key_provider = verifier_key_provider
+        self._patch_sandbox = PatchSandbox(
+            repo_root=self.repo_root,
+            sandbox_root=self.sandbox_root,
+        )
         self._lock = threading.RLock()
 
     def _server_provenance(self, recorded_at: str) -> dict[str, Any]:
@@ -855,7 +876,7 @@ class SelfIterationSystem:
         manifest = self._manifest(include_files=include_files, file_limit=file_limit)
         return {
             "mode": "bounded_self_iteration",
-            "autonomy_level": "proposal_only",
+            "autonomy_level": "quarantined_patch_only",
             "runtime": {
                 "package": "anima-mcp",
                 "package_version": self._package_version(self.repo_root),
@@ -873,11 +894,15 @@ class SelfIterationSystem:
                 "record_measured_outcomes": True,
                 "prepare_signed_verification": True,
                 "record_signed_verification": True,
+                "construct_quarantined_patch_artifacts": True,
+                "run_nonexecuting_static_evaluation": True,
                 "accept_caller_supplied_provenance": False,
                 "weight_unverified_ledger_claims": False,
                 "verification_grants_implementation_authority": False,
                 "write_source": False,
                 "execute_proposal_text": False,
+                "execute_candidate_code": False,
+                "execute_tests": False,
                 "commit_or_push": False,
                 "deploy": False,
             },
@@ -891,8 +916,9 @@ class SelfIterationSystem:
                     for pattern, reason in _AUTO_ELIGIBLE_RULES
                 ],
                 "implementation_rule": (
-                    "A separate caretaker or isolated runner must implement, test, "
-                    "review, and deploy every proposal."
+                    "This process may construct an inert patch artifact and run static "
+                    "parsers. A separate isolated runner or caretaker must execute, test, "
+                    "review, and deploy every candidate."
                 ),
                 "provenance_rule": (
                     "Caller labels, narratives, and evidence remain zero-weight claims. "
@@ -903,6 +929,11 @@ class SelfIterationSystem:
                     "A valid HMAC attestation must bind a distinct authenticated verifier, "
                     "proposal digest, source fingerprint, evidence digests, and expiry. "
                     "Verification never grants source-editing, merge, or deployment authority."
+                ),
+                "sandbox_rule": (
+                    "Patch artifacts are whole-file replacements stored outside the source "
+                    "repository. Static evaluation is heuristic and never makes a candidate "
+                    "eligible for execution."
                 ),
             },
             "ledger": self._ledger_summary(),
@@ -935,6 +966,7 @@ class SelfIterationSystem:
                 "schema_version": ledger["schema_version"],
                 "provenance_contract": ledger["provenance_contract"],
                 "verification_contract": ledger["verification_contract"],
+                "sandbox_contract": ledger["sandbox_contract"],
             }
         except SelfIterationError as exc:
             return {
@@ -1072,6 +1104,7 @@ class SelfIterationSystem:
             "schema_version": SCHEMA_VERSION,
             "provenance_contract": _provenance_contract(),
             "verification_contract": verification_contract(),
+            "sandbox_contract": sandbox_contract(),
             "migrations": [],
             "proposals": [],
         }
@@ -1161,20 +1194,47 @@ class SelfIterationSystem:
                     "type": "verification_schema_migrated",
                     "at": migrated_at,
                     "from_schema": PROVENANCE_SCHEMA_VERSION,
-                    "to_schema": SCHEMA_VERSION,
+                    "to_schema": VERIFICATION_SCHEMA_VERSION,
                     "verification_status": "unverified",
                     "authority_granted": False,
                 }
             )
-        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["schema_version"] = VERIFICATION_SCHEMA_VERSION
         ledger["verification_contract"] = verification_contract()
         ledger["migrations"].append(
             {
                 "type": "schema_migration",
                 "at": migrated_at,
                 "from_schema": PROVENANCE_SCHEMA_VERSION,
-                "to_schema": SCHEMA_VERSION,
+                "to_schema": VERIFICATION_SCHEMA_VERSION,
                 "classification": "verification_requires_signed_attestation",
+            }
+        )
+        return ledger
+
+    def _migrate_v3(self, data: dict[str, Any]) -> dict[str, Any]:
+        """Declare the quarantined artifact boundary without granting authority."""
+        migrated_at = _isoformat(self._clock())
+        ledger = copy.deepcopy(data)
+        for proposal in ledger["proposals"]:
+            proposal.setdefault("events", []).append(
+                {
+                    "type": "sandbox_schema_migrated",
+                    "at": migrated_at,
+                    "from_schema": VERIFICATION_SCHEMA_VERSION,
+                    "to_schema": SCHEMA_VERSION,
+                    "authority_granted": False,
+                }
+            )
+        ledger["schema_version"] = SCHEMA_VERSION
+        ledger["sandbox_contract"] = sandbox_contract()
+        ledger["migrations"].append(
+            {
+                "type": "schema_migration",
+                "at": migrated_at,
+                "from_schema": VERIFICATION_SCHEMA_VERSION,
+                "to_schema": SCHEMA_VERSION,
+                "classification": "quarantined_patch_static_evaluation_only",
             }
         )
         return ledger
@@ -1399,6 +1459,207 @@ class SelfIterationSystem:
                             "self-iteration attestation signature is malformed"
                         )
 
+    @staticmethod
+    def _validate_hex_digest(value: Any, *, label: str) -> None:
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise SelfIterationError(f"self-iteration {label} digest is malformed")
+
+    def _validate_v4(self, data: dict[str, Any]) -> None:
+        self._validate_v3(data)
+        if data.get("sandbox_contract") != sandbox_contract():
+            raise SelfIterationError(
+                "self-iteration ledger sandbox contract is malformed"
+            )
+        for proposal in data["proposals"]:
+            constructed: dict[str, dict[str, Any]] = {}
+            evaluation_ids: set[str] = set()
+            for event in proposal["events"]:
+                event_type = event.get("type")
+                if event_type == "sandbox_schema_migrated":
+                    if (
+                        set(event)
+                        != {
+                            "type",
+                            "at",
+                            "from_schema",
+                            "to_schema",
+                            "authority_granted",
+                        }
+                        or event
+                        != {
+                            "type": "sandbox_schema_migrated",
+                            "at": event.get("at"),
+                            "from_schema": VERIFICATION_SCHEMA_VERSION,
+                            "to_schema": SCHEMA_VERSION,
+                            "authority_granted": False,
+                        }
+                        or not isinstance(event.get("at"), str)
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration sandbox migration event is malformed"
+                        )
+                    continue
+                if event_type == "patch_candidate_constructed":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "candidate_id",
+                        "candidate_sha256",
+                        "proposal_content_sha256",
+                        "source_fingerprint",
+                        "author_identity",
+                        "active_attestation_ids",
+                        "paths",
+                        "patch_sha256",
+                        "provenance",
+                        "execution_performed",
+                        "tests_executed",
+                        "live_source_writes",
+                        "authority_granted",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration patch construction event fields are malformed"
+                        )
+                    candidate_id = event.get("candidate_id")
+                    if (
+                        not isinstance(candidate_id, str)
+                        or not re.fullmatch(r"sip-[0-9a-f]{32}", candidate_id)
+                        or candidate_id in constructed
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration patch candidate identifier is malformed or duplicated"
+                        )
+                    self._validate_hex_digest(
+                        event.get("candidate_sha256"), label="patch candidate"
+                    )
+                    self._validate_hex_digest(
+                        event.get("patch_sha256"), label="patch artifact"
+                    )
+                    try:
+                        subject_fingerprint = proposal_subject_fingerprint(proposal)
+                    except VerificationError as exc:
+                        raise SelfIterationError(
+                            "self-iteration proposal source fingerprint is malformed"
+                        ) from exc
+                    attestation_ids = event.get("active_attestation_ids")
+                    paths = event.get("paths")
+                    if (
+                        not isinstance(event.get("at"), str)
+                        or event.get("proposal_content_sha256")
+                        != proposal.get("content_sha256")
+                        or event.get("source_fingerprint") != subject_fingerprint
+                        or event.get("author_identity")
+                        != proposal.get("proposer_identity")
+                        or not isinstance(attestation_ids, list)
+                        or not attestation_ids
+                        or attestation_ids != sorted(attestation_ids)
+                        or len(set(attestation_ids)) != len(attestation_ids)
+                        or any(
+                            not isinstance(item, str)
+                            or not re.fullmatch(r"sia-[0-9a-f]{32}", item)
+                            for item in attestation_ids
+                        )
+                        or not isinstance(paths, list)
+                        or not paths
+                        or paths != sorted(paths)
+                        or len(set(paths)) != len(paths)
+                        or not set(paths).issubset(
+                            set(proposal.get("target_paths", []))
+                        )
+                        or event.get("execution_performed") is not False
+                        or event.get("tests_executed") is not False
+                        or event.get("live_source_writes") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration patch construction event violates its boundary"
+                        )
+                    self._validate_provenance(
+                        event.get("provenance"), label="patch construction event"
+                    )
+                    construction_actor = self._identity_from_provenance(
+                        event.get("provenance"),
+                        label="patch construction event",
+                        required=True,
+                    )
+                    if construction_actor != event.get("author_identity"):
+                        raise SelfIterationError(
+                            "self-iteration patch author is not bound to request provenance"
+                        )
+                    constructed[candidate_id] = event
+                    continue
+                if event_type == "patch_candidate_evaluated":
+                    if set(event) != {
+                        "type",
+                        "at",
+                        "candidate_id",
+                        "candidate_sha256",
+                        "proposal_content_sha256",
+                        "evaluation_id",
+                        "evaluation_sha256",
+                        "evaluator_id",
+                        "evaluator_contract_sha256",
+                        "requester_identity",
+                        "status",
+                        "eligible_for_external_review",
+                        "eligible_for_execution",
+                        "execution_performed",
+                        "tests_executed",
+                        "live_source_writes",
+                        "authority_granted",
+                        "provenance",
+                    }:
+                        raise SelfIterationError(
+                            "self-iteration patch evaluation event fields are malformed"
+                        )
+                    candidate_id = event.get("candidate_id")
+                    construction = constructed.get(candidate_id)
+                    status = event.get("status")
+                    evaluation_id = event.get("evaluation_id")
+                    if (
+                        construction is None
+                        or not isinstance(event.get("at"), str)
+                        or event.get("candidate_sha256")
+                        != construction.get("candidate_sha256")
+                        or event.get("proposal_content_sha256")
+                        != proposal.get("content_sha256")
+                        or not isinstance(evaluation_id, str)
+                        or not re.fullmatch(r"sie-[0-9a-f]{32}", evaluation_id)
+                        or evaluation_id in evaluation_ids
+                        or event.get("evaluator_id") != STATIC_EVALUATOR_ID
+                        or status not in {"static_checks_passed", "rejected"}
+                        or event.get("eligible_for_external_review")
+                        is not (status == "static_checks_passed")
+                        or event.get("eligible_for_execution") is not False
+                        or event.get("execution_performed") is not False
+                        or event.get("tests_executed") is not False
+                        or event.get("live_source_writes") is not False
+                        or event.get("authority_granted") is not False
+                    ):
+                        raise SelfIterationError(
+                            "self-iteration patch evaluation event violates its boundary"
+                        )
+                    self._validate_hex_digest(
+                        event.get("evaluation_sha256"), label="patch evaluation"
+                    )
+                    self._validate_hex_digest(
+                        event.get("evaluator_contract_sha256"),
+                        label="patch evaluator contract",
+                    )
+                    self._validate_provenance(
+                        event.get("provenance"), label="patch evaluation event"
+                    )
+                    requester_identity = self._identity_from_provenance(
+                        event.get("provenance"),
+                        label="patch evaluation event",
+                        required=True,
+                    )
+                    if requester_identity != event.get("requester_identity"):
+                        raise SelfIterationError(
+                            "self-iteration patch evaluation requester is not bound to provenance"
+                        )
+                    evaluation_ids.add(evaluation_id)
+
     def _load_ledger(self) -> dict[str, Any]:
         if not self.ledger_path.exists():
             return self._empty_ledger()
@@ -1423,9 +1684,15 @@ class SelfIterationSystem:
             self._validate_v2(data)
             data = self._migrate_v2(data)
             self._validate_v3(data)
+            version = VERIFICATION_SCHEMA_VERSION
+            migrated = True
+        if version == VERIFICATION_SCHEMA_VERSION:
+            self._validate_v3(data)
+            data = self._migrate_v3(data)
+            self._validate_v4(data)
             migrated = True
         elif version == SCHEMA_VERSION:
-            self._validate_v3(data)
+            self._validate_v4(data)
         else:
             raise SelfIterationError("self-iteration ledger has an unsupported schema")
         if migrated:
@@ -1510,6 +1777,147 @@ class SelfIterationSystem:
             "source_file_count": manifest["file_count"],
         }
 
+    def _assert_current_proposal_source(
+        self, proposal: dict[str, Any]
+    ) -> dict[str, Any]:
+        try:
+            expected = proposal_subject_fingerprint(proposal)
+        except VerificationError as exc:
+            raise SelfIterationError(
+                "proposal source fingerprint is unavailable or malformed"
+            ) from exc
+        current = self._code_fingerprint()
+        current_subject = {
+            "revision": current.get("revision"),
+            "manifest_sha256": current.get("manifest_sha256"),
+        }
+        if current_subject != expected:
+            raise SelfIterationError(
+                "live source no longer matches the verified proposal fingerprint"
+            )
+        return expected
+
+    def _patch_eligible_state(
+        self,
+        proposal: dict[str, Any],
+        *,
+        expected_content_sha256: str,
+        now: datetime,
+    ) -> dict[str, Any]:
+        if (
+            proposal.get("content_sha256") != expected_content_sha256
+            or proposal_content_sha256(proposal) != expected_content_sha256
+        ):
+            raise SelfIterationError(
+                "proposal content digest changed; inspect the proposal again"
+            )
+        if (
+            proposal.get("status") != "ready_for_isolated_implementation"
+            or proposal.get("risk", {}).get("effective") != "low"
+        ):
+            raise SelfIterationError(
+                "only low-risk proposals ready for isolated implementation may construct or evaluate patches"
+            )
+        target_paths = proposal.get("target_paths")
+        if not isinstance(target_paths, list) or not target_paths:
+            raise SelfIterationError("proposal target paths are malformed")
+        current_boundaries = [self.classify_target(path) for path in target_paths]
+        if any(
+            boundary.get("boundary") != "bounded_candidate"
+            or boundary.get("auto_implementation_eligible") is not True
+            for boundary in current_boundaries
+        ):
+            raise SelfIterationError(
+                "proposal targets are no longer within the bounded candidate allowlist"
+            )
+        state = self._verification_state(proposal, now=now)
+        if (
+            state.get("status") != "verified"
+            or state.get("priority_eligible") is not True
+        ):
+            raise SelfIterationError(
+                "a current independent verified attestation is required"
+            )
+        if (
+            state.get("automation_eligible") is not False
+            or state.get("authority_eligible") is not False
+        ):
+            raise SelfIterationError(
+                "verification state violates the no-authority contract"
+            )
+        active_ids = state.get("active_attestation_ids")
+        if not isinstance(active_ids, list) or not active_ids:
+            raise SelfIterationError("active verification binding is unavailable")
+        return state
+
+    @staticmethod
+    def _candidate_construction_event(
+        proposal: dict[str, Any], candidate_id: str
+    ) -> dict[str, Any]:
+        matches = [
+            event
+            for event in proposal["events"]
+            if event.get("type") == "patch_candidate_constructed"
+            and event.get("candidate_id") == candidate_id
+        ]
+        if len(matches) != 1:
+            raise SelfIterationError(
+                "candidate is not bound to one recorded construction event"
+            )
+        return matches[0]
+
+    def _assert_candidate_binding(
+        self,
+        *,
+        proposal: dict[str, Any],
+        candidate: dict[str, Any],
+        state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        candidate_id = candidate.get("candidate_id")
+        if not isinstance(candidate_id, str):
+            raise SelfIterationError("candidate manifest identifier is malformed")
+        construction = self._candidate_construction_event(proposal, candidate_id)
+        binding = candidate.get("proposal_binding")
+        files = candidate.get("files")
+        if not isinstance(binding, dict) or not isinstance(files, list):
+            raise SelfIterationError("candidate manifest binding is malformed")
+        try:
+            source_fingerprint = proposal_subject_fingerprint(proposal)
+        except VerificationError as exc:
+            raise SelfIterationError(
+                "proposal source fingerprint is unavailable or malformed"
+            ) from exc
+        expected_binding = {
+            "proposal_id": proposal.get("id"),
+            "proposal_content_sha256": proposal.get("content_sha256"),
+            "source_fingerprint": source_fingerprint,
+            "proposer_identity": proposal.get("proposer_identity"),
+            "active_attestation_ids": construction.get("active_attestation_ids"),
+        }
+        paths: list[str] = []
+        for item in files:
+            if not isinstance(item, dict) or not isinstance(item.get("path"), str):
+                raise SelfIterationError("candidate manifest file paths are malformed")
+            paths.append(item["path"])
+        paths.sort()
+        if (
+            binding != expected_binding
+            or candidate.get("candidate_sha256") != construction.get("candidate_sha256")
+            or candidate.get("patch", {}).get("sha256")
+            != construction.get("patch_sha256")
+            or paths != construction.get("paths")
+        ):
+            raise SelfIterationError(
+                "candidate artifact does not match its ledger construction event"
+            )
+        if state is not None and binding.get("active_attestation_ids") != state.get(
+            "active_attestation_ids"
+        ):
+            raise SelfIterationError(
+                "candidate verification binding is stale; construct a new candidate"
+            )
+        return construction
+
     def propose(
         self,
         *,
@@ -1554,9 +1962,12 @@ class SelfIterationSystem:
         )
         boundaries = [self.classify_target(path) for path in normalized_targets]
         risk_floor = max(
-            (item["risk_floor"] for item in boundaries), key=_RISK_ORDER.get
+            (str(item["risk_floor"]) for item in boundaries),
+            key=lambda level: _RISK_ORDER[level],
         )
-        effective_risk = max((str(risk), risk_floor), key=_RISK_ORDER.get)
+        effective_risk = max(
+            (str(risk), risk_floor), key=lambda level: _RISK_ORDER[level]
+        )
         if any(item["boundary"] == "protected_core" for item in boundaries):
             status = "protected_review_required"
         elif any(not item["auto_implementation_eligible"] for item in boundaries):
@@ -1993,6 +2404,358 @@ class SelfIterationSystem:
             "verification_state": state,
             "verification_contract": verification_contract(),
         }
+
+    def construct_patch(
+        self,
+        *,
+        proposal_id: Any,
+        expected_content_sha256: Any,
+        changes: Any,
+    ) -> dict[str, Any]:
+        """Construct an inert, proposal-bound artifact outside live source."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        expected_digest = _required_text(
+            expected_content_sha256,
+            "expected_content_sha256",
+            max_length=64,
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+            raise SelfIterationError(
+                "expected_content_sha256 must be exactly 64 hexadecimal characters"
+            )
+        if not isinstance(changes, list) or not changes:
+            raise SelfIterationError("changes must be a non-empty list")
+
+        candidate: dict[str, Any] | None = None
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                now = self._now_utc()
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=expected_digest,
+                    now=now,
+                )
+                source_fingerprint = self._assert_current_proposal_source(proposal)
+                proposal_targets = set(proposal["target_paths"])
+                normalized_change_paths: list[str] = []
+                for change in changes:
+                    if not isinstance(change, dict):
+                        raise SelfIterationError("each change must be an object")
+                    raw_path = change.get("path")
+                    if not isinstance(raw_path, str):
+                        raise SelfIterationError("change path must be a string")
+                    path = _normalize_repo_path(raw_path)
+                    if path not in proposal_targets:
+                        raise SelfIterationError(
+                            f"candidate path was not bound by the proposal: {path}"
+                        )
+                    boundary = self.classify_target(path)
+                    if (
+                        boundary["boundary"] != "bounded_candidate"
+                        or boundary["auto_implementation_eligible"] is not True
+                    ):
+                        raise SelfIterationError(
+                            f"candidate path is outside the bounded allowlist: {path}"
+                        )
+                    normalized_change_paths.append(path)
+
+                recorded_at = _isoformat(now)
+                receipt = self._server_provenance(recorded_at)
+                author_identity = self._identity_from_provenance(
+                    receipt,
+                    label="patch construction request",
+                    required=True,
+                )
+                proposer_identity = self._identity_from_provenance(
+                    proposal.get("provenance"),
+                    label="proposal",
+                    required=True,
+                )
+                assert author_identity is not None
+                assert proposer_identity is not None
+                if (
+                    proposal.get("proposer_identity") != proposer_identity
+                    or author_identity != proposer_identity
+                ):
+                    raise SelfIterationError(
+                        "only the authenticated proposal author may construct its patch"
+                    )
+
+                candidate = self._patch_sandbox.construct(
+                    proposal_id=proposal_id_text,
+                    proposal_content_sha256=expected_digest,
+                    source_fingerprint=source_fingerprint,
+                    proposer_identity=proposer_identity,
+                    author_identity=author_identity,
+                    active_attestation_ids=state["active_attestation_ids"],
+                    changes=changes,
+                    created_at=recorded_at,
+                )
+                self._assert_current_proposal_source(proposal)
+                event = {
+                    "type": "patch_candidate_constructed",
+                    "at": recorded_at,
+                    "candidate_id": candidate["candidate_id"],
+                    "candidate_sha256": candidate["candidate_sha256"],
+                    "proposal_content_sha256": expected_digest,
+                    "source_fingerprint": source_fingerprint,
+                    "author_identity": author_identity,
+                    "active_attestation_ids": sorted(state["active_attestation_ids"]),
+                    "paths": sorted(normalized_change_paths),
+                    "patch_sha256": candidate["patch"]["sha256"],
+                    "provenance": receipt,
+                    "execution_performed": False,
+                    "tests_executed": False,
+                    "live_source_writes": False,
+                    "authority_granted": False,
+                }
+                proposal["events"].append(event)
+                self._save_ledger(ledger)
+            except PatchSandboxError as exc:
+                if candidate is not None:
+                    try:
+                        self._patch_sandbox.discard_candidate(candidate["candidate_id"])
+                    except (OSError, PatchSandboxError):
+                        pass
+                raise SelfIterationError(str(exc)) from exc
+            except BaseException:
+                if candidate is not None:
+                    try:
+                        self._patch_sandbox.discard_candidate(candidate["candidate_id"])
+                    except (OSError, PatchSandboxError):
+                        pass
+                raise
+
+        assert candidate is not None
+        return {
+            "candidate": candidate,
+            "sandbox_contract": sandbox_contract(),
+            "next_step": (
+                "Run evaluate_patch for non-executing static checks, then hand the "
+                "artifact to an independent reviewer or stronger isolated runner."
+            ),
+            "authority_granted": False,
+        }
+
+    def evaluate_patch(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+        expected_candidate_sha256: Any,
+    ) -> dict[str, Any]:
+        """Evaluate an artifact without importing or executing candidate code."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        expected_digest = _required_text(
+            expected_candidate_sha256,
+            "expected_candidate_sha256",
+            max_length=64,
+        ).lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", expected_digest):
+            raise SelfIterationError(
+                "expected_candidate_sha256 must be exactly 64 hexadecimal characters"
+            )
+
+        evaluation: dict[str, Any] | None = None
+        with self._lock:
+            try:
+                ledger = self._load_ledger()
+                proposal = self._find_proposal(ledger, proposal_id_text)
+                now = self._now_utc()
+                state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=proposal["content_sha256"],
+                    now=now,
+                )
+                self._assert_current_proposal_source(proposal)
+                candidate = self._patch_sandbox.load_manifest(candidate_id_text)
+                if candidate.get("candidate_sha256") != expected_digest:
+                    raise SelfIterationError(
+                        "candidate digest changed; inspect the candidate again"
+                    )
+                self._assert_candidate_binding(
+                    proposal=proposal,
+                    candidate=candidate,
+                    state=state,
+                )
+                recorded_at = _isoformat(now)
+                receipt = self._server_provenance(recorded_at)
+                requester_identity = self._identity_from_provenance(
+                    receipt,
+                    label="patch evaluation request",
+                    required=True,
+                )
+                assert requester_identity is not None
+                evaluation = self._patch_sandbox.evaluate(
+                    candidate_id=candidate_id_text,
+                    expected_candidate_sha256=expected_digest,
+                    evaluated_at=recorded_at,
+                )
+                self._assert_current_proposal_source(proposal)
+                post_state = self._patch_eligible_state(
+                    proposal,
+                    expected_content_sha256=proposal["content_sha256"],
+                    now=now,
+                )
+                self._assert_candidate_binding(
+                    proposal=proposal,
+                    candidate=candidate,
+                    state=post_state,
+                )
+                event = {
+                    "type": "patch_candidate_evaluated",
+                    "at": recorded_at,
+                    "candidate_id": candidate_id_text,
+                    "candidate_sha256": expected_digest,
+                    "proposal_content_sha256": proposal["content_sha256"],
+                    "evaluation_id": evaluation["evaluation_id"],
+                    "evaluation_sha256": evaluation["evaluation_sha256"],
+                    "evaluator_id": evaluation["evaluator"]["id"],
+                    "evaluator_contract_sha256": evaluation["evaluator"][
+                        "contract_sha256"
+                    ],
+                    "requester_identity": requester_identity,
+                    "status": evaluation["status"],
+                    "eligible_for_external_review": evaluation[
+                        "eligible_for_external_review"
+                    ],
+                    "eligible_for_execution": False,
+                    "execution_performed": False,
+                    "tests_executed": False,
+                    "live_source_writes": False,
+                    "authority_granted": False,
+                    "provenance": receipt,
+                }
+                proposal["events"].append(event)
+                self._save_ledger(ledger)
+            except PatchSandboxError as exc:
+                if evaluation is not None:
+                    try:
+                        self._patch_sandbox.discard_evaluation(
+                            candidate_id_text,
+                            evaluation["evaluation_id"],
+                        )
+                    except (OSError, PatchSandboxError):
+                        pass
+                raise SelfIterationError(str(exc)) from exc
+            except BaseException:
+                if evaluation is not None:
+                    try:
+                        self._patch_sandbox.discard_evaluation(
+                            candidate_id_text,
+                            evaluation["evaluation_id"],
+                        )
+                    except (OSError, PatchSandboxError):
+                        pass
+                raise
+
+        assert evaluation is not None
+        return {
+            "evaluation": evaluation,
+            "next_step": (
+                "Static success permits external review only. Candidate execution and "
+                "tests require a later, stronger isolated runner."
+            ),
+            "authority_granted": False,
+        }
+
+    def patch_status(
+        self,
+        *,
+        proposal_id: Any,
+        candidate_id: Any,
+        include_patch: Any = False,
+    ) -> dict[str, Any]:
+        """Read one candidate and reconcile artifacts with ledger events."""
+        proposal_id_text = _required_text(proposal_id, "proposal_id", max_length=100)
+        candidate_id_text = _required_text(candidate_id, "candidate_id", max_length=100)
+        if not isinstance(include_patch, bool):
+            raise SelfIterationError("include_patch must be a boolean")
+        with self._lock:
+            ledger = self._load_ledger()
+            proposal = self._find_proposal(ledger, proposal_id_text)
+            if include_patch:
+                receipt = self._server_provenance(_isoformat(self._now_utc()))
+                self._identity_from_provenance(
+                    receipt,
+                    label="patch content request",
+                    required=True,
+                )
+            try:
+                artifact = self._patch_sandbox.status(
+                    candidate_id_text,
+                    include_patch=include_patch,
+                )
+            except PatchSandboxError as exc:
+                raise SelfIterationError(str(exc)) from exc
+            candidate = artifact["candidate"]
+            self._assert_candidate_binding(
+                proposal=proposal,
+                candidate=candidate,
+            )
+            recorded_events = [
+                event
+                for event in proposal["events"]
+                if event.get("type") == "patch_candidate_evaluated"
+                and event.get("candidate_id") == candidate_id_text
+            ]
+            recorded_by_id = {
+                event["evaluation_id"]: event for event in recorded_events
+            }
+            artifacts_by_id = {
+                item["evaluation_id"]: item for item in artifact["evaluations"]
+            }
+            recorded_evaluations: list[dict[str, Any]] = []
+            for evaluation_id, event in recorded_by_id.items():
+                evaluation = artifacts_by_id.get(evaluation_id)
+                if (
+                    evaluation is None
+                    or evaluation.get("evaluation_sha256")
+                    != event.get("evaluation_sha256")
+                    or evaluation.get("candidate_sha256")
+                    != candidate.get("candidate_sha256")
+                    or evaluation.get("status") != event.get("status")
+                ):
+                    raise SelfIterationError(
+                        "recorded evaluation artifact does not match its ledger event"
+                    )
+                recorded_evaluations.append(evaluation)
+            artifact["evaluations"] = recorded_evaluations
+            artifact["unledgered_evaluation_artifact_count"] = len(
+                set(artifacts_by_id) - set(recorded_by_id)
+            )
+
+            now = self._now_utc()
+            verification_state = self._verification_state(proposal, now=now)
+            try:
+                self._assert_current_proposal_source(proposal)
+            except SelfIterationError:
+                source_current = False
+            else:
+                source_current = True
+            attestation_binding_current = candidate["proposal_binding"][
+                "active_attestation_ids"
+            ] == verification_state.get("active_attestation_ids")
+            artifact["current_state"] = {
+                "proposal_status": proposal["status"],
+                "verification_status": verification_state["status"],
+                "source_fingerprint_current": source_current,
+                "active_attestation_binding_current": attestation_binding_current,
+                "eligible_for_new_static_evaluation": bool(
+                    proposal["status"] == "ready_for_isolated_implementation"
+                    and proposal.get("risk", {}).get("effective") == "low"
+                    and verification_state["status"] == "verified"
+                    and source_current
+                    and attestation_binding_current
+                ),
+                "eligible_for_execution": False,
+                "authority_granted": False,
+            }
+            artifact["sandbox_contract"] = sandbox_contract()
+            return artifact
 
     def record_outcome(
         self,
