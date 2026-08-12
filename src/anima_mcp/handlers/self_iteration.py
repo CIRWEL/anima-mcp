@@ -52,6 +52,9 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 )
             )
 
+        if action == "attention":
+            return _text(system.attention(limit=arguments.get("limit", 20)))
+
         if action == "propose":
             claimed_source, used_legacy_source = _claimed_input(
                 arguments,
@@ -261,6 +264,7 @@ async def handle_self_iteration(arguments: dict) -> list[TextContent]:
                 "error": f"unknown self_iteration action: {action}",
                 "allowed_actions": [
                     "inspect",
+                    "attention",
                     "propose",
                     "list",
                     "prepare_verification",

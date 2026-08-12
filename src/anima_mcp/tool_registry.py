@@ -68,7 +68,7 @@ TOOLS = [
     ),
     Tool(
         name="next_steps",
-        description="Get proactive next steps - analyzes current state and suggests what to do",
+        description="Get proactive next steps from embodied state, drives, governance connectivity, and read-only self-iteration attention",
         inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
     ),
     Tool(
@@ -164,7 +164,7 @@ TOOLS = [
     ),
     Tool(
         name="get_lumen_context",
-        description="Get Lumen's complete context: identity, anima state, sensors, mood in one call",
+        description="Get Lumen's complete context: identity, anima state, sensors, mood, and self-iteration attention in one call",
         inputSchema={
             "type": "object",
             "properties": {
@@ -172,9 +172,16 @@ TOOLS = [
                     "type": "array",
                     "items": {
                         "type": "string",
-                        "enum": ["identity", "anima", "sensors", "mood", "code"],
+                        "enum": [
+                            "identity",
+                            "anima",
+                            "sensors",
+                            "mood",
+                            "attention",
+                            "code",
+                        ],
                     },
-                    "description": "What to include (default: identity, anima, sensors, mood; code is opt-in)",
+                    "description": "What to include (default: identity, anima, sensors, mood, attention; code is opt-in)",
                 }
             },
         },
@@ -327,7 +334,7 @@ TOOLS = [
     Tool(
         name="self_iteration",
         description=(
-            "Inspect Lumen's own code structure and version, persist an evidence-backed change proposal, "
+            "Inspect Lumen's own code structure and version, read a bounded attention projection, persist an evidence-backed change proposal, "
             "append independently signed verification, construct a quarantined whole-file patch artifact, "
             "run non-executing static checks, or execute an eligible Python candidate once in a fixed, "
             "networkless, digest-pinned Docker test profile after distinct signed approval. A further distinct "
@@ -343,6 +350,7 @@ TOOLS = [
                     "type": "string",
                     "enum": [
                         "inspect",
+                        "attention",
                         "propose",
                         "list",
                         "prepare_verification",
@@ -441,7 +449,7 @@ TOOLS = [
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 100,
-                    "description": "Maximum proposals returned by list mode (default: 10)",
+                    "description": "Maximum proposals returned by list mode (default: 10), or examined by attention mode (default: 20; maximum: 50)",
                     "default": 10,
                 },
                 "decision": {

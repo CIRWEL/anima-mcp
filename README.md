@@ -192,7 +192,7 @@ Start with `get_lumen_context` to understand Anima's current state, or `next_ste
 
 ### Bounded Code Self-Iteration
 
-`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, obtain independent signed verification, construct a bounded patch artifact outside the source repository, run static checks and one separately approved isolated test, create a separately reviewed commit on a dedicated local branch, and request one signed transient canary from an external supervisor that must restore the baseline. `get_lumen_context(include=["code"])` exposes a compact version of this code self-awareness alongside identity and embodied state.
+`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, obtain independent signed verification, construct a bounded patch artifact outside the source repository, run static checks and one separately approved isolated test, create a separately reviewed commit on a dedicated local branch, and request one signed transient canary from an external supervisor that must restore the baseline. `self_iteration(action="attention")` projects actionable and exceptional states without signatures or actuation. Default `get_lumen_context` and `next_steps` responses include that projection so connected agents can discover pending reviews.
 
 The loop is deliberately split across trust boundaries:
 
@@ -230,6 +230,8 @@ Patch construction is narrower still. `construct_patch` accepts at most three co
 Phase 5 requires another authenticated reviewer, distinct from every earlier participant, to sign the exact passing execution result. Git plumbing and a temporary index then create one deterministic local branch without checkout, hooks, worktree writes, push, merge, restart, or deployment. A separate service signer authenticates the result, and `application_status` verifies the ref, commit, tree, parent, artifact, and ledger bindings. A recorded result is only eligible for canary review and never for live activation. See [the reviewed application boundary](docs/self_iteration_application.md).
 
 Phase 6 requires yet another distinct reviewer to sign the exact reviewed branch and a fixed supervisor identity/profile. After a durable one-use claim, Anima sends only that canonical plan over a configured local Unix socket. The external supervisor owns transient activation, three fixed health checks, and mandatory restoration of the exact baseline—even when the candidate passes. Its dedicated key signs the result. A restored pass can recommend keeping the candidate for human merge review; rollback failure requires operator recovery. No result retains activation or grants shell, service-control, push, merge, or deployment authority. See [the transient canary boundary](docs/self_iteration_canary.md).
+
+The attention layer is deliberately not another authority phase. It converts the integrity-checked ledger and reconciled signed review artifacts into stable, bounded records for `next_steps`, default agent context, and downstream observers such as the UNITARES Discord bridge. Caller claims keep their explicit epistemic status, critical recovery states are raised first, and acknowledgement never counts as a review signature. See [the attention projection](docs/self_iteration_attention.md).
 
 ---
 

@@ -674,6 +674,7 @@ def test_tool_registry_exposes_only_bounded_self_iteration_actions():
 
     assert actions == [
         "inspect",
+        "attention",
         "propose",
         "list",
         "prepare_verification",
