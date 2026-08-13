@@ -533,7 +533,9 @@ The **broker** (`stable_creature.py`) is the primary UNITARES caller. It checks 
 UNITARES_URL=http://<tailscale-ip>:8767/mcp/  # verify Mac IP with `tailscale status`
 ```
 
-Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, (1-Presence)*0.3→Void
+Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, clamp(E−I)→**Valence**
+
+⚠️ **V is Valence, not Void.** `eisv_mapper.py` computes `V = max(-1, min(1, E - integrity))` — a signed value (+hot / −careful), not a [0,1] magnitude. Presence is **not** in the EISV mapping. The old `(1-Presence)*0.3→Void` reading is retired: it only reported the positive half and was not comparable to other agents' V. Anything that assumes V ≥ 0, or that reads V as inverse-presence, is wrong.
 
 **Circuit breaker** (in `unitares_bridge.py`): 2 consecutive failures trigger exponential backoff (15s→30s→60s→120s). Any success resets to 15s.
 

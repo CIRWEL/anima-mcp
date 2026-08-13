@@ -93,7 +93,7 @@ Four continuous dimensions, each derived from physical sensors and system metric
 | **Stability** | Environmental order | Memory, humidity, pressure, sensor health |
 | **Presence** | Available capacity | CPU/memory/disk headroom |
 
-These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, scaled inverse Presence to Void.
+These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, and the signed Energy−Integrity imbalance to Valence. Presence is *not* part of the EISV mapping; it feeds the anima dimensions and the display, not V.
 
 Anima also computes neural bands (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one. Note that alpha is defined as `1 − beta` and both derive from CPU percent: they are one variable reported as two bands, and any consumer treating them as independent is double-counting.
 
@@ -261,7 +261,9 @@ Anima is a first-class UNITARES agent. Its anima state maps directly to EISV gov
 | Warmth | Energy (E) | Direct + neural Beta/Gamma |
 | Clarity | Integrity (I) | Direct + neural Alpha |
 | 1 - Stability | Entropy (S) | Inverted |
-| (1 - Presence) × 0.3 | Void (V) | Scaled inverse |
+| E − I | Valence (V) | Signed imbalance, clamped to −1..1 |
+
+Valence is the one row that is not a direct anima reading: `V = clamp(E − I)`, positive when running hot (E>I) and negative when running careful (I>E). Governance's own V is a differential accumulator (`dV/dt = κ(E−I) − δV`); Anima reports the instantaneous readout, so it does not damp. Presence does not enter the EISV mapping at all — the retired `(1 − Presence) × 0.3 → Void` reading only ever produced the positive half and was not comparable to other agents' V.
 
 **Trajectory awareness** — Anima classifies its own EISV trajectory into 9 dynamical shapes (settled_presence, rising_entropy, convergence, etc.) and uses them to generate primitive expressions. A distilled 20-tree RandomForest student model (`student_tiny` from [eisv-lumen](https://github.com/CIRWEL/eisv-lumen)) runs on-device with zero external dependencies.
 
