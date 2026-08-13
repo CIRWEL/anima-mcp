@@ -44,6 +44,36 @@ def isolate_anima_home(monkeypatch, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Admin gate (opt-in — request explicitly, never autouse)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def admin_authorized(monkeypatch):
+    """Satisfy the destructive-handler admin gate for handler-logic tests.
+
+    The gate fails closed when ``ANIMA_ADMIN_SECRET`` is unset, so a test that
+    wants to exercise what ``handle_git_pull`` *does* has to authenticate
+    first. Grant it the way a real caller would — a configured secret plus a
+    matching ``X-Anima-Admin`` header — rather than via the
+    ``ANIMA_ADMIN_ALLOW_UNAUTH_IF_NO_SECRET`` escape hatch, so these tests
+    keep exercising the real header path.
+
+    Deliberately NOT autouse: making it global would silently re-open the gate
+    for every test in the suite, which is the exact failure mode the closed
+    default exists to prevent. ``tests/test_admin_auth.py`` owns the gate's own
+    behavior and must not receive this.
+    """
+    from anima_mcp.admin_auth import set_admin_header
+
+    secret = "test-admin-secret"
+    monkeypatch.setenv("ANIMA_ADMIN_SECRET", secret)
+    monkeypatch.delenv("ANIMA_ADMIN_ALLOW_UNAUTH_IF_NO_SECRET", raising=False)
+    set_admin_header(secret)
+    yield secret
+    set_admin_header(None)
+
+
+# ---------------------------------------------------------------------------
 # Neural sensor reset (autouse — runs for every test)
 # ---------------------------------------------------------------------------
 

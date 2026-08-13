@@ -76,7 +76,9 @@ anima-creature
 
 Supports Tailscale, LAN, or Cloudflare Tunnel (with OAuth 2.1) for remote access. See `docs/operations/SECRETS_AND_ENV.md` for OAuth configuration.
 
-When `ANIMA_ADMIN_SECRET` is set on the server, the six system-operations tools (`git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`) additionally require an `X-Anima-Admin` header matching it. Leaving it unset leaves those tools ungated — set it on any deployment reachable beyond localhost.
+The six system-operations tools (`git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`) require an `X-Anima-Admin` header matching `ANIMA_ADMIN_SECRET` on the server. **The gate fails closed:** if the secret is unset, those six refuse to run rather than running ungated — an unset secret means the server cannot authenticate the caller. Everything else keeps working. `ANIMA_ADMIN_ALLOW_UNAUTH_IF_NO_SECRET=true` restores the permissive behavior for local development only.
+
+This matters on recovery: `anima.env` is deliberately excluded from backups because it holds secrets, so a reflash restores Lumen without it. `restore_lumen.sh` now reports which keys came back empty instead of leaving it to be discovered later.
 
 ---
 

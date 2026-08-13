@@ -212,7 +212,10 @@ PI_HOST="$PI_HOST" PI_USER="$PI_USER" SSH_KEY="$SSH_KEY" \
 # 2. Restore data
 log "Restoring Lumen data to ~/.anima/ on Pi..."
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "mkdir -p ~/.anima"
-# Create anima.env from example if missing (secrets — add GROQ_API_KEY, UNITARES_AUTH)
+# Create anima.env from example if missing. The template ships every key EMPTY
+# — anima.env is excluded from backups because it holds secrets, so a reflash
+# always lands here with no values. The post-restore check below reports which
+# ones are still blank rather than letting them be discovered later.
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "test -f ~/.anima/anima.env || cp ~/anima-mcp/config/anima.env.example ~/.anima/anima.env" && true
 
 # Upload every recovery component under temporary names first. Nothing below
@@ -592,7 +595,37 @@ fi
 
 log ""
 log "Done. Lumen running (broker + server, no DB contention)."
-log "Secrets: edit ~/.anima/anima.env on Pi — add GROQ_API_KEY, UNITARES_AUTH (see config/anima.env.example)"
+
+# Secrets never ride along with a restore (anima.env is excluded from backups),
+# so report exactly which ones came back empty. Values are never printed — only
+# whether each key has one. ANIMA_ADMIN_SECRET is called out separately because
+# an empty value now disables the destructive tools instead of ungating them.
+MISSING_SECRETS="$(ssh $SSH_OPTS "$PI_USER@$PI_HOST" '
+    for k in GROQ_API_KEY UNITARES_AUTH ANIMA_ADMIN_SECRET WIFI_SSID WIFI_PASSWORD; do
+        v="$(sed -nE "s/^[[:space:]]*${k}=(.*)$/\1/p" ~/.anima/anima.env 2>/dev/null | tail -1)"
+        [ -z "$v" ] && printf "%s " "$k"
+    done' 2>/dev/null || true)"
+
+if [ -n "${MISSING_SECRETS// /}" ]; then
+    log ""
+    log "⚠️  UNSET in ~/.anima/anima.env: ${MISSING_SECRETS}"
+    log "    Edit it on the Pi, then: sudo systemctl restart anima anima-broker"
+    case "$MISSING_SECRETS" in
+        *ANIMA_ADMIN_SECRET*)
+            log ""
+            log "⚠️  ANIMA_ADMIN_SECRET is empty — the six destructive MCP tools"
+            log "    (git_pull, deploy_from_github, system_service, system_power,"
+            log "    fix_ssh_port, setup_tailscale) will REFUSE to run until it is set."
+            log "    This is deliberate: unset means the server cannot authenticate"
+            log "    the caller, so the gate fails closed rather than open."
+            log "    Generate: python3 -c 'import secrets; print(secrets.token_urlsafe(32))'"
+            log "    Then set the same value in your MCP client's X-Anima-Admin header."
+            ;;
+    esac
+else
+    log "Secrets: all expected keys present in ~/.anima/anima.env"
+fi
+log "Secrets reference: config/anima.env.example"
 log "If I2C sensors (temp/humidity/light) fail: reboot required. Run: ssh $PI_USER@$PI_HOST 'sudo reboot'"
 log "Check: ssh $PI_USER@$PI_HOST 'journalctl -u anima -f'"
 log "MCP (LAN):       http://$PI_HOST:8766/mcp/"

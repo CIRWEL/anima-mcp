@@ -8,7 +8,14 @@ testing belongs in dedicated test files.
 import asyncio
 from unittest.mock import patch, MagicMock
 
+import pytest
+
 from conftest import parse_result
+
+# Several smoke tests call system-ops handlers. The admin gate fails closed
+# without a secret, so authenticate first — otherwise they would assert
+# against the gate's refusal instead of the handler reaching its error path.
+pytestmark = pytest.mark.usefixtures("admin_authorized")
 
 
 # ---------------------------------------------------------------------------

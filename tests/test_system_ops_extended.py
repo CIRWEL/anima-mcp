@@ -7,6 +7,11 @@ import pytest
 
 from conftest import parse_result
 
+# These exercise what the system-ops handlers DO. The admin gate fails closed
+# without a secret, so authenticate first — otherwise every test here would
+# assert against the gate's refusal instead of the handler's behavior.
+pytestmark = pytest.mark.usefixtures("admin_authorized")
+
 
 def _cp(returncode=0, stdout="", stderr=""):
     proc = MagicMock()
