@@ -3,9 +3,12 @@ defmodule AnimaBroker.Governance.EisvMapper do
   Anima → EISV mapping for governance check-ins.
 
   Faithful port of `src/anima_mcp/eisv_mapper.py` (the Python bridge's
-  formulas) so the Elixir shadow client's decision stream is comparable to the
-  Python bridge's during the Phase-2 soak. Formula changes belong in BOTH
-  files until the Python bridge retires.
+  formulas). Since the Phase-2 cutover this module is the SOLE producer of
+  Lumen's governance EISV -- the Python bridge runs in passthrough mode
+  (`ANIMA_GOVERNANCE_FROM_SHM`) and reads the verdict this client writes, so a
+  formula that drifts here is not a shadow discrepancy, it is what governance
+  records. Formula changes belong in BOTH files until the Python bridge
+  retires; `eisv_mapper_test.exs` pins the shared algebra.
 
   Inputs are plain maps read from the live SHM envelope: `anima` with
   "warmth"/"clarity"/"stability"/"presence" floats, `readings` with optional
@@ -35,12 +38,12 @@ defmodule AnimaBroker.Governance.EisvMapper do
         warmth
       end
 
-    i =
-      if has_neural and alpha != nil do
-        @physical_weight * clarity + @neural_weight * alpha
-      else
-        clarity
-      end
+    # Integrity (I): clarity only. Alpha is deliberately NOT mixed in --
+    # alpha = 1 - beta by construction (computational_neural.py), so feeding
+    # alpha into I while beta feeds E puts CPU% on both sides of V = E - I,
+    # the double-count CLAUDE.md warns neural consumers about. Kept in sync
+    # with the Python bridge's eisv_mapper.py (anima-mcp #141).
+    i = clarity
 
     e = clamp(e, 0.0, 1.0)
     i = clamp(i, 0.0, 1.0)
