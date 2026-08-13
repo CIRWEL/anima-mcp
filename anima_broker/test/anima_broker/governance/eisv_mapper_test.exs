@@ -13,7 +13,7 @@ defmodule AnimaBroker.Governance.EisvMapperTest do
     assert_in_delta eisv["V"], -0.4, 1.0e-9
   end
 
-  test "eisv with neural bands blends 0.7 physical / 0.3 neural" do
+  test "eisv with neural bands blends 0.7 physical / 0.3 neural into E only" do
     readings = %{
       "eeg_alpha_power" => 0.9,
       "eeg_beta_power" => 0.5,
@@ -23,9 +23,35 @@ defmodule AnimaBroker.Governance.EisvMapperTest do
     eisv = EisvMapper.anima_to_eisv(@anima, readings)
     # E = 0.7*0.4 + 0.3*(0.5*0.6 + 0.2*0.4) = 0.28 + 0.3*0.38 = 0.394
     assert_in_delta eisv["E"], 0.394, 1.0e-9
-    # I = 0.7*0.8 + 0.3*0.9 = 0.83
-    assert_in_delta eisv["I"], 0.83, 1.0e-9
+    # I = clarity. Alpha is NOT blended in (anima-mcp #141).
+    assert_in_delta eisv["I"], 0.8, 1.0e-9
     assert_in_delta eisv["V"], eisv["E"] - eisv["I"], 1.0e-9
+  end
+
+  test "alpha never reaches I — CPU% must not land on both sides of V = E - I" do
+    # alpha = 1 - beta by construction (computational_neural.py): both bands are
+    # the same CPU reading. Blending alpha into I while beta feeds E double-counts
+    # it and inflates |V|. Vary alpha across its whole range with beta/gamma held
+    # fixed: E and I must both be unmoved, so V is unmoved.
+    base = %{"eeg_beta_power" => 0.5, "eeg_gamma_power" => 0.2}
+
+    eisvs =
+      for a <- [0.0, 0.25, 0.5, 0.75, 1.0] do
+        EisvMapper.anima_to_eisv(@anima, Map.put(base, "eeg_alpha_power", a))
+      end
+
+    assert Enum.map(eisvs, & &1["I"]) |> Enum.uniq() |> length() == 1
+    assert Enum.map(eisvs, & &1["E"]) |> Enum.uniq() |> length() == 1
+    assert Enum.map(eisvs, & &1["V"]) |> Enum.uniq() |> length() == 1
+    assert_in_delta hd(eisvs)["I"], @anima["clarity"], 1.0e-9
+  end
+
+  test "alpha alone still counts as neural presence for E" do
+    # has_neural keys on beta OR alpha; with alpha-only readings beta/gamma
+    # default to 0, so E is damped by the 0.7 physical weight while I stays clarity.
+    eisv = EisvMapper.anima_to_eisv(@anima, %{"eeg_alpha_power" => 0.9})
+    assert_in_delta eisv["E"], 0.7 * 0.4, 1.0e-9
+    assert_in_delta eisv["I"], 0.8, 1.0e-9
   end
 
   test "complexity matches the Python weights and clamps" do
