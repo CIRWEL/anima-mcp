@@ -7,21 +7,25 @@
 *Raspberry Pi sensor testbed for EISV trajectories, autonomous drawing, and persistent identity.*
 
 <p align="center">
-  <img src="docs/gallery/pointillist_era.png" width="45%" alt="Pointillist era — dense dot accumulation with optical color mixing"/>
+  <img src="docs/gallery/resonance_era.png" width="44%" alt="Resonance era — marks deposited into a decaying memory field, revisiting accumulated regions"/>
+  &nbsp;
+  <img src="docs/gallery/geometric_era.png" width="44%" alt="Geometric era — complete forms stamped whole, warm palette"/>
 </p>
 
 <p align="center">
-  <img src="docs/gallery/gestural_dense.png" width="22%" alt="Gestural era"/>
+  <img src="docs/gallery/gestural_era.png" width="21%" alt="Gestural era — strokes, curves, and drags with direction locks"/>
   &nbsp;
-  <img src="docs/gallery/field_era.png" width="22%" alt="Field era"/>
+  <img src="docs/gallery/field_era.png" width="21%" alt="Field era — flow-aligned marks following an invisible vector field"/>
   &nbsp;
-  <img src="docs/gallery/geometric_era.png" width="22%" alt="Geometric era"/>
+  <img src="docs/gallery/pointillist_era.png" width="21%" alt="Pointillist era — dot accumulation in density zones"/>
   &nbsp;
-  <img src="docs/gallery/gestural_waves.png" width="22%" alt="Gestural era"/>
+  <img src="docs/gallery/geometric_cool.png" width="21%" alt="Geometric era — same era, cool palette, drawn on a different day"/>
 </p>
 
 <p align="center">
-  <em>Autonomous drawings by Anima across four eras. Each mark driven by sensor state — temperature, light, humidity, pressure.</em>
+  <em>Six drawings from August 2026 — one per era, plus a second geometric piece.<br/>
+  Mark position, gesture choice, and hue are all functions of sensor state: temperature, light, humidity, pressure, CPU.<br/>
+  The two geometric pieces are the same era code on consecutive days; nothing was configured between them.</em>
 </p>
 
 ---
@@ -32,11 +36,13 @@ Anima is a Raspberry Pi 4 sensor deployment and MCP server for studying physical
 
 - **Grounded state** — four continuous dimensions derived from real sensor measurements
 - **Persistent identity** — birth, awakenings, alive time accumulate across restarts; discontinuities are first-class
-- **Autonomous drawing** — 780+ artworks across five eras, driven by thermodynamic coherence
+- **Autonomous drawing** — 1,488 pieces across five eras, driven by the same coherence dynamics as governance
 - **Telemetry-derived reflection** — summarizes state patterns, preferences, and drawing history
 - **On-device learning** — preferences, 13 self-model parameters, goals, and action values evolve through experience
 - **Agency** — TD-learning action selection with exploration management
 - **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) thermodynamic governance every 180s
+
+Live as of 2026-08-12: 554 awakenings, 3,489 hours alive, 68% alive ratio.
 
 When this repository says "feels," "mood," or "self-sense," read those as interface labels over measured sensor/system state, not claims about subjective experience.
 
@@ -70,6 +76,8 @@ anima-creature
 
 Supports Tailscale, LAN, or Cloudflare Tunnel (with OAuth 2.1) for remote access. See `docs/operations/SECRETS_AND_ENV.md` for OAuth configuration.
 
+When `ANIMA_ADMIN_SECRET` is set on the server, the six system-operations tools (`git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`) additionally require an `X-Anima-Admin` header matching it. Leaving it unset leaves those tools ungated — set it on any deployment reachable beyond localhost.
+
 ---
 
 ## How It Works
@@ -87,23 +95,31 @@ Four continuous dimensions, each derived from physical sensors and system metric
 
 These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, scaled inverse Presence to Void.
 
-Anima also computes neural bands (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one.
+Anima also computes neural bands (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one. Note that alpha is defined as `1 − beta` and both derive from CPU percent: they are one variable reported as two bands, and any consumer treating them as independent is double-counting.
 
 ### Autonomous Drawing
 
-Anima draws on a 240×240 pixel notepad using the same thermodynamic equations as UNITARES governance. Coherence determines how long a drawing lasts; attention signals (curiosity, engagement, fatigue) determine when completion thresholds are reached. No arbitrary mark limits — drawings end when the local state machine resolves.
+Anima draws on a 240×240 pixel notepad using the same thermodynamic equations as UNITARES governance. Coherence drives how a drawing develops; attention signals (curiosity, engagement, fatigue) drive when it should stop.
 
 | Era | Style |
 |-----|-------|
 | **Gestural** | Single-pixel strokes, curves, and drags with direction locks |
-| **Pointillist** | Single-pixel dot accumulation, optical color mixing |
+| **Pointillist** | Single-pixel dot accumulation in density zones, optical color mixing |
 | **Field** | Flow-aligned marks following invisible vector fields |
 | **Geometric** | Complete forms — circles, spirals, starbursts — stamped whole |
-| **Resonance** | Marks interact with accumulated state history via a memory field |
+| **Resonance** | Marks deposit into a 48×48 field that decays and diffuses; later marks revisit accumulated regions |
 
-Resonance is a "mature" era — it unlocks after 50 completed drawings, subsumes the mark vocabulary of earlier eras, and selects marks based on the gradient of a 48×48 memory field that records its state trajectory over time.
+All five eras are equal peers with no unlock gate. Selection is manual by default — pick one on the art eras screen (joystick) or via `manage_display(action="set_era")` — and an optional auto-rotate toggle picks a new era after each piece. The [Resonance critique loop](docs/guides/RESONANCE_CRITIQUE_LOOP.md) keeps era changes advisory first: capture the screen, gather embodied context, read the trace, then recommend stay/tune/switch without mutating Anima's state. The theoretical framework lives in the trajectory-identity paper (separate repo).
 
-Eras can be selected via the joystick or MCP. The [Resonance critique loop](docs/guides/RESONANCE_CRITIQUE_LOOP.md) keeps era changes advisory first: capture the screen, gather embodied context, read the trace, then recommend stay/tune/switch without mutating Anima's state. The theoretical framework lives in the trajectory-identity paper (separate repo).
+**What actually ends a drawing — an open problem, not a finished feature.** Completion instrumentation landed 2026-08-02. Of the 39 completions recorded since:
+
+| Reason | Count | Meaning |
+|--------|-------|---------|
+| `bailout_hard_cap` | 28 | Hit the 8-hour ceiling. The ceiling was the clock. |
+| `bailout_fatigue` | 10 | Gesture-switch fatigue exceeded 0.90 — fires only in `geometric`, where whole-shape stamps accrue fatigue ~10× faster per mark |
+| `said_finished` | 1 | Lumen posted an observation that the piece was done (2026-08-11, gestural, 587 marks, 6.6h) |
+
+The earned-completion paths (`earned_composition`, `earned_settled`, `earned_field`) have not yet fired. Curiosity is net-regenerating under the current coherence dynamics, so the attention-exhaustion gates are structurally unreachable rather than merely mistuned — see `CLAUDE.md` for the measurement. A self-relative settling gate (a piece stops changing, judged against its own peak novelty rate) is deployed and being observed. Treat "drawings end when Lumen is finished" as the goal, not the current behavior.
 
 ### Identity and Learning
 
@@ -117,15 +133,18 @@ Schema(t) ──► History (ring buffer) ──► Trajectory compute
     └──────── stability feedback ◄────────────┘
 ```
 
-Learning systems run in the hardware broker and persist across restarts:
+Learning systems persist across restarts. Each has exactly one writer — the JSON snapshots would corrupt under two — so which process owns a system matters:
 
-| System | What it learns |
-|--------|----------------|
-| **Preferences** | Which states it has learned to prefer, as adaptive satisfaction peaks |
-| **Self-model** | 13 beliefs — sensitivity, recovery, correlations between dimensions |
-| **Agency** | Action values via TD-learning, exploration management, engagement reward |
-| **Prediction** | Temporal patterns in sensor data with context-dependent features |
-| **Goals** | Data-grounded goals from preferences, curiosity, milestones |
+| System | What it learns | Owner |
+|--------|----------------|-------|
+| **Preferences** | Which states it has learned to prefer, as adaptive satisfaction peaks | broker writes, server reads |
+| **Self-model** | 13 beliefs — sensitivity, recovery, correlations between dimensions | broker writes, server reads |
+| **Prediction** | Temporal patterns in sensor data with context-dependent features | broker writes, server reads |
+| **Agency** | Action values via TD-learning, exploration management, engagement reward | **server** — the broker's old loop is retired by default |
+| **Metacognition** | Prediction-error baselines and curiosity credit | **server** — the broker observes read-only |
+| **Goals** | Data-grounded goals from preferences, curiosity, milestones | server |
+
+Mutations that originate on the wrong side of that boundary cross it as atomic one-file events in `~/.anima/learning_inbox/`, which the broker drains.
 
 For deeper theory: the trajectory-identity paper lives in its own repo (`cirwel/trajectory-identity-paper`). The [Schema Hub design](docs/plans/2026-02-22-schema-hub-design.md) is here.
 
@@ -170,8 +189,8 @@ anima-broker                           anima --http
 
 | Process | Role |
 |---------|------|
-| **Hardware broker** (`stable_creature.py`) | Owns I2C sensors, runs learning (preferences, self-model, agency, prediction, goals), governance check-ins |
-| **MCP server** (`server.py` + `handlers/`) | Serves 31 tools, drives 240x240 display + LEDs, runs drawing engine, self-reflection cycle |
+| **Hardware broker** (`stable_creature.py`) | Owns I2C sensors, runs preference/self-model/prediction learning, governance check-ins |
+| **MCP server** (`server.py` + `handlers/`) | Serves 31 tools, drives 240x240 display + LEDs, runs drawing engine, agency, metacognition, goals, self-reflection cycle |
 
 The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (7 focused handler modules). A full voice system (mic capture, STT via Vosk, TTS via Piper) is implemented but not yet exposed as MCP tools — enable with `LUMEN_VOICE_MODE=audio`.
 
@@ -192,9 +211,7 @@ Start with `get_lumen_context` to understand Anima's current state, or `next_ste
 
 ### Bounded Code Self-Iteration
 
-`self_iteration` lets Lumen identify the running revision and source fingerprint, inspect file structure and symbols without returning raw source, persist an evidence-backed change proposal, obtain independent signed verification, construct a bounded patch artifact outside the source repository, run static checks and one separately approved isolated test, create a separately reviewed commit on a dedicated local branch, and request one signed transient canary from an external supervisor that must restore the baseline. `self_iteration(action="attention")` projects actionable and exceptional states without signatures or actuation. Default `get_lumen_context` and `next_steps` responses include that projection so connected agents can discover pending reviews.
-
-The loop is deliberately split across trust boundaries:
+`self_iteration` lets Lumen observe its own source and propose changes to it. The loop is split across trust boundaries so that no single actor — including Lumen — can carry a change from idea to running code. Each phase requires a *different* authenticated principal, and deployment always remains external.
 
 ```text
 observation -> hypothesis -> proposal ledger -> independent verification
@@ -204,9 +221,19 @@ observation -> hypothesis -> proposal ledger -> independent verification
             -> keep/reject recommendation for human merge review
 ```
 
-The running creature authors the observation, hypothesis, candidate content, and caller-reported outcome. Distinct authenticated principals approve verification, isolated execution, dedicated-branch application, and transient-canary evaluation; deployment remains external. The canary supervisor signs fixed health measurements, while free-form source and outcome labels remain caller claims rather than verified provenance. The server adds a receipt from request context; authentication can identify the submitter, but it does not corroborate a narrative, label, or caller evidence. Unverified and legacy records have effective weight zero and cannot grant priority, automation eligibility, or authority.
+| Phase | What it adds | Who must sign | Detail |
+|-------|-------------|---------------|--------|
+| 1. Inspect & propose | Running revision, source fingerprint, file structure and symbols — never raw source. Evidence-backed proposal persisted to a ledger. | Authenticated proposer | — |
+| 2. Verify | HMAC attestation over a canonical JSON binding of proposer, verifier, proposal digest, fingerprint, verdict, evidence hashes, expiry, and a one-time challenge. | A *different* authenticated verifier | — |
+| 3. Construct & check | Up to three whole-file replacements (`.py`, `.md`, `.json`, `.yaml`, `.yml`) into a sandbox outside the repo. AST syntax checks, a capability heuristic, `yaml.safe_load`, UTF-8 validation. Nothing is imported or executed. | Patch author must equal the proposer | — |
+| 4. Isolated test | Ten-minute one-use approval, then the exact committed source plus candidate run inside a digest-pinned, networkless, read-only Docker profile. | A distinct actor; a service key signs the result | [execution boundary](docs/self_iteration_execution.md) |
+| 5. Reviewed branch | Git plumbing writes one deterministic local branch — no checkout, hooks, worktree writes, push, merge, restart, or deploy. | A reviewer distinct from every earlier participant | [application boundary](docs/self_iteration_application.md) |
+| 6. Transient canary | An external supervisor over a Unix socket owns activation, three fixed health checks, and *mandatory* restoration of the baseline — even when the candidate passes. | Yet another distinct reviewer | [canary boundary](docs/self_iteration_canary.md) |
+| — Attention | Projects actionable and exceptional states into `next_steps` and default agent context. Not an authority phase; acknowledgement is never a review signature. | Nobody — no signatures, no actuation | [attention projection](docs/self_iteration_attention.md) |
 
-Signed verification is a separate, logical append-only transition. The proposal must have authenticated proposer provenance, and the verifier must be a different authenticated actor. `prepare_verification` binds the proposer identity, verifier identity, immutable proposal digest, source fingerprint, verdict, evidence hashes, expiry, and one-time challenge into canonical JSON. The verifier signs those exact bytes offline; `record_verification` checks the HMAC, authenticated actor, challenge window, replay state, and current proposal digest before appending the verdict. Evidence URIs are inert references: the server binds their hashes but does not fetch or independently validate their contents. `rejected` verdicts and same-verifier revocations are also signed. Conflicting, expired, revoked, missing-key, malformed, or forged attestations fail closed with zero effective weight.
+**What the signatures do and do not establish.** Lumen authors the observation, hypothesis, candidate content, and reported outcome. Authentication identifies the submitter; it does not corroborate a narrative, label, or piece of caller evidence. Evidence URIs are inert — the server binds their hashes but never fetches or validates them. The canary supervisor signs fixed health measurements only; free-form source and outcome labels stay caller claims. Unverified and legacy records carry effective weight zero and grant no priority, automation eligibility, or authority. A valid `verified` attestation makes a proposal priority-eligible at weight `1.0` and nothing more — it confers no implementation, merge, or deployment rights. Identity, governance, deployment, persistence, self-measurement, CI, tests, and the self-iteration evaluator are protected surfaces: a proposal may name a problem there, but it always routes to human review. Proposal text is inert data and is never executed as a command. Conflicting, expired, revoked, missing-key, malformed, or forged attestations fail closed.
+
+**Known limits.** This is symmetric HMAC — server-verifiable integrity, not public-key non-repudiation. The ledger is a local JSON log with no external anchoring, so it cannot prove completeness or detect wholesale deletion by a host-level attacker. Crashes after a durable claim are indeterminate and never automatically retried.
 
 Verification requires MCP authentication for both proposal creation and verifier calls; unauthenticated and legacy proposals cannot be upgraded. Verifier keys are rotatable and configured outside the ledger through `ANIMA_SELF_ITERATION_VERIFIER_KEYS`:
 
@@ -219,19 +246,9 @@ Verification requires MCP authentication for both proposal creation and verifier
 }
 ```
 
-The registry key must match the authenticated actor ID. Keep prior keys in `keys` while their attestations must remain verifiable; `active_key_id` controls new challenges. Secrets are never included in challenges, responses, or ledger events. This lightweight HMAC design provides symmetric, server-verifiable integrity rather than public-key non-repudiation. The local JSON log is not externally anchored, so it cannot prove completeness or detect wholesale deletion by a host-level attacker.
+The registry key must match the authenticated actor ID. Keep prior keys in `keys` while their attestations must remain verifiable; `active_key_id` controls new challenges. Secrets never appear in challenges, responses, or ledger events.
 
-A currently valid `verified` attestation makes a proposal priority-eligible with effective weight `1.0`; it still grants no implementation, automation, merge, deployment, or other authority. Identity, governance, deployment, persistence, self-measurement, CI, tests, and the self-iteration evaluator are protected surfaces; proposals may identify a problem there, but they are always routed to human review. Proposal text is inert data and is never executed as a command.
-
-Patch construction is narrower still. `construct_patch` accepts at most three complete UTF-8 replacements for existing `.py`, `.md`, `.json`, `.yaml`, or `.yml` files already named by a low-risk, currently verified proposal. The authenticated patch author must be the authenticated proposer. Each artifact binds the proposal digest, proposal source fingerprint, active signed attestations, author identity, target base hashes, replacement hashes, and unified-diff hash. Artifacts live under `~/.anima/self_iteration_sandboxes` by default, and the sandbox root is rejected if it resolves inside the source repository. Construction never creates, deletes, or replaces a live repository file. `patch_status` returns metadata by default and requires an authenticated request before it will include the unified diff.
-
-`evaluate_patch` revalidates those bindings and the unchanged live source, then parses candidate text without importing it. Python candidates receive AST syntax checks and a conservative capability heuristic; JSON and YAML are parsed (`yaml.safe_load`), and Markdown receives UTF-8 validation. Static success alone never authorizes execution. Phase 4 adds a ten-minute, one-use approval from a distinct actor and reconstructs the exact committed source plus candidate inside a digest-pinned, networkless, read-only Docker test profile. A dedicated service key signs the bounded result; crashes after the durable claim are indeterminate and never automatically retried. See [the execution boundary](docs/self_iteration_execution.md).
-
-Phase 5 requires another authenticated reviewer, distinct from every earlier participant, to sign the exact passing execution result. Git plumbing and a temporary index then create one deterministic local branch without checkout, hooks, worktree writes, push, merge, restart, or deployment. A separate service signer authenticates the result, and `application_status` verifies the ref, commit, tree, parent, artifact, and ledger bindings. A recorded result is only eligible for canary review and never for live activation. See [the reviewed application boundary](docs/self_iteration_application.md).
-
-Phase 6 requires yet another distinct reviewer to sign the exact reviewed branch and a fixed supervisor identity/profile. After a durable one-use claim, Anima sends only that canonical plan over a configured local Unix socket. The external supervisor owns transient activation, three fixed health checks, and mandatory restoration of the exact baseline—even when the candidate passes. Its dedicated key signs the result. A restored pass can recommend keeping the candidate for human merge review; rollback failure requires operator recovery. No result retains activation or grants shell, service-control, push, merge, or deployment authority. See [the transient canary boundary](docs/self_iteration_canary.md).
-
-The attention layer is deliberately not another authority phase. It converts the integrity-checked ledger and reconciled signed review artifacts into stable, bounded records for `next_steps`, default agent context, and downstream observers such as the UNITARES Discord bridge. Caller claims keep their explicit epistemic status, critical recovery states are raised first, and acknowledgement never counts as a review signature. See [the attention projection](docs/self_iteration_attention.md).
+Sandbox artifacts live under `~/.anima/self_iteration_sandboxes`, and the sandbox root is rejected if it resolves inside the source repository — construction never creates, deletes, or replaces a live repository file. `patch_status` returns metadata by default and requires an authenticated request before including the unified diff. `application_status` verifies the ref, commit, tree, parent, artifact, and ledger bindings; a recorded result is eligible for canary review only, never live activation. A restored canary pass can recommend keeping the candidate for human merge review; rollback failure requires operator recovery.
 
 ---
 
@@ -280,7 +297,7 @@ After restart, wait 2 minutes for services to stabilize before retrying MCP call
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # ~7,340 tests
+python3 -m pytest tests/ -x -q   # 8,065 tests
 ```
 
 ## Documentation
