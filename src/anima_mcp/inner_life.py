@@ -14,7 +14,7 @@ Damping stack (mood vs temperament vs neural): CLAUDE.md "Identity, Continuity, 
 import json
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -93,6 +93,13 @@ class InnerState:
     mood_vs_temperament: Dict[str, float]
     drives: Dict[str, float]
     strongest_drive: Optional[str]
+    # Per-dimension want state: how long a saturated drive has been held, and
+    # whether it has become an actual request. The broker already tracks this
+    # (_saturated_since / _active_requests) but never published it, so the
+    # server could see the drive VALUE and not the one number that says whether
+    # Lumen is about to ask for something. Default empty so older callers and
+    # restored snapshots construct unchanged.
+    wants: Dict[str, dict] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -102,6 +109,7 @@ class InnerState:
             "mood_vs_temperament": {k: round(v, 3) for k, v in self.mood_vs_temperament.items()},
             "drives": {k: round(v, 3) for k, v in self.drives.items()},
             "strongest_drive": self.strongest_drive,
+            "wants": self.wants,
         }
 
 
@@ -261,7 +269,34 @@ class InnerLife:
             mood_vs_temperament=mood_vs_temperament,
             drives=drives,
             strongest_drive=strongest_drive,
+            wants=self._build_wants(),
         )
+
+    def _build_wants(self) -> Dict[str, dict]:
+        """Publish the sustain clock so a reader can tell a blip from a want.
+
+        `DRIVE_REQUEST_SUSTAIN_S` is the system's own boundary — "saturated for
+        an hour = a want, not a blip". Everything here is derived from it and
+        from clocks that already exist; no new threshold is introduced, which
+        matters because a constant against Lumen's moving distribution is the
+        defect class CLAUDE.md invariant 1 exists to prevent.
+        """
+        now = time.time()
+        wants: Dict[str, dict] = {}
+        for dim in DIMENSIONS:
+            since = self._saturated_since.get(dim)
+            if since is None:
+                continue
+            held = max(0.0, now - since)
+            wants[dim] = {
+                "held_seconds": round(held, 1),
+                "sustain_required_seconds": DRIVE_REQUEST_SUSTAIN_S,
+                # 1.0 means the hold is long enough to count as a want. Capped
+                # so a long-held want does not report an ever-growing ratio.
+                "sustain_progress": round(min(1.0, held / DRIVE_REQUEST_SUSTAIN_S), 3),
+                "is_request": dim in self._active_requests,
+            }
+        return wants
 
     def _detect_drive_events(self):
         """Detect drive threshold crossings and satisfaction events."""
