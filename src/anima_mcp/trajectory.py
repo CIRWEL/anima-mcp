@@ -11,7 +11,9 @@ characteristics that define an agent's identity:
 - Α (Attractor Basin): Equilibrium and variance in anima state
 - Ρ (Recovery Profile): Characteristic time constants
 - Δ (Relational Disposition): Social behavior patterns
-- Η (Homeostatic Identity): Unified self-maintenance characterization
+- Η (Homeostatic Identity): Unified self-maintenance characterization —
+  a DERIVED VIEW onto (Α, Ρ, V), not an independent measurement channel.
+  It is reported, never weighted. See SIMILARITY_WEIGHTS below.
 
 See: trajectory-identity paper (cirwel/trajectory-identity-paper, separate repo)
 """
@@ -41,6 +43,28 @@ VIABILITY_BOUNDS = {
     "I": (0.3, 1.0),
     "S": (0.0, 0.6),
     "V": (-0.2, 0.15),
+}
+
+# Paper §4.1: the five informationally-independent similarity weights.
+#
+# Η is deliberately ABSENT. Until 2026-08-14 this module summed six components
+# with Η at 0.15 — the pre-v0.11 spec — while the paper had demoted Η in v0.11
+# and its Appendix A claimed this file already tracked the five-weight version.
+# It never did. Η is not merely correlated with Α and Ρ, it is BUILT FROM THEM:
+# compute_trajectory_signature() assigns homeostatic["set_point"] from
+# attractor["center"], homeostatic["basin_shape"] from attractor["covariance"],
+# and homeostatic["recovery_tau"] from recovery["tau_estimate"]. Weighting it
+# re-weighted Α and Ρ under another name.
+#
+# Η remains a first-class part of the signature and is still REPORTED in the
+# compare_signatures() breakdown as a derived view (paper §3.6) — it just does
+# not get a vote in the weighted sum.
+SIMILARITY_WEIGHTS = {
+    "preferences": 0.18,   # Π
+    "beliefs": 0.18,       # Β
+    "attractor": 0.30,     # Α
+    "recovery": 0.22,      # Ρ
+    "relational": 0.12,    # Δ
 }
 
 
@@ -324,8 +348,13 @@ class TrajectorySignature:
         """
         Compute similarity to another trajectory signature.
 
-        This is the core operation for determining identity:
-        sim(Σ₁, Σ₂) > θ implies "same identity"
+        This is the core operation for operational continuity (paper §4.3):
+        sim(Σ₁, Σ₂) > θ implies the two signatures are operationally
+        continuous. That is a tolerance relation, NOT transitive identity —
+        "same identity" is the philosophical reading, not what this returns.
+
+        Weights come from SIMILARITY_WEIGHTS (paper §4.1, five components).
+        Η is excluded by construction; see that constant for why.
 
         Args:
             other: Another TrajectorySignature to compare against
@@ -344,7 +373,7 @@ class TrajectorySignature:
             sim = self._cosine_similarity(v1, v2)
             if sim is not None:
                 scores.append((sim + 1) / 2)  # Map [-1,1] to [0,1]
-                weights.append(0.15)
+                weights.append(SIMILARITY_WEIGHTS["preferences"])
 
         # --- Belief Similarity (Β) ---
         # Cosine similarity of belief values
@@ -354,7 +383,7 @@ class TrajectorySignature:
             sim = self._cosine_similarity(v1, v2)
             if sim is not None:
                 scores.append((sim + 1) / 2)
-                weights.append(0.15)
+                weights.append(SIMILARITY_WEIGHTS["beliefs"])
 
         # --- Attractor Similarity (Α) ---
         # Bhattacharyya coefficient when covariance available, else center distance
@@ -370,7 +399,7 @@ class TrajectorySignature:
                     dist = sum((a - b)**2 for a, b in zip(c1, c2)) ** 0.5
                     alpha_sim = math.exp(-dist * 2)
                 scores.append(alpha_sim)
-                weights.append(0.25)
+                weights.append(SIMILARITY_WEIGHTS["attractor"])
 
         # --- Recovery Similarity (Ρ) ---
         # Similarity of time constants (log-scale)
@@ -380,7 +409,7 @@ class TrajectorySignature:
             log_ratio = abs(math.log(t1 / t2))
             tau_sim = math.exp(-log_ratio)
             scores.append(tau_sim)
-            weights.append(0.20)
+            weights.append(SIMILARITY_WEIGHTS["recovery"])
 
         # --- Relational Similarity (Δ) ---
         # Valence tendency similarity
@@ -390,13 +419,10 @@ class TrajectorySignature:
             # Max diff is 2 (-1 to 1 range)
             valence_sim = 1 - abs(v1 - v2) / 2
             scores.append(valence_sim)
-            weights.append(0.10)
+            weights.append(SIMILARITY_WEIGHTS["relational"])
 
-        # --- Homeostatic Similarity (Η) ---
-        if self.homeostatic and other.homeostatic:
-            eta_sim = homeostatic_similarity(self.homeostatic, other.homeostatic)
-            scores.append(eta_sim)
-            weights.append(0.15)
+        # --- Homeostatic (Η) is NOT summed here. It is a derived view onto
+        # Α and Ρ (see SIMILARITY_WEIGHTS); compare_signatures() reports it.
 
         # --- Compute weighted average ---
         if not scores:
@@ -438,14 +464,7 @@ class TrajectorySignature:
             Dictionary mapping component names to weights (sum to ~1.0)
         """
         if default_weights is None:
-            default_weights = {
-                "preferences": 0.15,
-                "beliefs": 0.15,
-                "attractor": 0.25,
-                "recovery": 0.20,
-                "relational": 0.10,
-                "homeostatic": 0.15,
-            }
+            default_weights = dict(SIMILARITY_WEIGHTS)
 
         # Need at least 5 observations per component for variance
         if not self.component_history:
@@ -534,8 +553,12 @@ class TrajectorySignature:
         if v1 is not None and v2 is not None:
             component_scores["relational"] = 1 - abs(v1 - v2) / 2
 
+        # Η is derived from Α and Ρ, so it is reported but never weighted and
+        # never enters component_history (it would bias the inverse-variance
+        # weights toward what Α and Ρ already say). See SIMILARITY_WEIGHTS.
+        derived_scores = {}
         if self.homeostatic and other.homeostatic:
-            component_scores["homeostatic"] = homeostatic_similarity(
+            derived_scores["homeostatic"] = homeostatic_similarity(
                 self.homeostatic, other.homeostatic
             )
 
@@ -554,7 +577,12 @@ class TrajectorySignature:
 
         # Compute weighted similarity
         if not component_scores:
-            return {"similarity": 0.5, "components": {}, "weights": adaptive_weights}
+            return {
+                "similarity": 0.5,
+                "components": {},
+                "derived": {k: round(v, 4) for k, v in derived_scores.items()},
+                "weights": adaptive_weights,
+            }
 
         weighted_sum = 0.0
         total_weight = 0.0
@@ -568,22 +596,38 @@ class TrajectorySignature:
         return {
             "similarity": round(similarity, 4),
             "components": {k: round(v, 4) for k, v in component_scores.items()},
+            "derived": {k: round(v, 4) for k, v in derived_scores.items()},
             "weights": {k: round(v, 4) for k, v in adaptive_weights.items()},
             "history_depth": {k: len(v) for k, v in self.component_history.items()},
         }
 
-    def is_same_identity(self, other: 'TrajectorySignature', threshold: float = 0.8) -> bool:
+    def is_operationally_continuous(
+        self, other: 'TrajectorySignature', threshold: float = 0.8
+    ) -> bool:
         """
-        Determine if two signatures represent the same identity.
+        Determine whether two signatures are operationally continuous.
+
+        Paper §4.3: this is a tolerance relation at θ_continuity, NOT an
+        identity predicate — it is reflexive and symmetric but not
+        transitive, so it cannot mean "same identity" in the strict sense.
 
         Args:
             other: Another TrajectorySignature
-            threshold: Similarity threshold (default 0.8)
+            threshold: θ_continuity (default 0.8)
 
         Returns:
             True if similarity > threshold
         """
         return self.similarity(other) > threshold
+
+    def is_same_identity(self, other: 'TrajectorySignature', threshold: float = 0.8) -> bool:
+        """Deprecated alias for is_operationally_continuous().
+
+        The name asserts transitive identity, which the relation does not
+        have (paper §4.3). Kept so external callers do not break; prefer
+        is_operationally_continuous().
+        """
+        return self.is_operationally_continuous(other, threshold)
 
     def detect_anomaly(self, historical: 'TrajectorySignature', threshold: float = 0.7) -> Dict[str, Any]:
         """
@@ -946,16 +990,19 @@ def compare_signatures(sig1: TrajectorySignature, sig2: TrajectorySignature) -> 
     if v1 is not None and v2 is not None:
         components["relational"] = round(1 - abs(v1 - v2) / 2, 4)
 
-    # Homeostatic (Eta)
+    # Homeostatic (Eta) — reported as a derived view (paper §3.6), and kept
+    # out of `components` so it cannot be mistaken for a term in the sum.
+    derived = {}
     if sig1.homeostatic and sig2.homeostatic:
-        components["homeostatic"] = round(
+        derived["homeostatic"] = round(
             homeostatic_similarity(sig1.homeostatic, sig2.homeostatic), 4
         )
 
     return {
         "overall_similarity": round(overall, 4),
         "components": components,
-        "is_same_identity": overall > 0.8,
+        "derived": derived,
+        "is_operationally_continuous": overall > 0.8,
     }
 
 
