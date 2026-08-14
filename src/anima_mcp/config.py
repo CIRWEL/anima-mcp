@@ -83,17 +83,32 @@ class NervousSystemCalibration:
     physical_weight: float = 0.7
     
     # Component weights for anima dimensions (must sum to ~1.0)
+    # neural is 0.0 by design, not omitted: consumers use .get("neural", 0.0),
+    # and a file merge is whole-field, so the key stays present to document the
+    # decision. The (beta+gamma)/2 term is CPU% (beta = cpu_percent/100), which
+    # made warmth partly busy-ness — the docstring on _sense_warmth already
+    # says warmth is thermal state. Backtested over 14d before the flip
+    # (2026-08-14): warmth 0.453->0.535, spurious below-comfort episodes
+    # 15.9%->2.0%. CPU%'s single remaining path into E is the EISV mapper's
+    # explicit neural_energy term (#166).
     warmth_weights: Dict[str, float] = field(default_factory=lambda: {
-        "cpu_temp": 0.35,
-        "ambient_temp": 0.45,
-        "neural": 0.20,
+        "cpu_temp": 0.4375,
+        "ambient_temp": 0.5625,
+        "neural": 0.0,
     })
     
+    # neural is 0.0 by design (see warmth_weights). Alpha = 1 - beta by
+    # construction (computational_neural.py), i.e. the SAME CPU reading that
+    # feeds E — so "alpha = relaxed awareness" was an idle Pi inflating I by a
+    # 0.27 share and suppressing E from one variable, the double-count
+    # CLAUDE.md warns neural consumers about. #141/#166 removed it from the
+    # EISV mappers; this removes it at the source. Backtested 14d: clarity
+    # 0.672->0.576 (honest-lower, more variance), V -0.320->-0.166.
     clarity_weights: Dict[str, float] = field(default_factory=lambda: {
-        "prediction_accuracy": 0.50,  # How well I predict my own state = internal seeing
-        "neural": 0.30,               # Alpha power = relaxed awareness
-        "sensor_coverage": 0.15,      # Data richness
-        "world_light": 0.15,          # Environmental light (self-glow subtracted)
+        "prediction_accuracy": 0.625,  # How well I predict my own state = internal seeing
+        "neural": 0.0,
+        "sensor_coverage": 0.1875,     # Data richness
+        "world_light": 0.1875,         # Environmental light (self-glow subtracted)
     })
     
     stability_weights: Dict[str, float] = field(default_factory=lambda: {
