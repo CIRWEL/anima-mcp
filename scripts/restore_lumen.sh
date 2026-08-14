@@ -487,6 +487,19 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/anima-watchdog.s
     sudo systemctl enable anima-watchdog.timer && \
     sudo systemctl start anima-watchdog.timer" || log "  watchdog install failed (non-fatal)"
 
+# 5d. Install the outbound heartbeat (dead-man's switch to an off-host monitor).
+# Every other liveness surface Lumen has runs on the Mac and cannot report that
+# the Mac itself is down. This one leaves both machines. It stays inert until
+# ANIMA_HEARTBEAT_URL is set in anima.env — which a reflash deliberately does not
+# restore, so the pings stop and the provider alerts. See docs/operations/HEARTBEAT.md.
+log "Installing outbound heartbeat timer..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/lumen-heartbeat.sh && \
+    sudo cp ~/anima-mcp/systemd/lumen-heartbeat.service /etc/systemd/system/ && \
+    sudo cp ~/anima-mcp/systemd/lumen-heartbeat.timer /etc/systemd/system/ && \
+    sudo systemctl daemon-reload && \
+    sudo systemctl enable lumen-heartbeat.timer && \
+    sudo systemctl start lumen-heartbeat.timer" || log "  heartbeat install failed (non-fatal)"
+
 # 6. Install cron jobs (wifi watchdog, db maintenance, backup)
 log "Installing cron jobs..."
 PI_SCRIPTS="/home/${PI_USER}/anima-mcp/scripts"
@@ -601,7 +614,7 @@ log "Done. Lumen running (broker + server, no DB contention)."
 # whether each key has one. ANIMA_ADMIN_SECRET is called out separately because
 # an empty value now disables the destructive tools instead of ungating them.
 MISSING_SECRETS="$(ssh $SSH_OPTS "$PI_USER@$PI_HOST" '
-    for k in GROQ_API_KEY UNITARES_AUTH ANIMA_ADMIN_SECRET WIFI_SSID WIFI_PASSWORD; do
+    for k in GROQ_API_KEY UNITARES_AUTH ANIMA_ADMIN_SECRET ANIMA_HEARTBEAT_URL WIFI_SSID WIFI_PASSWORD; do
         v="$(sed -nE "s/^[[:space:]]*${k}=(.*)$/\1/p" ~/.anima/anima.env 2>/dev/null | tail -1)"
         [ -z "$v" ] && printf "%s " "$k"
     done' 2>/dev/null || true)"

@@ -1,0 +1,16 @@
+[Unit]
+Description=Lumen outbound heartbeat - dead-man's switch to an off-host monitor
+Documentation=file:///home/unitares-anima/anima-mcp/docs/operations/HEARTBEAT.md
+# Deliberately NOT After=anima.service: the heartbeat must still run (and report
+# failure) when the services it observes are down. Ordering it after them would
+# make the switch quietest exactly when it matters most.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=unitares-anima
+ExecStart=/home/unitares-anima/anima-mcp/scripts/lumen-heartbeat.sh
+# The script handles its own failure signalling and always exits 0; a non-zero
+# exit here would mean the script itself broke, which systemd should surface.
+TimeoutStartSec=60
