@@ -9,39 +9,89 @@ Maps anima state to visual expression:
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Tuple
+from typing import Dict, Optional, Tuple
 
 from ..anima import Anima
 
 
-# === Named thresholds for clarity ===
-# These define the boundaries between expression states
+# === Expression thresholds ===
+#
+# The named values below are the FALLBACK DEFAULTS, kept for fresh installs and
+# for any deployment that has not derived its own. They are absolute constants
+# against a moving distribution — the defect class CLAUDE.md invariant 1
+# catalogues — and the 2026-08-14 de-aliasing (#173/#176) made that concrete:
+# re-basing warmth/clarity moved the distributions under these constants, so
+# the face smiled more (honestly — the cold was fake) but read "alert" only
+# ~40% of the time instead of ~85% while actually perceiving BETTER.
+#
+# A deployment derives its own from the creature's lived distribution with
+# scripts/derive_face_thresholds.py, which writes `face_thresholds` into the
+# calibration file ($ANIMA_CONFIG → nervous_system.face_thresholds). Values in
+# that dict override these names 1:1; absent keys fall back here. Calibration
+# readers refresh on file-signature change, so a rederive propagates live.
+#
+# Two names are deliberately ABSOLUTE and never derived (safety-floor pattern,
+# anima-mcp#79 item 3): WARMTH_FREEZING (a genuinely cold creature must look
+# shut down even if cold becomes its norm) and STABILITY_DISTRESSED (likewise
+# distress). The derivation script refuses to emit them.
 
-# Warmth thresholds
-WARMTH_FREEZING = 0.20      # Very cold - sleeping/shut down
-WARMTH_COLD = 0.35          # Cold - sluggish, no smiles
-WARMTH_COOL = 0.40          # Cool - not quite comfortable
-WARMTH_COMFORTABLE = 0.45   # Comfortable enough for subtle positivity
-WARMTH_HOT = 0.80           # Overheated - overwhelmed
+_DEFAULT_THRESHOLDS = {
+    # Warmth
+    "WARMTH_FREEZING": 0.20,      # ABSOLUTE - very cold, sleeping/shut down
+    "WARMTH_COLD": 0.35,          # Cold - sluggish, no smiles
+    "WARMTH_COOL": 0.40,          # Cool - not quite comfortable
+    "WARMTH_COMFORTABLE": 0.45,   # Comfortable enough for subtle positivity
+    "WARMTH_HOT": 0.80,           # Overheated - overwhelmed
+    # Clarity
+    "CLARITY_FOGGY": 0.30,        # Very low - uncertain, squinting
+    "CLARITY_DROWSY": 0.40,       # Low - sleepy, unfocused
+    "CLARITY_CLEAR": 0.45,        # Clear enough for contentment
+    "CLARITY_ALERT": 0.60,        # High - curious, engaged
+    # Stability / presence
+    "STABILITY_DISTRESSED": 0.25, # ABSOLUTE - very low, squinting/stressed
+    "STABILITY_UNSTABLE": 0.30,   # Low - frowning
+    "STABILITY_STABLE": 0.40,     # Stable enough for curiosity
+    "STABILITY_GROUNDED": 0.50,   # Well-grounded - can smile
+    # Wellness (mean of the four dimensions)
+    "WELLNESS_DEPLETED": 0.30,    # Very low - flat expression
+    "WELLNESS_LOW": 0.40,         # Low - no positive expression
+    "WELLNESS_OK": 0.45,          # OK - subtle positivity possible
+    "WELLNESS_GOOD": 0.50,        # Good - can smile
+    "WELLNESS_GREAT": 0.55,       # Great - genuine contentment
+}
 
-# Clarity thresholds
-CLARITY_FOGGY = 0.30        # Very low - uncertain, squinting
-CLARITY_DROWSY = 0.40       # Low - sleepy, unfocused
-CLARITY_CLEAR = 0.45        # Clear enough for contentment
-CLARITY_ALERT = 0.60        # High - curious, engaged
+_ABSOLUTE_NAMES = frozenset({"WARMTH_FREEZING", "STABILITY_DISTRESSED"})
 
-# Stability/Presence thresholds
-STABILITY_DISTRESSED = 0.25  # Very low - squinting, stressed
-STABILITY_UNSTABLE = 0.30    # Low - frowning
-STABILITY_STABLE = 0.40      # Stable enough for curiosity
-STABILITY_GROUNDED = 0.50    # Well-grounded - can smile
 
-# Wellness thresholds
-WELLNESS_DEPLETED = 0.30    # Very low - flat expression
-WELLNESS_LOW = 0.40         # Low - no positive expression
-WELLNESS_OK = 0.45          # OK - subtle positivity possible
-WELLNESS_GOOD = 0.50        # Good - can smile
-WELLNESS_GREAT = 0.55       # Great - genuine contentment
+class FaceThresholds:
+    """Expression thresholds, calibration-overridable per name."""
+
+    __slots__ = tuple(_DEFAULT_THRESHOLDS)
+
+    def __init__(self, overrides: Optional[Dict[str, float]] = None):
+        overrides = overrides or {}
+        for name, default in _DEFAULT_THRESHOLDS.items():
+            value = overrides.get(name, default)
+            # The two safety floors may never be softened by a derived file;
+            # a derived value ABOVE the floor (stricter) is allowed.
+            if name in _ABSOLUTE_NAMES and value < default:
+                value = default
+            setattr(self, name, float(value))
+
+
+def get_face_thresholds() -> FaceThresholds:
+    """Thresholds with any calibration-file overrides applied.
+
+    Reads through get_calibration(), which refreshes on config-file signature
+    change — so a rederive lands on the live face without a restart. Fail-open
+    to the defaults: a face must render even if calibration is broken.
+    """
+    try:
+        from ..config import get_calibration
+        overrides = getattr(get_calibration(), "face_thresholds", None) or {}
+    except Exception:
+        overrides = {}
+    return FaceThresholds(overrides)
 
 
 class EyeState(Enum):
@@ -102,6 +152,7 @@ def derive_face_state(anima: Anima) -> FaceState:
     """
     from ..anima import _overall_mood
 
+    thr = get_face_thresholds()
     mood = _overall_mood(anima.warmth, anima.clarity, anima.stability, anima.presence)
     wellness = (anima.warmth + anima.clarity + anima.stability + anima.presence) / 4.0
 
@@ -110,8 +161,8 @@ def derive_face_state(anima: Anima) -> FaceState:
     base_openness = 0.3 + (anima.clarity * 0.5)  # 0.3-0.8
 
     # Warmth affects energy
-    if anima.warmth < WARMTH_COLD:
-        warmth_mod = anima.warmth * 0.1 - (WARMTH_COLD - anima.warmth) * 0.3
+    if anima.warmth < thr.WARMTH_COLD:
+        warmth_mod = anima.warmth * 0.1 - (thr.WARMTH_COLD - anima.warmth) * 0.3
     else:
         warmth_mod = anima.warmth * 0.2
 
@@ -127,13 +178,13 @@ def derive_face_state(anima: Anima) -> FaceState:
     smile_intensity = 0.0
 
     # Priority 1: Distress
-    if anima.stability < STABILITY_UNSTABLE or anima.presence < STABILITY_UNSTABLE:
+    if anima.stability < thr.STABILITY_UNSTABLE or anima.presence < thr.STABILITY_UNSTABLE:
         mouth = MouthState.FROWN
         smile_intensity = -0.3
 
     # Priority 2: Cold - no smiles
-    elif anima.warmth < WARMTH_COLD:
-        if wellness < WELLNESS_LOW:
+    elif anima.warmth < thr.WARMTH_COLD:
+        if wellness < thr.WELLNESS_LOW:
             mouth = MouthState.FLAT
             smile_intensity = -0.1
         else:
@@ -141,57 +192,57 @@ def derive_face_state(anima: Anima) -> FaceState:
             smile_intensity = -0.05
 
     # Priority 3: Depleted
-    elif mood == "sleepy" or wellness < WELLNESS_DEPLETED:
+    elif mood == "sleepy" or wellness < thr.WELLNESS_DEPLETED:
         mouth = MouthState.FLAT
         smile_intensity = 0.0
 
     # Priority 4: Overheated
-    elif mood == "overheated" or anima.warmth > WARMTH_HOT:
+    elif mood == "overheated" or anima.warmth > thr.WARMTH_HOT:
         mouth = MouthState.NEUTRAL
         smile_intensity = 0.0
 
     # Priority 5: Curious - OPEN mouth (this enables WIDE eyes)
-    elif anima.clarity > CLARITY_ALERT and anima.stability > STABILITY_STABLE and anima.warmth > WARMTH_COLD:
+    elif anima.clarity > thr.CLARITY_ALERT and anima.stability > thr.STABILITY_STABLE and anima.warmth > thr.WARMTH_COLD:
         mouth = MouthState.OPEN
         smile_intensity = 0.2
 
     # Priority 6: Content - can smile
-    elif wellness > WELLNESS_GOOD and anima.warmth > WARMTH_COOL:
-        if anima.stability > STABILITY_GROUNDED and anima.presence > STABILITY_GROUNDED:
-            if anima.clarity > CLARITY_CLEAR:
+    elif wellness > thr.WELLNESS_GOOD and anima.warmth > thr.WARMTH_COOL:
+        if anima.stability > thr.STABILITY_GROUNDED and anima.presence > thr.STABILITY_GROUNDED:
+            if anima.clarity > thr.CLARITY_CLEAR:
                 mouth = MouthState.SMILE
-                smile_intensity = min(1.0, (wellness - WELLNESS_GOOD) * 2.0)
+                smile_intensity = min(1.0, (wellness - thr.WELLNESS_GOOD) * 2.0)
             else:
-                smile_intensity = (wellness - WELLNESS_OK) * 1.0
-        elif wellness > WELLNESS_GREAT:
-            smile_intensity = (wellness - WELLNESS_GOOD) * 0.5
+                smile_intensity = (wellness - thr.WELLNESS_OK) * 1.0
+        elif wellness > thr.WELLNESS_GREAT:
+            smile_intensity = (wellness - thr.WELLNESS_GOOD) * 0.5
 
     # Priority 7: Neutral - subtle expression based on state
     else:
-        if wellness > WELLNESS_OK and anima.warmth > WARMTH_COOL:
-            smile_intensity = (wellness - WARMTH_COOL) * 0.3
-        elif anima.warmth < WARMTH_COOL:
-            smile_intensity = (anima.warmth - WARMTH_COOL) * 0.5
-        elif wellness < WARMTH_COLD:
-            smile_intensity = (wellness - WARMTH_COLD) * 0.5
+        if wellness > thr.WELLNESS_OK and anima.warmth > thr.WARMTH_COOL:
+            smile_intensity = (wellness - thr.WARMTH_COOL) * 0.3
+        elif anima.warmth < thr.WARMTH_COOL:
+            smile_intensity = (anima.warmth - thr.WARMTH_COOL) * 0.5
+        elif wellness < thr.WARMTH_COLD:
+            smile_intensity = (wellness - thr.WARMTH_COLD) * 0.5
 
     # === Now determine eyes (coordinated with mouth) ===
     # Key fix: WIDE eyes ONLY when mouth is OPEN (curious)
     # A content creature has relaxed normal eyes, not startled wide ones
 
-    if anima.stability < STABILITY_DISTRESSED or anima.presence < STABILITY_DISTRESSED:
+    if anima.stability < thr.STABILITY_DISTRESSED or anima.presence < thr.STABILITY_DISTRESSED:
         eyes = EyeState.SQUINT
         eye_openness = max(0.2, eye_openness * 0.6)
-    elif anima.warmth < WARMTH_FREEZING:
+    elif anima.warmth < thr.WARMTH_FREEZING:
         eyes = EyeState.CLOSED
         eye_openness = 0.1
-    elif anima.warmth < WARMTH_COLD:
+    elif anima.warmth < thr.WARMTH_COLD:
         eyes = EyeState.DROOPY
         eye_openness = max(0.25, eye_openness * 0.6)
-    elif anima.clarity < CLARITY_FOGGY:
+    elif anima.clarity < thr.CLARITY_FOGGY:
         eyes = EyeState.SQUINT
         eye_openness = max(0.3, eye_openness * 0.7)
-    elif eye_openness < 0.45 and anima.warmth < WARMTH_COMFORTABLE:
+    elif eye_openness < 0.45 and anima.warmth < thr.WARMTH_COMFORTABLE:
         eyes = EyeState.DROOPY
     elif mouth == MouthState.OPEN and eye_openness > 0.60:
         # WIDE eyes ONLY with OPEN mouth = genuine curiosity
@@ -202,7 +253,7 @@ def derive_face_state(anima: Anima) -> FaceState:
         eyes = EyeState.NORMAL
 
     # Eye size - presence now affects this more
-    if anima.warmth < WARMTH_COLD:
+    if anima.warmth < thr.WARMTH_COLD:
         eye_size_factor = 0.6 + (eye_openness * 0.4)
     else:
         # Presence makes eyes more "present" - slightly larger, more engaged
@@ -271,8 +322,8 @@ def derive_face_state(anima: Anima) -> FaceState:
     base_interval = 4.0
 
     # Drowsy: longer between blinks (slow rhythm)
-    if anima.clarity < CLARITY_DROWSY:
-        clarity_mod = (CLARITY_DROWSY - anima.clarity) * 2.0  # +0 to +0.8
+    if anima.clarity < thr.CLARITY_DROWSY:
+        clarity_mod = (thr.CLARITY_DROWSY - anima.clarity) * 2.0  # +0 to +0.8
     else:
         clarity_mod = 0.0
 
@@ -283,8 +334,8 @@ def derive_face_state(anima: Anima) -> FaceState:
     blink_freq = max(2.0, min(6.0, blink_freq))
 
     # Drowsy = heavier, longer blinks
-    if anima.clarity < CLARITY_DROWSY:
-        blink_dur = 0.2 + (CLARITY_DROWSY - anima.clarity) * 0.25  # 0.2-0.3s
+    if anima.clarity < thr.CLARITY_DROWSY:
+        blink_dur = 0.2 + (thr.CLARITY_DROWSY - anima.clarity) * 0.25  # 0.2-0.3s
     else:
         blink_dur = 0.12 + (1.0 - anima.clarity) * 0.06  # 0.12-0.18s
     blink_dur = max(0.1, min(0.3, blink_dur))

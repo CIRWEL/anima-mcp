@@ -130,6 +130,14 @@ class NervousSystemCalibration:
     # degraded mode (no ctx stats) the fallback was gamma = beta*0.5: exact
     # aliasing. Presence is resource headroom, read once per resource.
     # Backtested before the flip: presence 0.733 -> 0.713, sd 0.016 -> 0.012.
+    # Face expression thresholds derived from THIS creature's lived
+    # distribution (scripts/derive_face_thresholds.py). Empty = use the
+    # built-in defaults in display/face.py — fresh installs render identically
+    # to before this field existed. Keys override 1:1; the two absolute safety
+    # floors (WARMTH_FREEZING, STABILITY_DISTRESSED) are clamped in
+    # FaceThresholds and refused by the derivation script.
+    face_thresholds: Dict[str, float] = field(default_factory=dict)
+
     presence_weights: Dict[str, float] = field(default_factory=lambda: {
         "disk": 0.3125,
         "memory": 0.375,
