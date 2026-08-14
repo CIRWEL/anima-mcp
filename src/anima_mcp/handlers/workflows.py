@@ -227,6 +227,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
         unitares_connected=unitares_connected,
         drives=_il.get("drives"),
         strongest_drive=_il.get("strongest_drive"),
+        wants=_il.get("wants"),
         self_iteration_attention=self_iteration_attention,
     )
 

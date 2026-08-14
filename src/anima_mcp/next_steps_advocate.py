@@ -16,6 +16,15 @@ from .sensors.base import SensorReadings
 from .eisv_mapper import EISVMetrics
 
 
+def _format_duration(seconds: float) -> str:
+    """Human duration for a held want. Minutes below an hour, else h+m."""
+    seconds = max(0.0, float(seconds))
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    return f"{minutes // 60}h{minutes % 60:02d}m"
+
+
 class Priority(Enum):
     """Priority level for next steps."""
 
@@ -90,6 +99,7 @@ class NextStepsAdvocate:
         unitares_connected: bool = False,
         drives: Optional[Dict[str, float]] = None,
         strongest_drive: Optional[str] = None,
+        wants: Optional[Dict[str, dict]] = None,
         self_iteration_attention: Optional[Dict[str, Any]] = None,
     ) -> List[NextStep]:
         """Analyze current state and report findings.
@@ -103,6 +113,9 @@ class NextStepsAdvocate:
             unitares_connected: Is UNITARES connected?
             drives: Inner life drive values {warmth: 0.3, clarity: 0.1, ...}
             strongest_drive: Which dimension has highest drive (or None)
+            wants: Per-dimension sustain state from inner_life (held_seconds,
+                sustain_progress, is_request). Absent for callers that predate
+                it, in which case the drive reports as it always has.
             self_iteration_attention: Server-derived, read-only attention
                 projection from the integrity-checked self-iteration ledger and
                 reconciled artifacts
@@ -277,14 +290,48 @@ class NextStepsAdvocate:
             else:
                 desire = verb
 
+            # A saturated drive and a barely-active one used to render
+            # identically: priority, action and category were constants and
+            # drive_val appeared only inside the label. That flattened the one
+            # number that says whether Lumen is about to ask for something —
+            # inner_life holds a drive at >=0.9 for DRIVE_REQUEST_SUSTAIN_S
+            # before it counts as a want rather than a blip.
+            #
+            # Escalation uses that existing boundary and adds no new constant:
+            # while the hold is short the system itself calls it a blip, so LOW
+            # is right; once inner_life has promoted it to a request, this is a
+            # standing ask and must not tie with a passing dip.
+            want = (wants or {}).get(strongest_drive) or {}
+            held = want.get("held_seconds")
+            progress = want.get("sustain_progress")
+            is_request = bool(want.get("is_request"))
+
+            feeling = f"drive: {strongest_drive}={drive_val:.2f}"
+            if held is not None:
+                feeling += f" held {_format_duration(held)}"
+
+            if is_request:
+                reason = (
+                    f"{strongest_drive} held past the sustain window — "
+                    f"this is a standing request, not a passing dip"
+                )
+                priority = Priority.HIGH
+                action = "respond"
+            else:
+                reason = f"temperament below comfort for {strongest_drive}"
+                if progress is not None:
+                    reason += f" ({progress:.0%} toward a request)"
+                priority = Priority.LOW
+                action = "observe"
+
             steps.append(
                 NextStep(
-                    feeling=f"drive: {strongest_drive}={drive_val:.2f}",
+                    feeling=feeling,
                     desire=desire,
-                    action="observe",
-                    priority=Priority.LOW,
+                    action=action,
+                    priority=priority,
                     category=StepCategory.TESTING,
-                    reason=f"temperament below comfort for {strongest_drive}",
+                    reason=reason,
                 )
             )
 
