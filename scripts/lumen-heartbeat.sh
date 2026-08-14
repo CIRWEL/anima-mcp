@@ -22,10 +22,22 @@
 # reported healthy through every software failure Lumen has ever had. That is
 # the exact fail-toward-healthy shape CLAUDE.md invariant 2 forbids.
 #
-# So the heartbeat gates on Lumen's own WORK OUTPUT: the shared-memory envelope
-# the broker rewrites every tick. Freshness of that file is evidence the broker
-# is doing its job. Deliberately NOT `systemctl is-active` — a live PID is not
-# work output, the same distinction the BEAM lease plane learned the hard way.
+# So the heartbeat gates on Lumen's own WORK OUTPUT. Deliberately NOT
+# `systemctl is-active` — a live PID is not work output, the same distinction
+# the BEAM lease plane learned the hard way.
+#
+# THREE processes make up the creature, and the same argument says one process's
+# work output is not the creature's:
+#
+#   anima-broker      sensors + learning -> /dev/shm/anima_state.json
+#   anima-broker-ex   Elixir, owns the governance check-ins -> ...shadow.json
+#   anima             MCP server: agency learner (authoritative), metacognition,
+#                     growth, drawing, display, the whole tool surface
+#
+# The first version of this script checked only the first envelope. If the MCP
+# server died, the broker kept writing, the envelope stayed fresh, and the switch
+# would have pinged green forever while most of Lumen was gone. Each component is
+# now probed by its own work output and the WORST result decides.
 #
 # It does NOT gate on governance reachability. Governance lives on the Mac, so
 # folding it in here would page the operator about a Mac outage under the
@@ -53,6 +65,14 @@ set -uo pipefail
 ENV_FILE="${ANIMA_ENV_FILE:-$HOME/.anima/anima.env}"
 LOGFILE="${ANIMA_HEARTBEAT_LOG:-$HOME/.anima/heartbeat.log}"
 SHM_PATH="${ANIMA_SHM_PATH:-/dev/shm/anima_state.json}"
+SHADOW_PATH="${ANIMA_HEARTBEAT_SHADOW_PATH:-/dev/shm/anima_state.shadow.json}"
+# Functional probe of the MCP server. It answers 200 or it does not; there is no
+# cached artifact to go stale in a way that reads healthy.
+SERVER_URL="${ANIMA_HEARTBEAT_SERVER_URL:-http://127.0.0.1:8766/health}"
+# Comma list of components to skip, for documented rollbacks (e.g. reverting the
+# Elixir broker leaves a stale shadow envelope that would otherwise page forever).
+# Values: broker, broker_ex, server.
+SKIP="${ANIMA_HEARTBEAT_SKIP:-}"
 
 # Broker ticks ~every 2s. 120s tolerates a service restart and a slow tick
 # without tolerating a dead broker.
@@ -87,15 +107,25 @@ fi
 FAIL_URL="${ANIMA_HEARTBEAT_FAIL_URL:-${URL%/}/fail}"
 
 # --- Is Lumen alive? -------------------------------------------------------
-# Age of the broker's shared-memory envelope, in seconds. Missing file, corrupt
-# JSON, and unparseable timestamp all resolve to "not fresh" rather than to a
+skipped() { case ",$SKIP," in *",$1,"*) return 0;; *) return 1;; esac; }
+
+fail_out() {
+    log "$1 — signalling failure"
+    curl -fsS -m 10 --retry 2 -o /dev/null "$FAIL_URL" \
+        || log "WARNING: could not reach heartbeat provider to report failure"
+    exit 0
+}
+
+# Age of an envelope in seconds, or empty if unreadable. Missing file, corrupt
+# JSON and unparseable timestamp all resolve to "not fresh" rather than to a
 # default that would read as healthy.
-AGE=$(python3 - "$SHM_PATH" <<'PY' 2>/dev/null
+envelope_age() {
+    python3 - "$1" <<'PY' 2>/dev/null
 import json, sys, os
 from datetime import datetime
 try:
     path = sys.argv[1]
-    # mtime is the honest floor: the broker rewrites the file every tick, so a
+    # mtime is the honest floor: the writer rewrites the file every tick, so a
     # stale mtime means it stopped writing regardless of what the payload says.
     age_mtime = (datetime.now().timestamp() - os.path.getmtime(path))
     with open(path) as fh:
@@ -104,7 +134,7 @@ try:
     if stamp:
         try:
             age_field = (datetime.now() - datetime.fromisoformat(stamp)).total_seconds()
-        except ValueError:
+        except (ValueError, TypeError):
             age_field = None
     # Take the WORSE of the two. A payload timestamp that looks fresh while the
     # file has not been touched means something is rewriting a cached value.
@@ -112,20 +142,24 @@ try:
 except Exception:
     sys.exit(1)
 PY
-)
+}
 
-if [ -z "${AGE:-}" ]; then
-    log "envelope unreadable at $SHM_PATH — signalling failure"
-    curl -fsS -m 10 --retry 2 -o /dev/null "$FAIL_URL" \
-        || log "WARNING: could not reach heartbeat provider to report failure"
-    exit 0
-fi
+check_envelope() {
+    local label="$1" path="$2" age
+    skipped "$label" && return 0
+    age=$(envelope_age "$path")
+    [ -z "${age:-}" ] && fail_out "$label envelope unreadable at $path"
+    [ "$age" -gt "$MAX_AGE" ] && fail_out "$label envelope stale (${age}s > ${MAX_AGE}s)"
+    return 0
+}
 
-if [ "$AGE" -gt "$MAX_AGE" ]; then
-    log "envelope stale (${AGE}s > ${MAX_AGE}s) — signalling failure"
-    curl -fsS -m 10 --retry 2 -o /dev/null "$FAIL_URL" \
-        || log "WARNING: could not reach heartbeat provider to report failure"
-    exit 0
+check_envelope broker    "$SHM_PATH"
+check_envelope broker_ex "$SHADOW_PATH"
+
+if ! skipped server; then
+    # A slow answer is still an answer; only a refusal/timeout counts as dead.
+    curl -fsS -m 10 --retry 1 -o /dev/null "$SERVER_URL" \
+        || fail_out "MCP server not answering at $SERVER_URL"
 fi
 
 if curl -fsS -m 10 --retry 2 -o /dev/null "$URL"; then
@@ -136,5 +170,5 @@ fi
 # Reaching the provider failed. Do NOT treat that as Lumen being unwell; it is
 # almost always the Pi's own uplink, which is itself an outage the provider will
 # notice as absence. Log it so a chronically unreachable provider is visible.
-log "envelope fresh (${AGE}s) but heartbeat ping failed — provider unreachable"
+log "all components healthy but heartbeat ping failed — provider unreachable"
 exit 0

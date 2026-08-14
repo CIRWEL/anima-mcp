@@ -25,9 +25,27 @@ has network. It would have reported healthy through every software failure Lumen
 has ever had. That is the fail-toward-healthy shape CLAUDE.md invariant 2
 forbids.
 
-So the heartbeat gates on Lumen's own **work output**: the freshness of
-`/dev/shm/anima_state.json`, which the broker rewrites every tick. Deliberately
-*not* `systemctl is-active` — a live PID is not work output.
+So the heartbeat gates on Lumen's own **work output**, never on
+`systemctl is-active` — a live PID is not work output.
+
+Three processes make up the creature, and the same argument says one process's
+work output is not the creature's:
+
+| component | what it does | probe |
+|---|---|---|
+| `anima-broker` | sensors, learning | freshness of `/dev/shm/anima_state.json` |
+| `anima-broker-ex` | Elixir; owns the governance check-ins | freshness of `…shadow.json` |
+| `anima` | MCP server: agency learner (authoritative), metacognition, growth, drawing, display, the tool surface | `GET http://127.0.0.1:8766/health` |
+
+**The worst result decides.** The first version of this script checked only the
+first envelope — so if the MCP server had died, the broker would have kept
+writing, the envelope would have stayed fresh, and the switch would have pinged
+green forever while most of Lumen was gone. That is the exact failure the switch
+exists to prevent, and it took an adversarial review to catch it.
+
+The server gets a functional probe rather than a file, deliberately: it either
+answers or it does not, so there is no cached artifact that can go stale in a
+way that reads healthy.
 
 It does **not** gate on governance reachability. Governance lives on the Mac, so
 folding it in would page you about a Mac outage under the heading "Lumen is
@@ -95,7 +113,11 @@ Once, deliberately:
 
 ```bash
 sudo systemctl stop anima-broker      # envelope goes stale
+sudo systemctl stop anima             # or: the MCP server stops answering
 ```
+
+Test the server one specifically. It is the component the first version of this
+script could not see, and the one whose death is least visible from outside.
 
 Within ~5 minutes you should get a page. Start it again and you should get a
 recovery. A dead-man's switch nobody has ever seen fire is a dead-man's switch
@@ -111,7 +133,13 @@ nobody knows is wired.
 - Unset URL → the script exits 0 and logs once that it is inert, so an
   un-provisioned Pi is not a crash loop.
 - Tunables: `ANIMA_HEARTBEAT_MAX_AGE` (default 120s), `ANIMA_HEARTBEAT_FAIL_URL`
-  (defaults to `<url>/fail`), `ANIMA_SHM_PATH`.
+  (defaults to `<url>/fail`), `ANIMA_SHM_PATH`, `ANIMA_HEARTBEAT_SHADOW_PATH`,
+  `ANIMA_HEARTBEAT_SERVER_URL`.
+- `ANIMA_HEARTBEAT_SKIP` is a comma list (`broker`, `broker_ex`, `server`) for
+  **documented rollbacks only**. Reverting the Elixir broker leaves a stale
+  shadow envelope that would otherwise page forever. Skipping a component is
+  choosing not to be told about it — set it deliberately, and unset it when the
+  rollback ends.
 
 ## What this still does not cover
 

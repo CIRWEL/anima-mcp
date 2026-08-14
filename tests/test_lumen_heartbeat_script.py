@@ -32,10 +32,15 @@ def rig(tmp_path):
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     stub = bin_dir / "curl"
+    # Records every URL curl is handed. CURL_FAIL_URLS is a space-separated list
+    # of substrings; a request matching any of them exits non-zero, so a test can
+    # kill one endpoint (the server probe, say) without killing the others.
     stub.write_text(
         "#!/bin/bash\n"
-        f'for a in "$@"; do case "$a" in http*) echo "$a" >> "{calls}";; esac; done\n'
-        f'[ -n "${{CURL_SHOULD_FAIL:-}}" ] && exit 7\nexit 0\n'
+        f'for a in "$@"; do case "$a" in http*) echo "$a" >> "{calls}";\n'
+        '    for f in ${CURL_FAIL_URLS:-}; do case "$a" in *"$f"*) exit 7;; esac; done;;\n'
+        '  esac; done\n'
+        '[ -n "${CURL_SHOULD_FAIL:-}" ] && exit 7\nexit 0\n'
     )
     stub.chmod(0o755)
 
@@ -44,6 +49,7 @@ def rig(tmp_path):
 
     log = tmp_path / "heartbeat.log"
     shm = tmp_path / "anima_state.json"
+    shadow = tmp_path / "anima_state.shadow.json"
 
     def run(extra_env=None):
         env = dict(os.environ)
@@ -51,6 +57,10 @@ def rig(tmp_path):
         env["ANIMA_ENV_FILE"] = str(env_file)
         env["ANIMA_HEARTBEAT_LOG"] = str(log)
         env["ANIMA_SHM_PATH"] = str(shm)
+        env["ANIMA_HEARTBEAT_SHADOW_PATH"] = str(shadow)
+        # The curl stub answers 200 for everything, so the server probe passes
+        # unless a test overrides it.
+        env["ANIMA_HEARTBEAT_SERVER_URL"] = "http://server.test/health"
         env["ANIMA_HEARTBEAT_INERT_MARK"] = str(tmp_path / ".inert-mark")
         env.pop("ANIMA_HEARTBEAT_URL", None)
         env.update(extra_env or {})
@@ -59,21 +69,33 @@ def rig(tmp_path):
         )
 
     def pinged():
-        return calls.read_text().splitlines() if calls.exists() else []
+        """Only heartbeat-provider URLs; the server health probe is not a ping."""
+        if not calls.exists():
+            return []
+        return [u for u in calls.read_text().splitlines() if u.startswith(PING)]
 
-    def write_envelope(age_seconds=0, stamp_age_seconds=None):
+    def _write(path, age_seconds=0, stamp_age_seconds=None):
         stamp = datetime.now() - timedelta(
             seconds=stamp_age_seconds if stamp_age_seconds is not None else age_seconds
         )
-        shm.write_text(json.dumps({"updated_at": stamp.isoformat(), "data": {}}))
+        path.write_text(json.dumps({"updated_at": stamp.isoformat(), "data": {}}))
         if age_seconds:
             old = time.time() - age_seconds
-            os.utime(shm, (old, old))
+            os.utime(path, (old, old))
+
+    def write_envelope(age_seconds=0, stamp_age_seconds=None, shadow_age=0):
+        """Write the broker envelope; keep the shadow healthy unless told otherwise."""
+        _write(shm, age_seconds, stamp_age_seconds)
+        _write(shadow, shadow_age)
+
+    def write_shadow(age_seconds=0):
+        _write(shadow, age_seconds)
 
     return type(
         "Rig", (), {"run": staticmethod(run), "pinged": staticmethod(pinged),
                     "write_envelope": staticmethod(write_envelope),
-                    "log": log, "shm": shm, "env_file": env_file}
+                    "write_shadow": staticmethod(write_shadow),
+                    "log": log, "shm": shm, "shadow": shadow, "env_file": env_file}
     )
 
 
@@ -136,7 +158,7 @@ def test_inert_notice_is_rate_limited_to_daily(rig):
 def test_unreachable_provider_does_not_masquerade_as_lumen_failure(rig):
     """The Pi's uplink dying is not Lumen dying; the provider sees it as absence."""
     rig.write_envelope(age_seconds=0)
-    result = rig.run({"CURL_SHOULD_FAIL": "1"})
+    result = rig.run({"CURL_FAIL_URLS": "hc-ping.test"})
     assert result.returncode == 0
     assert "provider unreachable" in rig.log.read_text()
 
@@ -152,3 +174,57 @@ def test_happy_path_stays_quiet_in_the_log(rig):
     rig.write_envelope(age_seconds=0)
     rig.run()
     assert not rig.log.exists() or rig.log.read_text().strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# The creature is three processes; one process's work output is not the whole
+# ---------------------------------------------------------------------------
+#
+# The first version gated only on the broker's envelope. If the MCP server died
+# — agency learner, metacognition, growth, drawing, the whole tool surface — the
+# broker kept writing, the envelope stayed fresh, and the switch would have
+# pinged green forever. That is the exact failure the switch exists to prevent.
+
+
+def test_dead_mcp_server_fails_even_with_fresh_envelopes(rig):
+    rig.write_envelope(age_seconds=0)
+    result = rig.run({"CURL_FAIL_URLS": "server.test"})
+    assert result.returncode == 0
+    assert rig.pinged()[-1].endswith("/fail")
+    assert "MCP server not answering" in rig.log.read_text()
+
+
+def test_dead_elixir_broker_fails_even_with_a_fresh_main_envelope(rig):
+    """anima-broker-ex owns the governance check-ins; its silence is an outage."""
+    rig.write_envelope(age_seconds=0, shadow_age=600)
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "broker_ex envelope stale" in rig.log.read_text()
+
+
+def test_missing_shadow_envelope_fails(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.shadow.unlink()
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "broker_ex envelope unreadable" in rig.log.read_text()
+
+
+def test_all_three_healthy_pings_success(rig):
+    rig.write_envelope(age_seconds=0)
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [PING]
+
+
+def test_skip_list_allows_a_documented_rollback(rig):
+    """Reverting the Elixir broker leaves a stale shadow that would page forever."""
+    rig.write_envelope(age_seconds=0, shadow_age=99999)
+    assert rig.run({"ANIMA_HEARTBEAT_SKIP": "broker_ex"}).returncode == 0
+    assert rig.pinged() == [PING]
+
+
+def test_skip_list_does_not_disable_the_others(rig):
+    rig.write_envelope(age_seconds=600, shadow_age=0)
+    assert rig.run({"ANIMA_HEARTBEAT_SKIP": "broker_ex"}).returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "broker envelope stale" in rig.log.read_text()
