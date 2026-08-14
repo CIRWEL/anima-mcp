@@ -50,22 +50,36 @@ runs a retroactive rescale, a never-re-derived NEW external insight ranks
 
 ## Architecture
 
-Two systemd services run on the Pi:
+**Three** systemd services run on the Pi:
 
 ```
-anima-broker.service        anima.service
-(hardware broker)           (MCP server)
-     |                           |
-     | writes to                 | reads from
-     +---> /dev/shm/anima_state.json <--+
+anima-broker-ex.service     anima-broker.service        anima.service
+(Elixir broker)             (Python broker)             (MCP server)
+     |                           |                           |
+     | owns I2C env sensors      | writes to                 | reads from
+     | + ALL governance          |                           |
+     | check-ins                 v                           |
+     +-> ...shadow.json    /dev/shm/anima_state.json <-------+
+         (reads live env        ^
+          sensors FROM shadow --+  via ANIMA_ENV_SENSORS_FROM_SHM)
 ```
 
-| Service | Command | Role |
-|---------|---------|------|
-| `anima-broker.service` | `anima-creature` | Hardware broker - owns I2C, runs learning |
+| Service | Runs | Role |
+|---------|------|------|
+| `anima-broker-ex.service` | Elixir release (`anima_broker/_build/prod/rel/`) | Owns the I2C env sensors (writes the shadow envelope the Python broker consumes) and is the **sole UNITARES caller** — `AnimaBroker.Governance.Client` checks in as Lumen every ~180s |
+| `anima-broker.service` | `anima-creature` | Hardware broker - display/LEDs, learning; env sensors come FROM the Elixir shadow; governance comes FROM the shadow too (`ANIMA_GOVERNANCE_FROM_SHM`, Python's own check-in loop disabled) |
 | `anima.service` | `anima --http` | MCP server - serves tools, reads shared memory |
 
-**Both must run for full functionality.** The broker writes sensor data and learning state to shared memory; the server reads it.
+**All three must run.** This file said "two services" from the Phase-1/2 Elixir
+cutovers (2026-07-01/09) until 2026-08-14, and the gap had real costs: agents
+"fixed" the EISV formula in the Python mapper that no longer drives check-ins
+(#141) while the live Elixir mapper kept the bug for two more days (#166), and
+the first dead-man's switch monitored one process of three (#171). A formula
+change in `eisv_mapper.py` needs the same change in
+`anima_broker/lib/anima_broker/governance/eisv_mapper.ex` **plus an on-Pi
+release rebuild** — `git pull` alone does not touch the compiled Elixir release
+(`MIX_ENV=prod mix release --overwrite && sudo systemctl restart
+anima-broker-ex`).
 
 ### Entry Points (pyproject.toml)
 
@@ -112,7 +126,7 @@ Handler modules import state accessors from `accessors.py` (e.g., `from ..access
 
 Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth) use 90s. Governance uses dedicated SHM freshness thresholds (currently 210s).
 
-**Governance health** checks broker's shared memory governance data (broker is sole UNITARES caller, default every 180s via `ANIMA_GOVERNANCE_INTERVAL_SECONDS`). Stale threshold: 210s.
+**Governance health** checks the shared-memory governance data (the Elixir broker `anima-broker-ex` is the sole UNITARES caller, ~180s cadence). Stale threshold: 210s.
 
 ### Learning Systems — which process runs them
 
@@ -488,9 +502,10 @@ anything, but it still steers no mark.
 
 ```bash
 # Check status
-sudo systemctl status anima-broker anima
+sudo systemctl status anima-broker-ex anima-broker anima
 
-# Restart both
+# Restart the Python pair (the Elixir broker rarely needs it; see Architecture
+# for when it needs a release REBUILD, not just a restart)
 sudo systemctl restart anima-broker anima
 
 # View logs
@@ -527,7 +542,13 @@ ssh unitares-anima@<tailscale-ip> 'cd ~/anima-mcp && git pull && sudo systemctl 
 
 ## UNITARES Integration
 
-The **broker** (`stable_creature.py`) is the primary UNITARES caller. It checks in on a configurable cadence (`ANIMA_GOVERNANCE_INTERVAL_SECONDS`, default 180s, minimum 30s) and writes the governance decision to shared memory with a `governance_at` timestamp. The **server** (`server.py`) reads governance from SHM and has a fallback: if no "via unitares" decision arrives for 240s (`SERVER_GOVERNANCE_FALLBACK_SECONDS`), the server calls UNITARES directly using its native async event loop. This fallback exists because the broker's sync+ThreadPoolExecutor+new-event-loop pattern has reliability issues with aiohttp sessions.
+The **Elixir broker** (`anima-broker-ex`, `AnimaBroker.Governance.Client`) is the
+sole UNITARES caller since the Phase-2 cutover (2026-07-09). It reads anima state
+from the live envelope, checks in as Lumen's own UUID every ~180s, and writes the
+decision to the SHADOW envelope with a `governance_at` timestamp. The Python
+broker (`stable_creature.py`) runs in passthrough (`ANIMA_GOVERNANCE_FROM_SHM`);
+its own check-in loop is disabled and it republishes the shadow's governance
+slice into the live envelope. The **server** (`server.py`) reads governance from SHM and has a fallback: if no "via unitares" decision arrives for 240s (`SERVER_GOVERNANCE_FALLBACK_SECONDS`), the server calls UNITARES directly using its native async event loop. This fallback exists because the broker's sync+ThreadPoolExecutor+new-event-loop pattern has reliability issues with aiohttp sessions.
 
 ```
 UNITARES_URL=http://<tailscale-ip>:8767/mcp/  # verify Mac IP with `tailscale status`
