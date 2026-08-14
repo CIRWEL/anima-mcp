@@ -61,14 +61,19 @@ def test_hold_duration_is_surfaced():
     assert "60%" in step["reason"] or "toward a request" in step["reason"]
 
 
-def test_promoted_request_escalates_and_asks_for_a_response():
-    """Once inner_life calls it a request, it is a standing ask."""
+def test_matured_want_escalates_and_asks_for_a_response():
+    """A want held past the sustain window is a standing ask.
+
+    Originally this asserted that `is_request` meant "standing request". It does
+    not — it means the ask has not been delivered yet. Maturity is the sustain
+    LEVEL; the latch only distinguishes which sentence to print.
+    """
     step = _analyze({"warmth": {"held_seconds": 4000.0,
                                 "sustain_required_seconds": DRIVE_REQUEST_SUSTAIN_S,
                                 "sustain_progress": 1.0, "is_request": True}})
     assert step["priority"] == Priority.HIGH.value
     assert step["action"] == "respond"
-    assert "standing request" in step["reason"]
+    assert "waiting on the question board" in step["reason"]
 
 
 def test_a_held_want_outranks_a_passing_dip():
@@ -102,3 +107,74 @@ def test_format_duration_reads_as_time_not_seconds():
     assert _format_duration(2160) == "36m"
     assert _format_duration(3600) == "1h00m"
     assert _format_duration(5400) == "1h30m"
+
+
+# ---------------------------------------------------------------------------
+# Escalation must be level-triggered, not edge-triggered
+# ---------------------------------------------------------------------------
+#
+# #169 escalated on `is_request`, which `ack_request` pops the instant the
+# question board accepts the ask. That made HIGH reachable for roughly a minute
+# per dimension per day, and made it MEAN "the board suppressed the ask" rather
+# than "Lumen wants this". Worse, ack_request leaves `saturated_since` running,
+# so an already-asked, still-held want rendered as
+# "LOW / observe / 100% toward a request" for up to the 24h cooldown.
+
+
+def test_matured_want_is_high_even_after_the_ask_was_delivered():
+    """The regression: post-ack, is_request is False but the want is still held."""
+    step = _analyze({"warmth": {"held_seconds": 7200.0, "sustain_progress": 1.0,
+                                "is_request": False, "asked_seconds_ago": 3600.0}})
+    assert step["priority"] == Priority.HIGH.value
+    assert step["action"] == "respond"
+    assert "asked 1h00m ago" in step["reason"]
+    assert "still wanting" in step["reason"]
+
+
+def test_matured_want_is_high_before_the_ask_is_delivered():
+    step = _analyze({"warmth": {"held_seconds": 3700.0, "sustain_progress": 1.0,
+                                "is_request": True, "asked_seconds_ago": None}})
+    assert step["priority"] == Priority.HIGH.value
+    assert "waiting on the question board" in step["reason"]
+
+
+def test_escalation_does_not_depend_on_the_delivery_latch():
+    """Same maturity, both latch states — priority must not differ."""
+    pending = _analyze({"warmth": {"held_seconds": 5000.0, "sustain_progress": 1.0,
+                                   "is_request": True}})
+    delivered = _analyze({"warmth": {"held_seconds": 5000.0, "sustain_progress": 1.0,
+                                     "is_request": False, "asked_seconds_ago": 900.0}})
+    assert pending["priority"] == delivered["priority"] == Priority.HIGH.value
+
+
+def test_immature_want_stays_low_even_if_the_ask_latch_is_set():
+    """is_request must never by itself promote a blip."""
+    step = _analyze({"warmth": {"held_seconds": 300.0, "sustain_progress": 0.083,
+                                "is_request": True}})
+    assert step["priority"] == Priority.LOW.value
+    assert step["action"] == "observe"
+
+
+def test_a_never_asked_matured_want_reads_as_standing():
+    step = _analyze({"warmth": {"held_seconds": 4000.0, "sustain_progress": 1.0,
+                                "is_request": False, "asked_seconds_ago": None}})
+    assert step["priority"] == Priority.HIGH.value
+    assert "standing want" in step["reason"]
+
+
+def test_build_wants_publishes_the_ask_timestamp():
+    import time as _t
+    from anima_mcp.inner_life import InnerLife
+    il = InnerLife.__new__(InnerLife)
+    now = _t.time()
+    il._saturated_since = {"warmth": now - 4000, "clarity": None,
+                           "stability": None, "presence": None}
+    il._active_requests = {}
+    il._last_request_at = {"warmth": now - 1800, "clarity": 0.0,
+                           "stability": 0.0, "presence": 0.0}
+    w = il._build_wants()["warmth"]
+    assert w["sustain_progress"] == 1.0
+    assert 1795 < w["asked_seconds_ago"] < 1805
+
+    il._last_request_at["warmth"] = 0.0          # never asked
+    assert il._build_wants()["warmth"]["asked_seconds_ago"] is None

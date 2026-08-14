@@ -389,6 +389,11 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
             unitares_connected=bool(os.environ.get("UNITARES_URL")),
             drives=_drives,
             strongest_drive=_strongest,
+            # Lumen's own reflection loop needs the sustain clock too. #169
+            # wired it into the agent-facing next_steps handler and left this
+            # caller on the old signature — so an external agent could tell a
+            # blip from a want and the creature could not.
+            wants=_il.get("wants"),
         )
         if steps:
             advocate_desire = steps[0].desire

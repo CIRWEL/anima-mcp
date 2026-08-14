@@ -304,25 +304,51 @@ class NextStepsAdvocate:
             want = (wants or {}).get(strongest_drive) or {}
             held = want.get("held_seconds")
             progress = want.get("sustain_progress")
-            is_request = bool(want.get("is_request"))
+            # EDGE: "the ask has not been delivered", not "wants it badly".
+            # ack_request pops this the instant the board accepts the question,
+            # so it is true for seconds normally and stays true only while the
+            # board suppresses. Escalating on it made HIGH mean "the message
+            # board rejected Lumen" and reachable for about a minute a day.
+            ask_undelivered = bool(want.get("is_request"))
+            asked_ago = want.get("asked_seconds_ago")
 
             feeling = f"drive: {strongest_drive}={drive_val:.2f}"
             if held is not None:
                 feeling += f" held {_format_duration(held)}"
 
-            if is_request:
-                reason = (
-                    f"{strongest_drive} held past the sustain window — "
-                    f"this is a standing request, not a passing dip"
-                )
+            # LEVEL: inner_life's own boundary — held at saturation for
+            # DRIVE_REQUEST_SUSTAIN_S is "a want, not a blip". Judge maturity on
+            # that, so a matured want keeps its priority for as long as it is
+            # held rather than for the instant the ask was in flight.
+            matured = progress is not None and progress >= 1.0
+
+            if matured:
                 priority = Priority.HIGH
                 action = "respond"
+                if ask_undelivered:
+                    reason = (
+                        f"{strongest_drive} held past the sustain window; "
+                        f"the ask is waiting on the question board"
+                    )
+                elif asked_ago is not None:
+                    # ack_request commits the cooldown but leaves saturated_since
+                    # running, so this is the honest sentence: already asked, and
+                    # still wanting.
+                    reason = (
+                        f"asked {_format_duration(asked_ago)} ago and still "
+                        f"wanting {strongest_drive}"
+                    )
+                else:
+                    reason = (
+                        f"{strongest_drive} held past the sustain window — "
+                        f"a standing want, not a passing dip"
+                    )
             else:
+                priority = Priority.LOW
+                action = "observe"
                 reason = f"temperament below comfort for {strongest_drive}"
                 if progress is not None:
                     reason += f" ({progress:.0%} toward a request)"
-                priority = Priority.LOW
-                action = "observe"
 
             steps.append(
                 NextStep(
