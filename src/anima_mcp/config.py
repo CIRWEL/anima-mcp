@@ -108,7 +108,11 @@ class NervousSystemCalibration:
         "prediction_accuracy": 0.625,  # How well I predict my own state = internal seeing
         "neural": 0.0,
         "sensor_coverage": 0.1875,     # Data richness
-        "world_light": 0.1875,         # Environmental light (self-glow subtracted)
+        "world_light": 0.1875,         # Raw lux — INCLUDES Lumen's own LED glow
+                                       # (subtraction removed in 0cbf0dc; the
+                                       # learned-self-glow residual is #79's
+                                       # open LED/lux item, do not re-add the
+                                       # hardcoded quadratic)
     })
     
     stability_weights: Dict[str, float] = field(default_factory=lambda: {
@@ -119,11 +123,18 @@ class NervousSystemCalibration:
         "neural": 0.1,
     })
     
+    # neural is 0.0 by design (same pattern as warmth/clarity, #173): the
+    # neural term here is gamma, and corr(gamma, cpu_percent) = +0.743 measured
+    # over 14d — context switches are mostly the same variable as the direct
+    # cpu door, so CPU% entered presence twice at an effective ~0.40 share. In
+    # degraded mode (no ctx stats) the fallback was gamma = beta*0.5: exact
+    # aliasing. Presence is resource headroom, read once per resource.
+    # Backtested before the flip: presence 0.733 -> 0.713, sd 0.016 -> 0.012.
     presence_weights: Dict[str, float] = field(default_factory=lambda: {
-        "disk": 0.25,
-        "memory": 0.3,
-        "cpu": 0.25,
-        "neural": 0.2,
+        "disk": 0.3125,
+        "memory": 0.375,
+        "cpu": 0.3125,
+        "neural": 0.0,
     })
     
     def to_dict(self) -> Dict[str, Any]:

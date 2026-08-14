@@ -99,3 +99,45 @@ def test_cpu_still_reaches_E_through_the_mapper_and_only_the_mapper():
     assert hi.energy > lo.energy
     # ...I does not (alpha reaches it nowhere).
     assert hi.integrity == lo.integrity
+
+
+# ---------------------------------------------------------------------------
+# Presence: resource headroom, each resource read once (#175)
+# ---------------------------------------------------------------------------
+
+
+def _readings_gamma(gamma: float, cpu: float = 10.0) -> SensorReadings:
+    return SensorReadings(
+        timestamp=1_000_000.0,
+        cpu_temp_c=55.0, ambient_temp_c=26.0, light_lux=100.0,
+        cpu_percent=cpu, memory_percent=40.0, disk_percent=30.0,
+        eeg_alpha_power=0.9, eeg_beta_power=0.1, eeg_gamma_power=gamma,
+    )
+
+
+def test_presence_is_invariant_to_gamma():
+    """Gamma is mostly cpu_percent renamed (r=+0.743 over 14d); CPU already
+    has its own door into presence. Two doors made an effective ~0.40 share."""
+    from anima_mcp.anima import _sense_presence
+    values = {_sense_presence(_readings_gamma(g), CAL)
+              for g in (0.0, 0.2, 0.5, 0.9)}
+    assert len(values) == 1, f"presence moved with gamma: {sorted(values)}"
+
+
+def test_cpu_still_moves_presence_through_its_own_door():
+    from anima_mcp.anima import _sense_presence
+    idle = _sense_presence(_readings_gamma(0.2, cpu=5.0), CAL)
+    busy = _sense_presence(_readings_gamma(0.2, cpu=95.0), CAL)
+    assert idle > busy
+
+
+def test_stability_fallback_matches_the_dict_default():
+    """dict said neural: 0.1, the consumer's .get fallback said 0.2 — a config
+    missing the key silently doubled the weight (#175)."""
+    from anima_mcp.anima import _sense_stability
+    with_key = _sense_stability(_readings_gamma(0.2), CAL)
+    keyless = NervousSystemCalibration(
+        stability_weights={k: v for k, v in CAL.stability_weights.items()
+                           if k != "neural"})
+    without_key = _sense_stability(_readings_gamma(0.2), keyless)
+    assert with_key == pytest.approx(without_key, abs=1e-9)
