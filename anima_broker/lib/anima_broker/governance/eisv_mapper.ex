@@ -102,21 +102,28 @@ defmodule AnimaBroker.Governance.EisvMapper do
   end
 
   @doc """
-  Ethical drift [Δη₀, Δη₁, Δη₂] from anima deltas, scaled 3x, environmentally
-  amplified (>2°C temp change or >30% lux change, up to 2x), clamped ±0.5.
+  Ethical drift [Δη₀, Δη₁, Δη₂] from anima deltas, scaled 3x, clamped ±0.5.
   Returns [0.0, 0.0, 0.0] on the first check-in (no previous state).
+
+  The environmental amplifier (1 + ΔT/10 on >2°C, up to 2x on >30% lux change)
+  was removed 2026-08-14 in BOTH mappers: post-#173 warmth IS thermal state, so
+  temperature entered emotional drift as the signal and again as its own
+  amplifier — quadratic in one quantity — and the lux term read raw light
+  including Lumen's own LED glow, so the creature's activity transitions
+  amplified the drift about themselves. The deltas carry the environment once.
   """
   def compute_ethical_drift(_anima, nil, _readings, _prev_readings), do: [0.0, 0.0, 0.0]
 
-  def compute_ethical_drift(anima, prev_anima, readings, prev_readings) do
+  # readings args unused since the amplifier removal; underscore-prefixed to
+  # keep the 4-arity call sites (client.ex, tests) unchanged.
+  def compute_ethical_drift(anima, prev_anima, _readings, _prev_readings) do
     d_warmth = Map.get(anima, "warmth", 0.5) - Map.get(prev_anima, "warmth", 0.5)
     d_clarity = Map.get(anima, "clarity", 0.5) - Map.get(prev_anima, "clarity", 0.5)
     d_stability = Map.get(anima, "stability", 0.5) - Map.get(prev_anima, "stability", 0.5)
 
     scale = 3.0
-    amp = env_amplifier(readings, prev_readings)
 
-    [d_warmth * scale * amp, d_clarity * scale, d_stability * scale * amp]
+    [d_warmth * scale, d_clarity * scale, d_stability * scale]
     |> Enum.map(&clamp(&1, -0.5, 0.5))
   end
 
@@ -127,35 +134,6 @@ defmodule AnimaBroker.Governance.EisvMapper do
       "Stability: #{fmt(Map.get(anima, "stability"))}. Presence: #{fmt(Map.get(anima, "presence"))}. " <>
       "EISV: E=#{fmt(eisv["E"])}, I=#{fmt(eisv["I"])}, S=#{fmt(eisv["S"])}, V=#{fmt(eisv["V"])}."
   end
-
-  defp env_amplifier(readings, prev_readings) when is_map(readings) and is_map(prev_readings) do
-    temp_amp =
-      with curr when is_number(curr) <-
-             Map.get(readings, "ambient_temp_c") || Map.get(readings, "cpu_temp_c"),
-           prev when is_number(prev) <-
-             Map.get(prev_readings, "ambient_temp_c") || Map.get(prev_readings, "cpu_temp_c"),
-           change = abs(curr - prev),
-           true <- change > 2.0 do
-        1.0 + min(change / 10.0, 1.0)
-      else
-        _ -> 1.0
-      end
-
-    light_amp =
-      with curr when is_number(curr) <- Map.get(readings, "light_lux"),
-           prev when is_number(prev) <- Map.get(prev_readings, "light_lux"),
-           true <- prev > 1.0,
-           ratio = abs(curr - prev) / prev,
-           true <- ratio > 0.3 do
-        1.0 + min(ratio, 1.0)
-      else
-        _ -> 1.0
-      end
-
-    max(temp_amp, light_amp)
-  end
-
-  defp env_amplifier(_, _), do: 1.0
 
   defp clamp(x, lo, hi), do: max(lo, min(hi, x))
 

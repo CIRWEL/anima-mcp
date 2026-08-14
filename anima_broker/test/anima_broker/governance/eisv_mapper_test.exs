@@ -82,14 +82,28 @@ defmodule AnimaBroker.Governance.EisvMapperTest do
     assert_in_delta ds, 0.0, 1.0e-9
   end
 
-  test "ethical drift amplified by >2°C temp change and clamped at ±0.5" do
+  test "environment must not amplify drift — the deltas already carry it once" do
+    # This test used to assert the amplifier (d_warmth 0.2 ×3 ×1.5 → clamp 0.5).
+    # That encoded the double-count as the contract: post-#173 warmth IS thermal
+    # state, so a temperature change amplifying the warmth delta counted one
+    # quantity quadratically; and the lux path read Lumen's own LED glow, so its
+    # own activity transitions amplified the drift about themselves.
     prev = %{"warmth" => 0.2, "clarity" => 0.8, "stability" => 0.7, "presence" => 0.6}
-    readings = %{"ambient_temp_c" => 28.0}
-    prev_readings = %{"ambient_temp_c" => 23.0}
+    calm = {%{"ambient_temp_c" => 23.1, "light_lux" => 100.0},
+            %{"ambient_temp_c" => 23.0, "light_lux" => 100.0}}
+    stormy = {%{"ambient_temp_c" => 28.0, "light_lux" => 500.0},
+              %{"ambient_temp_c" => 23.0, "light_lux" => 100.0}}
 
-    # d_warmth = 0.2, ×3 = 0.6, amp = 1 + 5/10 = 1.5 → 0.9 → clamp 0.5
-    [dw, _dc, _ds] = EisvMapper.compute_ethical_drift(@anima, prev, readings, prev_readings)
-    assert dw == 0.5
+    {r1, p1} = calm
+    {r2, p2} = stormy
+    drift_calm = EisvMapper.compute_ethical_drift(@anima, prev, r1, p1)
+    drift_stormy = EisvMapper.compute_ethical_drift(@anima, prev, r2, p2)
+
+    # Same anima deltas ⇒ same drift, whatever the environment did between
+    # check-ins — the environment reaches drift through the deltas only.
+    assert drift_calm == drift_stormy
+    # d_warmth = 0.2 ×3 = 0.6 → clamp 0.5 (clamp retained; it is a cap, not a gate)
+    assert hd(drift_calm) == 0.5
   end
 
   test "status text carries anima and EISV readouts" do
