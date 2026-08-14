@@ -288,13 +288,26 @@ class InnerLife:
             if since is None:
                 continue
             held = max(0.0, now - since)
+            asked_at = self._last_request_at.get(dim) or 0.0
             wants[dim] = {
                 "held_seconds": round(held, 1),
                 "sustain_required_seconds": DRIVE_REQUEST_SUSTAIN_S,
                 # 1.0 means the hold is long enough to count as a want. Capped
                 # so a long-held want does not report an ever-growing ratio.
+                # This is the LEVEL a reader should judge maturity on.
                 "sustain_progress": round(min(1.0, held / DRIVE_REQUEST_SUSTAIN_S), 3),
+                # EDGE, not level: true only while an activated ask is awaiting
+                # delivery. `ack_request` pops it the moment the board accepts
+                # the question, so it is true for seconds in the normal case and
+                # stays true only while the board SUPPRESSES the ask (soft cap,
+                # rate limit, dedup). Read it as "ask undelivered", never as
+                # "wants it badly" — escalating on it inverts the meaning.
                 "is_request": dim in self._active_requests,
+                # When the ask was last actually delivered. None = never asked.
+                # Without this a reader cannot distinguish "matured and waiting
+                # to ask" from "asked hours ago and still wanting", because
+                # ack_request deliberately leaves `saturated_since` running.
+                "asked_seconds_ago": round(now - asked_at, 1) if asked_at > 0 else None,
             }
         return wants
 
