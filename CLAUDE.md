@@ -586,6 +586,19 @@ operator's `interaction_count` includes agent visits and cannot be separated.
 - **Record identity:** `creature_id` + SQLite (`identity/store.py`) — continuity of *this* deployment’s database file.
 - **Trajectory identity:** `TrajectorySignature` (`trajectory.py`) — behavioral similarity over time. Same UUID with different lived history is still one record; trajectory compares *patterns*.
 
+⛔ **Η (homeostatic) is reported, never weighted.** `similarity()` sums the
+**five** components in `SIMILARITY_WEIGHTS` (Π .18, Β .18, Α .30, Ρ .22, Δ .12).
+Η is excluded because `compute_trajectory_signature()` *builds* it from the
+others — `set_point` ← `attractor["center"]`, `basin_shape` ←
+`attractor["covariance"]`, `recovery_tau` ← `recovery["tau_estimate"]` — so
+weighting it re-weighted Α and Ρ under another name. This is the same
+double-counting class as `alpha = 1 − beta` in the neural bands. It shipped
+that way from 2026-04-03 to 2026-08-14 while the paper's Appendix A claimed
+otherwise. `TestEtaExcludedFromWeightedSum` fails if it comes back; the
+deprecated `is_same_identity()` alias points at
+`is_operationally_continuous()` because the relation is a tolerance relation,
+not transitive identity.
+
 **Restore / fork:** `restore_lumen.sh` and restoring `anima.db` **preserve** record identity and accumulated history. A **fresh** DB (new install, no copy) yields a **new** `creature_id`. Copying DB to another Pi **forks** record identity; behavior and trajectory may diverge with environment.
 
 **Governance boundary:** UNITARES is **advisory** (thermodynamic check-in, verdicts). The broker still owns sensors and learning; **SHM** carries governance for the server. **`_local_governance()`** when Mac is unreachable is a **fallback**, not a substitute for embodied state — it keeps check-ins from going silent, not from replacing sensors.

@@ -24,6 +24,7 @@ from anima_mcp.trajectory import (
     GENESIS_MIN_OBSERVATIONS,
     bhattacharyya_similarity,
     homeostatic_similarity,
+    SIMILARITY_WEIGHTS,
     VIABILITY_BOUNDS,
 )
 
@@ -636,21 +637,21 @@ class TestCompareSignatures:
         assert "components" in result
         assert isinstance(result["components"], dict)
 
-    def test_returns_is_same_identity(self, full_signature, similar_signature):
-        """Should return is_same_identity boolean."""
+    def test_returns_is_operationally_continuous(self, full_signature, similar_signature):
+        """Should return is_operationally_continuous boolean (paper §4.3)."""
         result = compare_signatures(full_signature, similar_signature)
-        assert "is_same_identity" in result
-        assert isinstance(result["is_same_identity"], bool)
+        assert "is_operationally_continuous" in result
+        assert isinstance(result["is_operationally_continuous"], bool)
 
-    def test_similar_signatures_same_identity(self, full_signature, similar_signature):
-        """Similar signatures should be same identity."""
+    def test_similar_signatures_are_continuous(self, full_signature, similar_signature):
+        """Similar signatures should be operationally continuous."""
         result = compare_signatures(full_signature, similar_signature)
-        assert result["is_same_identity"] is True
+        assert result["is_operationally_continuous"] is True
 
-    def test_different_signatures_not_same_identity(self, full_signature, different_signature):
-        """Different signatures should not be same identity."""
+    def test_different_signatures_not_continuous(self, full_signature, different_signature):
+        """Different signatures should not be operationally continuous."""
         result = compare_signatures(full_signature, different_signature)
-        assert result["is_same_identity"] is False
+        assert result["is_operationally_continuous"] is False
 
 
 # =============================================================================
@@ -748,8 +749,8 @@ class TestAdaptiveWeights:
             "preferences": [0.8, 0.9, 0.85],  # Only 3 entries
         }
         weights = full_signature.compute_adaptive_weights()
-        # Should still use defaults for preferences
-        assert weights["preferences"] == pytest.approx(0.15, abs=0.01)
+        # Should still use defaults for preferences (paper §4.1)
+        assert weights["preferences"] == pytest.approx(0.18, abs=0.01)
 
     def test_low_variance_gets_higher_weight(self, full_signature):
         """Low variance component should get higher weight."""
@@ -1168,8 +1169,8 @@ class TestHomeostaticSimilarity:
         assert sig.homeostatic["recovery_tau"] == 3.5
         assert sig.homeostatic["viability_bounds"] == VIABILITY_BOUNDS
 
-    def test_compare_signatures_includes_homeostatic(self):
-        """compare_signatures should include homeostatic in component breakdown."""
+    def test_compare_signatures_reports_homeostatic_as_derived(self):
+        """compare_signatures reports Eta under `derived`, never in the sum."""
         eta = {
             "set_point": [0.5, 0.6, 0.3, 0.0],
             "recovery_tau": 3.5,
@@ -1178,8 +1179,70 @@ class TestHomeostaticSimilarity:
         sig1 = TrajectorySignature(homeostatic=eta)
         sig2 = TrajectorySignature(homeostatic=eta)
         result = compare_signatures(sig1, sig2)
-        assert "homeostatic" in result["components"]
-        assert result["components"]["homeostatic"] > 0.99
+        assert "homeostatic" in result["derived"]
+        assert result["derived"]["homeostatic"] > 0.99
+        assert "homeostatic" not in result["components"]
+
+
+class TestEtaExcludedFromWeightedSum:
+    """Regression guard for the 2026-08-14 de-aliasing.
+
+    Eta is built from Attractor and Recovery by compute_trajectory_signature(),
+    so weighting it re-weighted those two under another name. It must not be
+    able to move similarity() at all. If these fail, the six-component sum
+    has come back.
+    """
+
+    @staticmethod
+    def _sig(eta):
+        return TrajectorySignature(
+            preferences={"vector": [0.7, 0.3, 0.5, 0.8]},
+            beliefs={"values": [0.8, 0.6, 0.7, 0.5]},
+            attractor={"center": [0.6, 0.5, 0.7, 0.6]},
+            recovery={"tau_estimate": 3.5},
+            relational={"valence_tendency": 0.3},
+            homeostatic=eta,
+        )
+
+    def test_wildly_different_eta_cannot_move_similarity(self):
+        """Eta may disagree completely; similarity must not budge."""
+        agree = {"set_point": [0.5, 0.5, 0.5, 0.5], "recovery_tau": 3.5,
+                 "viability_bounds": VIABILITY_BOUNDS}
+        disagree = {"set_point": [-5.0, 9.0, -9.0, 5.0], "recovery_tau": 9999.0,
+                    "viability_bounds": VIABILITY_BOUNDS}
+
+        baseline = self._sig(None).similarity(self._sig(None))
+        both_agree = self._sig(agree).similarity(self._sig(agree))
+        opposed = self._sig(agree).similarity(self._sig(disagree))
+
+        assert both_agree == pytest.approx(baseline, abs=1e-12)
+        assert opposed == pytest.approx(baseline, abs=1e-12)
+
+    def test_weights_are_the_five_paper_values(self):
+        """SIMILARITY_WEIGHTS is the paper §4.1 five-tuple, summing to 1."""
+        assert "homeostatic" not in SIMILARITY_WEIGHTS
+        assert SIMILARITY_WEIGHTS == {
+            "preferences": 0.18,
+            "beliefs": 0.18,
+            "attractor": 0.30,
+            "recovery": 0.22,
+            "relational": 0.12,
+        }
+        assert sum(SIMILARITY_WEIGHTS.values()) == pytest.approx(1.0)
+
+    def test_adaptive_path_also_excludes_eta(self):
+        """similarity_adaptive() reports Eta but never weights it."""
+        eta = {"set_point": [0.5, 0.5, 0.5, 0.5], "recovery_tau": 3.5,
+               "viability_bounds": VIABILITY_BOUNDS}
+        result = self._sig(eta).similarity_adaptive(self._sig(eta))
+        assert "homeostatic" not in result["components"]
+        assert "homeostatic" not in result["weights"]
+        assert result["derived"]["homeostatic"] > 0.99
+
+    def test_deprecated_alias_still_delegates(self):
+        """is_same_identity() keeps working for external callers."""
+        sig = self._sig(None)
+        assert sig.is_same_identity(sig) is sig.is_operationally_continuous(sig)
 
 
 if __name__ == "__main__":
