@@ -414,7 +414,10 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration, *, salience_
         )
         neural_warmth = (neural.beta + neural.gamma) / 2
     components.append(neural_warmth)
-    weights.append(cal.warmth_weights.get("neural", 0.20))
+    # Fallback 0.0, not the historical 0.20: a config file predating the
+    # "neural" key must not silently resurrect the CPU% alias (config.py
+    # warmth_weights explains the de-alias).
+    weights.append(cal.warmth_weights.get("neural", 0.0))
 
     if not components:
         return 0.5
@@ -559,7 +562,8 @@ def _sense_clarity(
         )
         neural_clarity = neural.alpha  # Relaxed, clear awareness
     components.append(neural_clarity)
-    weights.append(cal.clarity_weights.get("neural", 0.3))
+    # Fallback 0.0, not the historical 0.3 — same reasoning as warmth's.
+    weights.append(cal.clarity_weights.get("neural", 0.0))
 
     if not components:
         return 0.5
