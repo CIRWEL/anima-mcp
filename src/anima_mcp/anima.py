@@ -646,7 +646,9 @@ def _sense_stability(r: SensorReadings, cal: NervousSystemCalibration, *, salien
         neural_groundedness = (neural.theta + neural.delta) / 2
 
     # Invert: low groundedness = high instability
-    neural_weight = cal.stability_weights.get("neural", 0.2)
+    # Fallback matches the dict default (was 0.2 vs the dict's 0.1 — a config
+    # missing the key silently DOUBLED the weight; #175 trap class).
+    neural_weight = cal.stability_weights.get("neural", 0.1)
     instability += (1.0 - neural_groundedness) * neural_weight
     count += neural_weight
 
@@ -675,19 +677,19 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration, *, salienc
     count = 0
 
     if r.disk_percent is not None:
-        weight = cal.presence_weights.get("disk", 0.25)
+        weight = cal.presence_weights.get("disk", 0.3125)
         void += (r.disk_percent / 100) * weight
         count += weight
 
     if r.memory_percent is not None:
-        weight = cal.presence_weights.get("memory", 0.3)
+        weight = cal.presence_weights.get("memory", 0.375)
         memory_void = (r.memory_percent / 100) * salience.get("memory", 1.0)
         memory_void = min(1, memory_void)
         void += memory_void * weight
         count += weight
 
     if r.cpu_percent is not None:
-        weight = cal.presence_weights.get("cpu", 0.25)
+        weight = cal.presence_weights.get("cpu", 0.3125)
         cpu_void = (r.cpu_percent / 100) * salience.get("cpu", 1.0)
         cpu_void = min(1, cpu_void)
         void += cpu_void * weight
@@ -706,8 +708,10 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration, *, salienc
         )
         neural_gamma = neural.gamma
 
-    # High gamma = high context switching = task contention = scattered
-    weight = cal.presence_weights.get("neural", 0.2)
+    # Weight 0.0 by design and fallback 0.0 deliberately (#175): gamma is
+    # mostly cpu_percent renamed (r=+0.743), which already has its own door
+    # above — and a config predating the key must not resurrect the alias.
+    weight = cal.presence_weights.get("neural", 0.0)
     void += neural_gamma * weight
     count += weight
 
