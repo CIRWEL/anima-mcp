@@ -1,0 +1,14 @@
+[Unit]
+Description=Ping the Lumen dead-man's switch every 5 minutes
+
+[Timer]
+# Early after boot so a Pi that power-cycled reports in quickly rather than
+# waiting out the first interval.
+OnBootSec=90s
+OnUnitActiveSec=5min
+AccuracySec=30s
+# Fire the missed run after a resume/outage instead of silently skipping it.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
