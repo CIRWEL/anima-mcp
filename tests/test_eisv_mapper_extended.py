@@ -105,59 +105,31 @@ class TestComputeEthicalDrift:
         for d in drift:
             assert -0.5 <= d <= 0.5
 
-    def test_temperature_amplification(self):
+    def test_environment_never_amplifies_drift(self):
+        """The amplifier was removed 2026-08-14 — it was a double-count.
+
+        Post-#173 warmth IS thermal state, so a temperature change amplifying
+        the warmth delta counted one quantity quadratically; the lux path read
+        raw light including Lumen's own LED glow, so its own activity
+        transitions amplified the drift about themselves (temp path fired on
+        2.1% of intervals over 14d, lux on 6.1%). These used to be four tests
+        ASSERTING the amplifier — the semantics-encoded-as-test trap, third
+        instance today. Environment reaches drift through the deltas, once.
+        """
         prev = _anima(warmth=0.4, stability=0.4)
         curr = _anima(warmth=0.5, stability=0.5)
-        prev_r = _readings(ambient_temp_c=20.0)
-        curr_r = _readings(ambient_temp_c=26.0)  # 6°C change > 2°C threshold
-
-        drift_no_env = compute_ethical_drift(curr, prev)
-        drift_with_env = compute_ethical_drift(curr, prev, curr_r, prev_r)
-
-        # Emotional drift (index 0) should be amplified
-        assert abs(drift_with_env[0]) > abs(drift_no_env[0])
-        # Epistemic drift (index 1) is NOT amplified by env
-        assert abs(drift_with_env[1] - drift_no_env[1]) < 1e-9
-
-    def test_light_amplification(self):
-        prev = _anima(warmth=0.4)
-        curr = _anima(warmth=0.5)
-        # Large light change (>30% of world light)
-        prev_r = _readings(light_lux=500.0)
-        prev_r.led_brightness = 0.0
-        curr_r = _readings(light_lux=100.0)
-        curr_r.led_brightness = 0.0
-
-        drift_no_env = compute_ethical_drift(curr, prev)
-        drift_with_env = compute_ethical_drift(curr, prev, curr_r, prev_r)
-
-        # Should be amplified
-        assert abs(drift_with_env[0]) >= abs(drift_no_env[0])
-
-    def test_small_temperature_change_no_amplification(self):
-        prev = _anima(warmth=0.4)
-        curr = _anima(warmth=0.5)
-        prev_r = _readings(ambient_temp_c=22.0)
-        curr_r = _readings(ambient_temp_c=22.5)  # 0.5°C < 2°C threshold
-
-        drift_no_env = compute_ethical_drift(curr, prev)
-        drift_with_env = compute_ethical_drift(curr, prev, curr_r, prev_r)
-
-        # No amplification — should be same
-        assert abs(drift_with_env[0] - drift_no_env[0]) < 1e-9
-
-    def test_small_light_change_no_amplification(self):
-        prev = _anima(warmth=0.4)
-        curr = _anima(warmth=0.5)
-        prev_r = _readings(light_lux=500.0)
-        prev_r.led_brightness = 0.0
-        curr_r = _readings(light_lux=480.0)  # 4% change < 30% threshold
-        curr_r.led_brightness = 0.0
-
-        drift_no_env = compute_ethical_drift(curr, prev)
-        drift_with_env = compute_ethical_drift(curr, prev, curr_r, prev_r)
-
-        assert abs(drift_with_env[0] - drift_no_env[0]) < 1e-9
+        scenarios = [
+            (None, None),                                              # no readings
+            (_readings(ambient_temp_c=20.0), _readings(ambient_temp_c=26.0)),   # 6C jump
+            (_readings(ambient_temp_c=22.0), _readings(ambient_temp_c=22.5)),   # calm
+            (_readings(light_lux=500.0), _readings(light_lux=100.0)),  # 80% light drop
+            (_readings(light_lux=500.0), _readings(light_lux=480.0)),  # calm light
+        ]
+        drifts = [compute_ethical_drift(curr, prev, c, p) for p, c in scenarios]
+        assert all(d == drifts[0] for d in drifts), (
+            "identical anima deltas must produce identical drift regardless of "
+            f"what the environment did between check-ins: {drifts}"
+        )
 
 
 # ── compute_confidence ──

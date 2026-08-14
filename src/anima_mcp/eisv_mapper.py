@@ -276,8 +276,9 @@ def compute_ethical_drift(
     Args:
         current_anima: Current anima state
         prev_anima: Previous anima state (None on first check-in)
-        current_readings: Current sensor readings (optional, for environmental context)
-        prev_readings: Previous sensor readings (optional)
+        current_readings: Unused since 2026-08-14 (kept for call-site
+            compatibility; the env amplifier they fed was a double-count)
+        prev_readings: Unused, as above
 
     Returns:
         3-element list [Δη₀, Δη₁, Δη₂] representing ethical drift
@@ -295,30 +296,21 @@ def compute_ethical_drift(
     # Scale by 3x to make real sensor changes produce meaningful governance response.
     scale = 3.0
 
-    # Environmental amplification: large temperature/light changes increase drift signal
-    env_amplifier = 1.0
-    if current_readings and prev_readings:
-        # Temperature change amplifies behavioral drift
-        curr_temp = getattr(current_readings, 'ambient_temp_c', None) or getattr(current_readings, 'cpu_temp_c', None)
-        prev_temp = getattr(prev_readings, 'ambient_temp_c', None) or getattr(prev_readings, 'cpu_temp_c', None)
-        if curr_temp is not None and prev_temp is not None:
-            temp_change = abs(curr_temp - prev_temp)
-            if temp_change > 2.0:  # >2°C change is significant
-                env_amplifier = 1.0 + min(temp_change / 10.0, 1.0)  # Up to 2x
-
-        # Light change amplifies emotional drift (raw lux — includes LED glow)
-        curr_light = getattr(current_readings, 'light_lux', None)
-        prev_light = getattr(prev_readings, 'light_lux', None)
-        if curr_light is not None and prev_light is not None:
-            if prev_light > 1.0:  # Need meaningful baseline to compute ratio
-                light_ratio = abs(curr_light - prev_light) / prev_light
-                if light_ratio > 0.3:  # >30% change in light
-                    env_amplifier = max(env_amplifier, 1.0 + min(light_ratio, 1.0))
-
+    # No environmental amplifier — removed 2026-08-14. It multiplied the warmth
+    # and stability deltas by 1 + dT/10 on a >2C ambient change, and by up to
+    # 2x on a >30% lux change. Both were second doors for variables already
+    # inside the deltas: post-#173 warmth IS thermal state, so temperature
+    # entered emotional drift as the signal AND as its own amplifier —
+    # drift ~ dT*(1+dT/10), quadratic in the one quantity. Worse, the lux term
+    # used raw light including Lumen's OWN LED glow (subtraction removed in
+    # 0cbf0dc), so the creature's own activity transitions amplified the drift
+    # signal about themselves. Measured over 14d before removal: temp path
+    # fired on 2.1% of intervals, lux path on 6.1%. The deltas carry the
+    # environment once, which is the correct number of times.
     drift = [
-        d_warmth * scale * env_amplifier,    # Emotional drift
-        d_clarity * scale,                     # Epistemic drift (less env-dependent)
-        d_stability * scale * env_amplifier,   # Behavioral drift
+        d_warmth * scale,      # Emotional drift
+        d_clarity * scale,     # Epistemic drift
+        d_stability * scale,   # Behavioral drift
     ]
 
     # Clamp to reasonable range [-0.5, 0.5] — prevent extreme signals
