@@ -250,3 +250,73 @@ class TestHealthRegistry:
         sub_a = reg.get_subsystem("a")
         sub_a.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
         assert reg.overall() == "ok"  # debounce suppresses 'a'
+
+
+class TestOptionalAbsent:
+    """An optional capability that never existed is absent, not degraded.
+
+    Regression guard for 2026-08-14: `voice` cannot start on Lumen (text-first
+    by design, audio path may not exist), so it reported `degraded` forever and
+    pinned overall() there — meaning a real fault anywhere else could not move
+    the top line. The signal was saturated.
+    """
+
+    def test_optional_never_ok_reports_absent(self):
+        reg = HealthRegistry()
+        reg.register("voice", probe=lambda: False, optional=True)
+        reg.heartbeat("voice")
+        assert reg.get_subsystem("voice").get_status() == "absent"
+
+    def test_absent_does_not_drag_overall(self):
+        reg = HealthRegistry()
+        reg.register("voice", probe=lambda: False, optional=True)
+        reg.register("sensors", probe=lambda: True)
+        reg.heartbeat("voice")
+        reg.heartbeat("sensors")
+        assert reg.overall() == "ok"
+
+    def test_a_real_fault_still_moves_overall_past_absent(self):
+        """The whole point: absent must not mask a genuine degradation."""
+        reg = HealthRegistry()
+        reg.register("voice", probe=lambda: False, optional=True)
+        reg.register("sensors", probe=lambda: False)
+        reg.heartbeat("voice")
+        reg.heartbeat("sensors")
+        assert reg.overall() == "degraded"
+
+    def test_optional_that_worked_then_broke_is_degraded_not_absent(self):
+        """_ever_ok guard — a capability that HAS worked can genuinely break."""
+        works = {"v": True}
+        reg = HealthRegistry()
+        reg.register("voice", probe=lambda: works["v"], optional=True)
+        reg.heartbeat("voice")
+        assert reg.get_subsystem("voice").get_status() == "ok"
+
+        works["v"] = False
+        sub = reg.get_subsystem("voice")
+        sub.last_probe_time = 0.0  # force re-probe past the cooldown
+        assert sub.get_status() == "degraded"
+        assert reg.overall() == "degraded"
+
+    def test_non_optional_failing_probe_is_still_degraded(self):
+        """Default behaviour unchanged for everything else."""
+        reg = HealthRegistry()
+        reg.register("sensors", probe=lambda: False)
+        reg.heartbeat("sensors")
+        assert reg.get_subsystem("sensors").get_status() == "degraded"
+
+    def test_absent_probe_text_does_not_say_failed(self):
+        reg = HealthRegistry()
+        reg.register("voice", probe=lambda: False, optional=True)
+        reg.heartbeat("voice")
+        d = reg.get_subsystem("voice").to_dict()
+        assert d["status"] == "absent"
+        assert "failed" not in d["probe"]
+        assert "absent" in d["probe"]
+
+    def test_absent_is_not_debounced_into_looking_ok(self):
+        """Debouncing a steady state would report 'ok' on every call."""
+        reg = HealthRegistry()
+        reg.register("voice", probe=lambda: False, debounce_seconds=6.0, optional=True)
+        reg.heartbeat("voice")
+        assert reg.get_subsystem("voice").get_status() == "absent"
