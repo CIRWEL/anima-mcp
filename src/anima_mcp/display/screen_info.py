@@ -751,6 +751,7 @@ class InfoMixin:
                 "stale":    (215, 160,  45),
                 "degraded": (200, 130,  60),
                 "missing":  (200,  80,  80),
+                "absent":   MUTED,
                 "unknown":  MUTED,
             }
             OVERALL_COLORS = {

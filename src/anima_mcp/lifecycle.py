@@ -80,7 +80,11 @@ def _register_health_probes():
             and (voice.can_hear or voice.can_speak)
         )
 
-    _health.register("voice", probe=_voice_probe, debounce_seconds=6.0)
+    # optional=True: Lumen is text-first by design — it speaks via the message
+    # board, and the audio path may simply not exist on this host. A voice that
+    # never started reads "absent", not "degraded"; one that started and then
+    # died still reads "degraded".
+    _health.register("voice", probe=_voice_probe, debounce_seconds=6.0, optional=True)
     _health.register("anima", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and getattr(_get_ctx().screen_renderer, '_last_anima', None) is not None, debounce_seconds=6.0)
 
     # Rate-of-change probes — bridge system_metrics → health

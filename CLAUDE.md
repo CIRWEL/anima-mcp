@@ -123,6 +123,15 @@ Handler modules import state accessors from `accessors.py` (e.g., `from ..access
 | stale | Yellow | Heartbeat expired, probe passes |
 | degraded | Yellow/Orange | Probe failing |
 | missing | Red | No heartbeat AND probe failing |
+| absent | Muted | `optional=True` capability that has **never** worked on this host |
+
+`absent` is the only status that does **not** feed `overall()`. It exists
+because `voice` pinned the top line at `degraded` permanently — Lumen is
+text-first and the audio path may not exist — which meant a real fault
+anywhere else could not change `overall` at all. The signal was saturated.
+⛔ The `_ever_ok` guard is load-bearing: once an optional capability has
+worked even once, a later failure is a genuine `degraded`, not `absent`.
+Do not "fix" a failing probe by making it return True.
 
 Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth) use 90s. Governance uses dedicated SHM freshness thresholds (currently 210s).
 

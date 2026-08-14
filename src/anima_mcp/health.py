@@ -40,7 +40,9 @@ class SubsystemHealth:
     registered: bool = True
     stale_threshold: float = 0.0  # 0 = use global default
     debounce_seconds: float = 0.0  # 0 = no debounce (instant transitions)
+    optional: bool = False  # capability may legitimately not exist on this host
     _first_bad_at: float = 0.0  # when status first went non-ok
+    _ever_ok: bool = False  # probe has succeeded at least once this process
 
     def heartbeat(self) -> None:
         self.last_heartbeat = time.time()
@@ -64,6 +66,8 @@ class SubsystemHealth:
         try:
             result = self.probe_fn()
             self.last_probe_ok = bool(result)
+            if self.last_probe_ok:
+                self._ever_ok = True
             self.last_probe_error = "" if self.last_probe_ok else "probe returned False"
         except Exception as e:
             self.last_probe_ok = False
@@ -71,7 +75,7 @@ class SubsystemHealth:
         return self.last_probe_ok
 
     def _raw_status(self) -> str:
-        """Compute raw status without debounce: ok, stale, degraded, missing."""
+        """Compute raw status without debounce: ok, absent, stale, degraded, missing."""
         if not self.registered:
             return "missing"
 
@@ -81,6 +85,14 @@ class SubsystemHealth:
 
         # Run probe (respects internal cooldown)
         self.run_probe()
+
+        # An optional capability that has NEVER worked in this process is not
+        # broken — it is not present. Reporting it as "degraded" saturates
+        # overall() so a real failure elsewhere cannot change the top line.
+        # Note the `_ever_ok` guard: once the capability HAS worked, a later
+        # failure is a genuine degradation and is reported as one.
+        if self.optional and not self.last_probe_ok and not self._ever_ok:
+            return "absent"
 
         if heartbeat_stale and not self.last_probe_ok:
             return "missing"  # No heartbeat AND probe failing
@@ -102,6 +114,13 @@ class SubsystemHealth:
         if raw == "ok":
             self._first_bad_at = 0.0
             return "ok"
+
+        # "absent" is a steady state, not a transient failure — debouncing it
+        # would report a healthy-looking "ok" for the grace period on every
+        # single call, which is the failure-toward-healthy this file forbids.
+        if raw == "absent":
+            self._first_bad_at = 0.0
+            return "absent"
 
         if self.debounce_seconds <= 0:
             return raw
@@ -131,7 +150,11 @@ class SubsystemHealth:
             "last_heartbeat_ago_s": heartbeat_ago,
         }
         if self.probe_fn is not None:
-            result["probe"] = "ok" if self.last_probe_ok else f"failed: {self.last_probe_error}"
+            if status == "absent":
+                # Not "failed" — this capability was never present here.
+                result["probe"] = "absent: optional capability unavailable on this host"
+            else:
+                result["probe"] = "ok" if self.last_probe_ok else f"failed: {self.last_probe_error}"
         if self.is_debouncing:
             result["debouncing"] = True
         return result
@@ -149,6 +172,7 @@ class HealthRegistry:
         probe: Optional[Callable[[], bool]] = None,
         stale_threshold: float = 0.0,
         debounce_seconds: float = 0.0,
+        optional: bool = False,
     ) -> None:
         """Register a subsystem for health tracking.
 
@@ -163,6 +187,11 @@ class HealthRegistry:
             debounce_seconds: Grace period before reporting non-ok status.
                    0 = instant transitions (default, backward compatible).
                    Use ~6s for fast subsystems to filter transient failures.
+            optional: True if this capability may legitimately not exist on
+                   this host (e.g. no audio path). Such a subsystem reports
+                   "absent" rather than "degraded" while it has never worked,
+                   and does not drag overall(). The moment it DOES work once,
+                   a later failure is reported as a real degradation.
         """
         if name in self._subsystems:
             # Update probe if re-registering
@@ -172,6 +201,7 @@ class HealthRegistry:
                 self._subsystems[name].stale_threshold = stale_threshold
             if debounce_seconds > 0:
                 self._subsystems[name].debounce_seconds = debounce_seconds
+            self._subsystems[name].optional = optional
             return
 
         self._subsystems[name] = SubsystemHealth(
@@ -180,6 +210,7 @@ class HealthRegistry:
             registered=True,
             stale_threshold=stale_threshold,
             debounce_seconds=debounce_seconds,
+            optional=optional,
         )
 
     def heartbeat(self, name: str) -> None:
@@ -197,7 +228,13 @@ class HealthRegistry:
         return {name: sub.to_dict() for name, sub in sorted(self._subsystems.items())}
 
     def overall(self) -> str:
-        """Overall system health: ok, degraded, or unhealthy."""
+        """Overall system health: ok, degraded, or unhealthy.
+
+        "absent" subsystems do not contribute: an optional capability that
+        was never present on this host is not a fault, and letting it pin
+        the top line at "degraded" means a real fault elsewhere cannot move
+        it. They remain visible per-subsystem.
+        """
         statuses = [sub.get_status() for sub in self._subsystems.values()]
         if not statuses:
             return "unknown"
