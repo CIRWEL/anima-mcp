@@ -541,7 +541,33 @@ async def _update_display_loop():
                         # saturated mind can still wonder — occasionally let
                         # curiosity arise from the stillness so Lumen keeps having
                         # open questions even when the environment doesn't change.
-                        contemplative = metacog.generate_contemplative_question()
+                        # Hand the generator the board's own record so it can
+                        # rotate the pool rather than re-drawing whatever just
+                        # expired. Widest practical window: the board trims
+                        # itself, so "what it still remembers" is the record.
+                        try:
+                            from .messages import (
+                                get_answered_question_texts,
+                                get_recent_questions,
+                            )
+                            _asked = [
+                                q["text"]
+                                for q in get_recent_questions(hours=168, limit=100)
+                            ]
+                            _answered = get_answered_question_texts()
+                        except Exception as e:
+                            logger.debug("[Metacog] recent-question lookup error: %s", e)
+                            _asked, _answered = None, None
+                        contemplative = metacog.generate_contemplative_question(
+                            recently_asked=_asked, already_answered=_answered
+                        )
+                        if not contemplative and _answered:
+                            # Pool exhausted rather than rate-limited. Say so —
+                            # a silent quiet reads identically to a healthy one.
+                            logger.debug(
+                                "[Metacog] contemplative pool exhausted: %d prompts answered",
+                                len(_answered),
+                            )
                         if contemplative:
                             try:
                                 from .messages import add_question

@@ -321,3 +321,44 @@ class TestQAProvenanceAndTruncation:
         assert not msg_module._looks_truncated("warmth makes me feel content")
         assert not msg_module._looks_truncated("i draw at night.")
         assert not msg_module._looks_truncated("")
+
+
+class TestAnsweredQuestionTexts:
+    """``get_answered_question_texts`` must mean REALLY answered.
+
+    ``Message.answered`` is set both by a genuine reply and by
+    ``_expire_old_questions``, so it cannot distinguish "someone engaged with
+    this" from "nobody looked at it for four hours". Callers deciding whether
+    a question is finished need the linked-answer test.
+    """
+
+    def test_real_answer_counts(self, board):
+        q = board.add_question("does the light change how I settle?")
+        board.add_agent_message("It does, measurably.", agent_name="helper",
+                                responds_to=q.message_id)
+        assert board.get_answered_question_texts() == {q.text}
+
+    def test_expiry_does_not_count(self, board):
+        """The distinction the whole change rests on."""
+        import time
+        q = board.add_question("what am I not noticing yet?")
+        q.timestamp = time.time() - (msg_module.QUESTION_EXPIRY_SECONDS + 60)
+        board._expire_old_questions(time.time())
+        assert q.answered is True          # flagged...
+        assert board.get_answered_question_texts() == set()  # ...but never answered
+
+    def test_unanswered_question_absent(self, board):
+        board.add_question("is anyone there?")
+        assert board.get_answered_question_texts() == set()
+
+    def test_answer_to_another_question_does_not_leak(self, board):
+        a = board.add_question("first question about the room?")
+        # Clear MIN_QUESTION_INTERVAL_SECONDS so the second is accepted.
+        a.timestamp -= msg_module.MIN_QUESTION_INTERVAL_SECONDS + 60
+        b = board.add_question("second question about myself?")
+        assert b is not None
+        board.add_agent_message("re: first", agent_name="helper",
+                                responds_to=a.message_id)
+        texts = board.get_answered_question_texts()
+        assert a.text in texts
+        assert b.text not in texts

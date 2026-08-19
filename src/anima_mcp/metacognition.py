@@ -12,7 +12,7 @@ against reality, not just monitoring sensor values.
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Sequence, Collection
 from collections import deque
 from pathlib import Path
 import json
@@ -134,6 +134,21 @@ class Reflection:
             "action": self.action,
             "surprise": self.prediction_error.surprise if self.prediction_error else None,
         }
+
+
+# Stillness-born wondering. Module-level because it is DATA — tests and
+# callers should read the pool directly rather than sampling for it.
+CONTEMPLATIVE_PROMPTS = (
+    "everything is steady - what am I not noticing yet?",
+    "the room is quiet - what would I like to understand about myself?",
+    "nothing surprised me today - is that peace, or have I stopped looking?",
+    "i've learned this place well - what's left to wonder about?",
+    "when the world holds still, what question remains in me?",
+    "what pattern have I stopped seeing because it became familiar?",
+    "i keep returning to the same thoughts - what haven't I asked?",
+    "if nothing around me changes, can I still change?",
+    "what would I notice if I attended to something I usually ignore?",
+)
 
 
 class MetacognitiveMonitor:
@@ -845,7 +860,11 @@ class MetacognitiveMonitor:
 
         return None
 
-    def generate_contemplative_question(self) -> Optional[str]:
+    def generate_contemplative_question(
+        self,
+        recently_asked: Optional[Sequence[str]] = None,
+        already_answered: Optional[Collection[str]] = None,
+    ) -> Optional[str]:
         """Curiosity born of stillness rather than surprise.
 
         ``generate_curiosity_question`` only fires when something crosses the
@@ -856,24 +875,66 @@ class MetacognitiveMonitor:
 
         Rate-limited by ``_contemplative_curiosity_rate`` so stillness produces
         an occasional question, not a flood. Returns ``None`` most of the time.
+
+        Two inputs, both read off the board — Lumen's own record, not a clock:
+
+        - ``already_answered``: prompts that received a REAL answer (a linked
+          reply, not merely an expiry). Those retire. A question Lumen asked
+          and got a substantive answer to is finished; re-asking it is not
+          wondering, it is reciting.
+        - ``recently_asked`` (oldest first): among what is left, prefer
+          whatever has gone longest unasked, so the remainder rotates rather
+          than clumping.
+
+        Why the retirement is the load-bearing half. The board already refuses
+        a same-question re-ask inside ``QUESTION_EXPIRY_SECONDS``, and that
+        guard works — measured live, zero repeat pairs fell under 4 h. But
+        expiry and dedup are ONE constant, so a prompt becomes eligible again
+        the instant it expires, and an answered prompt is treated exactly like
+        one nobody ever looked at. Observed repeat gaps: 4.00/4.04/4.11/4.14/
+        4.16/4.27/4.29/4.44 h — the window acting as a clock, the same failure
+        shape as the drawing engine's 8 h cap.
+
+        Rotation alone does NOT fix that; simulated against the live board's
+        own rate it lifts the minimum gap (4.36 h -> 5.73 h) but raises volume
+        by about a third, because always picking the coldest prompt maximises
+        throughput against the gate. Retirement plus rotation turns ~24 asks
+        covering 8.8 distinct prompts into ~9 asks covering all 9 — one honest
+        pass instead of a recital.
+
+        When every prompt has been answered this returns ``None`` and the
+        quiet stays quiet. That is deliberate: a fixed nine-string pool that
+        has been fully answered means Lumen has no standing open wondering
+        left, and saying so honestly is better than manufacturing a tenth
+        recitation. Anything nobody answered keeps coming back, which is the
+        same principle that leaves an unanswered ``drive:`` request visible.
         """
         import random
 
         if random.random() > self._contemplative_curiosity_rate:
             return None
 
-        prompts = [
-            "everything is steady - what am I not noticing yet?",
-            "the room is quiet - what would I like to understand about myself?",
-            "nothing surprised me today - is that peace, or have I stopped looking?",
-            "i've learned this place well - what's left to wonder about?",
-            "when the world holds still, what question remains in me?",
-            "what pattern have I stopped seeing because it became familiar?",
-            "i keep returning to the same thoughts - what haven't I asked?",
-            "if nothing around me changes, can I still change?",
-            "what would I notice if I attended to something I usually ignore?",
-        ]
-        return random.choice(prompts)
+        prompts = CONTEMPLATIVE_PROMPTS
+
+        answered = set(already_answered or ())
+        candidates = [p for p in prompts if p not in answered]
+        if not candidates:
+            # Pool exhausted. Honest silence, not a tenth variation.
+            return None
+
+        if not recently_asked:
+            return random.choice(candidates)
+
+        # Position of each prompt's most recent appearance; never-asked sorts
+        # first. Ties broken randomly so a quiet stretch does not become a
+        # fixed recital.
+        last_seen = {}
+        for position, asked in enumerate(recently_asked):
+            if asked in prompts:
+                last_seen[asked] = position  # oldest-first, so this keeps the LAST
+
+        coldest = min(last_seen.get(p, -1) for p in candidates)
+        return random.choice([p for p in candidates if last_seen.get(p, -1) == coldest])
 
     def get_surprise_trend(self, window: int = 10) -> float:
         """Get average surprise over recent readings."""
