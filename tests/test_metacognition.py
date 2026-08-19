@@ -705,3 +705,141 @@ class TestGetRecentReflections:
         recent = mm.get_recent_reflections(count=2)
         assert len(recent) == 2
         assert recent[-1].trigger == "test_2"
+
+
+# ==================== Contemplative rotation ====================
+
+class TestContemplativeRotation:
+    """The stillness-born question pool must ROTATE, not clump.
+
+    The board already refuses a same-question re-ask inside
+    ``QUESTION_EXPIRY_SECONDS``, and that guard works — measured on the live
+    board, zero repeat pairs fell under 4 h. But expiry and dedup are the same
+    constant, so a prompt becomes eligible again the moment it expires, and an
+    ANSWERED prompt is treated exactly like one nobody looked at. Observed gaps
+    clustered at 4.00/4.04/4.11/4.14/4.16/4.27/4.29/4.44 h: the window
+    functioning as a clock, the same failure shape as the drawing engine's 8 h
+    cap.
+
+    Rotation alone is not the fix — simulated at the live rate it lifts the
+    minimum gap but raises volume by a third. Retirement of answered prompts
+    is the load-bearing half; rotation covers the remainder evenly.
+    """
+
+    def _pool(self, mm):
+        """Read the pool directly. Sampling for it burned tens of thousands of
+        global-RNG draws per run and perturbed unrelated suites."""
+        from anima_mcp.metacognition import CONTEMPLATIVE_PROMPTS
+        mm._contemplative_curiosity_rate = 1.0
+        return set(CONTEMPLATIVE_PROMPTS)
+
+    def test_no_record_still_produces_a_question(self, mm):
+        """Cold start (empty board) keeps today's behavior."""
+        mm._contemplative_curiosity_rate = 1.0
+        assert mm.generate_contemplative_question(recently_asked=[]) in self._pool(mm)
+        assert mm.generate_contemplative_question(recently_asked=None) in self._pool(mm)
+
+    def test_rate_limit_still_gates(self, mm):
+        """Rotation must not turn an occasional wondering into a flood."""
+        mm._contemplative_curiosity_rate = 0.0
+        assert mm.generate_contemplative_question(recently_asked=[]) is None
+
+    def test_never_asked_prompt_wins(self, mm):
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        asked, held_back = pool[:-1], pool[-1]
+        for _ in range(30):
+            assert mm.generate_contemplative_question(recently_asked=asked) == held_back
+
+    def test_picks_the_longest_unasked(self, mm):
+        """All nine used: the one asked longest ago comes back next."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        record = list(pool)  # oldest first
+        for _ in range(30):
+            assert mm.generate_contemplative_question(recently_asked=record) == record[0]
+
+    def test_repeats_only_after_the_whole_pool(self, mm):
+        """The regression that matters: driving the generator from its own
+        record must space a prompt out by the full pool, not by the expiry
+        window. Nine draws must yield nine distinct prompts."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = self._pool(mm)
+        record = []
+        for _ in range(len(pool)):
+            q = mm.generate_contemplative_question(recently_asked=record)
+            assert q not in record, f"{q!r} repeated before the pool was exhausted"
+            record.append(q)
+        assert set(record) == pool
+
+    def test_unrelated_questions_do_not_disturb_rotation(self, mm):
+        """Agency/curiosity questions share the board but not the pool."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        asked, held_back = pool[:-1], pool[-1]
+        noisy = []
+        for q in asked:
+            noisy += [q, "why does the air is dry affect me?"]
+        assert mm.generate_contemplative_question(recently_asked=noisy) == held_back
+
+    def test_duplicate_heavy_record_uses_the_latest_appearance(self, mm):
+        """The real input shape: the live board held 36 contemplative questions
+        drawn from 9 strings, so every prompt appears several times. Only the
+        MOST RECENT appearance should count — an old copy must not make a
+        just-asked prompt look cold."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        # Everything asked once long ago, then all but `stale` asked again.
+        recent_again = [p for p in pool if p != pool[0]]
+        record = list(pool) + recent_again
+        for _ in range(30):
+            assert mm.generate_contemplative_question(recently_asked=record) == pool[0]
+
+        # And the reverse: the prompt whose only appearance is the newest one
+        # must not be chosen while anything older is available.
+        record2 = list(pool[:-1]) + [pool[-1]]
+        assert mm.generate_contemplative_question(recently_asked=record2) == pool[0]
+
+    def test_answered_prompts_retire(self, mm):
+        """A question that got a real answer is finished. Re-asking it is
+        reciting, not wondering."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        retired, live = pool[:-1], pool[-1]
+        for _ in range(30):
+            q = mm.generate_contemplative_question(already_answered=retired)
+            assert q == live
+
+    def test_exhausted_pool_stays_quiet(self, mm):
+        """Every prompt answered -> honest silence, not a tenth variation.
+        This is the behavioural consequence to weigh: in a long stationary
+        stretch the contemplative channel goes quiet by design."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = self._pool(mm)
+        for _ in range(30):
+            assert mm.generate_contemplative_question(already_answered=pool) is None
+
+    def test_unanswered_prompts_keep_coming_back(self, mm):
+        """The other half of the contract: retirement is earned by an ANSWER,
+        never by an expiry. Anything nobody replied to stays in rotation —
+        the same principle that leaves an unanswered drive: request visible."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        # Asked many times over, answered never.
+        record = pool * 4
+        q = mm.generate_contemplative_question(recently_asked=record, already_answered=set())
+        assert q in pool
+
+    def test_retirement_and_rotation_compose(self, mm):
+        """Retired prompts are excluded from the rotation, not merely ranked
+        down — the coldest ANSWERED prompt must never win."""
+        mm._contemplative_curiosity_rate = 1.0
+        pool = sorted(self._pool(mm))
+        coldest_but_answered = pool[0]
+        record = [coldest_but_answered] + pool[1:] * 3
+        for _ in range(30):
+            q = mm.generate_contemplative_question(
+                recently_asked=record, already_answered={coldest_but_answered}
+            )
+            assert q != coldest_but_answered
+            assert q in pool[1:]

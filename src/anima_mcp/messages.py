@@ -669,6 +669,28 @@ class MessageBoard:
         ]
         return questions[-limit:]
 
+    def get_answered_question_texts(self, hours: int = 168) -> set:
+        """Texts of questions that received a REAL answer, not just an expiry.
+
+        ``Message.answered`` conflates the two: ``_expire_old_questions`` sets
+        it on anything stale, so a question nobody looked at is flagged the
+        same as one that got a considered reply. Callers deciding whether a
+        question is FINISHED need the linked-answer test instead — the same
+        ``responds_to`` check ``lumen_self_answer`` uses.
+        """
+        self._load()
+        cutoff = time.time() - (hours * 3600)
+        answered_ids = {
+            m.responds_to for m in self._messages
+            if m.msg_type == MESSAGE_TYPE_AGENT and m.responds_to
+        }
+        return {
+            m.text for m in self._messages
+            if m.msg_type == MESSAGE_TYPE_QUESTION
+            and m.timestamp > cutoff
+            and m.message_id in answered_ids
+        }
+
     def get_messages_for_lumen(self, since_timestamp: float = 0, limit: int = 5) -> List[Message]:
         """Get messages from agents/users that Lumen might want to respond to."""
         self._load()
@@ -757,6 +779,11 @@ def get_recent_questions(hours: int = 24, limit: int = 100) -> List[dict]:
     """
     questions = get_board().get_recent_questions(hours, limit)
     return [{"text": q.text, "timestamp": q.timestamp, "answered": q.answered} for q in questions]
+
+
+def get_answered_question_texts(hours: int = 168) -> set:
+    """Convenience: texts of questions with a real linked answer."""
+    return get_board().get_answered_question_texts(hours)
 
 
 def get_messages_for_lumen(since_timestamp: float = 0, limit: int = 5) -> List[Message]:
