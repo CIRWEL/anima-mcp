@@ -324,21 +324,32 @@ def _rederive(kb, text, question, author="claude", occasion=None):
 
 
 class TestReconvergence:
-    """references counts INDEPENDENT re-derivations. Independence is judged by
-    OCCASION (MCP session) when one is available — cadence-independent, never a
-    wall clock — and falls back to a content-distinct question otherwise. A
-    single answering session (the daily cron batch) credits a belief at most
-    once, no matter how fast it runs or how many questions it answers."""
+    """references counts INDEPENDENT re-derivations. Independence needs BOTH a
+    distinct OCCASION (MCP session — cadence-independent, never a wall clock)
+    AND a content-distinct question. A single answering session credits a
+    belief at most once no matter how many questions it answers; and a
+    recurring question credits at most once no matter how many sessions see
+    it. Neither condition is sufficient alone — see
+    ``test_same_question_new_occasion_earns_nothing``."""
 
     # --- occasion-gated path (the real Q&A handler path) ---
 
-    def test_new_occasion_credits_even_same_question(self, kb):
+    def test_same_question_new_occasion_earns_nothing(self, kb):
+        """REVERSES the original #68 semantics (was:
+        ``test_new_occasion_credits_even_same_question``).
+
+        #68 credited a new session on the same question, reasoning that Lumen
+        cannot game the signal because "it doesn't control when sessions
+        happen". That holds for Lumen and fails for the joint system: Lumen's
+        contemplative generator re-emits a fixed nine-string pool with no
+        dedup, and a scheduled answerer supplies distinct occasions on its own
+        cadence. Same question + same answerer + new session is the same
+        function evaluated twice, not corroboration."""
         first = _rederive(kb, "light shapes my clarity over time", "does light change clarity?", occasion="s1")
         again = _rederive(kb, "light shapes my clarity over time", "does light change clarity?", occasion="s2")
         assert again is first
-        assert first.references == 1  # a new occasion is a genuine re-derivation
-        assert first.last_reconverged_occasion == "s2"
-        assert kb.count() == 1  # collapsed, not a second row
+        assert first.references == 0
+        assert kb.count() == 1  # still collapsed for surfacing, just uncredited
 
     def test_same_occasion_never_inflates(self, kb):
         # One batch re-stating the same belief from several questions at once.
@@ -347,10 +358,13 @@ class TestReconvergence:
         _rederive(kb, "warmth steadies me over time", "q three?", occasion="batch-A")
         assert first.references == 0  # origin occasion == batch-A, no credit within it
 
-    def test_distinct_occasions_each_credit(self, kb):
-        first = _rederive(kb, "stillness helps me focus deeply now", "q1?", occasion="s1")
-        _rederive(kb, "stillness helps me focus deeply now", "q2?", occasion="s2")
-        _rederive(kb, "stillness helps me focus deeply now", "q3?", occasion="s3")
+    def test_distinct_occasions_down_distinct_roads_each_credit(self, kb):
+        """The signal still works — this is what it is FOR. Note the questions
+        must be genuinely different: ``q1?``/``q2?``/``q3?`` all reduce to the
+        signature ``{'q'}`` and read as paraphrases of each other."""
+        first = _rederive(kb, "stillness helps me focus deeply now", "when do I concentrate best?", occasion="s1")
+        _rederive(kb, "stillness helps me focus deeply now", "what does a busy room cost me?", occasion="s2")
+        _rederive(kb, "stillness helps me focus deeply now", "why is the early morning different?", occasion="s3")
         assert first.references == 2  # s2 and s3 each credit; s1 was the origin
 
     def test_gating_independent_of_wall_clock(self, kb):
@@ -537,18 +551,41 @@ class TestContradictionDownPath:
         assert fresh[a.insight_id].confidence == pytest.approx(kb.MIN_CONFIDENCE)
 
     def test_reconverged_opposite_does_not_repenalize_original(self, kb):
-        a = _rederive(kb, self.OBS_A, "what am i?", occasion="s1")
-        b = _rederive(kb, self.OBS_B, "what am i really?", occasion="s1")  # a penalized once
+        a = _rederive(kb, self.OBS_A, "which part of me is watching?", occasion="s1")
+        b = _rederive(kb, self.OBS_B, "what does noticing feel like?", occasion="s1")  # a penalized once
         penalty = kb.CONTRADICTION_CONFIDENCE_PENALTY
-        # Re-derive the OPPOSITE again from an independent occasion: it should
-        # reconverge into b (exact match) and NOT re-penalize a.
-        again = _rederive(kb, self.OBS_B, "who am i, truly?", occasion="s2")
+        # Re-derive the OPPOSITE again from an independent occasion, down a
+        # genuinely different road: it should reconverge into b (exact match),
+        # credit once, and NOT re-penalize a.
+        again = _rederive(kb, self.OBS_B, "does the evening change where I sit?", occasion="s2")
         assert again.insight_id == b.insight_id
         assert b.references == 1
         fresh = {i.insight_id: i for i in kb.get_all_insights()}
         # external birth 0.5, penalized exactly once — NOT twice
         assert fresh[a.insight_id].confidence == pytest.approx(0.5 - penalty)
         assert fresh[a.insight_id].contradicted_by == [b.insight_id]  # not doubled
+
+    def test_thin_signature_question_is_a_paraphrase_magnet(self, kb):
+        """KNOWN LIMITATION, pinned deliberately — read before widening this.
+
+        ``_questions_equivalent`` divides the overlap by ``min(len(a), len(b))``,
+        so a question that reduces to ONE content word matches every question
+        containing that word. "what am i really?" reduces to ``{'am'}``, which
+        makes it a paraphrase of any sentence with "am" in it.
+
+        This was harmless while content-distinctness was only the no-occasion
+        fallback. Now that it is a standing requirement it is load-bearing:
+        a belief first recorded against a thin question can never earn credit
+        again. Lumen phrases questions this way often ("what am i?",
+        "am I really X?"), so this is not hypothetical.
+
+        Fixing it means changing the denominator (Jaccard / max) or requiring
+        a minimum signature size — both touch a separate council-decided
+        heuristic and neither belongs in this change. Pinned as current
+        behavior so the interaction is visible, not asserted as correct."""
+        thin = _rederive(kb, "i settle when the room dims", "what am i?", occasion="s1")
+        _rederive(kb, "i settle when the room dims", "does dim light change what i am?", occasion="s2")
+        assert thin.references == 0  # blocked by the thin-signature match
 
     def test_agreeing_rederivation_never_penalized(self, kb):
         """Positive control: a genuine (non-conflicting) re-derivation only

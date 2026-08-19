@@ -344,35 +344,54 @@ class KnowledgeBase:
     ) -> None:
         """Credit an INDEPENDENT re-derivation of an existing belief.
 
-        This is the real "conviction" signal. Independence is judged by
-        OCCASION, not a wall clock: a belief earns at most one reference per
-        answering session (``occasion_id`` — the MCP session id, distinct per
-        cron run). A single batch answering many questions, fast or slow,
-        credits once. This is cadence-independent by construction and not
-        gameable by Lumen's own question generator (Lumen does not control when
-        sessions happen).
+        This is the real "conviction" signal, so what counts as independent
+        has to be strict. It is judged by OCCASION and CONTENT, never by a
+        wall clock: a belief earns at most one reference per answering session
+        (``occasion_id`` — the MCP session id, distinct per cron run), and
+        only for a question it has not already been derived from. A single
+        batch answering many questions, fast or slow, credits once. This is
+        cadence-independent by construction.
 
-        When no occasion is available (internal reflection / message paths),
-        fall back to a CONTENT-distinct question guard — a paraphrase of an
-        already-recorded question does not count as a fresh derivation — rather
-        than reintroducing a time window.
+        Independence requires BOTH a distinct occasion AND a CONTENT-distinct
+        question. The content guard is not a fallback for when no occasion is
+        available — it is a standing requirement, because the two conditions
+        guard different failure modes and only their conjunction is evidence:
+
+        - occasion-distinct alone stops one batch from crediting many times,
+          but a SCHEDULED answerer is a distinct occasion by construction. The
+          "Lumen does not control when sessions happen" argument holds for
+          Lumen and fails for a cron: point one at a recurring question and
+          each run credits the answer the previous run gave.
+        - content-distinct alone stops a paraphrase from re-crediting, but not
+          a single session from restating the same belief many ways.
+
+        A real re-derivation is a DIFFERENT occasion arriving at the same
+        belief from a DIFFERENT question. Anything less is an echo, and under
+        the design law that self-derived outranks external assertion an echo
+        must not buy conviction. When no occasion is available (internal
+        reflection / message paths) the content guard carries alone.
 
         Same-occasion (or paraphrase) re-statements still collapse for
         surfacing (we return the existing row) but earn nothing.
         """
         if not (source_question or "").strip():
             return
-        if occasion_id:
-            independent = occasion_id != existing.last_reconverged_occasion
-        else:
-            sig = _question_signature(source_question)
-            if not sig:
-                return
-            seen = [_question_signature(existing.source_question)]
-            seen += [_question_signature(q) for q in existing.derived_from]
-            independent = all(
-                not _questions_equivalent(sig, s) for s in seen if s
-            )
+        sig = _question_signature(source_question)
+        if not sig:
+            return
+        seen = [_question_signature(existing.source_question)]
+        seen += [_question_signature(q) for q in existing.derived_from]
+        content_distinct = all(
+            not _questions_equivalent(sig, s) for s in seen if s
+        )
+        # An occasion, when we have one, is a NECESSARY extra condition —
+        # never a substitute for content-distinctness.
+        occasion_distinct = (
+            occasion_id != existing.last_reconverged_occasion
+            if occasion_id
+            else True
+        )
+        independent = content_distinct and occasion_distinct
         if independent:
             existing.references += 1
             existing.derived_from.append(source_question)
