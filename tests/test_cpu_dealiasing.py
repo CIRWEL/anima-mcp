@@ -133,11 +133,28 @@ def test_cpu_still_moves_presence_through_its_own_door():
 
 def test_stability_fallback_matches_the_dict_default():
     """dict said neural: 0.1, the consumer's .get fallback said 0.2 — a config
-    missing the key silently doubled the weight (#175)."""
+    missing the key silently doubled the weight (#175).
+
+    theta/delta are pinned so the EEG branch is taken. Without them
+    ``_sense_stability`` falls back to ``get_computational_neural_state``,
+    whose sensor is a SINGLETON that appends to ``_cpu_history`` and derives
+    ``dt`` from ``time.time()`` on every call — so the two calls this test
+    compares are not two evaluations of a pure function, and asserting exact
+    equality across them made the test timing- and order-dependent. It failed
+    once in CI at 0.583 vs 0.601 and passed on rerun with identical code.
+    The subject here is the WEIGHT fallback, not the neural source; pinning
+    the neural term isolates it and makes the invariant actually protected."""
     from anima_mcp.anima import _sense_stability
-    with_key = _sense_stability(_readings_gamma(0.2), CAL)
+
+    def _grounded():
+        r = _readings_gamma(0.2)
+        r.eeg_theta_power = 0.5
+        r.eeg_delta_power = 0.5
+        return r
+
+    with_key = _sense_stability(_grounded(), CAL)
     keyless = NervousSystemCalibration(
         stability_weights={k: v for k, v in CAL.stability_weights.items()
                            if k != "neural"})
-    without_key = _sense_stability(_readings_gamma(0.2), keyless)
+    without_key = _sense_stability(_grounded(), keyless)
     assert with_key == pytest.approx(without_key, abs=1e-9)
