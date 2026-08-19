@@ -352,7 +352,6 @@ class TestAnsweredQuestionTexts:
         assert board.get_answered_question_texts() == set()
 
     def test_answer_to_another_question_does_not_leak(self, board):
-        import time as _t
         a = board.add_question("first question about the room?")
         # Clear MIN_QUESTION_INTERVAL_SECONDS so the second is accepted.
         a.timestamp -= msg_module.MIN_QUESTION_INTERVAL_SECONDS + 60
