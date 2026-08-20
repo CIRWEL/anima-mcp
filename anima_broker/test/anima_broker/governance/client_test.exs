@@ -22,8 +22,43 @@ defmodule AnimaBroker.Governance.ClientTest do
     "next_step" => "onboard"
   }
 
+  # Every file this suite writes goes in a directory unique to THIS test, in
+  # THIS VM, and is deleted afterwards.
+  #
+  # The flake in #167 was not process leakage. Paths were built as
+  # `tmp_path("gov_id_#{System.unique_integer([:positive])}.json")`,
+  # and `unique_integer` is unique within a VM but restarts in the same numeric
+  # range on every `mix test`, while the tmp dir persists. So a client's
+  # `load_anchor/1` at init would read an anchor left by an EARLIER RUN of the
+  # suite and start up wearing a previous test's identity — which is exactly
+  # what the two canonical failures showed (`test-uuid-1234` where the test
+  # never onboards, `anchored-uuid-1234` from `write_anchor!/2`'s default).
+  #
+  # Measured on this branch, same seeds: cleared tmp 0/10 runs failed;
+  # accumulating tmp 1/10; tmp holding 400 stale anchors 9/10. That dose
+  # response is the whole flake, and it explains the reported oddities — CI
+  # looked version-specific because each runner starts clean and only the one
+  # that happened to collide failed; running the file alone passed because it
+  # creates fewer clients; and the "residual non-determinism at fixed seed" was
+  # just tmp contents differing between runs.
+  setup do
+    dir =
+      Path.join(
+        System.tmp_dir!(),
+        "anima_client_test_#{System.pid()}_#{System.unique_integer([:positive])}"
+      )
+
+    File.rm_rf!(dir)
+    File.mkdir_p!(dir)
+    on_exit(fn -> File.rm_rf(dir) end)
+    Process.put(:test_tmp_dir, dir)
+    :ok
+  end
+
+  defp tmp_path(name), do: Path.join(Process.get(:test_tmp_dir), name)
+
   defp fresh_live_envelope!(name) do
-    path = Path.join(System.tmp_dir!(), name)
+    path = tmp_path(name)
 
     File.write!(
       path,
@@ -52,7 +87,7 @@ defmodule AnimaBroker.Governance.ClientTest do
       Keyword.get(
         extra_opts,
         :id_file,
-        Path.join(System.tmp_dir!(), "gov_id_#{System.unique_integer([:positive])}.json")
+        tmp_path("gov_id_#{System.unique_integer([:positive])}.json")
       )
 
     opts =
@@ -146,7 +181,7 @@ defmodule AnimaBroker.Governance.ClientTest do
 
   test "prior uuid is declared as parent_agent_id on re-onboard" do
     me = self()
-    id_file = Path.join(System.tmp_dir!(), "gov_id_#{System.unique_integer([:positive])}.json")
+    id_file = tmp_path("gov_id_#{System.unique_integer([:positive])}.json")
     File.write!(id_file, Jason.encode!(%{"agent_uuid" => "prior-uuid-999"}))
 
     http_post = fn _url, body, _headers, _timeout ->
@@ -514,7 +549,7 @@ defmodule AnimaBroker.Governance.ClientTest do
       ok_envelope(%{"action" => "proceed"})
     end
 
-    id_file = Path.join(System.tmp_dir!(), "gov_id_#{System.unique_integer([:positive])}.json")
+    id_file = tmp_path("gov_id_#{System.unique_integer([:positive])}.json")
 
     write_anchor!(id_file, %{
       "mode" => "substrate",
@@ -546,7 +581,7 @@ defmodule AnimaBroker.Governance.ClientTest do
       end
     end
 
-    id_file = Path.join(System.tmp_dir!(), "gov_id_#{System.unique_integer([:positive])}.json")
+    id_file = tmp_path("gov_id_#{System.unique_integer([:positive])}.json")
     write_anchor!(id_file, %{"mode" => "scratch", "client_session_id" => "agent-soak-scratch"})
 
     %{pid: pid} =
