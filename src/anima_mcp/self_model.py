@@ -575,16 +575,27 @@ class SelfModel:
             return
 
         x_key, y_key = keys[0], keys[1]
-        x_values = [d[x_key] for d in data if d[x_key] is not None]
-        y_values = [d[y_key] for d in data if d[y_key] is not None]
+        # Filter as PAIRS, not as two independent series.
+        #
+        # The previous form built x_values and y_values with separate
+        # comprehensions, each dropping its own Nones, then truncated both to
+        # min(len) and zipped positionally. Whenever either channel had a gap
+        # the two lists desynchronised, so x[i] was correlated against a y[i]
+        # recorded at a DIFFERENT timestamp. The result was not noisier — it
+        # was a correlation between misaligned series, which can land anywhere
+        # including a confident wrong sign, and nothing downstream could tell.
+        # A sensor that reads None intermittently is the normal case here, not
+        # an edge case.
+        pairs = [(d[x_key], d[y_key]) for d in data
+                 if d[x_key] is not None and d[y_key] is not None]
 
-        if len(x_values) < 10 or len(y_values) < 10:
+        if len(pairs) < 10:
             return
 
         # Calculate correlation
-        n = min(len(x_values), len(y_values))
-        x = x_values[:n]
-        y = y_values[:n]
+        n = len(pairs)
+        x = [a for a, _ in pairs]
+        y = [b for _, b in pairs]
 
         mean_x = sum(x) / n
         mean_y = sum(y) / n

@@ -215,3 +215,82 @@ class TestBeliefSummary:
             assert "value" in info
             assert 0 <= info["confidence"] <= 1
             assert 0 <= info["value"] <= 1
+
+
+class TestCorrelationPairing:
+    """A gap in either channel must not desynchronise the two series.
+
+    _test_correlation_belief used to filter x and y with separate
+    comprehensions, then truncate both to min(len) and zip positionally. With
+    an intermittent sensor that silently correlated readings taken at
+    different timestamps — not noisier, just misaligned, which can produce a
+    confident wrong sign with nothing downstream able to notice.
+    """
+
+    def _feed(self, model, rows):
+        for temp, clarity in rows:
+            model._correlation_data["temp_clarity"].append(
+                {"temp": temp, "clarity": clarity, "timestamp": datetime.now()}
+            )
+
+    def test_gap_in_one_channel_does_not_shift_the_other(self, model):
+        """A PERIODIC signal, so misalignment is detectable.
+
+        A monotonic ramp is useless here: shifting one series against the
+        other still leaves it positively correlated, so the old code passes.
+        With a period-12 wave, dropping the first three x samples shifts the
+        surviving series by a quarter period and drives the old positional
+        zip toward zero, while correct pairing stays perfectly collinear.
+        """
+        rows = []
+        for i in range(36):
+            wave = math.sin(2 * math.pi * i / 12)
+            temp = 20.0 + 5.0 * wave   # CV ~0.18, clears the 5% variance gate
+            clarity = 0.5 + 0.2 * wave  # y is an exact function of x
+            drop_x = i < 3                       # quarter-period desync
+            rows.append((None if drop_x else temp, clarity))
+        self._feed(model, rows)
+
+        model._test_correlation_belief("temp_clarity_correlation", "temp_clarity")
+
+        belief = model.beliefs["temp_clarity_correlation"]
+        assert belief.value > 0.6, (
+            "surviving pairs are exactly collinear, so this must read as a "
+            f"strong positive; got {belief.value} (misaligned zip reads ~0.5)"
+        )
+
+    def test_pairing_survives_gaps_in_both_channels(self, model):
+        """Both channels gappy, on a periodic signal, at different strides.
+
+        CHARACTERIZATION, not a regression guard: verified that this one also
+        passes against the pre-fix code, because these particular strides
+        desynchronise in a way that still reads positive. Kept because it
+        pins the both-channels-gappy shape, but the guards with teeth are
+        test_gap_in_one_channel_does_not_shift_the_other and
+        test_too_few_complete_pairs_is_a_no_op — both confirmed failing
+        before the fix and passing after.
+        """
+        rows = []
+        for i in range(48):
+            wave = math.sin(2 * math.pi * i / 12)
+            temp = 20.0 + 5.0 * wave   # CV ~0.18, clears the 5% variance gate
+            clarity = 0.5 + 0.2 * wave
+            rows.append((None if i % 5 == 0 else temp,
+                         None if i % 8 == 0 else clarity))
+        self._feed(model, rows)
+        model._test_correlation_belief("temp_clarity_correlation", "temp_clarity")
+        assert model.beliefs["temp_clarity_correlation"].value > 0.6
+
+    def test_too_few_complete_pairs_is_a_no_op(self, model):
+        """<10 COMPLETE pairs must bail, even when each series alone has 10+.
+
+        The old min(len(x), len(y)) test passed here — 15 x-values and 15
+        y-values — while only 5 rows actually had both.
+        """
+        before = model.beliefs["temp_clarity_correlation"].value
+        rows = [(20.0 + i, None) for i in range(15)]
+        rows += [(None, 0.5 + i * 0.01) for i in range(15)]
+        rows += [(25.0 + i, 0.4 + i * 0.03) for i in range(5)]
+        self._feed(model, rows)
+        model._test_correlation_belief("temp_clarity_correlation", "temp_clarity")
+        assert model.beliefs["temp_clarity_correlation"].value == before
