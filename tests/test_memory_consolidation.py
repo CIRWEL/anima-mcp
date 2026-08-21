@@ -205,7 +205,7 @@ class TestDetectLongTermTrend:
         summaries = []
         for i, w in enumerate(values_warmth):
             summaries.append({
-                "date": f"2025-06-{10+i:02d}T12:00:00",
+                "date": (datetime.now() - timedelta(days=6 - i)).strftime("%Y-%m-%dT12:00:00"),
                 "center": [w, 0.5, 0.5, 0.5],
                 "variance": [0.001]*4,
                 "n_obs": 200,
@@ -241,7 +241,7 @@ class TestDetectLongTermTrend:
         summaries = []
         for i, c in enumerate([0.7, 0.6, 0.5, 0.4, 0.3]):
             summaries.append({
-                "date": f"2025-06-{10+i:02d}T12:00:00",
+                "date": (datetime.now() - timedelta(days=6 - i)).strftime("%Y-%m-%dT12:00:00"),
                 "center": [0.5, c, 0.5, 0.5],
                 "variance": [0.001]*4,
                 "n_obs": 200,
@@ -331,7 +331,7 @@ class TestReflectIntegration:
         summaries = []
         for i, w in enumerate([0.3, 0.4, 0.5, 0.6, 0.7]):
             summaries.append({
-                "date": f"2025-06-{10+i:02d}T12:00:00",
+                "date": (datetime.now() - timedelta(days=6 - i)).strftime("%Y-%m-%dT12:00:00"),
                 "center": [w, 0.5, 0.5, 0.5],
                 "variance": [0.001]*4,
                 "n_obs": 200,

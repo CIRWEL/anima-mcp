@@ -115,6 +115,26 @@ class SelfModel:
         "presence_baseline_low": (0.3, 0.5),
     }
 
+    # 2026-08-21 audit: these four beliefs have evidence channels that do not
+    # deliver in the deployed topology — the server-side observers sit behind
+    # the read-only guard, the broker never calls the warmth observer, the
+    # stability observer is gated behind the retired ANIMA_BROKER_AGENCY_ENABLED
+    # flag, and question_asking_tendency's inbox feed sits downstream of the
+    # surprise-path crash (#189), so zero events have ever arrived. Their
+    # stored values are artifacts of the retired 2s-tick era (counts
+    # byte-identical across every snapshot since 8-11/12); recomputation from
+    # state_history contradicts the recovery pair at every observable
+    # timescale. A frozen near-saturated value is worse than an honest prior —
+    # so each belief cold-starts to ITS OWN constructor prior (the 0.7
+    # hypothesis seeds for interaction/questions are deliberate design priors,
+    # not learned values, and survive the reset as priors).
+    _DEAD_CHANNEL_RESET_V3 = {
+        "warmth_recovery": (0.5, 0.5),
+        "stability_recovery": (0.5, 0.5),
+        "interaction_clarity_boost": (0.5, 0.7),
+        "question_asking_tendency": (0.5, 0.7),
+    }
+
     def __init__(self, persistence_path: Optional[Path] = None,
                  read_only: bool = False):
         self.persistence_path = persistence_path or Path.home() / ".anima" / "self_model.json"
@@ -281,6 +301,8 @@ class SelfModel:
         event_ids = data.get("applied_event_ids", [])
         if isinstance(event_ids, list):
             self._applied_event_ids = [str(value) for value in event_ids[-2000:]]
+        # Retain the dead-channel audit trail across load/save cycles.
+        self._dead_channel_audit = data.get("_migrated_dead_channel_reset_v3", None)
 
     def _load(self):
         """Load self-model from disk."""
@@ -316,6 +338,32 @@ class SelfModel:
                         belief.supporting_count = 0
                         belief.contradicting_count = 0
                     self._evidence_buckets.clear()
+                    migrated = True
+
+                if not self.read_only and not data.get("_migrated_dead_channel_reset_v3"):
+                    # The pre-reset state is stashed INSIDE the flag (a truthy
+                    # dict) so the reset stays auditable from the file itself,
+                    # like the kb migration's legacy_confidence.
+                    audit = {}
+                    for bid, (conf, value) in self._DEAD_CHANNEL_RESET_V3.items():
+                        belief = self._beliefs.get(bid)
+                        if belief is None:
+                            continue
+                        audit[bid] = {
+                            "confidence": belief.confidence,
+                            "value": belief.value,
+                            "supporting_count": belief.supporting_count,
+                            "contradicting_count": belief.contradicting_count,
+                        }
+                        print(f"[SelfModel] Cold-starting dead-channel belief '{bid}' "
+                              f"(+{belief.supporting_count}/-{belief.contradicting_count}, "
+                              f"v={belief.value:.3f}, c={belief.confidence:.3f})",
+                              flush=True)
+                        belief.confidence = conf
+                        belief.value = value
+                        belief.supporting_count = 0
+                        belief.contradicting_count = 0
+                    self._dead_channel_audit = audit or True
                     migrated = True
 
                 if migrated:
@@ -372,6 +420,10 @@ class SelfModel:
                 "applied_event_ids": self._applied_event_ids[-2000:],
                 "_migrated_noise_reset": True,
                 "_migrated_episode_evidence_v2": True,
+                # Truthy dict carrying the pre-reset state (audit trail), or
+                # True when there was nothing to reset. Preserved across loads.
+                "_migrated_dead_channel_reset_v3":
+                    getattr(self, "_dead_channel_audit", None) or True,
             }
             atomic_json_write(self.persistence_path, data, indent=2)
             try:

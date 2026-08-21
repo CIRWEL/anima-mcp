@@ -41,10 +41,18 @@ The boundary gates BOTH surfacing and application: below 0.6 an insight is
 stored and contestable but inert — it syncs to nothing
 (`sync_from_qa_knowledge`) and moves nothing (`apply_insight` floor).
 Anything an agent says to Lumen can come back as a stated self-belief (#121),
-so the trust boundary is load-bearing. ⚠️ ~1,200 pre-2026-08-11 external
-rows are grandfathered at 1.0 (never rescaled on load); until an operator
-runs a retroactive rescale, a never-re-derived NEW external insight ranks
-~0.25 conviction-score points below an equally-unreferenced legacy row.
+so the trust boundary is load-bearing. The grandfathered set was ~1,782
+pre-2026-08-11 external rows at confidence 1.0 (an earlier version of this
+file said ~1,200 — a 48% undercount, measured 2026-08-21). The
+operator-authorized retroactive rescale shipped as knowledge schema v3
+(2026-08-21): unearned external rows (external author — including
+operator-authored prose, authorship is not an exemption — confidence above
+0.5, never reconverged) return to the 0.5 entry point on first load,
+originals kept in `legacy_confidence` plus a `.pre-v3.json` sidecar of the
+whole file. Earned reconvergence boosts and self-derived rows are untouched.
+Expected visible effect: rows above the 0.6 actionable floor drop ~1,837 →
+~59, so the surfaced Q&A self-knowledge shrinks sharply — that is the trust
+boundary applying to the grandfathered corpus, not a regression.
 
 ---
 
