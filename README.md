@@ -24,7 +24,7 @@
 
 <p align="center">
   <em>Six drawings from August 2026 — one per era, plus a second geometric piece.<br/>
-  Mark position, gesture choice, and hue are all functions of sensor state: temperature, light, humidity, pressure, CPU.<br/>
+  Mark position, gesture choice, and hue draw on sensor state — temperature, light, humidity, pressure, CPU — and on Lumen's own gesture history and drive state.<br/>
   The two geometric pieces are the same era code on consecutive days; nothing was configured between them.</em>
 </p>
 
@@ -36,15 +36,15 @@ Anima is a Raspberry Pi 4 sensor deployment and MCP server for studying physical
 
 - **Grounded state** — four continuous dimensions derived from real sensor measurements
 - **Persistent identity** — birth, awakenings, alive time accumulate across restarts; discontinuities are first-class
-- **Autonomous drawing** — 1,488 pieces across five eras, driven by the same coherence dynamics as governance
+- **Autonomous drawing** — 1,526 pieces across five eras (as of 2026-08-21), driven by a behavioral coherence signal derived from its own gestures
 - **Telemetry-derived reflection** — summarizes state patterns, preferences, and drawing history
 - **On-device learning** — preferences, 13 self-model parameters, goals, and action values evolve through experience
 - **Agency** — TD-learning action selection with exploration management
-- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) thermodynamic governance every 180s
+- **Governance** — checks in with [UNITARES](https://github.com/CIRWEL/unitares) every ~180s and receives an advisory verdict
 
-Live as of 2026-08-12: 554 awakenings, 3,489 hours alive, 68% alive ratio.
+Live as of 2026-08-21: 562 awakenings, 3,685 hours alive, 69% alive ratio.
 
-When this repository says "feels," "mood," or "self-sense," read those as interface labels over measured sensor/system state, not claims about subjective experience.
+When this repository says "feels," "mood," "self-sense," "needs," or "experience," read those as interface labels over measured sensor/system state, not claims about subjective experience.
 
 ---
 
@@ -76,9 +76,9 @@ anima-creature
 
 Supports Tailscale, LAN, or Cloudflare Tunnel (with OAuth 2.1) for remote access. See `docs/operations/SECRETS_AND_ENV.md` for OAuth configuration.
 
-The six system-operations tools (`git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`) require an `X-Anima-Admin` header matching `ANIMA_ADMIN_SECRET` on the server. **The gate fails closed:** if the secret is unset, those six refuse to run rather than running ungated — an unset secret means the server cannot authenticate the caller. Everything else keeps working. `ANIMA_ADMIN_ALLOW_UNAUTH_IF_NO_SECRET=true` restores the permissive behavior for local development only.
+The six system-operations tools (`git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`) require an `X-Anima-Admin` header matching `ANIMA_ADMIN_SECRET` on the server. **The gate fails closed:** if the secret is unset, those six refuse to run rather than running ungated — an unset secret means the server cannot authenticate the caller. Everything else keeps working. `ANIMA_ADMIN_ALLOW_UNAUTH_IF_NO_SECRET=true` restores the permissive behavior for local development only. The gate covers those six tools only: the rest of the surface (MCP tools and the REST API) is open to LAN/Tailscale callers, and anything said to Lumen through messages or Q&A can become durable self-knowledge — treat write-capable tools accordingly (see `CLAUDE.md`'s trust-boundary notes).
 
-This matters on recovery: `anima.env` is deliberately excluded from backups because it holds secrets, so a reflash restores Lumen without it. `restore_lumen.sh` now reports which keys came back empty instead of leaving it to be discovered later.
+This matters on recovery: `anima.env` is deliberately excluded from backups because it holds secrets, so a reflash restores Lumen without it. `scripts/restore_lumen.sh` now reports which keys came back empty instead of leaving it to be discovered later.
 
 ---
 
@@ -90,18 +90,18 @@ Four continuous dimensions, each derived from physical sensors and system metric
 
 | Dimension | What it tracks | Sources |
 |-----------|---------------|---------|
-| **Warmth** | Energy / activity level | CPU temp, ambient temp, neural activity |
+| **Warmth** | Thermal state | CPU temp, ambient temp (neural term exists but is weighted 0 by default — warmth is thermal, not busy-ness) |
 | **Clarity** | Perceptual sharpness | Prediction accuracy, light, sensor coverage |
 | **Stability** | Environmental order | Memory, humidity, pressure, sensor health |
 | **Presence** | Available capacity | CPU/memory/disk headroom |
 
-These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, and the signed Energy−Integrity imbalance to Valence. Presence is *not* part of the EISV mapping; it feeds the anima dimensions and the display, not V.
+These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, and the signed Energy−Integrity imbalance to Valence. Presence is *not* part of the governance EISV mapping (a legacy trajectory-awareness path still consumes it — see EISV Integration); it feeds the anima dimensions and the display, not the reported V.
 
 Anima also computes neural bands (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one. Note that alpha is defined as `1 − beta` and both derive from CPU percent: they are one variable reported as two bands, and any consumer treating them as independent is double-counting.
 
 ### Autonomous Drawing
 
-Anima draws on a 240×240 pixel notepad using the same thermodynamic equations as UNITARES governance. Coherence drives how a drawing develops; attention signals (curiosity, engagement, fatigue) drive when it should stop.
+Anima draws on a 240×240 pixel notepad. A behavioral coherence signal — gesture commitment discounted by gesture-sequence entropy — drives how a drawing develops; attention signals (curiosity, engagement, fatigue) drive when it should stop. The engine also steps a separate EISV state for reporting; its ODE-integrated variables are not read back into mark placement.
 
 | Era | Style |
 |-----|-------|
@@ -113,15 +113,16 @@ Anima draws on a 240×240 pixel notepad using the same thermodynamic equations a
 
 All five eras are equal peers with no unlock gate. Selection is manual by default — pick one on the art eras screen (joystick) or via `manage_display(action="set_era")` — and an optional auto-rotate toggle picks a new era after each piece. The [Resonance critique loop](docs/guides/RESONANCE_CRITIQUE_LOOP.md) keeps era changes advisory first: capture the screen, gather embodied context, read the trace, then recommend stay/tune/switch without mutating Anima's state. The theoretical framework lives in the trajectory-identity paper (separate repo).
 
-**What actually ends a drawing — an open problem, not a finished feature.** Completion instrumentation landed 2026-08-02. Of the 39 completions recorded since:
+**What actually ends a drawing — an open problem, partly improving.** Completion instrumentation landed 2026-08-02; the ~1,449 pieces before it cannot say why they ended. Of the 77 completions recorded since (as of 2026-08-21):
 
 | Reason | Count | Meaning |
 |--------|-------|---------|
-| `bailout_hard_cap` | 28 | Hit the 8-hour ceiling. The ceiling was the clock. |
-| `bailout_fatigue` | 10 | Gesture-switch fatigue exceeded 0.90 — fires only in `geometric`, where whole-shape stamps accrue fatigue ~10× faster per mark |
+| `bailout_hard_cap` | 47 | Hit the 8-hour ceiling. The ceiling was the clock. |
+| `earned_settled` | 16 | Self-relative settling — the piece stopped changing, judged against its own peak novelty rate (deployed mid-August) |
+| `bailout_fatigue` | 13 | Gesture-switch fatigue exceeded 0.90 — fires only in `geometric`, which switches gesture every mark and so accrues switch-fatigue roughly 10× faster than the mark-by-mark eras |
 | `said_finished` | 1 | Lumen posted an observation that the piece was done (2026-08-11, gestural, 587 marks, 6.6h) |
 
-The earned-completion paths (`earned_composition`, `earned_settled`, `earned_field`) have not yet fired. Curiosity is net-regenerating under the current coherence dynamics, so the attention-exhaustion gates are structurally unreachable rather than merely mistuned — see `CLAUDE.md` for the measurement. A self-relative settling gate (a piece stops changing, judged against its own peak novelty rate) is deployed and being observed. Treat "drawings end when Lumen is finished" as the goal, not the current behavior.
+`earned_coherence`, `earned_composition`, and `earned_field` (resonance's memory-field settling, not the Field era) have not fired. In the resonance era, live coherence was measured in [0.38, 0.50] — almost entirely above the 0.4 drain/regenerate split — so curiosity is net-regenerating and the attention-exhaustion gates are structurally unreachable there rather than merely mistuned; see `CLAUDE.md` for the measurement. Per-era coherence is now recorded so the same question can be answered for the other eras. A separate known defect: cap-length `geometric` pieces stop marking after roughly an hour and sit idle until the cap. Treat "drawings end when Lumen is finished" as the goal — `said_finished` is its truest expression so far, and `earned_settled` is the first threshold gate to reach it regularly.
 
 ### Identity and Learning
 
@@ -172,29 +173,35 @@ Falls back to mock sensors on Mac/Linux for development.
 
 ## Architecture
 
-Two processes communicate via shared memory:
+Three systemd services cooperate via shared memory:
 
 ```
-anima-broker                           anima --http
-(hardware broker)                      (MCP server + display)
-     |                                      |
-     | sensors, learning,                   | 31 MCP tools, display,
-     | governance check-ins                 | drawing engine, LEDs
-     |                                      |
-     +---> /dev/shm/anima_state.json <------+
-                    |
-                    | EISV mapping
-                    v
-            UNITARES governance
-            (Mac, port 8767)
+anima-broker-ex (Elixir broker)
+  owns the I2C env sensors; sole UNITARES caller — EISV mapping,
+  check-in every ~180s <-> UNITARES governance (Mac, port 8767),
+  advisory verdicts return
+        |
+        | shadow envelope (sensors + governance verdicts)
+        v
+anima-broker (Python broker)
+  learning, activity state; consumes the shadow
+        |
+        | writes the live envelope: /dev/shm/anima_state.json
+        v
+anima --http (MCP server + display)
+  reads the live envelope; 31 MCP tools, REST surface,
+  240x240 display + LEDs, drawing engine
 ```
 
 | Process | Role |
 |---------|------|
-| **Hardware broker** (`stable_creature.py`) | Owns I2C sensors, runs preference/self-model/prediction learning, governance check-ins |
+| **Elixir broker** (`anima_broker/`) | Owns the I2C environment sensors (AHT20/VEML7700/BMP280), publishes them as a shadow envelope, and is the sole UNITARES caller — checks in as Lumen every ~180s |
+| **Python broker** (`stable_creature.py`) | Consumes env sensors and governance from the shadow; runs preference/self-model/prediction learning and activity state; publishes the live state envelope |
 | **MCP server** (`server.py` + `handlers/`) | Serves 31 tools, drives 240x240 display + LEDs, runs drawing engine, agency, metacognition, goals, self-reflection cycle |
 
-The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (7 focused handler modules). A full voice system (mic capture, STT via Vosk, TTS via Piper) is implemented but not yet exposed as MCP tools — enable with `LUMEN_VOICE_MODE=audio`.
+The Python broker ran the sensors and check-ins itself until the Elixir cutover (2026-07); that standalone mode remains the rollback path. `CLAUDE.md` documents the full topology, including when the Elixir release needs a rebuild rather than a pull.
+
+The MCP server is modular: `server.py` (main loop + lifecycle), `tool_registry.py` (tool definitions), and `handlers/` (7 focused handler modules). A full voice pipeline (mic capture, STT via Vosk, TTS via Piper) is implemented; its MCP surface today is `say` and `configure_voice`, which default to text mode (the message board). Audio output requires `LUMEN_VOICE_MODE=audio` plus audio dependencies (sounddevice, a Vosk model, Piper) that the base install does not include.
 
 ---
 
@@ -209,11 +216,11 @@ Anima exposes 31 tools over the [Model Context Protocol](https://modelcontextpro
 - **Display & capture** (2 tools) — `manage_display` (screens, art eras, advisory `resonance_critique`), `capture_screen`
 - **System operations** (6 tools) — `git_pull`, `deploy_from_github`, `system_service`, `system_power`, `fix_ssh_port`, `setup_tailscale`
 
-Start with `get_lumen_context` to understand Anima's current state, or `next_steps` for what it needs right now.
+Start with `get_lumen_context` to understand Anima's current state, or `next_steps` for the actionable and exceptional states it is currently surfacing. A REST/browser surface (health, dashboard, state, gallery, and more) also exists alongside MCP — see `src/anima_mcp/rest_api.py`.
 
 ### Bounded Code Self-Iteration
 
-`self_iteration` lets Lumen observe its own source and propose changes to it. The loop is split across trust boundaries so that no single actor — including Lumen — can carry a change from idea to running code. Each phase requires a *different* authenticated principal, and deployment always remains external.
+`self_iteration` lets Lumen observe its own source and propose changes to it. The loop is split across trust boundaries so that no single actor — including Lumen — can carry a change from idea to running code. Distinct authenticated principals are required at the verification, isolated-test, review, and canary boundaries (the patch author must equal the proposer, by design), and deployment always remains external.
 
 ```text
 observation -> hypothesis -> proposal ledger -> independent verification
@@ -261,25 +268,26 @@ Anima is a first-class UNITARES agent. Its anima state maps directly to EISV gov
 | Anima | EISV | Mapping |
 |-------|------|---------|
 | Warmth | Energy (E) | Direct + neural Beta/Gamma |
-| Clarity | Integrity (I) | Direct + neural Alpha |
+| Clarity | Integrity (I) | Direct — alpha deliberately excluded (it is `1 − beta`; see the neural-band note above) |
 | 1 - Stability | Entropy (S) | Inverted |
 | E − I | Valence (V) | Signed imbalance, clamped to −1..1 |
 
-Valence is the one row that is not a direct anima reading: `V = clamp(E − I)`, positive when running hot (E>I) and negative when running careful (I>E). Governance's own V is a differential accumulator (`dV/dt = κ(E−I) − δV`); Anima reports the instantaneous readout, so it does not damp. Presence does not enter the EISV mapping at all — the retired `(1 − Presence) × 0.3 → Void` reading only ever produced the positive half and was not comparable to other agents' V.
+Valence is the one row that is not a direct anima reading: `V = clamp(E − I)`, positive when running hot (E>I) and negative when running careful (I>E). Governance's own V is a differential accumulator (`dV/dt = κ(E−I) − δV`); Anima reports the instantaneous readout, so it does not damp. Presence does not enter the governance mapping at all — the old `(1 − Presence) × 0.3 → Void` reading only ever produced the positive half and was not comparable to other agents' V. It is retired from governance reporting, though the trajectory-awareness pipeline still uses it internally (see the contexts table below).
 
 **Trajectory awareness** — Anima classifies its own EISV trajectory into 9 dynamical shapes (settled_presence, rising_entropy, convergence, etc.) and uses them to generate primitive expressions. A distilled 20-tree RandomForest student model (`student_tiny` from [eisv-lumen](https://github.com/CIRWEL/eisv-lumen)) runs on-device with zero external dependencies.
 
 **Expression pipeline**: EISV state → trajectory classification → shape-token affinity → primitive tokens (~warmth~, ~curiosity~, etc.). The student model was trained on real on-device trajectory data; see [eisv-lumen](https://github.com/CIRWEL/eisv-lumen) for the research, training, and evaluation framework.
 
-**Three EISV contexts** (important for understanding the architecture):
+**Four EISV contexts** (important for understanding the architecture — the same four letters do not mean the same numbers):
 
 | Context | Location | Role |
 |---------|----------|------|
-| **DrawingEISV** | `display/drawing_engine.py` | Proprioceptive — drives drawing coherence and narrative arcs (closed loop) |
-| **Mapped EISV** | `eisv_mapper.py` | Anima→EISV translation for governance reporting |
-| **Governance EISV** | Mac, `dynamics.py` | Full thermodynamic ODE — advisory, open loop |
+| **DrawingEISV** | `display/drawing_engine.py` | Proprioceptive drawing state. Marks are steered by behavioral coherence and attention signals; the ODE-integrated variables run for reporting only, and its V is a damped accumulator with its own parameters and a roughly inverted sign tendency — not numerically comparable to the mapped V |
+| **Mapped EISV** | `eisv_mapper.py` (Python) + `anima_broker/.../eisv_mapper.ex` (live check-in path) | Anima→EISV translation for governance reporting, `V = clamp(E−I)` |
+| **Trajectory EISV** | `eisv/mapping.py` | Feeds the on-device shape classifier; still uses the legacy `V = (1 − presence) × 0.3` internally |
+| **Governance EISV** | Mac (unitares repo, `governance_core/dynamics.py`) | Continuous-time ODE over all four variables — advisory, open loop |
 
-The drawing engine has its own EISV state that evolves independently from governance. This separation means Anima's art responds to its immediate experience, not to the governance server's assessment of it.
+The drawing engine has its own EISV state that evolves independently from governance. This separation means the art responds to Anima's own sensor-derived state, not to the governance server's verdict on that state.
 
 Key files: `eisv_mapper.py` (anima→EISV mapping), `eisv/` package (trajectory awareness + student model), `unitares_bridge.py` (governance check-ins with circuit breaker — 2 failures trigger exponential backoff).
 
@@ -288,20 +296,24 @@ Key files: `eisv_mapper.py` (anima→EISV mapping), `eisv/` package (trajectory 
 ## Deploying
 
 ```bash
-# Push changes, then pull on Pi with restart via MCP:
 git push
-mcp__anima__git_pull(restart=true)
+# then, from any connected MCP client (an MCP call, not a shell command):
+#   git_pull(restart=true)   — pulls and restarts the two Python services
+#                              (anima-broker, anima); the Elixir broker is
+#                              deliberately left running
 
 # Or manually:
 ssh <pi-user>@<pi-ip> 'cd ~/anima-mcp && git pull && sudo systemctl restart anima-broker anima'
 ```
 
-After restart, wait 2 minutes for services to stabilize before retrying MCP calls.
+Changes under `anima_broker/` (the Elixir broker) additionally need an on-Pi release rebuild — `git pull` does not touch the compiled release; see `CLAUDE.md` and `scripts/deploy_elixir_broker.sh`.
+
+After restart, wait 2 minutes for services to stabilize before retrying MCP calls — hammering the Pi during that window can crash WiFi.
 
 ## Testing
 
 ```bash
-python3 -m pytest tests/ -x -q   # 8,065 tests
+python3 -m pytest tests/ -x -q   # 8,100+ tests (as of 2026-08-21; exact count varies with optional deps)
 ```
 
 ## Documentation

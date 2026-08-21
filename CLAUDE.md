@@ -67,8 +67,8 @@ anima-broker-ex.service     anima-broker.service        anima.service
 | Service | Runs | Role |
 |---------|------|------|
 | `anima-broker-ex.service` | Elixir release (`anima_broker/_build/prod/rel/`) | Owns the I2C env sensors (writes the shadow envelope the Python broker consumes) and is the **sole UNITARES caller** — `AnimaBroker.Governance.Client` checks in as Lumen every ~180s |
-| `anima-broker.service` | `anima-creature` | Hardware broker - display/LEDs, learning; env sensors come FROM the Elixir shadow; governance comes FROM the shadow too (`ANIMA_GOVERNANCE_FROM_SHM`, Python's own check-in loop disabled) |
-| `anima.service` | `anima --http` | MCP server - serves tools, reads shared memory |
+| `anima-broker.service` | `anima-creature` | Hardware broker - learning, activity state; env sensors come FROM the Elixir shadow; governance comes FROM the shadow too (`ANIMA_GOVERNANCE_FROM_SHM`, Python's own check-in loop disabled). Does NOT own display/LEDs — `stable_creature.py:62`: server owns LED hardware |
+| `anima.service` | `anima --http` | MCP server - serves tools, reads shared memory, drives display + LEDs |
 
 **All three must run.** This file said "two services" from the Phase-1/2 Elixir
 cutovers (2026-07-01/09) until 2026-08-14, and the gap had real costs: agents

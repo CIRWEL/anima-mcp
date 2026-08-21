@@ -23,17 +23,19 @@ nervous_system:
   neural_weight: 0.3
   physical_weight: 0.7
   
-  # Component weights for anima dimensions (should sum to ~1.0)
+  # Component weights for anima dimensions (should sum to ~1.0).
+  # neural is 0.0 by design in warmth and clarity — it aliases CPU% (#173);
+  # a config that sets it non-zero silently resurrects the double-count.
   warmth_weights:
-    cpu_temp: 0.4
-    ambient_temp: 0.33
-    neural: 0.27
-  
+    cpu_temp: 0.4375
+    ambient_temp: 0.5625
+    neural: 0.0
+
   clarity_weights:
-    prediction_accuracy: 0.45
-    neural: 0.25
-    sensor_coverage: 0.15
-    world_light: 0.15   # Environmental light (self-glow subtracted)
+    prediction_accuracy: 0.625
+    neural: 0.0
+    sensor_coverage: 0.1875
+    world_light: 0.1875   # Raw lux — includes Lumen's own LED glow
   
   stability_weights:
     humidity_dev: 0.25
