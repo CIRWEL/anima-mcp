@@ -931,8 +931,9 @@ _DEFAULT_ALLOWED_HOSTS = [
     "[::1]:*",
     "lumen.cirwel.org",
     "0.0.0.0:*",
-    # Operator-specific LAN/Tailscale hosts belong in ANIMA_MCP_ALLOWED_HOSTS,
-    # not baked into a public default.
+    # Operator-specific LAN/Tailscale hosts belong in ANIMA_ALLOWED_HOSTS
+    # (the env var _get_transport_security_settings reads), not baked into
+    # a public default.
 ]
 
 _DEFAULT_ALLOWED_ORIGINS = [

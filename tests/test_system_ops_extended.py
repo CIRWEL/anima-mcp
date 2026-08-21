@@ -334,6 +334,11 @@ class TestDelayedRestartExtended:
         data = json.loads(lockfile.read_text())
         assert data["wait_seconds"] == RESTART_WAIT_SECONDS
         popen_mock.assert_called_once()
+        # Both units, explicitly: the broker unit has no PartOf=, so restarting
+        # only 'anima' leaves the learning/belief writer on stale code — the
+        # 2026-08-21 deploy shipped #184 to a broker that kept running pre-fix.
+        cmd = popen_mock.call_args.args[0]
+        assert cmd == ["sudo", "systemctl", "restart", "anima-broker", "anima"]
 
     async def test_delayed_restart_continues_if_lockfile_write_fails(self):
         from anima_mcp.handlers.system_ops import _delayed_restart

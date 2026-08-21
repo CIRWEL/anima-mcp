@@ -78,11 +78,14 @@ async def _delayed_restart():
     Writes a lockfile BEFORE dispatching, so any caller that reconnects early
     can detect that a restart is in progress and back off.
 
-    Dispatches 'systemctl restart anima' to systemd via Popen.
-    This is an explicit restart, so PartOf=anima.service on the broker's
-    unit file causes the broker to also restart. systemd (PID 1) receives
-    the D-Bus command before it kills our cgroup, so the restart proceeds
-    even after our process dies.
+    Dispatches 'systemctl restart anima-broker anima' to systemd via Popen.
+    Both units are named explicitly: the broker unit has no PartOf= directive
+    (an earlier version of this comment claimed it did, and deploys left the
+    broker on stale code). Ordering within the transaction comes from
+    anima.service's After=anima-broker.service (mirrored by the broker's
+    Before=); Requires= only pulls the broker in when anima is targeted
+    alone. systemd (PID 1) receives the D-Bus command before it kills our
+    cgroup, so the restart proceeds even after our process dies.
     """
     # Write lockfile before restart — survives the process dying
     try:
@@ -96,8 +99,12 @@ async def _delayed_restart():
 
     # 5-second delay ensures the MCP response is fully sent before we die
     await asyncio.sleep(5)
+    # Broker first — its restart propagates to anima via Requires=, so both
+    # restart even if this process (which lives inside anima.service) dies
+    # before systemctl submits the second job. anima-first could kill
+    # systemctl before the broker job is enqueued.
     subprocess.Popen(
-        ["sudo", "systemctl", "restart", "anima"],
+        ["sudo", "systemctl", "restart", "anima-broker", "anima"],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
