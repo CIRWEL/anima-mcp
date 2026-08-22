@@ -25,7 +25,9 @@ constants don't. Every instance of this class found so far — the wellness
 learning gate (dead for months, fixed #119), the `C = 0.4` curiosity branch
 (95% regen ⇒ attention can't exhaust), the 5–25% density band, the light
 sensor saturating above 179 lux, the unreachable "stressed" mood, the goal
-confidence gates — was an absolute threshold against a moving distribution.
+confidence gates, the coverage-intention clarity cuts (`dense` below 0.30
+against a lived range of 0.454–0.910 ⇒ not generated once in 833 pieces, fixed
+2026-08-22) — was an absolute threshold against a moving distribution.
 Grandfathered constants are inventoried where they live; do not add more.
 (Bounded floors that encode *investment*, like "2 hours before a drawing can
 be done", are fine — they gate evidence quantity, not behavior against a
