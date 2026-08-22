@@ -138,6 +138,14 @@ class NervousSystemCalibration:
     # FaceThresholds and refused by the derivation script.
     face_thresholds: Dict[str, float] = field(default_factory=dict)
 
+    # Clarity cuts that pick a drawing's coverage intention, derived from THIS
+    # creature's lived clarity distribution (scripts/derive_drawing_thresholds.py).
+    # Empty = use the built-in defaults in display/drawing_engine.py — fresh
+    # installs generate goals identically to before this field existed. Keys
+    # override 1:1; a non-monotone pair is rejected whole (it would starve
+    # "balanced" the way the built-in 0.30 starved "dense").
+    drawing_thresholds: Dict[str, float] = field(default_factory=dict)
+
     presence_weights: Dict[str, float] = field(default_factory=lambda: {
         "disk": 0.3125,
         "memory": 0.375,

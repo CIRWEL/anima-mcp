@@ -362,6 +362,27 @@ class CanvasState:
                     min_cell = (gx, gy)
         return min_cell
 
+    def coverage_bias_cell(self, prefer: str) -> Optional[Tuple[int, int]]:
+        """A cell to lean toward for a `sparse` or `dense` coverage intention.
+
+        Deliberately NOT sparsest_cell(): that scans in fixed order and resolves
+        ties to the first minimum, so early in a piece — when most cells are
+        still empty and therefore tied — it always answers (0, 0). Good enough
+        for resonance, which only consults it occasionally; fatal for a bias
+        applied at every gesture boundary, which would quietly drag every
+        `sparse` piece into the top-left corner and call it an intention.
+        Ties are broken uniformly instead.
+
+        Returns None when the grid carries no information yet (nothing drawn),
+        so the opening marks are the era's alone.
+        """
+        cells = [(gx, gy) for gx in range(8) for gy in range(8)]
+        counts = [self.density_grid[gx][gy] for gx, gy in cells]
+        if not any(counts):
+            return None
+        want = min(counts) if prefer == "sparse" else max(counts)
+        return random.choice([c for c, n in zip(cells, counts) if n == want])
+
     def mark_satisfied(self):
         """Mark that Lumen feels satisfied with current drawing."""
         if not self.is_satisfied:
@@ -934,6 +955,57 @@ class DrawingState:
 DrawingEISV = DrawingState
 
 
+# Clarity cuts that pick a piece's coverage intention. Built-ins are the
+# historical constants and stay as the fallback, so a fresh install generates
+# goals exactly as before this field existed; a deployment derives its own via
+# scripts/derive_drawing_thresholds.py, which writes
+# nervous_system.drawing_thresholds into the calibration file. Names override
+# 1:1, absent keys fall back, and a broken config fails open — a drawing must
+# still start.
+_DEFAULT_COVERAGE_CUTS = {
+    "COVERAGE_DENSE_BELOW": 0.30,   # clarity under this -> "dense"
+    "COVERAGE_SPARSE_ABOVE": 0.70,  # clarity over this  -> "sparse"
+}
+
+# How far toward the intention's target cell a gesture boundary leans, as a
+# fraction of the distance. Self-relative by construction (the target is an
+# extremum of THIS piece's own density grid), so it adds no absolute threshold.
+COVERAGE_BIAS_STRENGTH = 0.30
+# Era focus margins run 15-25px; clamp the bias to the widest so it can never
+# park the focus in a band some era treats as off-canvas.
+COVERAGE_BIAS_MARGIN = 25
+
+
+def _coverage_cuts() -> Tuple[float, float]:
+    """(dense_below, sparse_above) clarity cuts, calibration-overridable.
+
+    Reads through get_calibration(), which refreshes on config-file signature
+    change, so a rederive lands without a restart. Fails open to the built-ins,
+    and to them individually — a config that supplies one cut and garbage for
+    the other keeps the good half. A non-monotone pair (dense_below >=
+    sparse_above) would make "balanced" unreachable, which is the same disease
+    as the dead "dense" branch, so that pair is rejected whole.
+    """
+    try:
+        from ..config import get_calibration
+        overrides = getattr(get_calibration(), "drawing_thresholds", None) or {}
+    except Exception:
+        overrides = {}
+    def _cut(name: str) -> float:
+        default = _DEFAULT_COVERAGE_CUTS[name]
+        try:
+            return float(overrides.get(name, default))
+        except (TypeError, ValueError):
+            return default
+
+    dense_below = _cut("COVERAGE_DENSE_BELOW")
+    sparse_above = _cut("COVERAGE_SPARSE_ABOVE")
+    if not dense_below < sparse_above:
+        return (_DEFAULT_COVERAGE_CUTS["COVERAGE_DENSE_BELOW"],
+                _DEFAULT_COVERAGE_CUTS["COVERAGE_SPARSE_ABOVE"])
+    return dense_below, sparse_above
+
+
 @dataclass
 class DrawingGoal:
     """A compositional intention for the current drawing.
@@ -943,6 +1015,11 @@ class DrawingGoal:
     giving each drawing a subtle intentional character.
     """
     warmth_bias: float = 0.0        # -0.15 to +0.15, biases warmth for generate_color
+    # How this piece wants to USE the canvas, not how much ink it should end up
+    # with: "sparse" leans each new gesture toward the emptiest region (marks
+    # spread, negative space survives), "dense" leans toward the fullest one
+    # (marks accumulate and layer), "balanced" leans nowhere and is exactly the
+    # pre-2026-08-22 behavior. Consumed by DrawingEngine._apply_coverage_bias().
     coverage_target: str = "balanced"  # "sparse", "balanced", "dense"
     initial_quadrant: Optional[int] = None  # 0-3, starting focus quadrant
     description: str = ""
@@ -956,10 +1033,16 @@ class DrawingGoal:
         # Color warmth follows anima warmth (subtle: max +/-0.15)
         goal.warmth_bias = (warmth - 0.5) * 0.3
 
-        # Coverage follows clarity
-        if clarity > 0.7:
+        # Coverage follows clarity: clear-headed opens the composition up,
+        # foggy lets it thicken. The cuts are calibration-derived because the
+        # built-in 0.30/0.70 were absolute constants against a moving
+        # distribution (invariant 1) and had gone one-sided: measured over 833
+        # drawing_records, clarity lives in 0.454-0.910, so `dense` (< 0.30)
+        # had NEVER once been generated and a third of the vocabulary was dead.
+        dense_below, sparse_above = _coverage_cuts()
+        if clarity > sparse_above:
             goal.coverage_target = "sparse"
-        elif clarity < 0.3:
+        elif clarity < dense_below:
             goal.coverage_target = "dense"
         else:
             goal.coverage_target = "balanced"
@@ -1150,6 +1233,47 @@ class DrawingEngine:
             "occupied_cells": self.canvas.occupied_cells(),
             "grid_entropy": round(self.canvas.grid_entropy(), 4),
         }
+
+    def _apply_coverage_bias(self, fx: float, fy: float, era_state) -> Tuple[float, float]:
+        """Lean the next gesture toward where this piece's intention wants to work.
+
+        `coverage_target` was generated per piece, described to the operator,
+        persisted since 2026-08-02 and read by NOTHING — the only DrawingGoal
+        field without a consumer. Measured over the instrumented corpus, that
+        showed up exactly as you would expect: within every era, "sparse" and
+        "balanced" pieces land at the same density (gestural 9.4% vs 10.1%,
+        pointillist 2.26% vs 2.13%, resonance 14.8% vs 16.0%), while the spread
+        BETWEEN eras is 1.4%-23.9%. Era decided everything; the stated
+        intention decided nothing.
+
+        Applied only at a gesture boundary, never mid-stroke: each era's
+        character lives in its sustained gestures (gestural locks direction for
+        15-45 marks to get long lines), and a per-mark positional pull would
+        bow those strokes into arcs. Between gestures is also where the piece
+        actually decides where to work next, which is the decision an intention
+        should be allowed to color. Geometric stamps one shape per gesture, so
+        there it applies every mark — correct, not an exception.
+
+        A bias, not a target: it moves the focus a fraction of the way toward
+        an extremum of the piece's OWN density grid, so it adds no absolute
+        threshold (invariant 1) and cannot override an era, only tilt it.
+        """
+        goal = self.drawing_goal
+        if goal is None or goal.coverage_target == "balanced":
+            return fx, fy
+        if era_state is not None and era_state.gesture_remaining > 0:
+            return fx, fy  # mid-stroke; the era owns this mark
+        cell = self.canvas.coverage_bias_cell(goal.coverage_target)
+        if cell is None:
+            return fx, fy  # empty grid carries no direction yet
+        target_x = cell[0] * 30 + 15
+        target_y = cell[1] * 30 + 15
+        fx += (target_x - fx) * COVERAGE_BIAS_STRENGTH
+        fy += (target_y - fy) * COVERAGE_BIAS_STRENGTH
+        # Clamp to the widest era margin so the bias can never park the focus
+        # in a band some era treats as off-canvas (margins run 15-25 by era).
+        lo, hi = COVERAGE_BIAS_MARGIN, self.canvas.width - COVERAGE_BIAS_MARGIN
+        return max(lo, min(hi, fx)), max(lo, min(hi, fy))
 
     def _update_novelty_settling(self, now: float) -> None:
         """Advance the earned_settled tracker by at most one sample per interval.
@@ -1452,6 +1576,7 @@ class DrawingEngine:
             era_state, self.intent.focus_x, self.intent.focus_y,
             self.intent.direction, stability, presence, C, clarity,
             canvas=self.canvas)
+        new_fx, new_fy = self._apply_coverage_bias(new_fx, new_fy, era_state)
         self.intent.focus_x = new_fx
         self.intent.focus_y = new_fy
         self.intent.direction = new_dir
