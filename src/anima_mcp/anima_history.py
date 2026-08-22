@@ -10,7 +10,7 @@ See: trajectory-identity paper (cirwel/trajectory-identity-paper, separate repo)
 
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
@@ -498,8 +498,36 @@ class AnimaHistory:
         """
         summaries = self.get_day_summaries(limit=window_days)
 
-        if len(summaries) < 3:
+        # Fail toward unknown, never stale-as-fresh. Audited 2026-08-21:
+        # day_summaries.json had not been written since 2026-03-28, and this
+        # function re-derived the same four March slopes every reflect cycle
+        # for five months, each cycle re-validating trend insights whose
+        # directions the current data contradicts (#188). Guards, in order:
+        #   - a summary with an unparsable date is dropped, not fatal (one
+        #     bad row must not disable the subsystem for every dimension);
+        #   - EVERY summary in the regression must lie within the window —
+        #     checking only the newest would let one fresh summary launder
+        #     six months-old ones into a "recent" trend;
+        #   - fewer than 3 in-window summaries is no trend data.
+        cutoff = datetime.now() - timedelta(days=window_days)
+        fresh: List[DaySummary] = []
+        for s in summaries:
+            try:
+                if datetime.fromisoformat(s.date) >= cutoff:
+                    fresh.append(s)
+            except (ValueError, TypeError):
+                continue
+        if len(fresh) < 3:
+            if summaries and not getattr(self, "_trend_stale_warned", False):
+                self._trend_stale_warned = True
+                print(f"[AnimaHistory] Trend detection has {len(fresh)} "
+                      f"in-window summaries (of {len(summaries)} stored, "
+                      f"window {window_days}d) — trends unavailable; if "
+                      f"summaries should be arriving, the consolidation "
+                      f"writer is broken (#188)", file=sys.stderr, flush=True)
             return None
+        summaries = fresh
+        newest = max(datetime.fromisoformat(s.date) for s in summaries)
 
         dim_idx = ["warmth", "clarity", "stability", "presence"].index(dimension)
 
@@ -534,6 +562,10 @@ class AnimaHistory:
             "n_summaries": n,
             "recent_value": round(values[-1], 4),
             "oldest_value": round(values[0], 4),
+            # When the newest contributing summary landed — consumers gate
+            # re-validation on this, so a static summary set cannot keep
+            # re-validating the same trend day after day.
+            "newest_summary_at": newest.isoformat(),
         }
 
     def _get_summaries_path(self) -> Path:

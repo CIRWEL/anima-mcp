@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Persisted store schema version. Bump when a one-time on-load migration is
 # needed (see KnowledgeBase._migrate_schema). v2: log-compress legacy
 # reference counts onto the honest occasion-gated scale.
-KNOWLEDGE_SCHEMA_VERSION = 2
+KNOWLEDGE_SCHEMA_VERSION = 3
 
 
 def _get_knowledge_path() -> Path:
@@ -68,6 +68,12 @@ class Insight:
     # (legacy counts were minted under looser, ungated rules). None = minted
     # under the honest signal / never migrated.
     legacy_references: Optional[int] = None
+    # Original confidence before the one-time v3 rescale of grandfathered
+    # external rows (pre-trust-boundary externals were born at 1.0; the v3
+    # migration returns unearned external confidence to the 0.5 entry point).
+    # None = never rescaled. Keeps the migration auditable/reversible, same
+    # contract as legacy_references.
+    legacy_confidence: Optional[float] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -91,6 +97,8 @@ class Insight:
             d["last_reconverged_occasion"] = ""
         if "legacy_references" not in d:
             d["legacy_references"] = None
+        if "legacy_confidence" not in d:
+            d["legacy_confidence"] = None
         # Tolerate unknown future fields rather than crashing on load.
         known = {f for f in cls.__dataclass_fields__}
         return cls(**{k: v for k, v in d.items() if k in known})
@@ -166,8 +174,9 @@ class KnowledgeBase:
             if self._knowledge_file.exists():
                 data = json.loads(self._knowledge_file.read_text())
                 self._insights = [Insight.from_dict(i) for i in data.get("insights", [])]
-                if data.get("schema_version", 0) < KNOWLEDGE_SCHEMA_VERSION:
-                    self._migrate_schema()
+                loaded_version = data.get("schema_version", 0)
+                if loaded_version < KNOWLEDGE_SCHEMA_VERSION:
+                    self._migrate_schema(loaded_version)
             else:
                 self._insights = []
         except Exception as e:
@@ -185,8 +194,13 @@ class KnowledgeBase:
         except Exception as e:
             print(f"[Knowledge] Save error: {e}", file=sys.stderr, flush=True)
 
-    def _migrate_schema(self):
+    def _migrate_schema(self, from_version: int):
         """One-time, idempotent migrations to KNOWLEDGE_SCHEMA_VERSION.
+
+        Each block is gated on ``from_version`` so bumping the schema never
+        re-applies an earlier migration to rows minted honestly after it (a
+        post-v2 row with references > 1 earned them under the gated logic and
+        must not be re-compressed).
 
         v2 — log-compress legacy reference counts. Counts minted under the old
         ungated logic (every near-duplicate +1, no occasion gate) reached the
@@ -195,12 +209,59 @@ class KnowledgeBase:
         onto the new scale while preserving their relative ORDER (a belief
         re-stated 1180x still outranks one re-stated 40x); the original is kept
         in ``legacy_references`` so the migration is auditable/reversible.
-        Re-runs are prevented by the persisted ``schema_version`` bump on save.
+
+        v3 — rescale grandfathered external confidence (operator-authorized
+        2026-08-21). Pre-trust-boundary external rows were born at confidence
+        1.0; since 2026-08-11 external claims enter at 0.5 and EARN their way
+        up through independent re-derivation. The v3 rule returns every
+        unearned external row to that entry point: external author (INCLUDING
+        operator-authored prose — authorship is not an exemption, #121) +
+        confidence above 0.5 + never reconverged. The predicate is
+        principle-gated, not date-gated, on purpose: a post-boundary row
+        minted with an explicit confidence override above 0.5 is equally
+        unearned. Rows that earned boosts through reconvergence keep them;
+        self-derived (lumen) rows are untouched; nothing is deleted — the
+        original confidence is kept in ``legacy_confidence`` and the whole
+        pre-migration file is copied to a ``.pre-v3.json`` sidecar first.
+
+        Measured on the live store before shipping (simulated 2026-08-21):
+        1,778 of 2,192 rows rescale; 58 exempt via reconvergence; 354 already
+        at/below 0.5; 2 lumen rows untouched. Downstream, rows above the 0.6
+        actionable floor drop from 1,837 to 59 — that collapse is the
+        INTENDED effect (the trust boundary finally applying to the
+        grandfathered corpus), stated here so nobody reads it as a
+        regression. Re-runs are prevented by the persisted
+        ``schema_version`` bump on save.
         """
-        for ins in self._insights:
-            if ins.legacy_references is None and ins.references > 1:
-                ins.legacy_references = ins.references
-                ins.references = round(math.log2(ins.references + 1))
+        if from_version < 2:
+            for ins in self._insights:
+                if ins.legacy_references is None and ins.references > 1:
+                    ins.legacy_references = ins.references
+                    ins.references = round(math.log2(ins.references + 1))
+        if from_version < 3:
+            # One-time sidecar of the pre-migration file: legacy_confidence
+            # makes single rows recoverable, but an old binary round-tripping
+            # a v3 file would drop the field — the sidecar survives that.
+            try:
+                sidecar = self._knowledge_file.with_suffix(".pre-v3.json")
+                if self._knowledge_file.exists() and not sidecar.exists():
+                    sidecar.write_bytes(self._knowledge_file.read_bytes())
+            except Exception as e:
+                print(f"[Knowledge] v3 sidecar backup failed: {e}",
+                      file=sys.stderr, flush=True)
+            rescaled = 0
+            for ins in self._insights:
+                if (ins.source_author.lower() != "lumen"
+                        and ins.confidence > 0.5
+                        and not ins.last_reconverged_at
+                        and ins.legacy_confidence is None):
+                    ins.legacy_confidence = ins.confidence
+                    ins.confidence = 0.5
+                    rescaled += 1
+            if rescaled:
+                print(f"[Knowledge] v3 rescale: {rescaled} unearned external "
+                      f"insights returned to confidence 0.5 (originals kept in "
+                      f"legacy_confidence)", file=sys.stderr, flush=True)
         self._save()
 
     def add_insight(

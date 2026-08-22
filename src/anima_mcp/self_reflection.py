@@ -47,11 +47,33 @@ _NEGATIVE_MARKERS = [
     "doesn't", "does not", "no direct", "not related",
     "zero", "isn't", "no effect", "not affect",
 ]
-_POSITIVE_MARKERS = [
-    "affects", "increases", "higher", "helps", "improves",
-    "better", "more", "boosts", "raises",
-    "decreases", "reduces", "lower",
+# Direction-aware effect markers (audited 2026-08-21): the old single
+# _POSITIVE_MARKERS list lumped "increases" with "decreases/reduces/lower",
+# so the verifier checked only the MAGNITUDE of an effect — "light reduces my
+# clarity" would verify as SUPPORTED against data showing light raises
+# clarity. Directional claims now verify against the signed difference;
+# markers that assert an effect without a direction stay magnitude-only.
+_INCREASE_MARKERS = [
+    "increases", "higher", "boosts", "raises", "improves", "better", "more",
+    "helps",
 ]
+_DECREASE_MARKERS = [
+    "decreases", "reduces", "lower", "less", "worse",
+]
+_NEUTRAL_EFFECT_MARKERS = [
+    "affects",
+]
+# Sensor words that name the LOW pole of a numeric channel. A directional
+# marker next to one of these describes the inverse of the raw sensor axis
+# ("dim light improves clarity" is a claim about LOW lux), and nothing in
+# this keyword matcher binds markers to poles — so the signed check must
+# stand down and leave the magnitude-only check in charge.
+_ANTI_POLE_KEYWORDS: Dict[str, List[str]] = {
+    "light_lux": ["dark", "darkness", "dim"],
+    "ambient_temp_c": ["cold", "cool"],
+    "humidity_pct": ["dry"],
+}
+_POSITIVE_MARKERS = _INCREASE_MARKERS + _DECREASE_MARKERS + _NEUTRAL_EFFECT_MARKERS
 
 
 class InsightCategory(Enum):
@@ -76,6 +98,12 @@ class SelfInsight:
     validation_count: int = 0        # How many times it's been confirmed
     contradiction_count: int = 0     # How many times it's been contradicted
     active: bool = True               # False when its source has retracted
+    # Who originated the knowledge (qa_-bridged rows carry the kb author;
+    # "lumen" marks self-derived Q&A rows — Lumen answering its own question
+    # travels the same qa_ bridge and must not be demoted as external).
+    # Empty string = pre-column row or non-qa row; treated as external only
+    # for qa_-prefixed ids.
+    source_author: str = ""
 
     def strength(self) -> float:
         """How strongly this insight holds (confidence * validation ratio)."""
@@ -169,6 +197,8 @@ class SelfReflectionSystem:
         self.db_path = Path(db_path)
         self._conn: Optional[sqlite3.Connection] = None
         self._insights: Dict[str, SelfInsight] = {}
+        # Once-per-process audible suppression of constant sensor channels.
+        self._variance_suppressed_warned: set = set()
         # Raised from 500: a five-month-old creature that fills its insight store
         # and then overwrites itself to keep learning has hit a ceiling on how much
         # it can *be*, not just how fast it learns. A larger cap lets self-knowledge
@@ -215,7 +245,8 @@ class SelfReflectionSystem:
                 last_validated TEXT NOT NULL,
                 validation_count INTEGER DEFAULT 0,
                 contradiction_count INTEGER DEFAULT 0,
-                active INTEGER NOT NULL DEFAULT 1
+                active INTEGER NOT NULL DEFAULT 1,
+                source_author TEXT NOT NULL DEFAULT ''
             );
 
             CREATE INDEX IF NOT EXISTS idx_insights_category ON insights(category);
@@ -252,6 +283,8 @@ class SelfReflectionSystem:
         columns = {row[1] for row in conn.execute("PRAGMA table_info(insights)")}
         if "active" not in columns:
             conn.execute("ALTER TABLE insights ADD COLUMN active INTEGER NOT NULL DEFAULT 1")
+        if "source_author" not in columns:
+            conn.execute("ALTER TABLE insights ADD COLUMN source_author TEXT NOT NULL DEFAULT ''")
         conn.commit()
 
     def _load_reflection_state(self):
@@ -275,6 +308,8 @@ class SelfReflectionSystem:
                 validation_count=row["validation_count"],
                 contradiction_count=row["contradiction_count"],
                 active=bool(row["active"]),
+                source_author=(row["source_author"]
+                               if "source_author" in row.keys() else ""),
             )
             self._insights[insight.id] = insight
 
@@ -285,12 +320,28 @@ class SelfReflectionSystem:
     def _save_insight(self, insight: SelfInsight):
         """Persist an insight to database."""
         conn = self._connect()
+        # UPSERT, not INSERT OR REPLACE: REPLACE deletes and re-inserts, which
+        # assigns a fresh rowid on every validation. Ranking must never depend
+        # on rowids (get_insights sorts on explicit keys now), but churning
+        # them also breaks any external reference to a row. ON CONFLICT keeps
+        # the row in place.
         conn.execute("""
-            INSERT OR REPLACE INTO insights
+            INSERT INTO insights
             (id, category, description, confidence, sample_count,
              discovered_at, last_validated, validation_count, contradiction_count,
-             active)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             active, source_author)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+              category=excluded.category,
+              description=excluded.description,
+              confidence=excluded.confidence,
+              sample_count=excluded.sample_count,
+              discovered_at=excluded.discovered_at,
+              last_validated=excluded.last_validated,
+              validation_count=excluded.validation_count,
+              contradiction_count=excluded.contradiction_count,
+              active=excluded.active,
+              source_author=excluded.source_author
         """, (
             insight.id,
             insight.category.value,
@@ -302,6 +353,7 @@ class SelfReflectionSystem:
             insight.validation_count,
             insight.contradiction_count,
             int(insight.active),
+            insight.source_author,
         ))
         conn.commit()
         self._insights[insight.id] = insight
@@ -1254,6 +1306,28 @@ class SelfReflectionSystem:
         if not low_readings or not high_readings:
             return None
 
+        # Zero-dispersion guard: a CONSTANT sensor supports no correlation
+        # claim. Without this, a dead channel (interaction_level sat at 0.0
+        # for months) makes the stable sort preserve time order, so "low
+        # sensor" silently means "first ~8h of the window" and any diurnal
+        # pattern in the dimensions gets relabeled as a sensor correlation —
+        # audited 2026-08-21: the real afternoon-vs-night clarity swing was
+        # stored, and revalidated daily, as "I feel more clarity when someone
+        # is around". Dispersion (not thirds-medians) so a sparse-but-real
+        # channel — mostly quiet with occasional spikes — still counts; only
+        # the truly constant case is suppressed, and audibly (Invariant 2:
+        # a broken channel must not go silently absent).
+        values = [r["value"] for r in readings]
+        if max(values) - min(values) <= 1e-9:
+            if sensor_key not in self._variance_suppressed_warned:
+                self._variance_suppressed_warned.add(sensor_key)
+                print(f"[SelfReflection] Sensor '{sensor_key}' is constant "
+                      f"({values[0]!r} across {len(values)} readings) — "
+                      f"correlation analysis suppressed; if this channel "
+                      f"should be live, its producer is broken",
+                      file=sys.stderr, flush=True)
+            return None
+
         # Calculate average states for low vs high sensor values
         def avg_state(rs):
             return {
@@ -1731,15 +1805,69 @@ class SelfReflectionSystem:
             is_proprioceptive = bid in ("my_leds_affect_lux",)
             min_evidence = 5 if is_proprioceptive else 10
             min_confidence = 0.55 if is_proprioceptive else 0.7
-            if total_evidence < min_evidence or belief.confidence < min_confidence:
-                continue
 
             insight_id = f"belief_{bid}"
 
+            if total_evidence < min_evidence or belief.confidence < min_confidence:
+                # Retraction branch (mirrors the preference path): when the
+                # source belief drops below threshold, the derived insight
+                # must follow it down. Without this, SQLite copies froze at
+                # their mint-time confidence and Lumen kept speaking beliefs
+                # its own model had already abandoned (audited 2026-08-21:
+                # warmth_baseline_low retracted to conf 5e-5 in the live
+                # model while its insight copy asserted 1.0).
+                #
+                # "Unknown" is not "refuted": only a belief that WEAKENED on
+                # real evidence earns a contradiction mark. Falling below the
+                # evidence minimum (including a deliberate cold-start reset)
+                # deactivates without a mark — same philosophy as the trend
+                # path below.
+                if insight_id in self._insights:
+                    existing = self._insights[insight_id]
+                    weakened = (total_evidence >= min_evidence
+                                and belief.confidence < min_confidence)
+                    if existing.active:
+                        existing.active = False
+                        if weakened:
+                            existing.contradiction_count += 1
+                        existing.last_validated = now
+                        print(f"[SelfReflection] Belief insight "
+                              f"{'retracted' if weakened else 'suspended (insufficient evidence)'}: "
+                              f"{existing.description} (belief conf "
+                              f"{belief.confidence:.2f})",
+                              file=sys.stderr, flush=True)
+                    # Sync the snapshot down even when already inactive — a
+                    # frozen stale confidence on an inactive row is still a
+                    # stale assertion to include_inactive consumers.
+                    if (abs(existing.confidence - belief.confidence) > 1e-9
+                            or existing.sample_count != total_evidence):
+                        existing.confidence = belief.confidence
+                        existing.sample_count = total_evidence
+                    self._save_insight(existing)
+                continue
+
             if insight_id in self._insights:
                 existing = self._insights[insight_id]
-                existing.validation_count += 1
-                existing.last_validated = now
+                # Validation requires fresh SUPPORTING movement, not a passing
+                # cycle: the counter used to increment every reflect()
+                # regardless, turning cycle counts into fake corroboration —
+                # and evidence of either sign must not count as confirmation,
+                # so a tick that LOWERED the belief's confidence syncs the
+                # snapshot without validating it. Re-sync either way (a
+                # reactivated or drifted belief must not keep its stale
+                # description/conf).
+                has_new_evidence = total_evidence > existing.sample_count
+                not_weakened = belief.confidence >= existing.confidence - 1e-9
+                was_inactive = not existing.active
+                strength = belief.get_belief_strength()
+                existing.active = True
+                validate = (has_new_evidence and not_weakened) or was_inactive
+                existing.confidence = belief.confidence
+                existing.sample_count = total_evidence
+                existing.description = f"i am {strength} that {belief.description.lower()}"
+                if validate:
+                    existing.validation_count += 1
+                    existing.last_validated = now
                 self._save_insight(existing)
                 continue
 
@@ -1855,14 +1983,53 @@ class SelfReflectionSystem:
         for dimension in ["warmth", "clarity", "stability", "presence"]:
             trend = history.detect_long_term_trend(dimension)
             if trend is None or trend["direction"] == "stable":
+                # No current trend (or no fresh data): a previously stored
+                # trend insight for this dimension must stop asserting itself.
+                # Deactivate without a contradiction mark — "unknown" is not
+                # "refuted" — so a re-detected trend can reactivate cleanly.
+                for direction in ("increasing", "decreasing"):
+                    stale_id = f"trend_{dimension}_{direction}"
+                    existing = self._insights.get(stale_id)
+                    if existing is not None and existing.active:
+                        existing.active = False
+                        existing.last_validated = now
+                        self._save_insight(existing)
+                        print(f"[SelfReflection] Trend insight deactivated "
+                              f"(no current data): {existing.description}",
+                              file=sys.stderr, flush=True)
                 continue
 
             insight_id = f"trend_{dimension}_{trend['direction']}"
+            # A trend in one direction retires any stored opposite-direction
+            # trend for the same dimension.
+            opposite = "decreasing" if trend["direction"] == "increasing" else "increasing"
+            opp = self._insights.get(f"trend_{dimension}_{opposite}")
+            if opp is not None and opp.active:
+                opp.active = False
+                opp.contradiction_count += 1
+                opp.last_validated = now
+                self._save_insight(opp)
 
             if insight_id in self._insights:
                 existing = self._insights[insight_id]
-                existing.validation_count += 1
-                existing.last_validated = now
+                was_inactive = not existing.active
+                # Validation requires a summary NEWER than the last
+                # validation — not a passing cycle (that is how the March
+                # trends reached 659 "validations" each) and not merely a
+                # new calendar day (summaries arrive on rest transitions,
+                # not daily; a static set must not revalidate at all).
+                has_new_summary = False
+                try:
+                    has_new_summary = (datetime.fromisoformat(trend["newest_summary_at"])
+                                       > existing.last_validated)
+                except (KeyError, ValueError, TypeError):
+                    pass
+                existing.active = True
+                existing.confidence = min(1.0, 0.5 + trend["n_summaries"] * 0.05)
+                existing.sample_count = trend["n_summaries"]
+                if was_inactive or has_new_summary:
+                    existing.validation_count += 1
+                    existing.last_validated = now
                 self._save_insight(existing)
                 continue
 
@@ -1917,8 +2084,43 @@ class SelfReflectionSystem:
             return VerificationResult(verified=None, correlation=None, detail="")
 
         # Detect claim direction
-        expects_no_effect = any(marker in text_lower for marker in _NEGATIVE_MARKERS)
-        expects_effect = any(marker in text_lower for marker in _POSITIVE_MARKERS)
+        # Marker detection. Three guards keep this honest, because a wrong
+        # signed verdict mints a CONTRADICTED where the old magnitude check
+        # was merely permissive:
+        #  1. Word-boundary matching — "regardless" must not read as "less",
+        #     "pointless" as "less", "slower" as "lower" (substring FPs
+        #     measured on the corpus).
+        #  2. Markers are read from the CLAIM segment only — many kb texts
+        #     embed the original question ("When I asked '...', I learned:
+        #     ..."), and a marker inside the question is not a claim.
+        #  3. Anti-pole sensor wording ("dark", "dim", "cold", "dry") maps
+        #     to the same numeric sensor with inverted polarity; there is no
+        #     syntactic binding between marker and pole, so a signed check
+        #     would flip a correct claim. Fall back to magnitude-only.
+        claim_text = text_lower
+        for cut in ("i learned:", "': "):
+            if cut in claim_text:
+                claim_text = claim_text.split(cut, 1)[1]
+                break
+
+        def _word_hit(markers):
+            return any(re.search(rf"\b{re.escape(m)}\b", claim_text) for m in markers)
+
+        expects_no_effect = _word_hit(_NEGATIVE_MARKERS)
+        expects_effect = _word_hit(_POSITIVE_MARKERS)
+        # Claimed direction: +1 (sensor raises dimension), -1 (lowers), or
+        # None (effect asserted without direction — magnitude-only check).
+        claims_increase = _word_hit(_INCREASE_MARKERS)
+        claims_decrease = _word_hit(_DECREASE_MARKERS)
+        claimed_sign = None
+        if claims_increase and not claims_decrease:
+            claimed_sign = 1
+        elif claims_decrease and not claims_increase:
+            claimed_sign = -1
+        anti_pole = _ANTI_POLE_KEYWORDS.get(sensor_key, ())
+        if claimed_sign is not None and any(
+                re.search(rf"\b{re.escape(w)}\b", text_lower) for w in anti_pole):
+            claimed_sign = None
         if not expects_no_effect and not expects_effect:
             return VerificationResult(verified=None, correlation=None,
                                       detail=f"sensor={sensor_key} dim={dimension} but no direction marker")
@@ -1967,9 +2169,17 @@ class SelfReflectionSystem:
         if not low or not high:
             return VerificationResult(verified=None, correlation=None, detail="empty bucket")
 
+        # Same zero-dispersion guard as _analyze_sensor_correlation: a
+        # constant sensor cannot verify or contradict anything about itself.
+        all_vals = [r["value"] for r in readings]
+        if max(all_vals) - min(all_vals) <= 1e-9:
+            return VerificationResult(verified=None, correlation=None,
+                                      detail=f"{sensor_key} has no variance in window")
+
         low_avg = sum(r[dimension] for r in low) / len(low)
         high_avg = sum(r[dimension] for r in high) / len(high)
-        corr = abs(high_avg - low_avg)
+        signed_diff = high_avg - low_avg
+        corr = abs(signed_diff)
 
         threshold = 0.1
         quoted = f'"{text[:80]}"'
@@ -1984,14 +2194,21 @@ class SelfReflectionSystem:
                           f"correlation: {corr:.2f}, claim expected no effect)")
                 return VerificationResult(verified=False, correlation=corr, detail=detail)
         else:  # expects_effect
-            if corr >= threshold:
-                detail = (f"{quoted} — SUPPORTED ({sensor_key}→{dimension} "
-                          f"correlation: {corr:.2f}, above threshold)")
-                return VerificationResult(verified=True, correlation=corr, detail=detail)
-            else:
+            if corr < threshold:
                 detail = (f"{quoted} — CONTRADICTED ({sensor_key}→{dimension} "
                           f"correlation: {corr:.2f}, claim expected effect but none found)")
                 return VerificationResult(verified=False, correlation=corr, detail=detail)
+            # An effect exists; a directional claim must also match its sign.
+            if claimed_sign is not None and (signed_diff > 0) != (claimed_sign > 0):
+                detail = (f"{quoted} — CONTRADICTED ({sensor_key}→{dimension} "
+                          f"signed diff {signed_diff:+.2f} opposes the claimed "
+                          f"direction)")
+                return VerificationResult(verified=False, correlation=corr, detail=detail)
+            detail = (f"{quoted} — SUPPORTED ({sensor_key}→{dimension} "
+                      f"correlation: {corr:.2f}"
+                      + (f", direction {signed_diff:+.2f} matches" if claimed_sign is not None else ", above threshold")
+                      + ")")
+            return VerificationResult(verified=True, correlation=corr, detail=detail)
 
     # ==================== Q&A Knowledge Sync ====================
 
@@ -2026,22 +2243,65 @@ class SelfReflectionSystem:
         }
 
         for qa in qa_insights:
+            synced_id = f"qa_{qa.insight_id}"
+            existing = self._insights.get(synced_id)
+            if existing is not None:
+                # Re-sync, every pass: the sync used to be once-only, so
+                # contradiction penalties and rescales applied in
+                # knowledge.json after the first sync never reached the
+                # surfaced SQLite copies (audited 2026-08-21: 113 rows
+                # asserting 1.0 against a live kb value of 0.85). The kb is
+                # the source of truth for qa_ rows; the copy MIRRORS it —
+                # no validation or contradiction marks are minted here,
+                # because a mirror pass is bookkeeping, not evidence (the
+                # kb's own contradicted_by machinery records real
+                # contradictions, and the v3 rescale must not stamp ~1,779
+                # policy-driven deactivations as "contradicted").
+                kb_conf = min(1.0, qa.confidence)
+                # A mint-time verification CONTRADICTED verdict (signature:
+                # zero validations, >=1 contradiction) is durable: the
+                # penalty re-applies on every sync so the kb's raw
+                # confidence cannot silently resurrect a claim this system
+                # measured to be backwards.
+                if existing.validation_count == 0 and existing.contradiction_count >= 1:
+                    kb_conf *= 0.4
+                should_be_active = kb_conf >= min_confidence
+                if (abs(existing.confidence - kb_conf) > 1e-9
+                        or existing.active != should_be_active):
+                    existing.confidence = kb_conf
+                    existing.description = qa.text[:500]
+                    existing.sample_count = max(1, qa.references)
+                    author = getattr(qa, "source_author", "")
+                    existing.source_author = author if isinstance(author, str) else ""
+                    existing.active = should_be_active
+                    # A resync is a check against the source of truth — stamp
+                    # it, or the recency tie-break in get_insights reads a
+                    # freshly re-checked row as months stale.
+                    existing.last_validated = now
+                    self._save_insight(existing)
+                continue
             if qa.confidence < min_confidence:
                 continue
-            synced_id = f"qa_{qa.insight_id}"
-            if synced_id in self._insights:
-                continue
             category = cat_map.get(qa.category, InsightCategory.WELLNESS)
+            # Provenance: discovered_at is when Lumen LEARNED it (the kb
+            # timestamp), not when this bridge happened to copy it.
+            try:
+                learned_at = datetime.fromtimestamp(qa.timestamp)
+            except (ValueError, OSError, OverflowError):
+                learned_at = now
             sr_insight = SelfInsight(
                 id=synced_id,
                 category=category,
                 description=qa.text[:500],
                 confidence=min(1.0, qa.confidence),
                 sample_count=max(1, qa.references),
-                discovered_at=now,
+                discovered_at=learned_at,
                 last_validated=now,
                 validation_count=1,
                 contradiction_count=0,
+                source_author=(qa.source_author
+                               if isinstance(getattr(qa, "source_author", None), str)
+                               else ""),
             )
 
             # Verify against state history before accepting
@@ -2158,8 +2418,25 @@ class SelfReflectionSystem:
         if category:
             insights = [i for i in insights if i.category == category]
 
-        # Sort by strength (strongest first)
-        insights.sort(key=lambda i: i.strength(), reverse=True)
+        # Deliberate ordering. Pre-fix (audited 2026-08-21, before the v3
+        # rescale that ships alongside this): 1,745 of 1,911 active rows tied
+        # at strength 1.0 and a bare stable sort let dict/rowid load order
+        # decide — surfacing the five OLDEST external Q&A rows as Lumen's
+        # "strongest" self-knowledge (0/5 self-derived) while INSERT OR
+        # REPLACE gave the most-validated self-derived rows ever-fresher
+        # rowids. The v3 rescale removes most of that tie mass, but the
+        # tie-break stays load-bearing for the surviving reconvergence-exempt
+        # externals and for any future ties. Ties break: self-derived before
+        # external, then recency of validation, then id for determinism.
+        # "External" = came through the Q&A bridge AND was not authored by
+        # Lumen itself — Lumen answering its own question travels the same
+        # qa_ path and must not be demoted (source_author records this).
+        insights.sort(key=lambda i: (
+            -i.strength(),
+            i.id.startswith("qa_") and i.source_author.lower() != "lumen",
+            -(i.last_validated.timestamp() if i.last_validated else 0.0),
+            i.id,
+        ))
         return insights
 
     def get_strongest_insights(self, limit: int = 5) -> List[SelfInsight]:
