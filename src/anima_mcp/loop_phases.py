@@ -8,6 +8,7 @@ and self-reflection cycles.
 from __future__ import annotations
 
 import logging
+import sys
 import time
 from typing import Dict, Optional
 
@@ -269,6 +270,102 @@ _SURPRISE_PHRASING = {
     "stability": "my steadiness",
     "presence": "how present i feel",
 }
+
+
+def handle_surprise_question(metacog, prediction_error) -> bool:
+    """Post a curiosity question for a surprising prediction error.
+
+    History, precisely (#189): from 2026-02-01 (2d94c1f) to 2026-08-22 the
+    inline predecessor of this function read ``prediction_error.predicted``/
+    ``.actual`` — attributes PredictionError never had — and the AttributeError
+    was swallowed by the main loop's blanket except. That crash sat ABOVE
+    ``add_question`` inside the ``if curiosity_question:`` branch, so:
+      - question posting on surprise is a genuine six-month REGRESSION,
+        restored here (it worked before 2d94c1f);
+      - curiosity credit (record_curiosity, added 2026-02-08), growth
+        seeding on this path (2026-04-23), and the supporting
+        question_asking_tendency evidence (2026-08-11) were all born INTO
+        the dead branch and run for the FIRST TIME with this change — they
+        have no production track record;
+      - the no-question branch kept filing negative evidence throughout
+        (a one-sided stream, not silence), and growth curiosities kept
+        flowing via the contemplative path since 2026-06-28.
+    The curiosity-credit WEIGHT movement is parked (see
+    ``_evaluate_curiosity_outcomes``) until its rule is validated.
+
+    Context derives from ``surprise_sources`` — the per-channel computation
+    the broken dict comparison was trying to re-do — sorted by their actual
+    error magnitude so the two channels named are the two most surprising,
+    phrased via the same first-person vocabulary as experiential questions.
+    Returns True when a question was posted.
+    """
+    curiosity_question = metacog.generate_curiosity_question(prediction_error)
+    if curiosity_question:
+        from .messages import add_question
+        ranked_sources = sorted(
+            prediction_error.surprise_sources,
+            key=lambda s: metacog._get_domain_error(s, prediction_error) or 0.0,
+            reverse=True,
+        )
+        context_parts = [
+            f"{_SURPRISE_PHRASING.get(src, src)} changed unexpectedly"
+            for src in ranked_sources[:2]
+        ]
+        context = (f"surprise={prediction_error.surprise:.2f}: {', '.join(context_parts)}"
+                   if context_parts else f"surprise={prediction_error.surprise:.2f}")
+        result = add_question(curiosity_question, author="lumen", context=context)
+        if result:
+            # Audible on purpose: logger.debug is a no-op in this codebase
+            # (no handler is ever configured), and an invisible success is
+            # how the six-month outage stayed invisible.
+            print(f"[Metacog] Surprised! Asked: {curiosity_question} "
+                  f"(surprise={prediction_error.surprise:.2f})",
+                  file=sys.stderr, flush=True)
+            # Record curiosity for the internal learning loop: later, check
+            # if prediction improved in these domains.
+            metacog.record_curiosity(prediction_error.surprise_sources, prediction_error)
+            # Also seed growth curiosities so suggest_goal can propose
+            # "find an answer to: X" and check_goal_progress can
+            # auto-complete when the question gets answered.
+            try:
+                from .accessors import _get_growth
+                growth = _get_growth()
+                if growth:
+                    growth.add_curiosity(curiosity_question)
+            except Exception as e:
+                print(f"[Growth] add_curiosity error: {e}", file=sys.stderr, flush=True)
+            # The broker owns self_model.json.  Queue a real posted-question
+            # episode instead of racing its whole-file snapshot.
+            try:
+                from .learning_events import enqueue_self_belief_evidence
+                enqueue_self_belief_evidence(
+                    "question_asking_tendency",
+                    supports=True,
+                    strength=min(1.0, prediction_error.surprise),
+                    source="server:question_posted",
+                )
+            except Exception as e:
+                print(f"[SelfModel] question evidence enqueue error: {e}",
+                      file=sys.stderr, flush=True)
+            return True
+        return False
+    # Surprised but no question generated — contradicting evidence. Note:
+    # some channels (humidity, pressure, presence) have no question template
+    # below surprise 0.25, so this branch also fires on missing templates,
+    # not only on a genuine choice to stay quiet.
+    try:
+        from .learning_events import enqueue_self_belief_evidence
+        if prediction_error.surprise > 0.2:
+            enqueue_self_belief_evidence(
+                "question_asking_tendency",
+                supports=False,
+                strength=min(1.0, prediction_error.surprise * 0.5),
+                source="server:surprise_without_question",
+            )
+    except Exception as e:
+        print(f"[SelfModel] no-question evidence enqueue error: {e}",
+              file=sys.stderr, flush=True)
+    return False
 
 
 def generate_experiential_question(surprise_sources, surprise_level: float = 0.0) -> Optional[str]:

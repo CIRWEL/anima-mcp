@@ -87,6 +87,7 @@ SERVER_SHUTTING_DOWN = False  # Set during graceful shutdown to reject new reque
 
 # Phase helper functions — delegated to loop_phases.py
 from .loop_phases import (  # noqa: E402,F401
+    handle_surprise_question,
     server_governance_fallback as _server_governance_fallback,
     parse_shm_governance_freshness as _parse_shm_governance_freshness,
     compute_lagged_correlations as _compute_lagged_correlations,
@@ -479,59 +480,7 @@ async def _update_display_loop():
                             except Exception as _re:
                                 logger.debug("[Metacog] reflection episode record failed: %s", _re)
 
-                            curiosity_question = metacog.generate_curiosity_question(prediction_error)
-                            if curiosity_question:
-                                from .messages import add_question
-                                context_parts = []
-                                if prediction_error.predicted and prediction_error.actual:
-                                    for key in prediction_error.predicted:
-                                        pred = prediction_error.predicted.get(key, 0)
-                                        actual = prediction_error.actual.get(key, 0)
-                                        if abs(pred - actual) > 0.1:
-                                            context_parts.append(f"{key} changed unexpectedly")
-                                context = f"surprise={prediction_error.surprise:.2f}: {', '.join(context_parts[:2])}" if context_parts else f"surprise={prediction_error.surprise:.2f}"
-                                result = add_question(curiosity_question, author="lumen", context=context)
-                                if result:
-                                    logger.debug("[Metacog] Surprised! Asked: %s (surprise=%.2f)", curiosity_question, prediction_error.surprise)
-                                    # Record curiosity for internal learning loop:
-                                    # later, check if prediction improved in these domains
-                                    metacog.record_curiosity(prediction_error.surprise_sources, prediction_error)
-                                    # Also seed growth curiosities so suggest_goal can propose
-                                    # "find an answer to: X" and check_goal_progress can
-                                    # auto-complete when the question gets answered.
-                                    try:
-                                        from .accessors import _get_growth
-                                        growth = _get_growth()
-                                        if growth:
-                                            growth.add_curiosity(curiosity_question)
-                                    except Exception as e:
-                                        logger.debug("[Growth] add_curiosity error: %s", e)
-                                    # The broker owns self_model.json.  Queue a
-                                    # real posted-question episode instead of
-                                    # racing its whole-file snapshot.
-                                    try:
-                                        from .learning_events import enqueue_self_belief_evidence
-                                        enqueue_self_belief_evidence(
-                                            "question_asking_tendency",
-                                            supports=True,
-                                            strength=min(1.0, prediction_error.surprise),
-                                            source="server:question_posted",
-                                        )
-                                    except Exception as e:
-                                        logger.debug("[SelfModel] question evidence enqueue error: %s", e)
-                            else:
-                                # Surprised but no question generated — contradicting evidence
-                                try:
-                                    from .learning_events import enqueue_self_belief_evidence
-                                    if prediction_error.surprise > 0.2:
-                                        enqueue_self_belief_evidence(
-                                            "question_asking_tendency",
-                                            supports=False,
-                                            strength=min(1.0, prediction_error.surprise * 0.5),
-                                            source="server:surprise_without_question",
-                                        )
-                                except Exception as e:
-                                    logger.debug("[SelfModel] no-question evidence enqueue error: %s", e)
+                            handle_surprise_question(metacog, prediction_error)
 
                             if reflection.observation:
                                 logger.debug("[Metacog] Reflection: %s", reflection.observation)
@@ -595,8 +544,13 @@ async def _update_display_loop():
                     metacog.predict(led_brightness=_led_brightness_for_pred)
 
                 except Exception as e:
+                    # Audible on purpose: this exact handler used logger.debug
+                    # — a no-op here, no logging handler is ever configured —
+                    # and swallowed a hard AttributeError on every reflection
+                    # for six months without producing one byte (#189).
                     if loop_count % STATUS_LOG_THROTTLE == 1:
-                        logger.debug("[Metacog] Error (non-fatal): %s", e)
+                        print(f"[Metacog] Error (non-fatal): {e}",
+                              file=sys.stderr, flush=True)
 
             # === AGENCY: Action selection and learning ===
             # Throttled: runs every 5th iteration (enhancement, not critical path)

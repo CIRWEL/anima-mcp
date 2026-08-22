@@ -520,8 +520,12 @@ class TestCuriosity:
         assert len(mm._curiosity_log) == 1
         assert "light" in mm._curiosity_log[0]["domains"]
 
-    def test_evaluate_curiosity_outcomes_reward(self, mm):
-        """When prediction improves after curiosity, domain weight increases."""
+    def test_evaluate_curiosity_outcomes_reward(self, mm, monkeypatch):
+        """When prediction improves after curiosity, domain weight increases.
+
+        Weight movement is parked by default (#189 revival review); these
+        tests arm it to keep the rule mechanics pinned for the redesign."""
+        monkeypatch.setenv("ANIMA_CURIOSITY_WEIGHTS_ENABLED", "1")
         # Record curiosity with high initial error
         initial_error = PredictionError(
             timestamp=datetime.now(),
@@ -545,8 +549,9 @@ class TestCuriosity:
         # Domain weight should have increased
         assert mm._domain_weights.get("ambient_temp", 1.0) > 1.0
 
-    def test_evaluate_curiosity_outcomes_penalty(self, mm):
+    def test_evaluate_curiosity_outcomes_penalty(self, mm, monkeypatch):
         """When prediction worsens after curiosity, domain weight decreases."""
+        monkeypatch.setenv("ANIMA_CURIOSITY_WEIGHTS_ENABLED", "1")
         initial_error = PredictionError(
             timestamp=datetime.now(),
             prediction=Prediction(timestamp=datetime.now()),
