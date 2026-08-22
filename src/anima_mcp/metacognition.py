@@ -17,6 +17,7 @@ from collections import deque
 from pathlib import Path
 import json
 import math
+import os
 import sys
 
 from .sensors.base import SensorReadings
@@ -217,8 +218,14 @@ class MetacognitiveMonitor:
 
         # Curiosity effectiveness tracking:
         # When curiosity fires about a domain, record the prediction error.
-        # After more observations, check if error decreased (curiosity was productive).
-        # _domain_weights influences which domains get asked about more.
+        # After more observations, check if error decreased.
+        # NOTE (2026-08-22, #189 revival review): _domain_weights currently
+        # influences nothing — the only consumer applies the same max-weight
+        # to every candidate question, making the draw uniform — and the
+        # update rule is a one-way ratchet (reward 0.1 vs penalty 0.03 on
+        # threshold-selected samples saturates at the cap under pure noise).
+        # Weight MOVEMENT is parked behind ANIMA_CURIOSITY_WEIGHTS_ENABLED
+        # until the rule is validated; the log still records for later study.
         self._domain_weights: Dict[str, float] = {}  # domain -> weight (1.0 = neutral)
         self._curiosity_log: List[dict] = []  # [{domain, error_at_time, obs_count}]
         self._eval_horizon: int = 50  # observations before evaluating curiosity outcome
@@ -362,8 +369,29 @@ class MetacognitiveMonitor:
 
         Called periodically from observe(). Compares current domain errors
         to error-at-curiosity-time. If improved → reward that domain weight.
+
+        PARKED (2026-08-22): this rule has never run in production — it was
+        added 2026-02-08 into the surprise branch that had been crashing
+        since 2026-02-01 (#189) — and pre-activation review found it
+        structurally unsound: the reward/penalty asymmetry (0.1 vs 0.03) on
+        threshold-selected samples saturates weights at the cap under pure
+        stationary noise; a missing sensor reads as error 0.0 and is
+        rewarded as improvement; and the 50-observation horizon (~30s)
+        measures the baseline EMA's own time constant, with no
+        counterfactual. Nothing consumes the weights meaningfully today, but
+        they persist and print at boot, where saturated values would read as
+        learning. Weight movement stays off until the rule is redesigned;
+        set ANIMA_CURIOSITY_WEIGHTS_ENABLED=true to re-arm for study.
         """
         if not self._curiosity_log:
+            return
+        if not os.environ.get("ANIMA_CURIOSITY_WEIGHTS_ENABLED"):
+            # Keep the log bounded without moving weights: entries past the
+            # horizon are retired unevaluated.
+            self._curiosity_log = [
+                e for e in self._curiosity_log
+                if self._save_counter - e["obs_count"] < self._eval_horizon
+            ]
             return
 
         resolved = []
@@ -836,7 +864,10 @@ class MetacognitiveMonitor:
         if questions:
             import random
 
-            # Use domain weights to prefer questions from productive domains
+            # NOTE: this weighting is currently a no-op by construction —
+            # q_weight never reads q, so every candidate gets the same
+            # weight and the draw below is uniform. Kept (inert) pending the
+            # domain-weight redesign; see _evaluate_curiosity_outcomes.
             if self._domain_weights and error.surprise_sources:
                 # Build weighted list: questions from higher-weight domains more likely
                 weighted = []
