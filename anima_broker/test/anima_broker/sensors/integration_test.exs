@@ -36,5 +36,17 @@ defmodule AnimaBroker.Sensors.IntegrationTest do
 
     assert is_float(lux)
     assert_in_delta lux, expected, 1.0e-6
+    readings = Store.snapshot()["readings"]
+    assert {:ok, _observed_at} = NaiveDateTime.from_iso8601(readings["light_observed_at"])
+    assert readings["light_observed_precision_seconds"] == 0.52
+  end
+
+  test "capture provenance bounds continuous-read phase and integration tolerance" do
+    completed_at = ~N[2026-08-23 12:00:00.500000]
+
+    assert VEML7700.capture_provenance(completed_at) == %{
+             "light_observed_at" => "2026-08-23T11:59:59.980000",
+             "light_observed_precision_seconds" => 0.52
+           }
   end
 end

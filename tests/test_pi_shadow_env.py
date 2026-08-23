@@ -29,7 +29,15 @@ def shadow_file(tmp_path, monkeypatch):
     path = tmp_path / "anima_state.shadow.json"
     monkeypatch.setenv("ANIMA_ENV_SENSORS_FROM_SHM", str(path))
 
-    def write(readings, *, age_seconds=0.0):
+    def write(readings, *, age_seconds=0.0, include_light_provenance=True):
+        readings = dict(readings)
+        if include_light_provenance and readings.get("light_lux") is not None:
+            completed_at = datetime.now() - timedelta(seconds=age_seconds)
+            readings.setdefault(
+                "light_observed_at",
+                (completed_at - timedelta(seconds=0.52)).isoformat(),
+            )
+            readings.setdefault("light_observed_precision_seconds", 0.52)
         envelope = {
             "updated_at": (
                 datetime.now() - timedelta(seconds=age_seconds)
@@ -60,7 +68,7 @@ def test_shadow_mode_reads_env_channels(shadow_file):
     assert r.humidity_pct == 23.1
     assert r.light_lux == 60.0  # first read seeds the EMA
     assert r.light_observed_at is not None
-    assert r.light_observed_precision_seconds == 0.001
+    assert r.light_observed_precision_seconds == 0.52
     assert r.pressure_hpa == 819.9
     assert r.pressure_temp_c == 29.8
 
@@ -74,16 +82,43 @@ def test_shadow_lux_ema_matches_i2c_path(shadow_file):
     assert r.light_lux == pytest.approx(0.8 * 60.0 + 0.2 * 100.0)
 
 
-def test_shadow_whole_second_capture_reports_timestamp_uncertainty(shadow_file):
+def test_shadow_uses_sensor_capture_window_not_envelope_flush(shadow_file):
     path = shadow_file(ENV)
     envelope = json.loads(path.read_text())
-    observed_at = datetime.now().replace(microsecond=0)
-    envelope["updated_at"] = observed_at.isoformat()
+    window_start = datetime.now() - timedelta(seconds=0.52)
+    envelope["updated_at"] = (window_start + timedelta(seconds=1.7)).isoformat()
+    envelope["data"]["readings"]["light_observed_at"] = window_start.isoformat()
+    envelope["data"]["readings"]["light_observed_precision_seconds"] = 0.52
     path.write_text(json.dumps(envelope))
 
     readings = PiSensors().read()
-    assert readings.light_observed_at == observed_at
-    assert readings.light_observed_precision_seconds == 1.0
+    assert readings.light_observed_at == window_start
+    assert readings.light_observed_precision_seconds == 0.52
+
+
+def test_shadow_without_sensor_capture_provenance_cannot_train_residual(shadow_file):
+    shadow_file(ENV, include_light_provenance=False)
+
+    readings = PiSensors().read()
+
+    assert readings.light_lux == 60.0
+    assert readings.light_observed_at is None
+    assert readings.light_observed_precision_seconds is None
+
+
+def test_stale_sensor_capture_provenance_cannot_train_fresh_envelope(shadow_file):
+    path = shadow_file(ENV)
+    envelope = json.loads(path.read_text())
+    envelope["data"]["readings"]["light_observed_at"] = (
+        datetime.now() - timedelta(seconds=120.52)
+    ).isoformat()
+    path.write_text(json.dumps(envelope))
+
+    readings = PiSensors().read()
+
+    assert readings.light_lux == 60.0
+    assert readings.light_observed_at is None
+    assert readings.light_observed_precision_seconds is None
 
 
 def test_stale_shadow_degrades_to_none(shadow_file):

@@ -241,7 +241,10 @@ class LearnedLedLuxResidual:
     closed-loop correlation as self-glow.
     """
 
-    MODEL_KIND = "stable_command_breathing_delta_median"
+    # v1 paired actions to the independent SHM flush timestamp, which can lag
+    # the VEML7700 read by almost one 2s cycle. A distinct kind intentionally
+    # rejects that contaminated durable evidence after capture timing is fixed.
+    MODEL_KIND = "capture_timed_stable_command_breathing_delta_median_v2"
     INSTRUMENT = "internal_led_breathing_pulse"
     MAX_TRANSITIONS = 96
     MAX_SAMPLE_INTERVAL_SECONDS = 8.0
@@ -270,7 +273,9 @@ class LearnedLedLuxResidual:
         if not isinstance(data, dict):
             return
         persisted_kind = data.get("model_kind")
-        if persisted_kind is not None and persisted_kind != self.MODEL_KIND:
+        # Kindless evidence predates capture-provenance versioning, so it
+        # cannot prove that it used the sensor-owned timing path either.
+        if persisted_kind != self.MODEL_KIND:
             return
         transitions = data.get("transitions")
         if not isinstance(transitions, list):

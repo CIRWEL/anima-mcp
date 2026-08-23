@@ -639,7 +639,7 @@ class TestLEDBrightnessEstimate:
 
         readings = _make_readings(
             light_observed_at=datetime.fromtimestamp(100.0),
-            light_observed_precision_seconds=1.0,
+            light_observed_precision_seconds=0.52,
         )
         paired = {"brightness": 0.08, "alignment_error_seconds": 0.1}
         with patch(
@@ -650,7 +650,7 @@ class TestLEDBrightnessEstimate:
 
         assert read_action.call_args.kwargs == {
             "max_age_seconds": 2.0,
-            "at_time": 100.5,
+            "at_time": 100.26,
             "max_alignment_error_seconds": 0.75,
         }
 

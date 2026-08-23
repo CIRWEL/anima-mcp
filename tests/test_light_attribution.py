@@ -214,7 +214,12 @@ def test_robust_median_tolerates_one_coincident_room_light_change():
                 "captured_at_unix": 100.0 + i,
             }
         )
-    model = LearnedLedLuxResidual({"transitions": transitions})
+    model = LearnedLedLuxResidual(
+        {
+            "model_kind": LearnedLedLuxResidual.MODEL_KIND,
+            "transitions": transitions,
+        }
+    )
 
     stats = model.model_stats()
     assert stats["slope_lux_per_drive"] == 500.0
@@ -237,7 +242,12 @@ def test_inconsistent_transition_directions_remain_unknown():
                 "captured_at_unix": 100.0 + i,
             }
         )
-    model = LearnedLedLuxResidual({"transitions": transitions})
+    model = LearnedLedLuxResidual(
+        {
+            "model_kind": LearnedLedLuxResidual.MODEL_KIND,
+            "transitions": transitions,
+        }
+    )
 
     result = model.attribute(120.0, led_state(0.08))
     assert result["status"] == "warming"
@@ -261,6 +271,45 @@ def test_persisted_evidence_from_another_instrument_is_rejected():
                     "instrument": "endogenous_activity_change",
                 }
             ],
+        }
+    )
+
+    assert model.model_stats()["instrument_sample_count"] == 0
+
+
+def test_pre_capture_timestamp_model_evidence_is_invalidated():
+    model = LearnedLedLuxResidual(
+        {
+            "model_kind": "stable_command_breathing_delta_median",
+            "transitions": [
+                {
+                    "before_drive": 0.02,
+                    "after_drive": 0.06,
+                    "delta_lux": 20.0,
+                    "slope_lux_per_drive": 500.0,
+                    "captured_at_unix": 100.0,
+                    "instrument": LearnedLedLuxResidual.INSTRUMENT,
+                }
+            ],
+        }
+    )
+
+    assert model.model_stats()["instrument_sample_count"] == 0
+
+
+def test_kindless_legacy_evidence_is_invalidated():
+    model = LearnedLedLuxResidual(
+        {
+            "transitions": [
+                {
+                    "before_drive": 0.02,
+                    "after_drive": 0.06,
+                    "delta_lux": 20.0,
+                    "slope_lux_per_drive": 500.0,
+                    "captured_at_unix": 100.0,
+                    "instrument": LearnedLedLuxResidual.INSTRUMENT,
+                }
+            ]
         }
     )
 
