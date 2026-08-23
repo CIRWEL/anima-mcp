@@ -10,6 +10,11 @@ from enum import Enum
 from typing import Optional, List
 
 
+PREFERENCE_ESTABLISHED_MIN_EVIDENCE = 10
+PREFERENCE_ESTABLISHED_MIN_CONFIDENCE = 0.8
+RETIRED_QA_PREFERENCE_ORIGIN = "retired_qa_claim_bridge_v1"
+
+
 def preference_evidence_confidence(
     supporting_count: int,
     contradicting_count: int,
@@ -147,7 +152,33 @@ class GrowthPreference:
             "confidence_basis": "95% Wilson lower bound on signed independent evidence",
             "first_noticed": self.first_noticed.isoformat(),
             "last_confirmed": self.last_confirmed.isoformat(),
+            "evidence_status": preference_evidence_status(self),
         }
+
+
+def preference_evidence_status(preference: GrowthPreference) -> str:
+    """Classify a preference without confusing a stored row with learning."""
+    evidence_origin = getattr(
+        preference, "evidence_origin", "legacy_unclassified"
+    )
+    if evidence_origin == RETIRED_QA_PREFERENCE_ORIGIN:
+        return "historical_claim"
+    evidence_count = getattr(preference, "independent_evidence_count", None)
+    if evidence_count is None:
+        evidence_count = getattr(
+            preference,
+            "evidence_count",
+            getattr(preference, "observation_count", 0),
+        )
+    if evidence_count <= 0:
+        return "tracked"
+    if (
+        evidence_count >= PREFERENCE_ESTABLISHED_MIN_EVIDENCE
+        and getattr(preference, "confidence", 0.0)
+        >= PREFERENCE_ESTABLISHED_MIN_CONFIDENCE
+    ):
+        return "established"
+    return "review"
 
 
 @dataclass

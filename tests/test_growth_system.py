@@ -86,6 +86,43 @@ class TestGrowthPreferences:
         assert "labels" in vec
         assert "n_learned" in vec
         assert isinstance(vec["vector"], list)
+        assert vec["n_tracked"] == 0
+        assert vec["n_established"] == 0
+        assert vec["n_learned"] == 0
+        assert vec["vector_semantics"] == "established preferences only"
+
+    def test_tracked_row_does_not_enter_identity_vector_until_established(
+        self, growth
+    ):
+        from anima_mcp.growth.models import PreferenceCategory
+
+        growth._update_preference(
+            "warm_temp",
+            PreferenceCategory.ENVIRONMENT,
+            "Warmth makes me feel content",
+            0.9,
+        )
+        tracked = growth.get_preference_vector()
+        warm_index = tracked["labels"].index("warm_temp")
+        assert tracked["n_tracked"] == 1
+        assert tracked["n_cold_start"] == 0
+        assert tracked["n_review"] == 1
+        assert tracked["n_established"] == 0
+        assert tracked["tracked_vector"][warm_index] > 0.0
+        assert tracked["vector"][warm_index] == 0.0
+
+        for _ in range(59):
+            growth._update_preference(
+                "warm_temp",
+                PreferenceCategory.ENVIRONMENT,
+                "Warmth makes me feel content",
+                0.9,
+            )
+        established = growth.get_preference_vector()
+        assert established["n_established"] == 1
+        assert established["n_learned"] == 1
+        assert established["n_review"] == 0
+        assert established["vector"][warm_index] > 0.0
 
 
 class TestGrowthRelationships:

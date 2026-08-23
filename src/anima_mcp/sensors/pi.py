@@ -51,6 +51,7 @@ class PiSensors(SensorBackend):
         self._bmp280 = None
         self._last_pressure = None
         self._smoothed_lux: Optional[float] = None  # EMA for light sensor
+        self._last_smoothed_light_capture: Optional[tuple[str, float]] = None
         self._shadow_light_observed_at: Optional[datetime] = None
         self._shadow_light_precision_s: Optional[float] = None
 
@@ -447,13 +448,31 @@ class PiSensors(SensorBackend):
                 light_observed_precision_seconds = self._shadow_light_precision_s
                 # Same EMA as the I2C path — sensor is close to LEDs, raw
                 # values swing wildly; consumers expect the smoothed series.
+                # Advance it once per physical VEML capture, not once per
+                # consumer read of the same SHM envelope. Replaying a capture
+                # otherwise changes the reported measurement and de-aligns it
+                # from the identically filtered LED efference copy.
+                capture_key = (
+                    (
+                        light_observed_at.isoformat(),
+                        float(light_observed_precision_seconds),
+                    )
+                    if light_observed_at is not None
+                    and light_observed_precision_seconds is not None
+                    else None
+                )
                 if self._smoothed_lux is None:
                     self._smoothed_lux = light
-                else:
+                elif (
+                    capture_key is None
+                    or capture_key != self._last_smoothed_light_capture
+                ):
                     alpha = LIGHT_SENSOR_EMA_ALPHA
                     self._smoothed_lux = (
                         (1.0 - alpha) * self._smoothed_lux + alpha * light
                     )
+                if capture_key is not None:
+                    self._last_smoothed_light_capture = capture_key
                 light = self._smoothed_lux
             pressure = shadow.get("pressure_hpa")
             pressure_temp = shadow.get("pressure_temp_c")

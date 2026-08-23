@@ -566,7 +566,16 @@ class SchemaHub:
             "confidences": preference_confidences,
             "labels": preference_labels,
             "dimensions": preference_dimensions,
+            "n_tracked": len(preference_nodes),
+            "n_review": 0,
+            "n_cold_start": 0,
+            "n_historical_claim": 0,
+            "n_established": len(preference_nodes),
             "n_learned": len(preference_nodes),
+            "vector_semantics": "established preferences only",
+            "n_learned_semantics": (
+                "established dimension nodes from the latest self-schema"
+            ),
         }
 
         belief_nodes = sorted(

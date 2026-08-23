@@ -290,12 +290,12 @@ class TestExtractSelfSchema:
             for e in schema.edges
         )
 
-    def test_extraction_excludes_low_confidence_preferences(self):
-        """Test preferences below threshold are excluded."""
+    def test_extraction_excludes_preferences_without_established_evidence(self):
+        """Review-only dimensions do not occupy the learned self graph."""
         mock_growth = MagicMock()
         mock_growth.get_dimension_preferences.return_value = {
-            "warmth": {"valence": 0.5, "optimal_range": (0.3, 0.7), "confidence": 0.1},  # Below 0.2
-            "clarity": {"valence": 0.3, "optimal_range": (0.4, 0.8), "confidence": 0.5},  # Above 0.2
+            "warmth": {"valence": 0.5, "optimal_range": (0.3, 0.7), "confidence": 0.9, "evidence_status": "review"},
+            "clarity": {"valence": 0.3, "optimal_range": (0.4, 0.8), "confidence": 0.8, "evidence_status": "established"},
         }
 
         schema = extract_self_schema(growth_system=mock_growth, include_preferences=True)
@@ -308,10 +308,10 @@ class TestExtractSelfSchema:
         """Test preferences above threshold are included."""
         mock_growth = MagicMock()
         mock_growth.get_dimension_preferences.return_value = {
-            "warmth": {"valence": 0.5, "optimal_range": (0.3, 0.7), "confidence": 0.8},
-            "clarity": {"valence": 0.3, "optimal_range": (0.4, 0.8), "confidence": 0.6},
-            "stability": {"valence": -0.2, "optimal_range": (0.5, 0.9), "confidence": 0.4},
-            "presence": {"valence": 0.1, "optimal_range": (0.4, 0.7), "confidence": 0.3},
+            "warmth": {"valence": 0.5, "optimal_range": (0.3, 0.7), "confidence": 0.8, "evidence_status": "established"},
+            "clarity": {"valence": 0.3, "optimal_range": (0.4, 0.8), "confidence": 0.6, "evidence_status": "established"},
+            "stability": {"valence": -0.2, "optimal_range": (0.5, 0.9), "confidence": 0.4, "evidence_status": "established"},
+            "presence": {"valence": 0.1, "optimal_range": (0.4, 0.7), "confidence": 0.3, "evidence_status": "established"},
         }
 
         schema = extract_self_schema(growth_system=mock_growth, include_preferences=True)
@@ -472,7 +472,7 @@ class TestExtractSelfSchema:
 
         mock_growth = MagicMock()
         mock_growth.get_dimension_preferences.return_value = {
-            "warmth": {"valence": 0.5, "optimal_range": (0.3, 0.7), "confidence": 0.8},
+            "warmth": {"valence": 0.5, "optimal_range": (0.3, 0.7), "confidence": 0.8, "evidence_status": "established"},
         }
 
         mock_self_model = MagicMock()

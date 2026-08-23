@@ -382,7 +382,15 @@ class TestLumenQaExtended:
              patch("anima_mcp.messages.add_agent_message", return_value=msg), \
              patch("anima_mcp.handlers.communication._get_unitares_bridge", return_value=bridge), \
              patch("anima_mcp.knowledge.extract_insight_from_answer", AsyncMock(return_value=insight)), \
-             patch("anima_mcp.knowledge.apply_insight", return_value={"shift": "positive"}), \
+             patch(
+                 "anima_mcp.knowledge.apply_insight",
+                 return_value={
+                     "stored_claim": {
+                         "status": "historical_hypothesis_only",
+                         "behavioral_effects": False,
+                     }
+                 },
+             ), \
              patch("anima_mcp.accessors._get_growth", return_value=growth):
             data = parse_result(await handle_lumen_qa({
                 "question_id": "q_abc",
@@ -395,7 +403,9 @@ class TestLumenQaExtended:
         assert data["question_id"] == "q_abcdef123"
         assert data["matched_partial_id"] == "q_abc"
         assert data["agent_name"] == "Resolved Agent"
-        assert data["insight"]["behavior_effects"]["shift"] == "positive"
+        handling = data["insight"]["epistemic_handling"]["stored_claim"]
+        assert handling["status"] == "historical_hypothesis_only"
+        assert handling["behavioral_effects"] is False
         assert data["visitor_context"]["bond"] == "trusted"
 
     async def test_answer_mode_records_the_visit(self):

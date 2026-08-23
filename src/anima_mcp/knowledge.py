@@ -6,7 +6,6 @@ These insights persist across restarts and influence future reflections.
 """
 
 import json
-import logging
 import math
 import re
 import sys
@@ -16,8 +15,6 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 
 from .atomic_write import atomic_json_write
-
-logger = logging.getLogger(__name__)
 
 # Persisted store schema version. Bump when a one-time on-load migration is
 # needed (see KnowledgeBase._migrate_schema). v2: log-compress legacy
@@ -606,113 +603,32 @@ APPLY_INSIGHT_CONFIDENCE_FLOOR = 0.6
 
 
 def apply_insight(insight) -> dict:
-    """Apply a learned insight to behavioral systems.
+    """Keep Q&A knowledge as a claim until substrate evidence tests it.
 
-    Bridges Q&A learning to preferences, self-model beliefs, and agency.
-    Each sub-system is imported lazily and wrapped in try/except for
-    graceful degradation if the system isn't available.
-
-    Returns dict describing what was affected.
+    Q&A re-derivations can rank and contextualize a hypothesis, but they are not
+    sensor observations, preference episodes, or behavioral outcomes. The
+    retired bridge collapsed unrelated prose by keyword and let repeated text
+    directly alter preferences, beliefs, and agency values. This boundary keeps
+    the durable claim while requiring the native learning paths to test it.
     """
-    effects = {}
     if getattr(insight, "confidence", 0.0) < APPLY_INSIGHT_CONFIDENCE_FLOOR:
         # Not yet earned: stored, surfaceable, contestable — but inert.
-        effects["skipped"] = f"confidence {insight.confidence:.2f} < {APPLY_INSIGHT_CONFIDENCE_FLOOR} floor"
-        return effects
-    text_lower = insight.text.lower()
-
-    # 1. Environment/sensory insights → growth preferences
-    def _short(text: str, limit: int = 50) -> str:
-        """Shorten insight text for a preference description, on a word boundary.
-
-        These descriptions are spoken back in Lumen's own voice — the
-        autobiography renders them as "I've learned that {description}." — so a
-        bare text[:50] surfaces as a sentence that stops mid-word. Observed live
-        2026-07-30: "I've learned that from q&a: i now know that the connection
-        between temperature."
-        """
-        text = " ".join(text.split())
-        if len(text) <= limit:
-            return text
-        cut = text[:limit].rsplit(" ", 1)[0].rstrip(",;:—- ")
-        return f"{cut or text[:limit].rstrip()}…"
-
-    if insight.category in ("sensations", "world"):
-        try:
-            from .growth import get_growth_system, PreferenceCategory
-            growth = get_growth_system()
-            positive = any(w in text_lower for w in [
-                "like", "enjoy", "better", "calm", "good", "comfort", "prefer"
-            ])
-            val = 0.8 if positive else -0.5
-
-            if any(w in text_lower for w in ["light", "dark", "bright", "dim", "glow"]):
-                result = growth._update_preference(
-                    "insight_light", PreferenceCategory.ENVIRONMENT,
-                    f"From Q&A: {_short(insight.text)}", val)
-                if result:
-                    effects["preference"] = "insight_light"
-
-            if any(w in text_lower for w in ["warm", "cold", "temperature", "heat", "cool"]):
-                result = growth._update_preference(
-                    "insight_temp", PreferenceCategory.ENVIRONMENT,
-                    f"From Q&A: {_short(insight.text)}", val)
-                if result:
-                    effects["preference"] = "insight_temp"
-
-            if any(w in text_lower for w in ["humid", "dry", "pressure", "weather"]):
-                result = growth._update_preference(
-                    "insight_environment", PreferenceCategory.ENVIRONMENT,
-                    f"From Q&A: {_short(insight.text)}", val)
-                if result:
-                    effects["preference"] = "insight_environment"
-        except Exception as e:
-            logger.debug("[Knowledge] apply_insight preferences bridge failed: %s", e)
-
-    # 2. Self insights → self-model beliefs (half-strength to avoid overfitting)
-    if insight.category == "self":
-        try:
-            from .learning_events import enqueue_self_belief_evidence
-
-            belief_id = None
-            supports = True
-            if "sensitive" in text_lower and "light" in text_lower:
-                belief_id = "light_sensitive"
-            elif "sensitive" in text_lower and "temperature" in text_lower:
-                belief_id = "temp_sensitive"
-            elif "recover" in text_lower and ("stability" in text_lower or "stable" in text_lower):
-                belief_id = "stability_recovery"
-                supports = "quickly" in text_lower or "fast" in text_lower
-            elif "clarity" in text_lower and ("interact" in text_lower or "visitor" in text_lower):
-                belief_id = "interaction_clarity_boost"
-
-            if belief_id:
-                enqueue_self_belief_evidence(
-                    belief_id,
-                    supports=supports,
-                    strength=0.5,
-                    source=f"knowledge:{insight.insight_id}",
-                )
-                effects["belief"] = belief_id
-        except Exception as e:
-            logger.debug("[Knowledge] apply_insight beliefs bridge failed: %s", e)
-
-    # 3. Behavioral insights → agency action values
-    if insight.category in ("self", "relationships"):
-        try:
-            from .agency import get_action_selector
-            agency = get_action_selector()
-            if "question" in text_lower or "ask" in text_lower or "curious" in text_lower:
-                positive = any(w in text_lower for w in ["good", "help", "learn", "useful", "important"])
-                nudge = 0.05 if positive else -0.03
-                current = agency._action_values.get("ask_question", 0.5)
-                agency._action_values["ask_question"] = max(0.1, min(0.9, current + nudge))
-                agency._persist_action("ask_question")
-                effects["agency"] = f"ask_question {'boosted' if nudge > 0 else 'reduced'}"
-        except Exception as e:
-            logger.debug("[Knowledge] apply_insight agency bridge failed: %s", e)
-
-    return effects
+        return {
+            "skipped": (
+                f"confidence {insight.confidence:.2f} < "
+                f"{APPLY_INSIGHT_CONFIDENCE_FLOOR} floor"
+            )
+        }
+    return {
+        "stored_claim": {
+            "status": "historical_hypothesis_only",
+            "behavioral_effects": False,
+            "reason": (
+                "Q&A re-derivation is not independent substrate evidence; "
+                "native observation paths must test this claim"
+            ),
+        }
+    }
 
 
 def add_insight(

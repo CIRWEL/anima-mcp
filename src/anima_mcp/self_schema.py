@@ -450,8 +450,12 @@ def extract_self_schema(
 
     if pref_summary:
         for dim, pref_data in pref_summary.items():
-            # Only include confident preferences (confidence > 0.2)
-            if pref_data.get("confidence", 0) > 0.2 and dim in ["warmth", "clarity", "stability", "presence"]:
+            # A stored/cold-started preference is tracked, not learned. Only
+            # evidence-established dimensions occupy the rendered self graph.
+            if (
+                pref_data.get("evidence_status") == "established"
+                and dim in ["warmth", "clarity", "stability", "presence"]
+            ):
                 # Use valence as node value (how much Lumen values this dimension)
                 nodes.append(SchemaNode(
                     node_id=f"pref_{dim}",
@@ -462,6 +466,9 @@ def extract_self_schema(
                         "valence": pref_data.get("valence", 0),
                         "optimal_range": pref_data.get("optimal_range", (0.3, 0.7)),
                         "confidence": pref_data.get("confidence", 0),
+                        "evidence_status": pref_data.get("evidence_status"),
+                        "evidence_count": pref_data.get("evidence_count", 0),
+                        "source_preferences": pref_data.get("source_preferences", []),
                     },
                 ))
 

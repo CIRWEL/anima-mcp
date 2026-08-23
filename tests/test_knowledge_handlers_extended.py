@@ -1,10 +1,22 @@
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
 from conftest import parse_result
+
+
+def test_control_center_renders_historical_claim_and_preference_evidence_lenses():
+    dashboard = (
+        Path(__file__).parents[1] / "docs" / "control_center.html"
+    ).read_text(encoding="utf-8")
+
+    assert "historical Q&amp;A claims" in dashboard
+    assert "retired Q&amp;A claim rows" in dashboard
+    assert "historical_claim: 'historical claim'" in dashboard
+    assert "established \\u00b7 ${trackedCount} tracked" in dashboard
 
 
 @pytest.mark.asyncio
@@ -132,10 +144,12 @@ class TestGetSelfKnowledgeExtended:
             data = parse_result(await handle_get_self_knowledge({"limit": 5}))
 
         strongest = data["summary"]["strongest"]
-        assert strongest[0]["id"] == "qa_rederived"
-        assert strongest[1]["id"] == "pref_dim_light"
-        assert strongest[1]["confidence"] == 0.2
-        assert strongest[1]["actionability"] == "review"
+        assert strongest[0]["id"] == "pref_dim_light"
+        assert strongest[0]["confidence"] == 0.2
+        assert strongest[0]["actionability"] == "review"
+        assert strongest[1]["id"] == "qa_rederived"
+        assert strongest[1]["actionability"] == "historical_claim"
+        assert strongest[1]["current_state_authority"] == "none"
         assert data["summary"]["by_category"]["environment"] == [
             "observational pattern: dim light calms me"
         ]
@@ -187,10 +201,11 @@ class TestGetSelfKnowledgeExtended:
 
         view = _insight_view(insight)
 
-        assert view["actionability"] == "review"
+        assert view["actionability"] == "historical_claim"
         assert view["actionability_evidence_count"] == 1
         assert view["minimum_established_evidence"] == 3
-        assert "only 1 source evidence" in view["review_reason"]
+        assert "do not revalidate" in view["review_reason"]
+        assert view["record_role"] == "historical_claim"
 
 
 @pytest.mark.asyncio
@@ -202,13 +217,21 @@ class TestGetGrowthExtended:
             name="dim",
             description="likes dim light",
             confidence=0.9,
-            observation_count=6,
+            observation_count=20,
+            independent_evidence_count=20,
+            supporting_count=20,
+            contradicting_count=0,
+            evidence_origin="native_events",
         )
         pref_low = SimpleNamespace(
             name="noise",
             description="uncertain",
             confidence=0.1,
             observation_count=2,
+            independent_evidence_count=2,
+            supporting_count=1,
+            contradicting_count=1,
+            evidence_origin="native_events",
         )
         rel_self = SimpleNamespace(
             is_self=lambda: True,
@@ -253,7 +276,9 @@ class TestGetGrowthExtended:
 
         assert "autobiography" in data
         assert data["preferences"]["count"] == 2
-        assert len(data["preferences"]["learned"]) == 1  # low-confidence pref filtered out
+        assert data["preferences"]["established_count"] == 1
+        assert data["preferences"]["review_count"] == 1
+        assert len(data["preferences"]["learned"]) == 1
         assert data["visitors"]["unique_names"] == 1
         assert data["goals"]["active"] == 1
         assert data["goals"]["achieved"] == 1
@@ -274,6 +299,33 @@ class TestQaInsightsExtended:
 
         assert data["total_insights"] == 0
         assert "note" in data
+
+    async def test_claims_are_timestamped_and_have_no_current_authority(self):
+        from anima_mcp.handlers.knowledge import handle_get_qa_insights
+
+        insight = SimpleNamespace(
+            text="Light may affect how I feel",
+            source_question="What does light do?",
+            source_answer="It may matter",
+            source_author="operator",
+            category="sensations",
+            confidence=0.8,
+            references=3,
+            timestamp=1_700_000_000.0,
+            derived_from=["q2", "q3", "q4"],
+            contradicted_by=[],
+            conviction_score=lambda: 3.8,
+        )
+        kb = SimpleNamespace(_insights=[insight])
+        with patch("anima_mcp.knowledge.get_knowledge", return_value=kb), \
+             patch("anima_mcp.knowledge.get_insights", return_value=[insight]):
+            data = parse_result(await handle_get_qa_insights({"limit": 3}))
+
+        claim = data["insights"][0]
+        assert claim["record_role"] == "historical_claim"
+        assert claim["current_state_authority"] == "none"
+        assert claim["historical_as_of"].startswith("2023-11-14")
+        assert "not current telemetry" in data["epistemic_note"]
 
 
 @pytest.mark.asyncio
@@ -342,6 +394,7 @@ class TestQueryExtended:
             text="Light matters",
             category="environment",
             source_question="How does light affect you?",
+            timestamp=1_700_000_000.0,
         )
         refl_insight = SimpleNamespace(to_dict=lambda: {"text": "dim helps"})
         reflection = SimpleNamespace(
@@ -356,6 +409,8 @@ class TestQueryExtended:
             data = parse_result(await handle_query({"text": "light", "type": "cognitive"}))
 
         assert len(data["qa_insights"]) == 1
+        assert data["qa_insights"][0]["record_role"] == "historical_claim"
+        assert data["qa_insights"][0]["current_state_authority"] == "none"
         assert data["self_knowledge"] == "dim helps"
         assert len(data["reflection_insights"]) == 1
 

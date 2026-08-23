@@ -8,10 +8,16 @@ import pytest
 from anima_mcp.growth.migrations import (
     migrate_external_light_preferences_v2,
     migrate_preference_evidence_windows,
+    migrate_qa_claim_preferences,
     migrate_raw_lux_preferences,
     run_identity_migration,
 )
-from anima_mcp.growth.models import GrowthPreference, PreferenceCategory
+from anima_mcp.growth.models import (
+    GrowthPreference,
+    PreferenceCategory,
+    RETIRED_QA_PREFERENCE_ORIGIN,
+    preference_evidence_status,
+)
 
 
 def _schema(conn: sqlite3.Connection) -> None:
@@ -429,3 +435,83 @@ class TestMigrateExternalLightPreferencesV2:
         assert pref.observation_count == 1500
         assert pref.independent_evidence_count == 0
         assert pref.evidence_origin == "reset_external_light_gate_v2"
+
+
+class TestMigrateQaClaimPreferences:
+    def test_retires_behavioral_evidence_but_preserves_audit_record(self):
+        from datetime import datetime
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        _schema(conn)
+        now = datetime.now()
+        pref = GrowthPreference(
+            category=PreferenceCategory.ENVIRONMENT,
+            name="insight_light",
+            description="From Q&A: a textual claim about brightness",
+            value=-0.5,
+            confidence=0.95,
+            observation_count=330,
+            first_noticed=now,
+            last_confirmed=now,
+            evidence_count=330,
+            supporting_count=0,
+            contradicting_count=330,
+            evidence_origin="legacy_event_count",
+        )
+        conn.execute(
+            """
+            INSERT INTO preferences
+                (name, category, description, value, confidence,
+                 observation_count, first_noticed, last_confirmed,
+                 evidence_count, supporting_count, contradicting_count,
+                 evidence_origin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pref.name,
+                pref.category.value,
+                pref.description,
+                pref.value,
+                pref.confidence,
+                pref.observation_count,
+                pref.first_noticed.isoformat(),
+                pref.last_confirmed.isoformat(),
+                pref.evidence_count,
+                pref.supporting_count,
+                pref.contradicting_count,
+                pref.evidence_origin,
+            ),
+        )
+        conn.commit()
+
+        migrate_qa_claim_preferences(conn, {pref.name: pref})
+
+        assert pref.observation_count == 330
+        assert pref.value == 0.0
+        assert pref.confidence == 0.0
+        assert pref.independent_evidence_count == 0
+        assert pref.evidence_origin == RETIRED_QA_PREFERENCE_ORIGIN
+        assert preference_evidence_status(pref) == "historical_claim"
+        row = conn.execute(
+            "SELECT value, confidence, observation_count, evidence_count, "
+            "evidence_origin FROM preferences WHERE name='insight_light'"
+        ).fetchone()
+        assert tuple(row) == (
+            0.0,
+            0.0,
+            330,
+            0,
+            RETIRED_QA_PREFERENCE_ORIGIN,
+        )
+
+        sentinel = conn.execute(
+            "SELECT description FROM preferences "
+            "WHERE name='_migration_retire_qa_preference_bridge_v1'"
+        ).fetchone()
+        audit = json.loads(sentinel["description"])
+        assert audit["rows"][0]["contradicting_count"] == 330
+
+        # The sentinel makes the migration idempotent.
+        migrate_qa_claim_preferences(conn, {pref.name: pref})
+        assert pref.evidence_origin == RETIRED_QA_PREFERENCE_ORIGIN

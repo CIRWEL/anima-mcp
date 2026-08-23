@@ -41,9 +41,10 @@ _QUESTION_BOILERPLATE_PREFIXES = (
     "i now know that ",
     "i learned that ",
     "i know this about myself: ",
-    # Storage provenance, not something Lumen said. apply_insight() files Q&A
-    # learning as "From Q&A: <text>"; without this the marker survived into the
-    # question and the generator stacked a wrapper on top of it, producing
+    # Storage provenance, not something Lumen said. The retired behavioral
+    # bridge historically filed Q&A claims as "From Q&A: <text>"; without this
+    # the marker survived into the question and the generator stacked a wrapper,
+    # producing
     # "why is it that from q&a: i now know that ..." (observed live 2026-07-31).
     # The stripper loops, so peeling this exposes the "i now know that " stem
     # underneath and that gets peeled on the next pass.

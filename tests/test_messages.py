@@ -285,10 +285,10 @@ class TestSingleton:
 class TestQAProvenanceAndTruncation:
     """Guards for the 2026-07-31 malformed-question chain.
 
-    apply_insight() files Q&A learning as "From Q&A: <text>". That marker is
-    storage provenance, not something Lumen said, and it was surviving into
-    generated questions — the generator wrapped a template around it instead
-    of stripping it, producing:
+    The retired behavioral bridge filed Q&A claims as "From Q&A: <text>". That
+    marker is storage provenance, not something Lumen said, and it was surviving
+    into generated questions — the generator wrapped a template around it
+    instead of stripping it, producing:
 
         "why is it that from q&a: i now know that the connection between
          temperature?"

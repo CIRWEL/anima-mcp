@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Optional, Any, List
 
 from .models import (
-    MemorableEvent, VisitorFrequency, VisitorType,
+    MemorableEvent, VisitorFrequency, VisitorType, preference_evidence_status,
 )
 
 
@@ -196,7 +196,11 @@ class MemoriesMixin:
         # Weight by independent evidence, not raw broker cadence. Confidence is
         # Wilson-calibrated from signed windows; the weight still lets mature
         # patterns appear more often without rewarding a faster loop.
-        strong_prefs = [p for p in self._preferences.values() if p.confidence > 0.7]
+        strong_prefs = [
+            p
+            for p in self._preferences.values()
+            if preference_evidence_status(p) == "established"
+        ]
         if strong_prefs:
             weights = [
                 max(

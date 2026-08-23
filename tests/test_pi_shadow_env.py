@@ -82,6 +82,22 @@ def test_shadow_lux_ema_matches_i2c_path(shadow_file):
     assert r.light_lux == pytest.approx(0.8 * 60.0 + 0.2 * 100.0)
 
 
+def test_shadow_lux_ema_advances_once_per_physical_capture(shadow_file):
+    shadow_file(ENV)
+    sensors = PiSensors()
+    assert sensors.read().light_lux == 60.0
+
+    # A new capture advances the EMA once. Re-reading the same SHM envelope
+    # must return the same measurement rather than smoothing it a second time.
+    shadow_file({**ENV, "light_lux": 100.0})
+    first = sensors.read()
+    replay = sensors.read()
+
+    assert first.light_lux == pytest.approx(68.0)
+    assert replay.light_lux == pytest.approx(first.light_lux)
+    assert replay.light_observed_at == first.light_observed_at
+
+
 def test_shadow_uses_sensor_capture_window_not_envelope_flush(shadow_file):
     path = shadow_file(ENV)
     envelope = json.loads(path.read_text())
