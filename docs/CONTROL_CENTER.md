@@ -116,9 +116,11 @@ LUMEN_HTTP_URL=http://127.0.0.1:8769 python3 scripts/message_server.py
 ```
 
 Set `LUMEN_HTTP_AUTH=user:pass` when the upstream REST API requires Basic auth.
-If the HTTP bridge cannot be reached, legacy state, Q&A, message, voice, learning,
-and gallery operations fall back to `unitares-anima@${LUMEN_HOST:-lumen-local}`
-over SSH. Growth, self-knowledge, and detailed health require the HTTP bridge.
+If the HTTP bridge cannot be reached, legacy state, Q&A, voice, learning, and
+gallery reads fall back to `unitares-anima@${LUMEN_HOST:-lumen-local}` over SSH.
+Growth, self-knowledge, and detailed health require the HTTP bridge. Message and
+answer writes use SSH only when no HTTP bridge is configured; an ambiguous HTTP
+failure is never retried automatically because that could duplicate a write.
 
 ## Troubleshooting
 

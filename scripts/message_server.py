@@ -82,14 +82,19 @@ def http_call_tool(tool_name: str, arguments: dict = None, timeout: int = 10) ->
 
 
 def ssh_command(python_code: str, timeout: int = 10) -> tuple[bool, str]:
-    """Run Python code on the Pi via SSH using base64 to avoid escaping issues."""
-    encoded = base64.b64encode(python_code.encode()).decode()
+    """Run Python code on the Pi via SSH, supplying it only through stdin."""
     cmd = [
         "ssh", "-o", "ConnectTimeout=10", "-o", "BatchMode=yes", f"{PI_USER}@{PI_HOST}",
-        f"cd anima-mcp && echo {encoded} | base64 -d | .venv/bin/python3"
+        "cd anima-mcp && .venv/bin/python3 -"
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        result = subprocess.run(
+            cmd,
+            input=python_code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
         if result.returncode == 0:
             return True, result.stdout.strip()
         else:
@@ -636,50 +641,77 @@ else:
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
 
-        if self.proxy_http_post(post_data):
+        if LUMEN_HTTP_URL:
+            if self.proxy_http_post(post_data):
+                return
+            self.send_json(
+                {
+                    "error": (
+                        "Lumen HTTP bridge unavailable; message was not retried "
+                        "over SSH because delivery status is unknown"
+                    )
+                },
+                503,
+            )
             return
 
         try:
             data = json.loads(post_data)
-            text = data.get('text', '').replace("'", "\\'").replace('"', '\\"')
-            author = data.get('author', 'user')
+            text = data.get('text', '')
+            author = data.get('author') or 'user'
+            responds_to = data.get('responds_to') or None
+
+            if not isinstance(text, str) or not text.strip():
+                self.send_json({"error": "No text provided"}, 400)
+                return
+            if not isinstance(author, str):
+                self.send_json({"error": "Author must be text"}, 400)
+                return
+            if responds_to is not None and not isinstance(responds_to, str):
+                self.send_json({"error": "responds_to must be text"}, 400)
+                return
+
             # Normalize role aliases → canonical operator name (also done server-side)
             if author.lower() in ('caretaker', OPERATOR_NAME.lower()):
                 author = OPERATOR_DISPLAY
-            author = author.replace("'", "\\'").replace('"', '\\"')
-            responds_to = data.get('responds_to', '').replace("'", "\\'").replace('"', '\\"')
 
-            if not text:
-                self.send_json({"error": "No text provided"}, 400)
-                return
-
+            payload = {
+                "message": text,
+                "source": "dashboard",
+                "author": author,
+            }
             if responds_to:
-                # Answering a question - use agent message with responds_to
-                print(f"[{author}] Answering question {responds_to}: {text[:50]}...")
-                code = f'''
-from src.anima_mcp.messages import MessageBoard
-board = MessageBoard()
-board._load()
-# Mark question as answered
-for m in board._messages:
-    if m.message_id == "{responds_to}":
-        m.answered = True
-        break
-# Add the answer
-board.add_agent_message("{text}", agent_name="{author}", responds_to="{responds_to}")
-print("ok")
-'''
-            else:
-                # Regular message
-                print(f"[{author}] Sending message to Lumen: {text[:50]}...")
-                code = f"from src.anima_mcp.messages import MessageBoard; b = MessageBoard(); b.add_user_message('{text}'); print('ok')"
+                payload["responds_to"] = responds_to
+            encoded_payload = base64.b64encode(
+                json.dumps(payload).encode()
+            ).decode()
+            code = '''
+import asyncio
+import base64
+import json
 
-            success, output = ssh_command(code)
+from src.anima_mcp.growth import normalize_visitor_identity
+from src.anima_mcp.handlers.communication import handle_post_message
+
+payload = json.loads(base64.b64decode("__PAYLOAD__").decode())
+author = payload.pop("author")
+_, display_name, _ = normalize_visitor_identity(author, source="dashboard")
+payload["agent_name"] = display_name
+result = asyncio.run(handle_post_message(payload))
+print(result[0].text if result else json.dumps({"success": True}))
+'''.replace("__PAYLOAD__", encoded_payload)
+
+            success, output = ssh_command(code, timeout=15)
             if success:
-                self.send_json({"status": "answered" if responds_to else "sent", "responds_to": responds_to or None})
+                try:
+                    self.send_json(json.loads(output))
+                except json.JSONDecodeError:
+                    self.send_json({"error": "Invalid JSON", "raw": output}, 500)
             else:
                 self.send_json({"error": output}, 500)
 
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            self.send_json({"error": f"Invalid JSON: {e}"}, 400)
         except Exception as e:
             self.send_json({"error": str(e)}, 500)
 
@@ -688,44 +720,74 @@ print("ok")
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
 
-        if self.proxy_http_post(post_data):
+        if LUMEN_HTTP_URL:
+            if self.proxy_http_post(post_data, timeout=45):
+                return
+            self.send_json(
+                {
+                    "error": (
+                        "Lumen HTTP bridge unavailable; answer was not retried "
+                        "over SSH because delivery status is unknown"
+                    )
+                },
+                503,
+            )
             return
 
         try:
             data = json.loads(post_data)
-            question_id = data.get('question_id') or data.get('id', '')  # Accept both
-            answer_text = data.get('answer', '').replace("'", "\\'").replace('"', '\\"')
-            author = data.get('author', OPERATOR_DISPLAY)
+            question_id = data.get('question_id') or data.get('id', '')
+            answer_text = data.get('answer', '')
+            author = data.get('author') or OPERATOR_DISPLAY
+
+            if not isinstance(question_id, (str, int)) or not str(question_id):
+                self.send_json({"error": "No question ID provided"}, 400)
+                return
+            if not isinstance(answer_text, str) or not answer_text.strip():
+                self.send_json({"error": "No answer provided"}, 400)
+                return
+            if not isinstance(author, str):
+                self.send_json({"error": "Author must be text"}, 400)
+                return
+
             # Normalize role aliases → canonical operator name (also done server-side)
             if author.lower() in ('caretaker', OPERATOR_NAME.lower()):
                 author = OPERATOR_DISPLAY
-            author = author.replace("'", "\\'").replace('"', '\\"')
 
-            if not answer_text:
-                self.send_json({"error": "No answer provided"}, 400)
-                return
+            payload = {
+                "question_id": str(question_id),
+                "answer": answer_text,
+                "author": author,
+            }
+            encoded_payload = base64.b64encode(
+                json.dumps(payload).encode()
+            ).decode()
+            code = '''
+import asyncio
+import base64
+import json
 
-            print(f"[{author}] Answering question {question_id}: {answer_text[:50]}...")
-            code = f'''
-from src.anima_mcp.messages import MessageBoard
-board = MessageBoard()
-board._load()
-# Find the question and mark as answered
-for m in board._messages:
-    if m.message_id == "{question_id}":
-        m.answered = True
-        m.answered_by = "{author}"
-        break
-# Add the answer
-board.add_agent_message("{answer_text}", agent_name="{author}", responds_to="{question_id}")
-print("ok")
-'''
-            success, output = ssh_command(code)
+from src.anima_mcp.growth import normalize_visitor_identity
+from src.anima_mcp.handlers.communication import handle_lumen_qa
+
+payload = json.loads(base64.b64decode("__PAYLOAD__").decode())
+author = payload.pop("author")
+_, display_name, _ = normalize_visitor_identity(author, source="dashboard")
+payload["agent_name"] = display_name
+result = asyncio.run(handle_lumen_qa(payload))
+print(result[0].text if result else json.dumps({"success": True}))
+'''.replace("__PAYLOAD__", encoded_payload)
+            success, output = ssh_command(code, timeout=45)
             if success:
-                self.send_json({"status": "answered"})
+                try:
+                    self.send_json(json.loads(output))
+                except json.JSONDecodeError:
+                    self.send_json({"error": "Invalid JSON", "raw": output}, 500)
             else:
                 self.send_json({"error": output}, 500)
 
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            self.send_json({"error": f"Invalid JSON: {e}"}, 400)
         except Exception as e:
             self.send_json({"error": str(e)}, 500)
 

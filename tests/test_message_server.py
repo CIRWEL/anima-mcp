@@ -1,7 +1,9 @@
 import base64
 import importlib.util
+import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -46,6 +48,25 @@ def test_ssh_state_fallback_relays_shadow_light_attribution(monkeypatch):
     assert '"disk_percent": readings.disk_percent or 0' in captured["code"]
     assert captured["response"]["light_attribution"] == expected
     assert captured["status"] == 200
+
+
+def test_ssh_command_supplies_code_via_stdin_not_command_line(monkeypatch):
+    module = load_message_server()
+    captured = {}
+    python_code = 'print("request-controlled content")'
+
+    def fake_run(command, **kwargs):
+        captured.update({"command": command, **kwargs})
+        return SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(module.subprocess, "run", fake_run)
+
+    assert module.ssh_command(python_code) == (True, "ok")
+    assert captured["command"][-1] == "cd anima-mcp && .venv/bin/python3 -"
+    assert all(python_code not in part for part in captured["command"])
+    assert captured["input"] == python_code
+    assert captured["text"] is True
+    assert captured["timeout"] == 10
 
 
 @pytest.mark.parametrize(
@@ -155,6 +176,64 @@ def test_http_post_proxy_preserves_body_and_content_type(monkeypatch):
     assert request.get_header("Content-type") == "application/json; charset=utf-8"
     assert captured["timeout"] == 15
     assert captured["response_body"] == b'{"success": true}'
+
+
+def test_ssh_message_fallback_encodes_request_data_outside_python_source(monkeypatch):
+    module = load_message_server()
+    module.LUMEN_HTTP_URL = ""
+    captured = {}
+    malicious_text = '\"); __import__("os").system("touch /tmp/pwned") #'
+    post_data = json.dumps(
+        {"text": malicious_text, "author": "Visitor", "responds_to": "q1"}
+    ).encode()
+
+    def fake_ssh_command(code, timeout=10):
+        captured.update({"code": code, "timeout": timeout})
+        return True, '{"success": true}'
+
+    monkeypatch.setattr(module, "ssh_command", fake_ssh_command)
+    handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
+    handler.headers = {"Content-Length": str(len(post_data))}
+    handler.rfile = io.BytesIO(post_data)
+    handler.send_json = lambda data, status=200: captured.update(
+        {"response": data, "status": status}
+    )
+
+    handler.handle_post_message()
+
+    assert malicious_text not in captured["code"]
+    encoded = captured["code"].split('base64.b64decode("', 1)[1].split('"', 1)[0]
+    decoded = json.loads(base64.b64decode(encoded))
+    assert decoded["message"] == malicious_text
+    assert decoded["responds_to"] == "q1"
+    assert "handle_post_message" in captured["code"]
+    assert captured["timeout"] == 15
+    assert captured["response"] == {"success": True}
+    assert captured["status"] == 200
+
+
+def test_configured_http_write_is_not_retried_after_ambiguous_failure(monkeypatch):
+    module = load_message_server()
+    module.LUMEN_HTTP_URL = "http://127.0.0.1:8769"
+    captured = {}
+    post_data = b'{"text":"hello"}'
+    handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
+    handler.headers = {"Content-Length": str(len(post_data))}
+    handler.rfile = io.BytesIO(post_data)
+    handler.proxy_http_post = lambda *_args, **_kwargs: False
+    handler.send_json = lambda data, status=200: captured.update(
+        {"response": data, "status": status}
+    )
+    monkeypatch.setattr(
+        module,
+        "ssh_command",
+        lambda *_args, **_kwargs: pytest.fail("ambiguous POST must not be retried"),
+    )
+
+    handler.handle_post_message()
+
+    assert captured["status"] == 503
+    assert "delivery status is unknown" in captured["response"]["error"]
 
 
 def test_rest_only_card_reports_missing_http_bridge():
