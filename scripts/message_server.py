@@ -230,6 +230,10 @@ try:
             "cpu_temp": readings.cpu_temp_c or 0,
             "ambient_temp": readings.ambient_temp_c or 0,
             "light": readings.light_lux or 0,
+            # Preserve the broker's provenance-rich decomposition. This is a
+            # telemetry slice only: the Control Center labels it as shadow and
+            # raw lux remains the behavioral input on the Pi.
+            "light_attribution": shm_data.get("light_attribution"),
             "humidity": readings.humidity_pct or 0,
             "awakenings": creature.total_awakenings if creature else 0,
             "timestamp": readings.timestamp,
@@ -480,7 +484,7 @@ else:
     files = list(drawings_dir.glob("lumen_drawing*.png"))
 
     def parse_ts(f):
-        m = re.search(r"(\d{8})_(\d{6})", f.name)
+        m = re.search(r"(\\d{8})_(\\d{6})", f.name)
         if m:
             try:
                 return datetime.strptime(m.group(1) + m.group(2), "%Y%m%d%H%M%S").timestamp()
