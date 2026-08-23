@@ -7,9 +7,11 @@
 
 set -euo pipefail
 
-ANIMA_DIR="/home/unitares-anima/.anima"
+# Overridable so the recovery logic is executable in a test harness; the
+# systemd unit sets nothing, so production keeps the literal path.
+ANIMA_DIR="${ANIMA_DIR:-/home/unitares-anima/.anima}"
 DB_PATH="$ANIMA_DIR/anima.db"
-SSH_KEY="/home/unitares-anima/.ssh/id_ed25519"
+SSH_KEY="${SSH_KEY:-/home/unitares-anima/.ssh/id_ed25519}"
 SSH_OPTS="-i $SSH_KEY -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=4"
 BACKUP_USER="${BACKUP_USER:-cirwel}"
 BACKUP_DIR="${BACKUP_DIR:-backups/lumen}"
@@ -95,6 +97,91 @@ if sqlite_ok "$DB_PATH" && learned_state_ok; then
 fi
 
 log "Database or learned state missing/invalid — locating a complete recovery point"
+
+# Recover from this host's OWN verified snapshots before reaching for another
+# host's. A principal that cannot restore itself without holding a credential
+# into someone else's machine has a shared administrative root, which is the
+# thing the federation model exists to avoid. It is also simply better recovery:
+# the local hourly snapshot is fresher than any pushed mirror and needs no
+# network at boot.
+#
+# Scope is deliberately the DB-only case. The local learned-state generations
+# under backups/state/ do NOT currently carry anima_config.json, so they cannot
+# satisfy learned_state_ok on their own; when learned state is the broken half
+# we fall through to the remote mirror that does carry it. Widening this to
+# learned state requires fixing the state-backup contents first, not loosening
+# the gate here.
+try_local_db_recovery() {
+    learned_state_ok || return 1
+    [ -d "$ANIMA_DIR/backups" ] || return 1
+
+    local candidate stage
+    while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        sqlite_ok "$candidate" || continue
+
+        stage=$(mktemp "$ANIMA_DIR/.auto-restore-local-db.XXXXXX") || return 1
+        if ! cp "$candidate" "$stage"; then
+            rm -f "$stage"
+            continue
+        fi
+        # Same durability discipline as the remote path: the staged file must be
+        # on disk before a rename can make it the live identity.
+        python3 - "$stage" <<'PY_FSYNC'
+import os
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    os.fsync(handle.fileno())
+PY_FSYNC
+
+        rm -f "$ANIMA_DIR/.pre-restore-anima.db"
+        if [ -e "$DB_PATH" ]; then
+            mv "$DB_PATH" "$ANIMA_DIR/.pre-restore-anima.db"
+        fi
+        # The WAL/SHM belong to the DB being replaced; carrying them across
+        # would reapply the damage we are recovering from.
+        rm -f "$DB_PATH-wal" "$DB_PATH-shm"
+        mv "$stage" "$DB_PATH"
+        chmod 600 "$DB_PATH"
+
+        if ! sqlite_ok "$DB_PATH"; then
+            # Put the original back rather than leaving a half-swapped identity;
+            # the next candidate gets a clean attempt.
+            rm -f "$DB_PATH"
+            if [ -e "$ANIMA_DIR/.pre-restore-anima.db" ]; then
+                mv "$ANIMA_DIR/.pre-restore-anima.db" "$DB_PATH"
+            fi
+            continue
+        fi
+
+        python3 - "$ANIMA_DIR" <<'PY_SYNCDIR'
+import os
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+with (root / "anima.db").open("rb") as handle:
+    os.fsync(handle.fileno())
+descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+try:
+    os.fsync(descriptor)
+finally:
+    os.close(descriptor)
+PY_SYNCDIR
+
+        log "Recovered database from local snapshot $(basename "$candidate")"
+        return 0
+    done <<< "$(ls -t "$ANIMA_DIR"/backups/anima_*.db 2>/dev/null || true)"
+
+    return 1
+}
+
+if try_local_db_recovery; then
+    log "Local recovery complete; no cross-host access required"
+    exit 0
+fi
+log "No usable local snapshot — falling back to the backup Mac"
 
 if [ ! -f "$SSH_KEY" ]; then
     continuity_failure "no SSH key at $SSH_KEY"
