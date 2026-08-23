@@ -232,6 +232,38 @@ class TestBeliefPersistence:
 class TestLedCausalEvidenceBoundary:
     """The explanatory LED belief must follow the causal residual, not raw co-motion."""
 
+    def test_led_attribution_requests_throttled_checkpoint(
+        self, model, monkeypatch
+    ):
+        from anima_mcp.self_model import (
+            LIGHT_ATTRIBUTION_CHECKPOINT_SECONDS,
+        )
+
+        attribution = {
+            "model": {
+                "ready": False,
+                "identification_status": "inconclusive",
+                "confidence": 0.5,
+            }
+        }
+        monkeypatch.setattr(
+            model._light_attribution_model,
+            "observe",
+            lambda *args, **kwargs: attribution,
+        )
+        checkpoint_intervals = []
+        monkeypatch.setattr(
+            model,
+            "_maybe_save",
+            lambda min_interval_seconds=10.0: checkpoint_intervals.append(
+                min_interval_seconds
+            ),
+        )
+
+        model.observe_led_lux(0.2, 200.0, observed_at=1_700_000_000.0)
+
+        assert checkpoint_intervals == [LIGHT_ATTRIBUTION_CHECKPOINT_SECONDS]
+
     def test_raw_led_lux_changes_do_not_update_belief(self, model, monkeypatch):
         attribution = {
             "model": {

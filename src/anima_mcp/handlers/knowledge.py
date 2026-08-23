@@ -11,7 +11,12 @@ from mcp.types import TextContent
 from ..eisv import get_trajectory_awareness
 
 
-def _insight_view(insight, growth=None, self_model=None) -> dict:
+def _insight_view(
+    insight,
+    growth=None,
+    self_model=None,
+    light_attribution=None,
+) -> dict:
     """Attach source-specific epistemic labels without rewriting stored history."""
     view = insight.to_dict()
     insight_id = getattr(insight, "id", view.get("id", ""))
@@ -107,22 +112,66 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
         if self_model is not None:
             belief = (getattr(self_model, "beliefs", None) or {}).get(belief_id)
         if belief is not None:
+            # Reflection rows preserve the wording and validation counters that
+            # existed when they were written.  They are useful as an audit, but
+            # they must not masquerade as the current belief after a reset or
+            # evidence migration.  Keep the old projection explicitly nested
+            # and render the live SelfBelief fields at the top level.
+            stored_reflection_audit = {
+                key: view.get(key)
+                for key in (
+                    "description",
+                    "last_validated",
+                    "validation_count",
+                    "contradiction_count",
+                    "strength",
+                )
+                if key in view
+            }
+            stored_reflection_audit.update({
+                "record_role": "historical_projection",
+                "current_state_authority": "none",
+            })
             evidence_supports = int(getattr(belief, "supporting_count", 0) or 0)
             evidence_contradictions = int(
                 getattr(belief, "contradicting_count", 0) or 0
             )
+            live_confidence = float(getattr(belief, "confidence", 0.0))
+            last_tested = getattr(belief, "last_tested", None)
             view.update({
-                "confidence": float(getattr(belief, "confidence", 0.0)),
+                "description": (
+                    f"Testable hypothesis: {getattr(belief, 'description', belief_id)}"
+                ),
+                "confidence": live_confidence,
                 "belief_value": float(getattr(belief, "value", 0.5)),
                 "sample_count": evidence_supports + evidence_contradictions,
                 "supporting_count": evidence_supports,
                 "contradicting_count": evidence_contradictions,
+                "validation_count": evidence_supports,
+                "contradiction_count": evidence_contradictions,
+                "strength": live_confidence,
+                "last_validated": (
+                    last_tested.isoformat()
+                    if isinstance(last_tested, datetime)
+                    else None
+                ),
+                "stored_reflection_audit": stored_reflection_audit,
             })
         if insight_id == "belief_my_leds_affect_lux":
-            stats_getter = getattr(
-                self_model, "get_light_attribution_model_stats", None
-            )
-            stats = stats_getter() if callable(stats_getter) else None
+            stats = None
+            stats_source = None
+            if isinstance(light_attribution, dict):
+                live_model = light_attribution.get("model")
+                if isinstance(live_model, dict):
+                    stats = live_model
+                    stats_source = "broker_shm_live"
+            if stats is None:
+                stats_getter = getattr(
+                    self_model, "get_light_attribution_model_stats", None
+                )
+                stats = stats_getter() if callable(stats_getter) else None
+                if isinstance(stats, dict):
+                    stats_source = "persisted_self_model_snapshot"
             if isinstance(stats, dict):
                 led_causal_model_ready = bool(stats.get("ready"))
                 try:
@@ -130,6 +179,7 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                 except (TypeError, ValueError):
                     causal_confidence = 0.0
                 view["causal_test"] = {
+                    "source": stats_source,
                     "model_kind": stats.get("kind"),
                     "identification_status": stats.get(
                         "identification_status"
@@ -144,6 +194,13 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                     "down_transitions": stats.get("down_transitions"),
                     "unknown_reasons": stats.get("unknown_reasons", []),
                 }
+                view["description"] = (
+                    "Causally supported hypothesis: my own LEDs affect my light "
+                    "sensor readings"
+                    if led_causal_model_ready
+                    else "Hypothesis under causal test: my own LEDs affect my "
+                    "light sensor readings"
+                )
                 view["interpretation"] = (
                     "The raw closed-loop correlation pathway is retired. "
                     f"The causal breathing-pulse test is "
@@ -152,6 +209,10 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                     "only a ready model may reinforce this belief."
                 )
             else:
+                view["description"] = (
+                    "Unverified hypothesis: my own LEDs may affect my light "
+                    "sensor readings"
+                )
                 view["interpretation"] = (
                     "Narrative hypothesis only. The separately gated "
                     "light_attribution residual determines whether self-glow can "
@@ -277,7 +338,7 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
 
 async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
     """Get Lumen's accumulated self-knowledge from pattern analysis."""
-    from ..accessors import _get_growth, _get_store
+    from ..accessors import _get_growth, _get_last_shm_data, _get_store
 
     store = _get_store()
     if store is None:
@@ -314,6 +375,8 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
             self_model = get_self_model()
         except Exception:
             self_model = None
+        shm_data = _get_last_shm_data() or {}
+        light_attribution = shm_data.get("light_attribution")
 
         # The reflection store retains the historical wording/confidence that
         # existed when an insight was written.  `_insight_view` reconciles that
@@ -322,7 +385,15 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
         # Otherwise `insights` can correctly call a claim cold-started while
         # `summary.strongest` still presents its pre-reset confidence as 1.0.
         active_view_pairs = [
-            (insight, _insight_view(insight, growth, self_model))
+            (
+                insight,
+                _insight_view(
+                    insight,
+                    growth,
+                    self_model,
+                    light_attribution,
+                ),
+            )
             for insight in active_insights
         ]
         active_views_by_id = {
@@ -335,7 +406,12 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
             view = active_views_by_id.get(insight_id)
             if view is not None:
                 return view
-            return _insight_view(insight, growth, self_model)
+            return _insight_view(
+                insight,
+                growth,
+                self_model,
+                light_attribution,
+            )
 
         summary = reflection_system.get_self_knowledge_summary()
         if isinstance(summary, dict):
@@ -824,21 +900,20 @@ async def handle_query(arguments: dict) -> list[TextContent]:
         # Add self-knowledge when cognitive/insights
         if query_type in ("cognitive", "insights", "self"):
             try:
-                from ..self_reflection import get_reflection_system
                 store = _get_store()
                 if store:
-                    reflection = get_reflection_system(db_path=str(store.db_path))
-                    result["self_knowledge"] = reflection.get_self_knowledge_summary()
-                    try:
-                        from ..self_model import get_self_model
-
-                        self_model = get_self_model()
-                    except Exception:
-                        self_model = None
-                    result["reflection_insights"] = [
-                        _insight_view(i, _get_growth(), self_model)
-                        for i in reflection.get_insights()[:limit]
-                    ]
+                    # Reuse the evidence-reconciled view so the semantic query
+                    # pipe cannot resurrect stale reflection wording or an old
+                    # persisted causal snapshot that `/self-knowledge` already
+                    # superseded with live broker state.
+                    knowledge_content = await handle_get_self_knowledge({
+                        "limit": limit,
+                    })
+                    knowledge_payload = json.loads(knowledge_content[0].text)
+                    result["self_knowledge"] = knowledge_payload.get("summary")
+                    result["reflection_insights"] = knowledge_payload.get(
+                        "insights", []
+                    )
                     result["self_knowledge_epistemic_note"] = (
                         "Q&A-derived reflection rows are historical claims, "
                         "not current-state evidence."

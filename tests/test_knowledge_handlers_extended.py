@@ -123,8 +123,76 @@ class TestGetSelfKnowledgeExtended:
 
         assert view["actionability"] == "review"
         assert view["causal_test"]["ready"] is False
+        assert view["causal_test"]["source"] == "persisted_self_model_snapshot"
+        assert view["description"].startswith("Hypothesis under causal test:")
+        assert view["validation_count"] == 20
+        assert view["stored_reflection_audit"]["validation_count"] == 100
+        assert (
+            view["stored_reflection_audit"]["current_state_authority"]
+            == "none"
+        )
         assert "closed-loop correlation pathway is retired" in view["interpretation"]
         assert "has not established" in view["review_reason"]
+
+    async def test_led_belief_prefers_live_broker_causal_model(self):
+        from anima_mcp.handlers.knowledge import _insight_view
+
+        insight = SimpleNamespace(
+            id="belief_my_leds_affect_lux",
+            to_dict=lambda: {
+                "id": "belief_my_leds_affect_lux",
+                "description": "I am confident my own LEDs affect lux",
+                "confidence": 0.99,
+                "sample_count": 100,
+                "validation_count": 100,
+                "contradiction_count": 0,
+            },
+        )
+        belief = SimpleNamespace(
+            description="My own LEDs affect my light sensor readings",
+            confidence=0.5,
+            value=0.5,
+            supporting_count=0,
+            contradicting_count=0,
+            last_tested=None,
+        )
+        self_model = SimpleNamespace(
+            beliefs={"my_leds_affect_lux": belief},
+            get_light_attribution_model_stats=lambda: {
+                "kind": "causal-v3",
+                "identification_status": "collecting",
+                "ready": False,
+                "confidence": 0.2,
+                "transition_count": 5,
+            },
+        )
+        live_light_attribution = {
+            "model": {
+                "kind": "causal-v3",
+                "identification_status": "inconclusive",
+                "ready": False,
+                "confidence": 0.77,
+                "transition_count": 120,
+                "latest_transition_at_unix": 1_787_528_400.0,
+                "up_transitions": 60,
+                "down_transitions": 60,
+                "unknown_reasons": ["breathing_response_is_inconsistent"],
+            }
+        }
+
+        view = _insight_view(
+            insight,
+            self_model=self_model,
+            light_attribution=live_light_attribution,
+        )
+
+        assert view["causal_test"]["source"] == "broker_shm_live"
+        assert view["causal_test"]["confidence"] == 0.77
+        assert view["causal_test"]["transition_count"] == 120
+        assert view["description"] == (
+            "Hypothesis under causal test: my own LEDs affect my light "
+            "sensor readings"
+        )
 
     async def test_summary_uses_live_views_and_ranks_review_claims_last(self):
         from anima_mcp.handlers.knowledge import handle_get_self_knowledge
