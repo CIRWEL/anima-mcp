@@ -194,6 +194,19 @@ class TestZeroVarianceGuard:
         assert pattern is not None
         assert "clarity" in pattern.outcome
 
+    def test_negative_difference_stays_anchored_to_high_sensor_bucket(self, srs):
+        # Clarity rises over time while the sensor falls, so high sensor values
+        # correspond to the lower-clarity bucket.
+        rows = self._rows(srs, lambda i: 0.0 if i >= 15 else 1.0)
+        pattern = srs._analyze_sensor_correlation(
+            rows, "interaction_level", "Interaction"
+        )
+
+        assert pattern is not None
+        assert pattern.condition == "high interaction"
+        assert pattern.outcome == "lower clarity"
+        assert pattern.avg_clarity == pytest.approx(0.5)
+
 
 class TestSignAwareVerification:
     def _seed_positive_light_clarity(self, srs):

@@ -216,3 +216,14 @@ class TestSelfReflectionInteraction:
         desc = sys._pattern_to_description(low_pattern)
         assert "alone" in desc
         assert "stability" in desc
+
+        lower_pattern = StatePattern(
+            condition="high humidity",
+            outcome="lower stability",
+            correlation=-0.12,
+            sample_count=50,
+            avg_warmth=0.5, avg_clarity=0.5,
+            avg_stability=0.4, avg_presence=0.4,
+        )
+        desc = sys._pattern_to_description(lower_pattern)
+        assert desc == "I feel less stability when it's humid"

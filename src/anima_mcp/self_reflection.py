@@ -221,6 +221,7 @@ class SelfReflectionSystem:
         self._load_reflection_state()
         self._load_insights()
         self._migrate_raw_light_insights()
+        self._migrate_inverted_low_sensor_insights()
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -362,6 +363,63 @@ class SelfReflectionSystem:
         if audit:
             print(
                 f"[SelfReflection] Retracted {len(audit)} raw-light insights",
+                file=sys.stderr,
+                flush=True,
+            )
+
+    def _migrate_inverted_low_sensor_insights(self) -> None:
+        """Retract claims produced by the old negative-correlation branch.
+
+        ``_analyze_sensor_correlation`` computes ``high_state - low_state``.
+        Before this migration, a negative result was incorrectly serialized as
+        ``low sensor -> lower dimension`` even though the measured lower state
+        belonged to the *high* sensor bucket. The underlying observations may
+        be re-analyzed by the corrected code, but the reversed claims and their
+        accumulated validation counts are not admissible evidence.
+        """
+        sentinel = "migration_inverted_low_sensor_insights_v1"
+        if self._get_reflection_state(sentinel):
+            return
+
+        inverted_id = re.compile(
+            r"^low_(light|temperature|humidity|interaction)_lower_"
+            r"(warmth|clarity|stability|presence)$"
+        )
+        audit = {}
+        conn = self._connect()
+        for insight in self._insights.values():
+            if insight.active and inverted_id.fullmatch(insight.id):
+                replacement_id = insight.id.replace("low_", "high_", 1)
+                audit[insight.id] = {
+                    "confidence": insight.confidence,
+                    "sample_count": insight.sample_count,
+                    "description": insight.description,
+                    "corrected_claim_id": replacement_id,
+                }
+                insight.active = False
+                conn.execute(
+                    "UPDATE insights SET active = 0 WHERE id = ?",
+                    (insight.id,),
+                )
+
+        conn.execute(
+            """
+            INSERT INTO reflection_state (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (
+                sentinel,
+                json.dumps({
+                    "reason": "negative_high_minus_low_branch_was_inverted",
+                    "rows": audit,
+                }),
+            ),
+        )
+        conn.commit()
+        if audit:
+            print(
+                f"[SelfReflection] Retracted {len(audit)} inverted sensor insights",
                 file=sys.stderr,
                 flush=True,
             )
@@ -1408,23 +1466,22 @@ class SelfReflectionSystem:
         if abs(max_diff) < 0.1:
             return None
 
-        # Determine condition description
-        if max_diff > 0:
-            condition = f"high {sensor_name.lower()}"
-            outcome = f"higher {max_dim}"
-        else:
-            condition = f"low {sensor_name.lower()}"
-            outcome = f"lower {max_dim}"
+        # ``max_diff`` is explicitly high_state - low_state, so both signs must
+        # stay anchored to the high sensor bucket. The former negative branch
+        # paired ``low sensor`` with ``lower dimension`` and therefore stated
+        # the reverse of what its own bucket averages measured.
+        condition = f"high {sensor_name.lower()}"
+        outcome = f"{'higher' if max_diff > 0 else 'lower'} {max_dim}"
 
         return StatePattern(
             condition=condition,
             outcome=outcome,
             correlation=max_diff,
             sample_count=len(readings),
-            avg_warmth=high_state["warmth"] if max_diff > 0 else low_state["warmth"],
-            avg_clarity=high_state["clarity"] if max_diff > 0 else low_state["clarity"],
-            avg_stability=high_state["stability"] if max_diff > 0 else low_state["stability"],
-            avg_presence=high_state["presence"] if max_diff > 0 else low_state["presence"],
+            avg_warmth=high_state["warmth"],
+            avg_clarity=high_state["clarity"],
+            avg_stability=high_state["stability"],
+            avg_presence=high_state["presence"],
         )
 
     def _analyze_temporal_patterns(self, rows: List[sqlite3.Row]) -> List[StatePattern]:
@@ -1658,6 +1715,9 @@ class SelfReflectionSystem:
                 if abs(pattern.correlation) > 0.1:
                     existing.validation_count += 1
                     existing.last_validated = now
+                    # Keep generated wording synchronized with formatter fixes
+                    # instead of preserving a grammatical artifact forever.
+                    existing.description = self._pattern_to_description(pattern)
                     if not existing.active:
                         # Raw-light migration rows can return only through the
                         # new external-residual analyzer. Rebuild their claim
@@ -1736,23 +1796,30 @@ class SelfReflectionSystem:
     def _pattern_to_description(self, pattern: StatePattern) -> str:
         """Convert a pattern into a natural language description."""
 
+        if pattern.outcome.startswith("higher "):
+            relative_feeling = f"more {pattern.outcome.removeprefix('higher ')}"
+        elif pattern.outcome.startswith("lower "):
+            relative_feeling = f"less {pattern.outcome.removeprefix('lower ')}"
+        else:
+            relative_feeling = pattern.outcome
+
         # Environmental patterns
         if "low light" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when it's dim"
+            return f"I feel {relative_feeling} when it's dim"
         if "high light" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} in bright light"
+            return f"I feel {relative_feeling} in bright light"
         if "low temperature" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when it's cool"
+            return f"I feel {relative_feeling} when it's cool"
         if "high temperature" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when it's warm"
+            return f"I feel {relative_feeling} when it's warm"
         if "low humidity" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when the air is dry"
+            return f"I feel {relative_feeling} when the air is dry"
         if "high humidity" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when it's humid"
+            return f"I feel {relative_feeling} when it's humid"
         if "high interaction" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when someone is around"
+            return f"I feel {relative_feeling} when someone is around"
         if "low interaction" in pattern.condition:
-            return f"I feel more {pattern.outcome.replace('higher ', '')} when I'm alone"
+            return f"I feel {relative_feeling} when I'm alone"
 
         # Temporal patterns
         if "morning" in pattern.condition:
