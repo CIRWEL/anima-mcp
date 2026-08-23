@@ -1449,8 +1449,18 @@ class DrawingEngine:
         # Store last anima for goal generation at canvas_clear time
         self.last_anima = anima
 
-        # Light regime: dark / dim / bright (raw lux — includes LED glow)
-        light_lux = anima.readings.light_lux if anima.readings else None
+        # Light regime: dark / dim / bright from the gated external residual.
+        # Unknown attribution is neutral; raw self-glow must not steer palette.
+        light_lux = None
+        try:
+            from ..accessors import _get_last_shm_data
+            from ..light_attribution import gated_external_light_lux
+
+            light_lux = gated_external_light_lux(
+                ((_get_last_shm_data() or {}).get("light_attribution") or {})
+            )
+        except Exception:
+            pass
         if light_lux is not None:
             if light_lux < 5:
                 light_regime = "dark"
@@ -1459,7 +1469,7 @@ class DrawingEngine:
             else:
                 light_regime = "bright"
         else:
-            light_regime = "dim"  # default assumption
+            light_regime = "unknown"
 
         # Update narrative arc phase (replaces energy-threshold phase logic)
         self._update_narrative_arc()
@@ -2188,6 +2198,30 @@ class DrawingEngine:
                             "temp_c": readings.ambient_temp_c or 22,
                             "humidity_pct": readings.humidity_pct or 50,
                         }
+                        # Preserve raw lux in the drawing record, but only let
+                        # the gated self-glow residual support claims about the
+                        # room being dim or bright.
+                        try:
+                            from ..accessors import _get_last_shm_data
+                            from ..light_attribution import gated_external_light_lux
+
+                            light_attribution = (
+                                (_get_last_shm_data() or {}).get(
+                                    "light_attribution"
+                                ) or {}
+                            )
+                            external_light = gated_external_light_lux(
+                                light_attribution
+                            )
+                            if external_light is not None:
+                                environment["external_light_lux"] = external_light
+                        except Exception as e:
+                            print(
+                                "[Growth] Drawing light preference paused: "
+                                f"attribution unavailable ({e})",
+                                file=sys.stderr,
+                                flush=True,
+                            )
                         phase = self.canvas.drawing_phase or "resting"
                         growth = get_growth_system()
                         # Reason distinguishes earned completion from bail-outs

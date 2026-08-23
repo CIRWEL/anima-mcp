@@ -6,11 +6,28 @@ import pytest
 from anima_mcp.light_attribution import (
     LED_PROPRIOCEPTION_SCHEMA,
     LearnedLedLuxResidual,
+    gated_external_light_lux,
     led_optical_drive,
     publish_led_proprioception,
     read_led_proprioception,
 )
 from anima_mcp.self_model import SelfModel
+
+
+def test_gated_external_light_lux_has_one_admission_rule():
+    assert gated_external_light_lux(None) is None
+    assert gated_external_light_lux({
+        "status": "warming",
+        "external_lux_residual": 12.0,
+    }) is None
+    assert gated_external_light_lux({
+        "status": "ready_shadow",
+        "external_lux_residual": float("nan"),
+    }) is None
+    assert gated_external_light_lux({
+        "status": "ready_shadow",
+        "external_lux_residual": 12.0,
+    }) == 12.0
 
 
 def led_state(drive: float) -> dict:
@@ -162,8 +179,9 @@ def test_residual_is_unknown_while_model_is_cold():
     assert result["self_glow_estimate_lux"] is None
     assert result["external_lux_residual"] is None
     assert result["raw_lux"] == 110.0
-    assert result["clarity_input"] == "raw_lux"
+    assert result["clarity_input"] is None
     assert result["used_by_clarity"] is False
+    assert result["used_by_environment_preferences"] is False
 
 
 def test_bidirectional_breathing_differences_unlock_shadow_residual():
@@ -176,7 +194,7 @@ def test_bidirectional_breathing_differences_unlock_shadow_residual():
     )
 
     assert result["status"] == "ready_shadow"
-    assert result["authority"] == "telemetry_only"
+    assert result["authority"] == "gated_secondary_signal"
     assert result["model"]["instrument"] == "internal_led_breathing_pulse"
     assert result["model"]["instrument_sample_count"] == 24
     assert result["model"]["up_transitions"] == 12
@@ -185,6 +203,10 @@ def test_bidirectional_breathing_differences_unlock_shadow_residual():
     assert result["estimate_confidence"] >= result["model"]["confidence_gate"]
     assert result["self_glow_estimate_lux"] == pytest.approx(500.0 * filtered_drive)
     assert result["external_lux_residual"] == pytest.approx(ambient_lux)
+    assert result["used_by_clarity"] is True
+    assert result["clarity_input"] == "external_lux_residual"
+    assert result["used_by_environment_preferences"] is True
+    assert result["environment_preference_input"] == "external_lux_residual"
 
 
 def test_ready_model_reports_conflict_instead_of_clamping():
@@ -340,7 +362,7 @@ def _persisted_sign_sequence(signs):
 
 def test_sign_readiness_uses_confidence_bound_and_hysteresis():
     # 26/37 clears the raw 70% point threshold, but the 95% Wilson lower
-    # bound is only ~0.542 and must not activate the shadow residual.
+    # bound is only ~0.542 and must not activate the gated residual.
     borderline = [True, True, False] * 8 + [False, False, False] + [True] * 10
     model = LearnedLedLuxResidual(_persisted_sign_sequence(borderline))
 
@@ -499,7 +521,7 @@ def test_led_display_proprioception_includes_post_scaling_colors():
     assert led_optical_drive(state) == pytest.approx(0.04 * 64 / (3 * 255))
 
 
-def test_operator_surfaces_name_shadow_semantics():
+def test_operator_surfaces_name_gated_efference_semantics():
     from anima_mcp.tool_registry import TOOLS
 
     context_tool = next(tool for tool in TOOLS if tool.name == "get_lumen_context")
@@ -509,5 +531,6 @@ def test_operator_surfaces_name_shadow_semantics():
     dashboard = (Path(__file__).parents[1] / "docs" / "control_center.html").read_text(
         encoding="utf-8"
     )
-    assert "LED efference shadow" in dashboard
-    assert "clarity uses raw lux" in dashboard
+    assert "LED efference copy" in dashboard
+    assert "clarity uses gated residual" in dashboard
+    assert "clarity light contribution paused" in dashboard

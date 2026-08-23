@@ -142,10 +142,11 @@ class GoalsMixin:
             elif "understand why" in goal.description.lower():
                 for pref in self._preferences.values():
                     if pref.description.lower() in goal.description.lower():
-                        if pref.confidence > 0.9 and pref.observation_count > 100:
+                        evidence_count = pref.independent_evidence_count
+                        if pref.confidence > 0.9 and evidence_count > 100:
                             msg = self.update_goal_progress(
                                 goal.goal_id, 1.0,
-                                milestone=f"observed {pref.observation_count} times")
+                                milestone=f"supported across {evidence_count} evidence windows")
                             if msg:
                                 messages.append(msg)
                         break
@@ -193,10 +194,11 @@ class GoalsMixin:
 
         # 1. Preference-driven: strong preferences create curiosity about why
         for pref in self._preferences.values():
-            if pref.confidence > 0.7 and pref.value > 0.5 and pref.observation_count > 50:
+            evidence_count = pref.independent_evidence_count
+            if pref.confidence > 0.7 and pref.value > 0.5 and evidence_count > 50:
                 suggestions.append((
                     f"understand why {pref.description.lower()}",
-                    f"i've noticed this {pref.observation_count} times",
+                    f"i've seen this across {evidence_count} evidence windows",
                     14,
                 ))
 

@@ -25,7 +25,7 @@ from .atomic_write import atomic_json_write
 # === Retired LED Self-Glow Calibration Reference ===
 # The VEML7700 light sensor sits next to the DotStar LEDs.
 # This fixed quadratic is retained only so old calibration reports remain
-# interpretable. Runtime sensing does not call it; the learned shadow model in
+# interpretable. Runtime sensing does not call it; the learned gated model in
 # light_attribution.py must not use this coefficient as evidence or a prior.
 #
 # Empirically calibrated 2026-02-18 via manage_display(action="calibrate_leds"):
@@ -116,11 +116,10 @@ class NervousSystemCalibration:
         "prediction_accuracy": 0.625,  # How well I predict my own state = internal seeing
         "neural": 0.0,
         "sensor_coverage": 0.1875,     # Data richness
-        "world_light": 0.1875,         # Raw lux — INCLUDES Lumen's own LED glow
-                                       # (subtraction removed in 0cbf0dc; the
-                                       # learned-self-glow residual is #79's
-                                       # open LED/lux item, do not re-add the
-                                       # hardcoded quadratic)
+        "world_light": 0.1875,         # Gated external-lux residual. Raw lux
+                                       # stays physical telemetry; this term is
+                                       # omitted until attribution is ready.
+                                       # Never restore the fixed quadratic.
     })
     
     stability_weights: Dict[str, float] = field(default_factory=lambda: {

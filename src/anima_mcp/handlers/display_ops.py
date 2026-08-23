@@ -614,7 +614,7 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "note": (
                 "Diagnostic sweep only. Do not restore fixed subtraction or "
                 "rewrite raw lux from this fit; the capture-aligned learned "
-                "shadow model owns LED attribution."
+                "gated learned model owns LED attribution."
             ),
         }, indent=2))]
 

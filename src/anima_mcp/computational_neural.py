@@ -1,14 +1,16 @@
 """
-Computational Neural Signals - Measuring Lumen's Own "Brain".
+Computational Dynamics - Normalized Views of Lumen's Pi Substrate.
 
-Instead of measuring a human brain with EEG, we measure the Pi's computational state:
+These are normalized views of the Pi's computational state, not EEG:
 - CPU activity → Beta (sustained processing)
-- Context switches + interrupts → Gamma (spiking/bursting activity)
-- I/O wait time → Theta (integration/waiting-for-data)
-- CPU idle fraction → Alpha (inverse beta, relaxed cortical state)
+- Context switches + interrupts → Gamma (scheduler activity)
+- Disk + network activity → Theta (I/O load)
+- CPU idle fraction → Alpha (exactly 1 - beta; not an independent input)
 - CPU variance + temp stability → Delta (deep system stability)
 
-This is computational proprioception - Lumen sensing its own computational "brain".
+This is computational proprioception. The Greek labels are visualization
+metaphors retained for continuity; they do not imply neural frequencies or a
+biological measurement.
 """
 
 import psutil
@@ -18,25 +20,78 @@ from typing import Optional
 from collections import deque
 
 
+COMPUTATIONAL_NEURAL_PROVENANCE = {
+    "schema": "anima.computational_dynamics.v1",
+    "label": "Computational Dynamics",
+    "kind": "computational_proprioception",
+    "physical_eeg": False,
+    "normalized_views": 5,
+    "independent_views": 4,
+    "memory_is_input": False,
+    "caveat": (
+        "Greek band names are display metaphors, not measured frequencies; "
+        "alpha is the exact complement of beta."
+    ),
+    "bands": {
+        "delta": {
+            "source": "CPU range over the last 10 samples + temperature deviation",
+            "formula": "0.7 × CPU stability + 0.3 × thermal stability",
+            "independent": True,
+        },
+        "theta": {
+            "source": "disk busy time + network throughput",
+            "formula": "0.7 × max(disk, network) + 0.3 × min(disk, network), then EMA",
+            "independent": True,
+        },
+        "alpha": {
+            "source": "derived from beta",
+            "formula": "1 − beta",
+            "independent": False,
+        },
+        "beta": {
+            "source": "CPU utilization",
+            "formula": "cpu_percent ÷ 100",
+            "independent": True,
+        },
+        "gamma": {
+            "source": "context-switch and interrupt rates",
+            "formula": "0.6 × ctx rate + 0.4 × interrupt rate, normalized then EMA",
+            "independent": True,
+        },
+    },
+}
+
+
+def computational_neural_provenance() -> dict:
+    """Return the stable, JSON-safe derivation contract for these displays."""
+    return {
+        **COMPUTATIONAL_NEURAL_PROVENANCE,
+        "bands": {
+            name: dict(metadata)
+            for name, metadata in COMPUTATIONAL_NEURAL_PROVENANCE["bands"].items()
+        },
+    }
+
+
 @dataclass
 class ComputationalNeuralState:
-    """Neural-like signals derived from Pi's computational state."""
+    """Normalized views derived from Pi computational state."""
     delta: float   # 0-1: CPU variance stability + temp stability
     theta: float   # 0-1: I/O wait (integration - CPU blocked waiting for data)
     alpha: float   # 0-1: CPU idle fraction (inverse beta)
     beta: float    # 0-1: Active processing (CPU usage)
-    gamma: float   # 0-1: Spiking activity (context switches + interrupts)
+    gamma: float   # 0-1: Scheduler activity (context switches + interrupts)
 
 
 class ComputationalNeuralSensor:
     """
-    Derives neural-like frequency bands from Pi's computational state.
+    Derives normalized, Greek-labelled views from Pi computational state.
 
-    Each band has a distinct, independent source:
+    Four views have independently measured sources; alpha is derived:
     - Beta: CPU % (sustained processing load)
-    - Gamma: Context switches + interrupts per second (burst/spiking activity)
-    - Alpha: 1 - beta (CPU idle fraction, inversely correlated like real EEG)
-    - Theta: I/O wait time (integration - CPU blocked waiting for data)
+    - Gamma: Context switches + interrupts per second (scheduler activity)
+    - Alpha: 1 - beta (CPU idle fraction; exactly dependent on beta)
+    - Theta: Disk + network activity (I/O load)
     - Delta: CPU variance over history window + temperature stability
     """
 
@@ -64,19 +119,22 @@ class ComputationalNeuralSensor:
 
         Args:
             cpu_percent: Current CPU usage (0-100)
-            memory_percent: Current memory usage (0-100)
+            memory_percent: Deprecated compatibility input; deliberately ignored
             cpu_temp: CPU temperature (Celsius)
 
         Returns:
-            ComputationalNeuralState with frequency bands
+            ComputationalNeuralState with normalized computational views
         """
         now = time.monotonic()
 
         # Get current metrics
         if cpu_percent is None:
             cpu_percent = psutil.cpu_percent(interval=None)
-        if memory_percent is None:
-            memory_percent = psutil.virtual_memory().percent
+        # RAM pressure is reported as its own system metric. It used to be
+        # accepted here without affecting any band, which made the mapping API
+        # imply a relationship that did not exist. Keep the keyword for caller
+        # compatibility, but make the non-use part of the public provenance.
+        _ = memory_percent
 
         # Update history
         self._cpu_history.append(cpu_percent)
@@ -90,10 +148,10 @@ class ComputationalNeuralSensor:
         # === BETA: Sustained CPU processing (0-100% → 0-1) ===
         beta = min(1.0, cpu_percent / 100.0)
 
-        # === GAMMA: Spiking activity (context switches + interrupts per second) ===
-        # Context switches = how often the CPU jumps between tasks (burst behavior)
+        # === GAMMA: Scheduler activity (context switches + interrupts per second) ===
+        # Context switches = how often the CPU jumps between tasks
         # Interrupts = hardware/software signals demanding attention
-        # Together they measure "spiking" — qualitatively different from sustained CPU load
+        # Together they form a scheduler-load view distinct from sustained CPU use.
         gamma = 0.0
         try:
             cpu_stats = psutil.cpu_stats()
@@ -113,13 +171,12 @@ class ComputationalNeuralSensor:
             # Fallback: no stats available
             gamma = beta * 0.5  # degrade gracefully
 
-        # === ALPHA: CPU idle fraction (inverse beta, like real EEG alpha/beta) ===
+        # === ALPHA: CPU idle fraction (exact inverse of beta) ===
         alpha = 1.0 - beta
 
-        # === THETA: I/O integration (disk + network activity) ===
-        # In neuroscience, theta reflects integration - the brain waiting for and processing
-        # incoming data. On the Pi, this maps to disk I/O (SHM writes, DB, logs) and
-        # network I/O (HTTP requests, UNITARES governance calls, Groq API).
+        # === THETA: Disk + network activity ===
+        # This is an I/O-load view (SHM writes, DB/log traffic, HTTP and
+        # governance calls), not a measurement of cognitive integration.
         theta = 0.0
         try:
             disk_io = psutil.disk_io_counters()

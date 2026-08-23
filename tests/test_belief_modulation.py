@@ -1,11 +1,18 @@
-"""Tests for generalized belief-based sensor-to-anima edge modulation."""
+"""Tests that computational wiring and learned hypotheses stay distinct."""
 
 from unittest.mock import MagicMock
 from anima_mcp.self_schema import (
     extract_self_schema,
-    BELIEF_EDGE_MODULATIONS,
-    BELIEF_SENSITIVITY_MODULATIONS,
+    BELIEF_SENSOR_ANIMA_HYPOTHESES,
+    BELIEF_SENSOR_RELATIONS,
+    BELIEF_SENSOR_SENSITIVITY_RELATIONS,
 )
+
+
+READY_EXTERNAL_LIGHT = {
+    "status": "ready_shadow",
+    "external_lux_residual": 125.0,
+}
 
 
 def _make_self_model(**belief_overrides):
@@ -34,14 +41,14 @@ def _make_self_model(**belief_overrides):
 
 
 class TestDeclarativeMapsExist:
-    def test_edge_modulations_has_expected_keys(self):
-        assert "temp_clarity_correlation" in BELIEF_EDGE_MODULATIONS
-        assert "light_warmth_correlation" in BELIEF_EDGE_MODULATIONS
-        assert "my_leds_affect_lux" in BELIEF_EDGE_MODULATIONS
+    def test_anima_hypotheses_have_expected_keys(self):
+        assert "temp_clarity_correlation" in BELIEF_SENSOR_ANIMA_HYPOTHESES
+        assert "light_warmth_correlation" in BELIEF_SENSOR_ANIMA_HYPOTHESES
+        assert "my_leds_affect_lux" in BELIEF_SENSOR_RELATIONS
 
-    def test_sensitivity_modulations_has_expected_keys(self):
-        assert "temp_sensitive" in BELIEF_SENSITIVITY_MODULATIONS
-        assert "light_sensitive" in BELIEF_SENSITIVITY_MODULATIONS
+    def test_sensitivity_relations_have_expected_keys(self):
+        assert "temp_sensitive" in BELIEF_SENSOR_SENSITIVITY_RELATIONS
+        assert "light_sensitive" in BELIEF_SENSOR_SENSITIVITY_RELATIONS
 
     def test_non_correlation_beliefs_not_in_maps(self):
         excluded = [
@@ -49,49 +56,77 @@ class TestDeclarativeMapsExist:
             "evening_warmth_increase", "morning_clarity", "question_asking_tendency",
         ]
         for key in excluded:
-            assert key not in BELIEF_EDGE_MODULATIONS
-            assert key not in BELIEF_SENSITIVITY_MODULATIONS
+            assert key not in BELIEF_SENSOR_ANIMA_HYPOTHESES
+            assert key not in BELIEF_SENSOR_SENSITIVITY_RELATIONS
 
 
-class TestCorrelationBeliefModulation:
-    def test_temp_clarity_positive_creates_positive_edge(self):
-        """temp_clarity_correlation value > 0.5 creates positive sensor_temp->anima_clarity."""
+class TestCorrelationBeliefSemantics:
+    def test_temp_clarity_is_hypothesis_not_computational_edge(self):
         model = _make_self_model(temp_clarity_correlation={
             "confidence": 0.8, "value": 0.9, "strength": "confident", "evidence": "15+ / 2-",
         })
         schema = extract_self_schema(self_model=model)
-        edges = [e for e in schema.edges
-                 if e.source_id == "sensor_temp" and e.target_id == "anima_clarity"]
-        assert len(edges) == 1
-        assert edges[0].weight > 0
+        assert not any(
+            e.source_id == "sensor_temp"
+            and e.target_id == "anima_clarity"
+            and e.relation == "computational_influence"
+            for e in schema.edges
+        )
+        assert any(
+            e.source_id == "belief_temp_clarity_correlation"
+            and e.target_id == "anima_clarity"
+            and e.relation == "belief_about"
+            for e in schema.edges
+        )
 
-    def test_light_warmth_negative_creates_negative_edge(self):
-        """light_warmth_correlation value < 0.5 creates negative sensor_light->anima_warmth."""
+    def test_light_warmth_negative_is_typed_hypothesis(self):
         model = _make_self_model(light_warmth_correlation={
             "confidence": 0.8, "value": 0.1, "strength": "confident", "evidence": "15+ / 2-",
         })
-        schema = extract_self_schema(self_model=model)
-        edges = [e for e in schema.edges
-                 if e.source_id == "sensor_light" and e.target_id == "anima_warmth"]
+        schema = extract_self_schema(
+            self_model=model,
+            light_attribution=READY_EXTERNAL_LIGHT,
+        )
+        assert not any(
+            e.source_id == "sensor_external_light"
+            and e.target_id == "anima_warmth"
+            and e.relation == "computational_influence"
+            for e in schema.edges
+        )
+        edges = [
+            e for e in schema.edges
+            if e.source_id == "belief_light_warmth_correlation"
+            and e.target_id == "anima_warmth"
+            and e.relation == "belief_about"
+        ]
         assert len(edges) == 1
         assert edges[0].weight < 0
 
-    def test_my_leds_modulates_light_to_presence(self):
-        """my_leds_affect_lux modulates sensor_light->anima_presence edge."""
+    def test_my_leds_is_semantic_relation_not_raw_lux_influence(self):
+        """LED→lux evidence must not become raw-lux→presence wiring."""
         model = _make_self_model(my_leds_affect_lux={
             "confidence": 0.9, "value": 0.8, "strength": "confident", "evidence": "100+ / 3-",
         })
         schema = extract_self_schema(self_model=model)
-        edges = [e for e in schema.edges
-                 if e.source_id == "sensor_light" and e.target_id == "anima_presence"]
-        assert len(edges) == 1
-        # value 0.8 -> learned = (0.8-0.5)*2 = 0.6, weight = 0.6 * 0.4 = 0.24
-        assert abs(edges[0].weight - 0.24) < 0.05
+        assert not any(
+            e.source_id == "sensor_light" and e.target_id == "anima_presence"
+            for e in schema.edges
+        )
+        assert any(
+            e.source_id == "sensor_light"
+            and e.target_id == "belief_my_leds_affect_lux"
+            and e.relation == "evidence_source"
+            for e in schema.edges
+        )
+        assert not any(
+            e.target_id == "anima_presence"
+            and e.source_id in {"sensor_light", "belief_my_leds_affect_lux"}
+            for e in schema.edges
+        )
 
 
-class TestSensitivityBeliefModulation:
-    def test_temp_sensitive_high_amplifies_temp_edges(self):
-        """High temp_sensitive (>0.5) amplifies sensor_temp->anima_warmth edge."""
+class TestSensitivityBeliefSemantics:
+    def test_temp_sensitive_does_not_rewrite_computational_edge(self):
         model_high = _make_self_model(temp_sensitive={
             "confidence": 0.8, "value": 0.9, "strength": "confident", "evidence": "20+ / 3-",
         })
@@ -108,16 +143,10 @@ class TestSensitivityBeliefModulation:
 
         w_high = _get_temp_warmth_weight(schema_high)
         w_neutral = _get_temp_warmth_weight(schema_neutral)
-        # High sensitivity (0.9) -> multiplier 1.4, neutral (0.5) -> 1.0
-        assert abs(w_high) > abs(w_neutral)
+        assert w_high == w_neutral
 
-    def test_light_sensitive_low_dampens_light_edges(self):
-        """Low light_sensitive (<0.5) dampens sensor_light->anima_warmth edge.
-
-        We set light_warmth_correlation to a non-neutral value to ensure a light
-        edge exists, then verify sensitivity dampens its magnitude.
-        """
-        # Both have the same light_warmth_correlation, only sensitivity differs
+    def test_raw_light_sensitivity_does_not_modulate_external_light_edge(self):
+        """Raw-sensor surprise and external-light effects are distinct wires."""
         model_low = _make_self_model(
             light_sensitive={"confidence": 0.8, "value": 0.2, "strength": "confident", "evidence": "20+ / 3-"},
             light_warmth_correlation={"confidence": 0.8, "value": 0.8, "strength": "confident", "evidence": "15+ / 2-"},
@@ -126,18 +155,23 @@ class TestSensitivityBeliefModulation:
             light_sensitive={"confidence": 0.8, "value": 0.5, "strength": "confident", "evidence": "20+ / 3-"},
             light_warmth_correlation={"confidence": 0.8, "value": 0.8, "strength": "confident", "evidence": "15+ / 2-"},
         )
-        schema_low = extract_self_schema(self_model=model_low)
-        schema_neutral = extract_self_schema(self_model=model_neutral)
+        schema_low = extract_self_schema(
+            self_model=model_low,
+            light_attribution=READY_EXTERNAL_LIGHT,
+        )
+        schema_neutral = extract_self_schema(
+            self_model=model_neutral,
+            light_attribution=READY_EXTERNAL_LIGHT,
+        )
 
         def _get_light_warmth_weight(schema):
             edges = [e for e in schema.edges
-                     if e.source_id == "sensor_light" and e.target_id == "anima_warmth"]
+                     if e.source_id == "sensor_external_light" and e.target_id == "anima_warmth"]
             return edges[0].weight if edges else 0.0
 
         w_low = _get_light_warmth_weight(schema_low)
         w_neutral = _get_light_warmth_weight(schema_neutral)
-        # Low sensitivity (0.2) -> multiplier 0.7, neutral (0.5) -> 1.0
-        assert abs(w_low) < abs(w_neutral)
+        assert w_low == w_neutral
 
 
 class TestNonCorrelationBeliefsUnchanged:
@@ -150,3 +184,4 @@ class TestNonCorrelationBeliefsUnchanged:
         edges = [e for e in schema.edges if e.source_id == "belief_stability_recovery"]
         assert len(edges) == 1
         assert edges[0].target_id == "anima_stability"
+        assert edges[0].relation == "belief_about"

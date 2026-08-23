@@ -40,6 +40,45 @@ class TestGrowthPreferences:
         summary = growth.get_growth_summary()
         assert isinstance(summary["preferences"], dict)
 
+    def test_raw_lux_cannot_create_environmental_light_preference(self, growth):
+        anima = {"warmth": 0.9, "clarity": 0.9, "stability": 0.9, "presence": 0.9}
+
+        growth.observe_state_preference(
+            anima,
+            {"light_lux": 20.0, "temp_c": 22.0, "humidity_pct": 45.0},
+        )
+        assert "dim_light" not in growth._preferences
+
+        growth.observe_state_preference(
+            anima,
+            {"external_light_lux": 20.0, "temp_c": 22.0, "humidity_pct": 45.0},
+        )
+        assert growth._preferences["dim_light"].evidence_origin == "native_hourly_windows"
+
+    def test_raw_lux_cannot_create_drawing_light_preference(self, growth):
+        anima = {
+            "warmth": 0.5,
+            "clarity": 0.5,
+            "stability": 0.5,
+            "presence": 0.5,
+        }
+        base_environment = {
+            "light_lux": 20.0,
+            "temp_c": 22.0,
+            "humidity_pct": 45.0,
+        }
+
+        growth.observe_drawing(500, "resting", anima, base_environment)
+        assert "drawing_dim" not in growth._preferences
+
+        growth.observe_drawing(
+            500,
+            "resting",
+            anima,
+            {**base_environment, "external_light_lux": 20.0},
+        )
+        assert growth._preferences["drawing_dim"].evidence_origin == "native_events"
+
     def test_preference_vector_returns_structure(self, growth):
         """get_preference_vector should return canonical format."""
         vec = growth.get_preference_vector()

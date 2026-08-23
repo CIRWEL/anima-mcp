@@ -32,6 +32,7 @@ from .display import derive_face_state, get_display
 from .display.leds import get_led_display
 from .display.screens import ScreenMode
 from .config import get_calibration
+from .light_attribution import gated_external_light_lux
 from .learning import get_learner
 from .activity_state import get_activity_manager
 from .primitive_language import get_language_system
@@ -413,6 +414,11 @@ async def _update_display_loop():
                         get_calibration(),
                         prediction_accuracy=_prediction_accuracy_from_shm(
                             _ctx.last_shm_data if _ctx else None
+                        ),
+                        external_light_lux=gated_external_light_lux(
+                            ((_ctx.last_shm_data if _ctx else None) or {}).get(
+                                "light_attribution"
+                            )
                         ),
                     )
                     raw_anima = {
@@ -892,8 +898,14 @@ async def _update_display_loop():
             # LEDs reflect proprioceptive state directly - what Lumen actually feels
             led_updated = False
             if _ctx.leds and _ctx.leds.is_available():
-                # Get light level for auto-brightness
-                light_level = readings.light_lux if readings else None
+                # Auto-brightness is itself an LED action, so feeding it raw
+                # VEML7700 lux would close a self-exciting sensor→LED loop. Use
+                # only the capture-aligned external residual; unknown stays
+                # neutral until attribution is ready.
+                _shm = _get_last_shm_data() or {}
+                light_level = gated_external_light_lux(
+                    _shm.get("light_attribution")
+                )
 
                 # Get activity brightness from shared memory (broker computes this)
                 # - ACTIVE (day/interaction): 1.0
@@ -902,7 +914,6 @@ async def _update_display_loop():
                 activity_brightness = 1.0
                 try:
                     # Primary: read from broker's shared memory (single source of truth)
-                    _shm = _get_last_shm_data()
                     if _shm and "activity" in _shm:
                         activity_brightness = _shm["activity"].get("brightness_multiplier", 1.0)
                     else:
@@ -995,10 +1006,15 @@ async def _update_display_loop():
                             mood=mood
                         )
                         if readings:
+                            _voice_external_light = gated_external_light_lux(
+                                ((_get_last_shm_data() or {}).get(
+                                    "light_attribution"
+                                ) or {})
+                            )
                             voice.update_environment(
                                 temperature=readings.ambient_temp_c or 22.0,
                                 humidity=readings.humidity_pct or 50.0,
-                                light_level=readings.light_lux or 500.0
+                                light_level=_voice_external_light,
                             )
                 except Exception as e:
                     if loop_count % STATUS_LOG_THROTTLE == 0:
@@ -1090,10 +1106,20 @@ async def _update_display_loop():
                         "stability": anima.stability,
                         "presence": anima.presence,
                     }
-                    # Prepare environment dict from sensor readings
-                    # Raw lux includes LED glow — that's Lumen's actual light environment
+                    # Raw VEML7700 lux includes DotStar self-glow. Every claim
+                    # about room light shares the broker's gated residual;
+                    # raw lux remains untouched physical telemetry.
+                    _light_attribution = (
+                        (_get_last_shm_data() or {}).get("light_attribution") or {}
+                    )
+                    _external_light = gated_external_light_lux(
+                        _light_attribution
+                    )
                     environment = {
-                        "light_lux": readings.light_lux or 0.0,
+                        "external_light_lux": _external_light,
+                        "light_attribution_status": _light_attribution.get(
+                            "status", "unavailable"
+                        ),
                         "temp_c": readings.ambient_temp_c,
                         "humidity_pct": readings.humidity_pct,
                     }

@@ -137,7 +137,11 @@ class UnifiedWorkflowOrchestrator:
             try:
                 readings = self._anima_sensors.read()
                 calibration = get_calibration()
-                anima = sense_self(readings, calibration)
+                anima = sense_self(
+                    readings,
+                    calibration,
+                    external_light_lux=None,
+                )
                 return readings, anima
             except Exception:
                 pass

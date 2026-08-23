@@ -193,16 +193,22 @@ class MemoriesMixin:
 
         # Preferences
         #
-        # Weight by evidence, not uniformly. The confidence > 0.7 gate looks
-        # selective but is a no-op: confidence is a flat +0.1 ratchet that
-        # saturates at 9 observations (preferences.py), and every live
-        # preference has >= 22 — so all 17 pass and random.choice gave a
-        # 22-observation insight the same odds as a 222,280-observation one.
-        # observation_count is the field that actually discriminates, and it
-        # was sitting unused on the same object.
+        # Weight by independent evidence, not raw broker cadence. Confidence is
+        # Wilson-calibrated from signed windows; the weight still lets mature
+        # patterns appear more often without rewarding a faster loop.
         strong_prefs = [p for p in self._preferences.values() if p.confidence > 0.7]
         if strong_prefs:
-            weights = [max(1, getattr(p, "observation_count", 1)) for p in strong_prefs]
+            weights = [
+                max(
+                    1,
+                    getattr(
+                        p,
+                        "independent_evidence_count",
+                        getattr(p, "observation_count", 1),
+                    ),
+                )
+                for p in strong_prefs
+            ]
             pref = random.choices(strong_prefs, weights=weights, k=1)[0]
             learned = self._render_learned(pref)
             if learned:

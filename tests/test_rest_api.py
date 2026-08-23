@@ -349,6 +349,10 @@ class TestRestStateAndLayers:
         assert data["light_attribution"]["status"] == "warming"
         assert data["light_attribution"]["external_lux_residual"] is None
         assert data["light_attribution"]["used_by_clarity"] is False
+        assert data["raw_light_lux"] == data["light"]
+        assert data["light_composition"] == "room_light_plus_dotstar_glow"
+        assert data["neural_provenance"]["physical_eeg"] is False
+        assert data["neural_provenance"]["bands"]["alpha"]["independent"] is False
         activity.get_status.assert_not_called()
 
     async def test_rest_layers_includes_schema_hub_data(self, monkeypatch):
@@ -384,6 +388,12 @@ class TestRestStateAndLayers:
         assert data["eisv"]["E"] == 0.4
         assert data["body_eisv_projection"] == data["eisv"]
         assert data["body_anima"]["warmth"] == data["anima"]["warmth"]
+        assert data["neural_provenance"]["independent_views"] == 4
+        assert data["physical"]["raw_light_lux"] == data["physical"]["light_lux"]
+        assert (
+            data["physical"]["light_lux_composition"]
+            == "room_light_plus_dotstar_glow"
+        )
 
     async def test_rest_layers_returns_500_when_sensors_missing(self):
         with patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):

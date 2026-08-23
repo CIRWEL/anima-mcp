@@ -257,6 +257,11 @@
         }
         .nd-edge-arrow { color: rgba(255,255,255,0.2); }
         .nd-edge-target { color: rgba(255,255,255,0.5); }
+        .nd-edge-relation {
+            color: rgba(255,255,255,0.28);
+            font-size: 9px;
+            letter-spacing: 0.03em;
+        }
         .nd-raw {
             margin-top: 10px;
             padding-top: 10px;
@@ -603,6 +608,14 @@
             --c-tension: #e87c7c;
         }
 
+        .edge-legend-line {
+            width: 22px;
+            height: 0;
+            border-top: 1px solid rgba(255,255,255,0.5);
+        }
+        .edge-legend-line.hypothesis { border-top-style: dashed; border-color: #c49be8; }
+        .edge-legend-line.semantic { border-top-style: dotted; border-color: #8a8a9a; }
+
         @media (max-width: 680px) {
             .container { padding: 20px 16px 40px; }
             .traj-grid { grid-template-columns: 1fr; }
@@ -637,19 +650,19 @@
     <script>
     // ── Constants ──
     const TYPE_COLORS = {
-        identity: '#e8c87c', anima: '#f0b87a', sensor: '#8bb8e8',
+        identity: '#e8c87c', anima: '#f0b87a', sensor: '#8bb8e8', derived_sensor: '#79c7dc',
         resource: '#6a9fd8', preference: '#7ecfcf', belief: '#c49be8',
         trajectory: '#7ecf8b', meta: '#8a8a9a', drift: '#e8a87c', tension: '#e87c7c',
     };
     const TYPE_LABELS = {
-        identity: 'Identity', anima: 'Anima', sensor: 'Sensor', resource: 'Resource',
+        identity: 'Identity', anima: 'Anima', sensor: 'Sensor', derived_sensor: 'Derived sensor', resource: 'Resource',
         preference: 'Preference', belief: 'Belief', trajectory: 'Trajectory',
         meta: 'Meta', drift: 'Drift', tension: 'Tension',
     };
-    const TYPE_ORDER = ['identity','anima','sensor','resource','preference','belief','trajectory','meta','drift','tension'];
+    const TYPE_ORDER = ['identity','anima','sensor','derived_sensor','resource','preference','belief','trajectory','meta','drift','tension'];
     // Aligned with LCD renderer: meta→anima→trajectory→sensor→resource→drift→preference→tension→belief
     const TYPE_RINGS = {
-        identity: 0, meta: 1, anima: 2, trajectory: 3, sensor: 4, resource: 5,
+        identity: 0, meta: 1, anima: 2, trajectory: 3, sensor: 4, derived_sensor: 4, resource: 5,
         drift: 6, preference: 7, tension: 8, belief: 9,
     };
 
@@ -775,7 +788,12 @@
         return '<div class="legend">' +
             TYPE_ORDER.filter(t => types.includes(t)).map(t =>
                 `<div class="legend-item"><div class="legend-dot" style="background:${TYPE_COLORS[t]}"></div>${TYPE_LABELS[t]}</div>`
-            ).join('') + '</div>';
+            ).join('') + '</div>' +
+            '<div class="legend">' +
+                '<div class="legend-item"><span class="edge-legend-line"></span>live equation</div>' +
+                '<div class="legend-item"><span class="edge-legend-line hypothesis"></span>hypothesis / derived</div>' +
+                '<div class="legend-item"><span class="edge-legend-line semantic"></span>structural / related</div>' +
+            '</div>';
     }
 
     // ── Node List ──
@@ -818,6 +836,51 @@
     }
 
     // ── Graph ──
+    const RELATION_LABELS = {
+        computational_influence: 'live equation',
+        influence: 'legacy influence',
+        belief_about: 'belief about',
+        evidence_source: 'evidence source',
+        satisfaction: 'derived satisfaction',
+        derived_summary: 'derived summary',
+        calibration_offset: 'live calibration offset',
+        tension_about: 'tension about',
+        reflection_about: 'reflection about',
+        constitutes: 'structural',
+        related: 'related',
+    };
+
+    function edgeVisual(e) {
+        const relation = e.relation || 'influence';
+        if (
+            relation === 'belief_about'
+            || relation === 'evidence_source'
+            || relation === 'reflection_about'
+        ) {
+            return { rgb: [196, 155, 232], dash: [6, 4] };
+        }
+        if (relation === 'satisfaction' || relation === 'derived_summary') {
+            return { rgb: [126, 207, 207], dash: [3, 3] };
+        }
+        if (relation === 'tension_about') {
+            return { rgb: [232, 124, 124], dash: [1, 4] };
+        }
+        if (relation === 'constitutes') {
+            return { rgb: [232, 200, 124], dash: [1, 4] };
+        }
+        if (relation === 'related') {
+            return { rgb: [138, 138, 154], dash: [1, 4] };
+        }
+        return {
+            rgb: e.weight >= 0 ? [126, 207, 139] : [232, 124, 124],
+            dash: [],
+        };
+    }
+
+    function edgeColor(visual, alpha) {
+        return `rgba(${visual.rgb[0]},${visual.rgb[1]},${visual.rgb[2]},${alpha})`;
+    }
+
     function drawGraph(schema) {
         const canvas = document.getElementById('graphCanvas');
         if (!canvas) return;
@@ -913,23 +976,23 @@
             ctx.beginPath();
             ctx.moveTo(s.x, s.y);
             ctx.quadraticCurveTo(cpx, cpy, t.x, t.y);
+            const visual = edgeVisual(e);
+            ctx.save();
+            ctx.setLineDash(visual.dash);
 
             if (isDim) {
-                ctx.strokeStyle = 'rgba(255,255,255,0.02)';
+                ctx.strokeStyle = edgeColor(visual, 0.02);
                 ctx.lineWidth = 0.5;
             } else if (isConn) {
-                ctx.strokeStyle = e.weight >= 0
-                    ? `rgba(126,207,139,${0.3 + aw * 0.6})`
-                    : `rgba(232,124,124,${0.3 + aw * 0.6})`;
+                ctx.strokeStyle = edgeColor(visual, 0.3 + aw * 0.6);
                 ctx.lineWidth = 1 + aw * 2.5;
             } else {
                 const alpha = 0.08 + aw * 0.45;
-                ctx.strokeStyle = e.weight >= 0
-                    ? `rgba(126,207,139,${alpha})`
-                    : `rgba(232,124,124,${alpha})`;
+                ctx.strokeStyle = edgeColor(visual, alpha);
                 ctx.lineWidth = 0.7 + aw * 1.5;
             }
             ctx.stroke();
+            ctx.restore();
         });
 
         // Nodes
@@ -1109,11 +1172,14 @@
             edgesHtml = `<div class="nd-edges">${edges.map(e => {
                 const other = e.source === n.id ? e.target : e.source;
                 const dir = e.source === n.id ? '\u2192' : '\u2190';
-                const wc = e.weight >= 0 ? 'rgba(126,207,139,0.7)' : 'rgba(232,124,124,0.7)';
+                const visual = edgeVisual(e);
+                const wc = edgeColor(visual, 0.75);
                 const ws = e.weight >= 0 ? '+' : '';
+                const relation = e.relation || 'influence';
                 return `<div class="nd-edge">
                     <span class="nd-edge-arrow">${dir}</span>
                     <span class="nd-edge-target">${other}</span>
+                    <span class="nd-edge-relation">${escapeHtml(RELATION_LABELS[relation] || relation)}</span>
                     <span style="color:${wc};margin-left:auto">${ws}${e.weight.toFixed(3)}</span>
                 </div>`;
             }).join('')}</div>`;
@@ -1169,7 +1235,7 @@
         html += tc('\u03a0', 'Preferences', false, pc);
 
         // Beliefs
-        const bv = t.beliefs_detail?.values || t.beliefs_detail?.beliefs || {};
+        const bv = t.beliefs_detail?.beliefs || t.beliefs_detail?.values || {};
         let bc = '';
         const bk = Object.keys(bv).slice(0, 8);
         if (bk.length > 0) {

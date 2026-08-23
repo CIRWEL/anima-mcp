@@ -67,7 +67,7 @@ class AutonomousVoice:
         # Environment state
         self._temperature = 22.0
         self._humidity = 50.0
-        self._light_level = 500.0
+        self._light_level: Optional[float] = None
         self._last_env_comment_time = 0.0
 
         # Speech state
@@ -201,10 +201,11 @@ class AutonomousVoice:
             observations.append(("The temperature is nice", 0.3))
 
         # Light
-        if self._light_level > 800:
-            observations.append(("It's bright", 0.5))
-        elif self._light_level < 100:
-            observations.append(("It's getting dim", 0.6))
+        if self._light_level is not None:
+            if self._light_level > 800:
+                observations.append(("It's bright", 0.5))
+            elif self._light_level < 100:
+                observations.append(("It's getting dim", 0.6))
 
         # Humidity
         if self._humidity > 70:
@@ -436,8 +437,13 @@ class AutonomousVoice:
         self._curiosity = 0.3 + clarity * 0.3 + (1.0 - stability) * 0.2
         self._reflectiveness = stability * 0.5 + clarity * 0.3
 
-    def update_environment(self, temperature: float, humidity: float, light_level: float):
-        """Update environment readings."""
+    def update_environment(
+        self,
+        temperature: float,
+        humidity: float,
+        light_level: Optional[float],
+    ):
+        """Update environment readings; ``None`` means light attribution unknown."""
         self._temperature = temperature
         self._humidity = humidity
         self._light_level = light_level

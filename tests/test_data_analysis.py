@@ -43,6 +43,7 @@ def _create_schema(conn):
             presence REAL,
             wellness REAL,
             light_lux REAL,
+            external_light_lux REAL,
             ambient_temp_c REAL,
             humidity_pct REAL,
             hour INTEGER
@@ -75,10 +76,10 @@ def _seed_drawings(conn, n=10, base_hour=22):
         conn.execute(
             "INSERT INTO drawing_records "
             "(timestamp, pixel_count, phase, warmth, clarity, stability, presence, "
-            "wellness, light_lux, ambient_temp_c, humidity_pct, hour) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            "wellness, light_lux, external_light_lux, ambient_temp_c, humidity_pct, hour) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (ts, 100 + i * 10, "building", 0.5 + i * 0.01, 0.6, 0.7, 0.4,
-             0.55, 200.0, 22.0, 45.0, h),
+             0.55, 500.0, 200.0, 22.0, 45.0, h),
         )
     conn.commit()
 
@@ -241,6 +242,12 @@ class TestAnalyzeCorrelation:
 
     def test_invalid_dimension(self):
         assert analyze_correlation("nosuchdim") is None
+
+    def test_light_alias_uses_external_residual_not_raw_lux(self):
+        external = analyze_correlation("light")
+        raw = analyze_correlation("raw_light_lux")
+        assert "200.00" in external
+        assert "500.00" in raw
 
     def test_empty_table(self, empty_db):
         with patch("anima_mcp.data_analysis._get_db_path", return_value=empty_db):

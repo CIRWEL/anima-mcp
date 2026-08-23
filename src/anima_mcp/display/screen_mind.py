@@ -1,8 +1,4 @@
-"""
-Display Screens - Mind screen mixin.
-
-Renders neural activity, inner life, learning, and self-graph screens.
-"""
+"""Display screens for computational dynamics, inner life, learning, and self-graph."""
 
 import sys
 import time
@@ -19,9 +15,9 @@ class MindMixin:
     """Mixin for mind-group screens (neural, inner_life, learning, self_graph)."""
 
     def _render_neural(self, anima: Optional[Anima], readings: Optional[SensorReadings]):
-        """Render neural activity screen - EEG frequency band visualization."""
+        """Render normalized Pi computational views; this is not an EEG screen."""
         if not readings:
-            self._display.render_text("neural\n\nno data", (10, 10))
+            self._display.render_text("compute dynamics\n\nno data", (10, 10))
             return
 
         raw = readings.to_dict()
@@ -48,36 +44,27 @@ class MindMixin:
             font_title = fonts['title']
             font_tiny = fonts['tiny']
 
-            from .design import lighten_color, dim_color
+            from .design import dim_color
 
             DIM = COLORS.TEXT_DIM
 
-            # Band colors from design system — each band has a distinct identity
+            # Greek labels are retained for continuity. The source column makes
+            # clear that these are heterogeneous normalized computations.
             bands = [
-                ("delta",  raw.get("eeg_delta_power") or 0, COLORS.SOFT_BLUE,   "0.5–4 Hz",  "deep rest"),
-                ("theta",  raw.get("eeg_theta_power") or 0, COLORS.SOFT_PURPLE, "4–8 Hz",    "meditation"),
-                ("alpha",  raw.get("eeg_alpha_power") or 0, COLORS.SOFT_CYAN,   "8–13 Hz",   "awareness"),
-                ("beta",   raw.get("eeg_beta_power") or 0,  COLORS.SOFT_GREEN,  "13–30 Hz",  "focus"),
-                ("gamma",  raw.get("eeg_gamma_power") or 0, COLORS.SOFT_ORANGE, "30+ Hz",    "cognition"),
+                ("delta", raw.get("eeg_delta_power") or 0, COLORS.SOFT_BLUE, "cpu/t"),
+                ("theta", raw.get("eeg_theta_power") or 0, COLORS.SOFT_PURPLE, "i/o"),
+                ("alpha", raw.get("eeg_alpha_power") or 0, COLORS.SOFT_CYAN, "1−β"),
+                ("beta", raw.get("eeg_beta_power") or 0, COLORS.SOFT_GREEN, "cpu"),
+                ("gamma", raw.get("eeg_gamma_power") or 0, COLORS.SOFT_ORANGE, "ctx"),
             ]
 
-            # Dominant band
-            dominant_idx = max(range(len(bands)), key=lambda i: bands[i][1])
-            dominant_name  = bands[dominant_idx][0]
-            dominant_value = bands[dominant_idx][1]
-            dominant_color = bands[dominant_idx][2]
-            dominant_desc  = bands[dominant_idx][4]
-
-            # Title + dominant info on one header row
-            draw.text((10, 6), "neural activity", fill=COLORS.SOFT_CYAN, font=font_title)
+            draw.text((10, 6), "compute dynamics", fill=COLORS.SOFT_CYAN, font=font_title)
             draw.line([(10, 28), (230, 28)], fill=(30, 30, 40), width=1)
-            draw.text((10, 32), "dominant:", fill=DIM, font=font_small)
-            draw.text((82, 32), dominant_name, fill=dominant_color, font=font_small)
-            draw.text((150, 32), f"{dominant_value:.0%}", fill=dominant_color, font=font_small)
+            draw.text((10, 32), "4 independent · not EEG", fill=DIM, font=font_small)
 
             # ---- Vertical bar chart ----
             bar_area_top    = 52
-            bar_area_bottom = 178
+            bar_area_bottom = 165
             bar_area_height = bar_area_bottom - bar_area_top
             bar_width       = 28
             bar_gap         = 12
@@ -86,13 +73,11 @@ class MindMixin:
 
             greek = {"delta": "\u03b4", "theta": "\u03b8", "alpha": "\u03b1", "beta": "\u03b2", "gamma": "\u03b3"}
 
-            for i, (name, value, color, freq, desc) in enumerate(bands):
-                is_dominant = (i == dominant_idx)
+            for i, (name, value, color, source) in enumerate(bands):
                 x = bar_start_x + i * (bar_width + bar_gap)
 
-                # Dominant at full brightness; others dimmed but still readable
-                draw_color   = color if is_dominant else dim_color(color, 0.55)
-                label_color  = color if is_dominant else dim_color(color, 0.65)
+                draw_color = dim_color(color, 0.72)
+                label_color = color
 
                 # Bar track
                 draw.rectangle([x, bar_area_top, x + bar_width, bar_area_bottom],
@@ -103,9 +88,6 @@ class MindMixin:
                 if fill_height > 0:
                     bar_top = bar_area_bottom - fill_height
                     draw.rectangle([x, bar_top, x + bar_width, bar_area_bottom], fill=draw_color)
-                    if is_dominant and fill_height > 3:
-                        bright = lighten_color(color, 60)
-                        draw.rectangle([x, bar_top, x + bar_width, bar_top + 2], fill=bright)
 
                 # Greek letter + % value below bar
                 letter = greek.get(name, name[0])
@@ -113,12 +95,13 @@ class MindMixin:
                           letter, fill=label_color, font=font_medium)
                 draw.text((x + bar_width // 2 - 7, bar_area_bottom + 16),
                           f"{value:.0%}", fill=label_color, font=font_tiny)
-
-            # ---- Bottom: description of dominant band ----
-            y_desc = 208
-            draw.line([(10, y_desc - 3), (230, y_desc - 3)], fill=(30, 30, 40), width=1)
-            draw.text((10, y_desc), f"{dominant_name} · {dominant_desc}  {bands[dominant_idx][3]}",
-                      fill=dominant_color, font=font_small)
+                source_width = draw.textbbox((0, 0), source, font=font_tiny)[2]
+                draw.text(
+                    (x + (bar_width - source_width) // 2, bar_area_bottom + 29),
+                    source,
+                    fill=DIM,
+                    font=font_tiny,
+                )
 
             self._draw_status_bar(draw)
             self._draw_screen_indicator(draw, self._state.mode)
@@ -138,7 +121,7 @@ class MindMixin:
     def _render_neural_text_fallback(self, readings: Optional[SensorReadings]):
         """Text-only fallback for neural screen."""
         raw = readings.to_dict() if readings else {}
-        lines = ["neural activity", ""]
+        lines = ["compute dynamics", "not EEG; alpha = 1-beta", ""]
         for band in ["delta", "theta", "alpha", "beta", "gamma"]:
             val = raw.get(f"eeg_{band}_power") or 0
             bar = "#" * int(val * 20)
@@ -655,10 +638,14 @@ class MindMixin:
             # Fallback: base schema (before hub is connected or has history)
             from ..growth import get_growth_system
             from ..self_model import get_self_model
+            from ..accessors import _get_last_shm_data
             schema = get_current_schema(
                 identity=identity, anima=anima, readings=readings,
                 growth_system=get_growth_system(), include_preferences=True,
                 self_model=get_self_model(),
+                light_attribution=(
+                    (_get_last_shm_data() or {}).get("light_attribution")
+                ),
             )
 
         # Cache: schema node/edge count + node names hash

@@ -304,6 +304,10 @@ def wake(db_path: str = "anima.db", anima_id: str | None = None):
                         readings=readings_init,
                         growth_system=_ctx.growth,
                         self_model=_sm_init,
+                        light_attribution=(
+                            (_ctx.last_shm_data or {}).get("light_attribution")
+                            if _ctx else None
+                        ),
                     )
                     print(f"[SchemaHub] Seeded initial schema: {len(init_schema.nodes)}n {len(init_schema.edges)}e", file=sys.stderr, flush=True)
                 except Exception as seed_e:

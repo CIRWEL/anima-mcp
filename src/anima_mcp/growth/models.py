@@ -10,6 +10,41 @@ from enum import Enum
 from typing import Optional, List
 
 
+def preference_evidence_confidence(
+    supporting_count: int,
+    contradicting_count: int,
+) -> float:
+    """Conservative confidence in the dominant direction of a preference.
+
+    The persisted field names predate this directional interpretation:
+    ``supporting_count`` means positive-direction evidence and
+    ``contradicting_count`` means negative-direction evidence. Either direction
+    can become a well-supported preference. Each count must represent an
+    independent evidence window or event, not a broker tick. The score is the
+    two-sided 95% Wilson lower bound for the majority direction, mapped from
+    chance (0.5) to certainty (1.0). A 0.20 floor preserves the historical
+    cold-start posture; a 0.95 ceiling keeps an observational association from
+    presenting itself as causal certainty.
+    """
+    support = max(0, int(supporting_count))
+    contradict = max(0, int(contradicting_count))
+    total = support + contradict
+    if total == 0:
+        return 0.0
+
+    majority_rate = max(support, contradict) / total
+    z = 1.959963984540054
+    denominator = 1.0 + (z * z / total)
+    centre = majority_rate + (z * z / (2.0 * total))
+    margin = z * (
+        (majority_rate * (1.0 - majority_rate) / total)
+        + (z * z / (4.0 * total * total))
+    ) ** 0.5
+    lower_bound = (centre - margin) / denominator
+    directional_confidence = max(0.0, 2.0 * (lower_bound - 0.5))
+    return round(min(0.95, max(0.20, directional_confidence)), 6)
+
+
 class PreferenceCategory(Enum):
     """Categories of preferences Lumen can develop."""
     ENVIRONMENT = "environment"  # Light, temp, humidity preferences
@@ -65,15 +100,34 @@ BondStrength = VisitorFrequency
 
 @dataclass
 class GrowthPreference:
-    """A learned preference."""
+    """A learned observational preference with explicit evidence provenance."""
     category: PreferenceCategory
     name: str                    # e.g., "dim_light", "morning_calm"
     description: str             # Natural language: "I feel better when it's dim"
     value: float                 # Preferred value or strength (-1 to 1)
-    confidence: float            # How sure (0-1), increases with observations
-    observation_count: int       # How many times observed
+    confidence: float            # Wilson-calibrated directional confidence
+    observation_count: int       # Raw source calls (audit/cadence diagnostic)
     first_noticed: datetime
     last_confirmed: datetime
+    evidence_count: int = 0      # Independent windows/events, not broker ticks
+    supporting_count: int = 0    # Positive-direction evidence (legacy field name)
+    contradicting_count: int = 0 # Negative-direction evidence (legacy field name)
+    last_evidence_key: Optional[str] = None
+    evidence_origin: str = "legacy_unclassified"
+
+    @property
+    def independent_evidence_count(self) -> int:
+        """Evidence count used by decisions, with legacy-object compatibility."""
+        if (
+            self.evidence_origin != "legacy_unclassified"
+            or self.evidence_count > 0
+            or self.observation_count == 0
+        ):
+            return self.evidence_count
+        # Tests and third-party callers may construct the pre-v2 dataclass
+        # directly. Durable rows are migrated before use; this branch only
+        # preserves sensible semantics for those in-memory legacy objects.
+        return self.observation_count
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +137,14 @@ class GrowthPreference:
             "value": self.value,
             "confidence": self.confidence,
             "observation_count": self.observation_count,
+            "raw_observation_count": self.observation_count,
+            "evidence_count": self.independent_evidence_count,
+            "supporting_count": self.supporting_count,
+            "contradicting_count": self.contradicting_count,
+            "positive_direction_count": self.supporting_count,
+            "negative_direction_count": self.contradicting_count,
+            "evidence_origin": self.evidence_origin,
+            "confidence_basis": "95% Wilson lower bound on signed independent evidence",
             "first_noticed": self.first_noticed.isoformat(),
             "last_confirmed": self.last_confirmed.isoformat(),
         }

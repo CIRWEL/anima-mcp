@@ -77,6 +77,12 @@ def test_ssh_command_supplies_code_via_stdin_not_command_line(monkeypatch):
         ("/self-knowledge?limit=50", "handle_get_upstream_json"),
         ("/growth", "handle_get_upstream_json"),
         ("/health/detailed", "handle_get_upstream_json"),
+        ("/layers", "handle_get_upstream_json"),
+        ("/schema-data", "handle_get_upstream_json"),
+        ("/architecture", "handle_get_upstream_json"),
+        ("/schema", "handle_get_upstream_json"),
+        ("/gallery-page", "handle_get_upstream_json"),
+        ("/static/shared.js", "handle_get_upstream_json"),
     ],
 )
 def test_get_routing_uses_path_without_dropping_query(path, handler_name):
@@ -259,3 +265,91 @@ def test_control_center_labels_neural_bands_as_computational():
 
     assert "CPU-derived computational proprioception" in dashboard.read_text()
     assert "not physical EEG" in dashboard.read_text()
+    assert "Computational Dynamics" in dashboard.read_text()
+    assert "independently derived" in dashboard.read_text()
+
+
+def test_architecture_page_uses_computational_sources_not_eeg_frequencies():
+    architecture = Path(__file__).parents[1] / "docs" / "architecture.html"
+    text = architecture.read_text()
+
+    assert "Computational Dynamics" in text
+    assert "not physical EEG" in text
+    assert "raw light (room+LED)" in text
+    assert r"0.5\u20134 Hz" not in text
+
+
+def test_schema_page_visually_distinguishes_wiring_from_hypotheses():
+    schema = Path(__file__).parents[1] / "docs" / "schema.html"
+    text = schema.read_text()
+
+    assert "live equation" in text
+    assert "hypothesis / derived" in text
+    assert "belief_about" in text
+    assert "computational_influence" in text
+    assert "derived_sensor" in text
+
+
+def test_control_relay_root_redirects_to_dashboard():
+    module = load_message_server()
+    handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
+    handler.path = "/"
+    handler.headers = {}
+    captured = []
+    handler.send_response = lambda status: captured.append(("status", status))
+    handler.send_header = lambda name, value: captured.append((name, value))
+    handler.end_headers = lambda: captured.append(("end", True))
+
+    handler.do_GET()
+
+    assert ("status", 302) in captured
+    assert ("Location", "/dashboard") in captured
+
+
+def test_control_relay_defaults_to_loopback_and_explicit_cors():
+    module = load_message_server()
+    assert module.BIND_HOST == "127.0.0.1"
+    assert "*" not in module.ALLOWED_ORIGINS
+    assert "null" in module.ALLOWED_ORIGINS
+
+    handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
+    handler.headers = {"Origin": "null"}
+    assert handler._allowed_cors_origin() == "null"
+    handler.headers = {"Origin": "https://example.invalid"}
+    assert handler._allowed_cors_origin() is None
+
+
+def test_control_relay_rejects_untrusted_browser_write():
+    module = load_message_server()
+    handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
+    handler.path = "/message"
+    handler.headers = {
+        "Origin": "https://example.invalid",
+        "Content-Type": "application/json",
+    }
+    captured = {}
+    handler.send_json = lambda data, status=200: captured.update(
+        {"response": data, "status": status}
+    )
+    handler.handle_post_message = lambda: pytest.fail("write must not dispatch")
+
+    handler.do_POST()
+
+    assert captured == {"response": {"error": "Origin not allowed"}, "status": 403}
+
+
+def test_control_relay_rejects_simple_non_json_write():
+    module = load_message_server()
+    handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
+    handler.path = "/message"
+    handler.headers = {"Origin": "null", "Content-Type": "text/plain"}
+    captured = {}
+    handler.send_json = lambda data, status=200: captured.update(
+        {"response": data, "status": status}
+    )
+    handler.handle_post_message = lambda: pytest.fail("write must not dispatch")
+
+    handler.do_POST()
+
+    assert captured["status"] == 415
+    assert "application/json" in captured["response"]["error"]

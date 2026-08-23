@@ -179,6 +179,10 @@ class TestGrowthPreferenceToDict:
             "category", "name", "description", "value",
             "confidence", "observation_count",
             "first_noticed", "last_confirmed",
+            "raw_observation_count", "evidence_count",
+            "supporting_count", "contradicting_count",
+            "positive_direction_count", "negative_direction_count",
+            "evidence_origin", "confidence_basis",
         }
         assert expected_keys == set(d.keys())
 

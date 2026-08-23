@@ -11,6 +11,7 @@ from collections import namedtuple
 
 from anima_mcp.computational_neural import (
     ComputationalNeuralSensor,
+    computational_neural_provenance,
 )
 
 
@@ -72,6 +73,19 @@ class TestBetaBand:
             _mock_psutil(mock_ps)
             state = sensor.get_neural_state(cpu_percent=50.0, memory_percent=50.0)
         assert state.beta == 0.5
+
+
+def test_provenance_exposes_dependencies_and_non_eeg_status():
+    provenance = computational_neural_provenance()
+    assert provenance["physical_eeg"] is False
+    assert provenance["memory_is_input"] is False
+    assert provenance["normalized_views"] == 5
+    assert provenance["independent_views"] == 4
+    assert provenance["bands"]["alpha"] == {
+        "source": "derived from beta",
+        "formula": "1 − beta",
+        "independent": False,
+    }
 
 
 class TestAlphaBand:

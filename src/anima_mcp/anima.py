@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 
 _PREDICTION_ACCURACY_UNSET = object()
+_EXTERNAL_LIGHT_UNSET = object()
 
 
 def _get_prediction_accuracy() -> Optional[float]:
@@ -189,6 +190,7 @@ def sense_self(
     drift_midpoints: Optional[Dict[str, float]] = None,
     salience_weights: Optional[Dict[str, float]] = None,
     prediction_accuracy: Any = _PREDICTION_ACCURACY_UNSET,
+    external_light_lux: Any = _EXTERNAL_LIGHT_UNSET,
 ) -> Anima:
     """
     The creature senses itself.
@@ -206,6 +208,10 @@ def sense_self(
         prediction_accuracy: Authoritative 0-1 accuracy supplied by another
             process.  Omitting it uses the process-local adaptive model; passing
             ``None`` deliberately represents insufficient owner data.
+        external_light_lux: Gated external-light residual from the body broker.
+            Passing ``None`` means attribution is not ready, so light is omitted
+            from clarity. Omitting the argument preserves raw-lux compatibility
+            for callers that do not yet carry attribution provenance.
     """
     if calibration is None:
         calibration = get_calibration()
@@ -221,6 +227,7 @@ def sense_self(
         _resolve_prediction_accuracy(prediction_accuracy),
         salience_weights=salience_weights,
         frozen_channel_count=frozen_channel_count,
+        external_light_lux=external_light_lux,
     )
     stability = _sense_stability(
         readings,
@@ -263,6 +270,7 @@ def sense_self_with_memory(
     drift_midpoints: Optional[Dict[str, float]] = None,
     salience_weights: Optional[Dict[str, float]] = None,
     prediction_accuracy: Any = _PREDICTION_ACCURACY_UNSET,
+    external_light_lux: Any = _EXTERNAL_LIGHT_UNSET,
 ) -> Anima:
     """
     The creature senses itself, informed by memory and exploration.
@@ -289,6 +297,8 @@ def sense_self_with_memory(
         prediction_accuracy: Authoritative 0-1 accuracy supplied by another
             process.  Omitting it uses the process-local adaptive model; passing
             ``None`` deliberately represents insufficient owner data.
+        external_light_lux: Gated external-light residual. Explicit ``None``
+            means unknown and removes the light contribution from clarity.
 
     Returns:
         Anima with potential anticipation influence and exploration
@@ -309,6 +319,7 @@ def sense_self_with_memory(
         _resolve_prediction_accuracy(prediction_accuracy),
         salience_weights=salience_weights,
         frozen_channel_count=frozen_channel_count,
+        external_light_lux=external_light_lux,
     )
     raw_stability = _sense_stability(
         readings,
@@ -396,7 +407,7 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration, *, salience_
     Sources:
     - CPU temperature (internal body heat)
     - Ambient temperature (environmental warmth)
-    - Neural activity (alertness/engagement - from light or EEG)
+    - Optional computational activity view (disabled by default calibration)
 
     Note: CPU usage removed - a resting creature in a warm room should feel
     comfortable, not cold. Warmth is about thermal state, not busy-ness.
@@ -427,8 +438,8 @@ def _sense_warmth(r: SensorReadings, cal: NervousSystemCalibration, *, salience_
             components.append(ambient_warmth)
             weights.append(cal.warmth_weights.get("ambient_temp", 0.45))
 
-    # Neural component: EEG beta+gamma power from computational proprioception
-    # This represents alertness/engagement derived from system state
+    # Legacy-named beta/gamma computational views. This contribution is
+    # disabled by default calibration to avoid counting CPU activity twice.
     if r.eeg_beta_power is not None and r.eeg_gamma_power is not None:
         neural_warmth = (r.eeg_beta_power + r.eeg_gamma_power) / 2
     else:
@@ -520,6 +531,7 @@ def _sense_clarity(
     *,
     salience_weights: Optional[Dict[str, float]] = None,
     frozen_channel_count: Optional[int] = None,
+    external_light_lux: Any = _EXTERNAL_LIGHT_UNSET,
 ) -> float:
     """
     How clearly can the creature perceive its own internal state?
@@ -528,18 +540,16 @@ def _sense_clarity(
 
     Sources:
     - Prediction accuracy: How well I predict my own state changes (1 - mean_error)
-    - Alpha EEG power: Relaxed awareness, clear processing
+    - Optional alpha computational view (exactly 1-beta; disabled by default)
     - Sensor coverage: Data richness (how complete is my self-perception)
-    - World light: Raw lux (LED glow + room light), log-scaled
+    - External light: Learned raw-lux minus self-glow residual, log-scaled
 
-    Note: lux is used raw — no LED-glow subtraction (removed in 0cbf0dc; the
-    quadratic estimate overcorrected at low brightness). The VEML7700 sits beside
-    the DotStar LEDs, so the reading includes self-emitted light, but the feedback
-    loop stays weak: clarity does NOT drive LED brightness (LEDs follow
-    activity/preset/agency), and light is only ~15% of clarity, log-compressed and
-    EMA-damped. Lumen's own LED brightness is tracked as a separate proprioceptive
-    signal (efference copy) and the led<->lux correlation is learned in self_model
-    (`my_leds_affect_lux`) rather than subtracted from the reading.
+    The physical VEML7700 reading remains raw telemetry. The body broker passes
+    the residual only after its attribution evidence gate; explicit ``None``
+    means environmental light is unknown and this component is omitted. The
+    private sentinel preserves compatibility for callers that have not yet
+    adopted the provenance-bearing argument, but the live body path never uses
+    that fallback.
     """
     salience = salience_weights or {}
     components = []
@@ -578,13 +588,24 @@ def _sense_clarity(
     components.append(coverage)
     weights.append(cal.clarity_weights.get("sensor_coverage", 0.15))
 
-    # Light: raw sensor reading (includes LED glow + room light).
-    # Lumen knows its LED brightness separately — no need to decompose.
+    # Light: gated external residual. Legacy callers that omit attribution keep
+    # their former raw behavior; the live broker passes either a residual or
+    # explicit None, so self-glow never enters environmental clarity there.
     # Log scale: 1 lux → 0.0, light_max_lux → 1.0
-    if r.light_lux is not None:
-        if r.light_lux > 1.0:
+    clarity_light = (
+        r.light_lux
+        if external_light_lux is _EXTERNAL_LIGHT_UNSET
+        else external_light_lux
+    )
+    if (
+        isinstance(clarity_light, (int, float))
+        and not isinstance(clarity_light, bool)
+        and math.isfinite(float(clarity_light))
+    ):
+        clarity_light = max(0.0, float(clarity_light))
+        if clarity_light > 1.0:
             log_max = math.log10(max(10.0, cal.light_max_lux))
-            light_clarity = min(1.0, math.log10(r.light_lux) / log_max)
+            light_clarity = min(1.0, math.log10(clarity_light) / log_max)
         else:
             light_clarity = 0.0
         light_clarity *= salience.get("light", 1.0)
@@ -592,10 +613,9 @@ def _sense_clarity(
         components.append(light_clarity)
         weights.append(cal.clarity_weights.get("world_light", 0.15))
 
-    # Neural clarity: Real EEG alpha power, or simulated if unavailable
+    # Alpha computational view in a legacy EEG-named field.
     if r.eeg_alpha_power is not None:
-        # Use real EEG data
-        neural_clarity = r.eeg_alpha_power  # Relaxed, clear awareness
+        neural_clarity = r.eeg_alpha_power
     else:
         # Fall back to computational neural (derives bands from system state)
         neural = get_computational_neural_state(
@@ -603,7 +623,7 @@ def _sense_clarity(
             memory_percent=r.memory_percent or 50,
             cpu_temp=r.cpu_temp_c
         )
-        neural_clarity = neural.alpha  # Relaxed, clear awareness
+        neural_clarity = neural.alpha
     components.append(neural_clarity)
     # Fallback 0.0, not the historical 0.3 — same reasoning as warmth's.
     weights.append(cal.clarity_weights.get("neural", 0.0))
@@ -635,7 +655,7 @@ def _sense_stability(
     - Memory headroom
     - Complete sensor data
     - Barometric pressure stability (deviations from local normal)
-    - Theta/Delta EEG power (deep stability, meditative state)
+    - Theta/delta computational I/O and CPU/thermal-stability views
     """
     salience = salience_weights or {}
     instability = 0.0
@@ -684,9 +704,9 @@ def _sense_stability(
         instability += pressure_instability
         count += pressure_weight
 
-    # Neural instability: Low theta+delta = scattered mind = instability
+    # Computational dynamics heuristic: low I/O-integration + CPU/thermal
+    # stability view contributes instability under its explicit 0.1 weight.
     if r.eeg_theta_power is not None and r.eeg_delta_power is not None:
-        # Use real EEG data - low theta+delta = instability
         neural_groundedness = (r.eeg_theta_power + r.eeg_delta_power) / 2
     else:
         # Fall back to computational neural (derives bands from system state)
@@ -722,7 +742,7 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration, *, salienc
     - Disk headroom
     - Memory headroom
     - CPU headroom
-    - Gamma EEG power (high gamma = contention = scattered)
+    - Optional gamma switch/interrupt view (disabled by default calibration)
     """
     salience = salience_weights or {}
     void = 0.0
@@ -749,7 +769,6 @@ def _sense_presence(r: SensorReadings, cal: NervousSystemCalibration, *, salienc
 
     # Neural void: High gamma = high ctx switching = scattered = less presence
     if r.eeg_gamma_power is not None:
-        # Use real EEG data
         neural_gamma = r.eeg_gamma_power
     else:
         # Fall back to computational neural (derives bands from system state)

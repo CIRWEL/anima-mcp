@@ -19,6 +19,9 @@ from pathlib import Path
 from .atomic_write import atomic_json_write
 
 
+FEATURE_SCHEMA = "lagged_external_context_v2"
+
+
 @dataclass
 class PatternFeatures:
     """Features extracted for pattern matching."""
@@ -37,7 +40,10 @@ class PatternFeatures:
 
     def to_key(self) -> str:
         """Convert to hashable key for pattern lookup."""
-        return f"{self.hour}:{self.minute_bucket}:{self.day_of_week}:{self.light_level}:{self.temp_zone}"
+        return (
+            f"{FEATURE_SCHEMA}:{self.hour}:{self.minute_bucket}:"
+            f"{self.day_of_week}:{self.light_level}:{self.temp_zone}"
+        )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -130,6 +136,12 @@ class AdaptivePredictionModel:
             try:
                 with open(self.persistence_path, 'r') as f:
                     data = json.load(f)
+                    # v1 keyed a target observation by that same observation's
+                    # current light/temperature category. That leaked the answer
+                    # into its own predictor. Do not reuse those patterns after
+                    # switching to lagged, gated context.
+                    if data.get("feature_schema") != FEATURE_SCHEMA:
+                        return
                     for variable, patterns in data.get("patterns", {}).items():
                         for key, p in patterns.items():
                             self._patterns[variable][key] = LearnedPattern(
@@ -166,6 +178,7 @@ class AdaptivePredictionModel:
         try:
             self.persistence_path.parent.mkdir(parents=True, exist_ok=True)
             data = {
+                "feature_schema": FEATURE_SCHEMA,
                 "patterns": {
                     variable: {
                         key: {
@@ -285,10 +298,18 @@ class AdaptivePredictionModel:
             if pattern.sample_count >= 3:  # Need minimum samples
                 return pattern.mean, pattern.confidence
 
-        # Try less specific patterns (just hour + day_type)
+        # Try less specific patterns from the same hour. Keys carry an explicit
+        # feature-schema prefix, so compare the parsed hour rather than a raw
+        # string prefix (which would silently stop matching after a migration).
         if variable in self._patterns:
             for key, pattern in self._patterns[variable].items():
-                if key.startswith(f"{features.hour}:") and pattern.sample_count >= 5:
+                parts = key.split(":")
+                same_schema_hour = (
+                    len(parts) >= 2
+                    and parts[0] == FEATURE_SCHEMA
+                    and parts[1] == str(features.hour)
+                )
+                if same_schema_hour and pattern.sample_count >= 5:
                     # Weight by similarity
                     return pattern.mean, pattern.confidence * 0.7
 
@@ -317,7 +338,9 @@ class AdaptivePredictionModel:
         Observe actual values and learn from them.
 
         This is where learning happens. Each observation updates the patterns
-        for the current context.
+        for the supplied context. Context must be known before the target
+        observation (normally the previous broker sample); this method never
+        falls back to the target's current light or temperature.
         """
         if current_time is None:
             current_time = datetime.now()
@@ -334,8 +357,8 @@ class AdaptivePredictionModel:
         features = self._extract_features(
             current_time,
             recent_values,
-            current_light or observations.get("light"),
-            current_temp or observations.get("ambient_temp"),
+            current_light,
+            current_temp,
         )
 
         pattern_key = features.to_key()
@@ -365,14 +388,14 @@ class AdaptivePredictionModel:
     def record_prediction_error(self, variable: str, predicted: float, actual: float):
         """Record prediction error for tracking accuracy improvement.
 
-        Normalizes error by variable scale so light (0-1000 lux) and warmth (0-1)
-        are comparable in aggregate stats.
+        Normalizes error by variable scale so external light (lux) and warmth
+        (0-1) are comparable in aggregate stats.
         """
         error = abs(predicted - actual)
         # Normalize to 0-1 scale (same logic as get_surprising_deviation)
         if variable in ("warmth", "clarity", "stability", "presence"):
             normalized = error  # Already 0-1
-        elif variable == "light":
+        elif "light" in variable:
             if predicted > 0 and actual > 0:
                 normalized = abs(math.log10(actual) - math.log10(predicted)) / 3.0
             else:
@@ -446,7 +469,7 @@ class AdaptivePredictionModel:
         # Normalize deviation based on variable type
         if variable in ("warmth", "clarity", "stability", "presence"):
             normalized_deviation = deviation  # Already 0-1 scale
-        elif variable == "light":
+        elif "light" in variable:
             # Log scale for light — 3 decades (1→1000 lux) = full range
             if predicted > 0 and actual > 0:
                 normalized_deviation = abs(math.log10(actual) - math.log10(predicted)) / 3.0

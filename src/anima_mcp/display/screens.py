@@ -42,7 +42,7 @@ class ScreenMode(Enum):
     SENSORS = "sensors"              # Sensor readings (temp, humidity, etc.)
     IDENTITY = "identity"            # Name, age, awakenings, alive time
     DIAGNOSTICS = "diagnostics"      # System health, governance status
-    NEURAL = "neural"                # Neural activity - computational EEG bands
+    NEURAL = "neural"                # Normalized Pi computational dynamics
     INNER_LIFE = "inner_life"        # Inner life - cognitive and emotional state
     LEARNING = "learning"            # Learning visualization - why Lumen feels what it feels
     SELF_GRAPH = "self_graph"        # Self-schema G_t visualization

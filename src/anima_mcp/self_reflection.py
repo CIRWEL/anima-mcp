@@ -30,7 +30,7 @@ VerificationResult = namedtuple("VerificationResult", ["verified", "correlation"
 
 # Keyword maps for parsing verifiable claims about sensor→dimension correlations
 _SENSOR_KEYWORDS: Dict[str, List[str]] = {
-    "light_lux": ["light", "bright", "dark", "lux", "dim"],
+    "external_light_lux": ["light", "bright", "dark", "lux", "dim"],
     "ambient_temp_c": ["temperature", "temp", "warm", "cold", "cool", "heat"],
     "humidity_pct": ["humidity", "humid", "dry", "moisture"],
     "pressure_hpa": ["pressure", "barometric"],
@@ -69,7 +69,7 @@ _NEUTRAL_EFFECT_MARKERS = [
 # this keyword matcher binds markers to poles — so the signed check must
 # stand down and leave the magnitude-only check in charge.
 _ANTI_POLE_KEYWORDS: Dict[str, List[str]] = {
-    "light_lux": ["dark", "darkness", "dim"],
+    "external_light_lux": ["dark", "darkness", "dim"],
     "ambient_temp_c": ["cold", "cool"],
     "humidity_pct": ["dry"],
 }
@@ -220,6 +220,7 @@ class SelfReflectionSystem:
         self._init_schema()
         self._load_reflection_state()
         self._load_insights()
+        self._migrate_raw_light_insights()
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -316,6 +317,54 @@ class SelfReflectionSystem:
         if self._insights:
             print(f"[SelfReflection] Loaded {len(self._insights)} existing insights",
                   file=sys.stderr, flush=True)
+
+    def _migrate_raw_light_insights(self) -> None:
+        """Retract environmental light patterns learned from mixed raw lux.
+
+        New analyzers read only ``external_light_lux``. An inactive row may be
+        reactivated later if the same pattern is independently rediscovered
+        from gated residual history; the audit record preserves what was
+        retracted here and why.
+        """
+        sentinel = "migration_external_light_insights_v1"
+        if self._get_reflection_state(sentinel):
+            return
+
+        audit = {}
+        conn = self._connect()
+        for insight in self._insights.values():
+            if (
+                insight.active
+                and insight.category == InsightCategory.ENVIRONMENT
+                and not insight.id.startswith(("qa_", "pref_", "belief_"))
+                and "light" in insight.id.lower()
+            ):
+                audit[insight.id] = {
+                    "confidence": insight.confidence,
+                    "sample_count": insight.sample_count,
+                    "description": insight.description,
+                }
+                insight.active = False
+                conn.execute(
+                    "UPDATE insights SET active = 0 WHERE id = ?",
+                    (insight.id,),
+                )
+
+        conn.execute(
+            """
+            INSERT INTO reflection_state (key, value)
+            VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (sentinel, json.dumps({"reason": "raw_lux_self_glow", "rows": audit})),
+        )
+        conn.commit()
+        if audit:
+            print(
+                f"[SelfReflection] Retracted {len(audit)} raw-light insights",
+                file=sys.stderr,
+                flush=True,
+            )
 
     def _save_insight(self, insight: SelfInsight):
         """Persist an insight to database."""
@@ -1099,8 +1148,12 @@ class SelfReflectionSystem:
 
         patterns = []
 
-        # Analyze light level correlations
-        light_pattern = self._analyze_sensor_correlation(rows, "light_lux", "Light")
+        # Analyze only the gated external residual. Historical raw VEML7700
+        # values mix room light with DotStar self-glow and are not admissible
+        # evidence for an environmental pattern.
+        light_pattern = self._analyze_sensor_correlation(
+            rows, "external_light_lux", "Light"
+        )
         if light_pattern:
             patterns.append(light_pattern)
 
@@ -1161,7 +1214,7 @@ class SelfReflectionSystem:
         CONJUNCTIVE_MAX_PATTERNS = 3
 
         input_specs = [
-            ("light_lux", "light"),
+            ("external_light_lux", "light"),
             ("ambient_temp_c", "temperature"),
             ("humidity_pct", "humidity"),
             ("interaction_level", "interaction"),
@@ -1605,6 +1658,19 @@ class SelfReflectionSystem:
                 if abs(pattern.correlation) > 0.1:
                     existing.validation_count += 1
                     existing.last_validated = now
+                    if not existing.active:
+                        # Raw-light migration rows can return only through the
+                        # new external-residual analyzer. Rebuild their claim
+                        # strength from current evidence instead of restoring
+                        # the contaminated historical confidence.
+                        existing.active = True
+                        existing.description = self._pattern_to_description(pattern)
+                        existing.sample_count = pattern.sample_count
+                        existing.confidence = min(
+                            1.0,
+                            min(1.0, pattern.sample_count / 100)
+                            + min(0.3, abs(pattern.correlation)),
+                        )
                 else:
                     existing.contradiction_count += 1
                 self._save_insight(existing)
@@ -1720,8 +1786,9 @@ class SelfReflectionSystem:
 
         for pref in growth._preferences.values():
             insight_id = f"pref_{pref.name}"
-            eligible = pref.confidence >= 0.8 and pref.observation_count >= 10
-            description = f"i know this about myself: {pref.description.lower()}"
+            evidence_count = pref.independent_evidence_count
+            eligible = pref.confidence >= 0.8 and evidence_count >= 10
+            description = f"observational pattern: {pref.description.lower()}"
 
             # Existing preference insights follow their source through both
             # confirmation and retraction.  The old early-continue made the
@@ -1729,11 +1796,11 @@ class SelfReflectionSystem:
             if insight_id in self._insights:
                 existing = self._insights[insight_id]
                 if eligible:
-                    has_new_evidence = pref.observation_count > existing.sample_count
+                    has_new_evidence = evidence_count > existing.sample_count
                     was_inactive = not existing.active
                     existing.active = True
                     existing.confidence = pref.confidence
-                    existing.sample_count = pref.observation_count
+                    existing.sample_count = evidence_count
                     existing.description = description
                     if has_new_evidence or was_inactive:
                         existing.validation_count += 1
@@ -1742,18 +1809,18 @@ class SelfReflectionSystem:
                 elif pref.confidence <= 0.7 and existing.active:
                     existing.active = False
                     existing.confidence = pref.confidence
-                    existing.sample_count = pref.observation_count
+                    existing.sample_count = evidence_count
                     existing.description = description
                     existing.contradiction_count += 1
                     existing.last_validated = now
                     self._save_insight(existing)
                 elif (existing.confidence != pref.confidence
-                      or existing.sample_count != pref.observation_count
+                      or existing.sample_count != evidence_count
                       or existing.description != description):
                     # Hysteresis band (0.7, 0.8): retain active/inactive status,
                     # but do not let the derived snapshot drift from its source.
                     existing.confidence = pref.confidence
-                    existing.sample_count = pref.observation_count
+                    existing.sample_count = evidence_count
                     existing.description = description
                     self._save_insight(existing)
                 continue
@@ -1775,7 +1842,7 @@ class SelfReflectionSystem:
                 category=category,
                 description=description,
                 confidence=pref.confidence,
-                sample_count=pref.observation_count,
+                sample_count=evidence_count,
                 discovered_at=now,
                 last_validated=now,
                 validation_count=1,
@@ -1908,7 +1975,7 @@ class SelfReflectionSystem:
 
         # Drawing + wellness
         wp = growth._preferences.get("drawing_wellbeing")
-        if wp and wp.confidence > 0.6 and wp.observation_count >= 5:
+        if wp and wp.confidence > 0.6 and wp.independent_evidence_count >= 5:
             iid = "drawing_wellness"
             if iid not in self._insights:
                 desc = "drawing seems to help me feel better" if wp.value > 0.5 \
@@ -1916,7 +1983,7 @@ class SelfReflectionSystem:
                 insight = SelfInsight(
                     id=iid, category=InsightCategory.BEHAVIORAL,
                     description=desc, confidence=wp.confidence,
-                    sample_count=wp.observation_count,
+                    sample_count=wp.independent_evidence_count,
                     discovered_at=now, last_validated=now,
                     validation_count=1, contradiction_count=0,
                 )
@@ -1934,31 +2001,51 @@ class SelfReflectionSystem:
         ]
         for pref_name, desc in drawing_checks:
             dp = growth._preferences.get(pref_name)
-            if dp and dp.confidence > 0.6 and dp.observation_count >= 5:
-                iid = pref_name  # e.g. "drawing_night" — no double prefix
-                if iid not in self._insights:
-                    insight = SelfInsight(
-                        id=iid, category=InsightCategory.BEHAVIORAL,
-                        description=desc, confidence=dp.confidence,
-                        sample_count=dp.observation_count,
-                        discovered_at=now, last_validated=now,
-                        validation_count=1, contradiction_count=0,
-                    )
-                    self._save_insight(insight)
-                    new_insights.append(insight)
-                    print(f"[SelfReflection] Drawing insight: {desc}",
-                          file=sys.stderr, flush=True)
+            iid = pref_name  # e.g. "drawing_night" — no double prefix
+            source_is_ready = (
+                dp is not None
+                and dp.confidence > 0.6
+                and dp.independent_evidence_count >= 5
+            )
+            existing = self._insights.get(iid)
+            if not source_is_ready:
+                if existing is not None and existing.active:
+                    existing.active = False
+                    self._save_insight(existing)
+                continue
+            if existing is not None:
+                existing.active = True
+                existing.description = desc
+                existing.confidence = dp.confidence
+                existing.sample_count = dp.independent_evidence_count
+                existing.last_validated = now
+                existing.validation_count += 1
+                self._save_insight(existing)
+                continue
+
+            insight = SelfInsight(
+                id=iid, category=InsightCategory.BEHAVIORAL,
+                description=desc, confidence=dp.confidence,
+                sample_count=dp.independent_evidence_count,
+                discovered_at=now, last_validated=now,
+                validation_count=1, contradiction_count=0,
+            )
+            self._save_insight(insight)
+            new_insights.append(insight)
+            print(f"[SelfReflection] Drawing insight: {desc}",
+                  file=sys.stderr, flush=True)
 
         # Abandonment pattern
         abandon_pref = growth._preferences.get("drawing_abandonment_rate")
-        if abandon_pref and abandon_pref.confidence > 0.6 and abandon_pref.observation_count >= 5:
+        if (abandon_pref and abandon_pref.confidence > 0.6
+                and abandon_pref.independent_evidence_count >= 5):
             iid = "drawing_abandonment"
             if iid not in self._insights:
                 desc = "i sometimes abandon drawings that aren't going anywhere"
                 insight = SelfInsight(
                     id=iid, category=InsightCategory.BEHAVIORAL,
                     description=desc, confidence=abandon_pref.confidence,
-                    sample_count=abandon_pref.observation_count,
+                    sample_count=abandon_pref.independent_evidence_count,
                     discovered_at=now, last_validated=now,
                     validation_count=1, contradiction_count=0,
                 )

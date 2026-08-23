@@ -20,6 +20,12 @@ from anima_mcp.self_schema import (
 )
 
 
+READY_EXTERNAL_LIGHT = {
+    "status": "ready_shadow",
+    "external_lux_residual": 125.0,
+}
+
+
 class TestSchemaNode:
     """Test SchemaNode dataclass."""
 
@@ -63,6 +69,7 @@ class TestSchemaEdge:
         assert d["source"] == "sensor_light"
         assert d["target"] == "anima_clarity"
         assert d["weight"] == 0.4
+        assert d["relation"] == "influence"
 
     def test_negative_weight(self):
         """Test edge with negative weight (inhibitory)."""
@@ -176,7 +183,7 @@ class TestBeliefLabel:
 
     def test_known_belief_labels(self):
         """Test known belief IDs return readable labels."""
-        assert _belief_label("light_sensitive") == "Light sensitive"
+        assert _belief_label("light_sensitive") == "Raw-lux sensitive"
         assert _belief_label("temp_sensitive") == "Temp sensitive"
         assert _belief_label("stability_recovery") == "Stability recovery"
         assert _belief_label("my_leds_affect_lux") == "LEDs affect lux"
@@ -250,12 +257,38 @@ class TestExtractSelfSchema:
 
         light = [n for n in schema.nodes if n.node_id == "sensor_light"][0]
         assert abs(light.value - 0.5) < 0.01
+        assert light.label == "Raw lux"
+        assert light.raw_value["composition"] == "room_light_plus_dotstar_glow"
+        assert not any(n.node_id == "sensor_external_light" for n in schema.nodes)
+        assert not any(
+            e.source_id == "sensor_light" and e.target_id == "anima_clarity"
+            for e in schema.edges
+        )
 
         temp = [n for n in schema.nodes if n.node_id == "sensor_temp"][0]
         assert abs(temp.value - 0.5) < 0.01
 
         cpu = [n for n in schema.nodes if n.node_id == "sensor_cpu"][0]
         assert abs(cpu.value - 0.25) < 0.01
+
+    def test_ready_residual_adds_the_only_light_to_clarity_edge(self):
+        schema = extract_self_schema(light_attribution=READY_EXTERNAL_LIGHT)
+
+        external = [
+            n for n in schema.nodes if n.node_id == "sensor_external_light"
+        ]
+        assert len(external) == 1
+        assert external[0].label == "Ext lux"
+        assert external[0].raw_value["lux"] == 125.0
+        assert any(
+            e.source_id == "sensor_external_light"
+            and e.target_id == "anima_clarity"
+            for e in schema.edges
+        )
+        assert not any(
+            e.source_id == "sensor_light" and e.target_id == "anima_clarity"
+            for e in schema.edges
+        )
 
     def test_extraction_excludes_low_confidence_preferences(self):
         """Test preferences below threshold are excluded."""
@@ -303,10 +336,29 @@ class TestExtractSelfSchema:
             },
         }
 
-        schema = extract_self_schema(self_model=mock_self_model)
+        schema = extract_self_schema(
+            self_model=mock_self_model,
+            light_attribution=READY_EXTERNAL_LIGHT,
+        )
 
         belief_nodes = [n for n in schema.nodes if n.node_type == "belief"]
         assert len(belief_nodes) == 0
+
+    def test_extraction_excludes_one_sample_belief_from_graph(self):
+        mock_self_model = MagicMock()
+        mock_self_model.get_belief_summary.return_value = {
+            "my_leds_affect_lux": {
+                "description": "My LEDs affect my light sensor",
+                "confidence": 0.99,
+                "value": 0.9,
+                "strength": "very confident",
+                "evidence": "1+ / 0-",
+            },
+        }
+
+        schema = extract_self_schema(self_model=mock_self_model)
+
+        assert not any(n.node_type == "belief" for n in schema.nodes)
 
     def test_extraction_excludes_low_confidence_beliefs(self):
         """Test beliefs below confidence threshold are excluded."""
@@ -353,11 +405,10 @@ class TestExtractSelfSchema:
 
         # Check labels
         labels = [n.label for n in belief_nodes]
-        assert "Light sensitive" in labels
+        assert "Raw-lux sensitive" in labels
         assert "LEDs affect lux" in labels
 
-    def test_belief_edges_connect_to_anima(self):
-        """Test belief nodes have edges to their mapped anima dimension."""
+    def test_only_anima_hypotheses_connect_to_anima(self):
         mock_self_model = MagicMock()
         mock_self_model.get_belief_summary.return_value = {
             "light_sensitive": {
@@ -378,18 +429,17 @@ class TestExtractSelfSchema:
 
         schema = extract_self_schema(self_model=mock_self_model)
 
-        # light_sensitive should connect to anima_clarity
+        # Raw sensor sensitivity describes surprise, not computational clarity.
         light_edges = [e for e in schema.edges if e.source_id == "belief_light_sensitive"]
-        assert len(light_edges) == 1
-        assert light_edges[0].target_id == "anima_clarity"
+        assert light_edges == []
 
         # question_asking_tendency should connect to anima_clarity
         question_edges = [e for e in schema.edges if e.source_id == "belief_question_asking_tendency"]
         assert len(question_edges) == 1
         assert question_edges[0].target_id == "anima_clarity"
+        assert question_edges[0].relation == "belief_about"
 
-    def test_my_leds_belief_connects_to_presence(self):
-        """Test my_leds_affect_lux belief connects to anima_presence."""
+    def test_my_leds_belief_stays_about_raw_sensor(self):
         mock_self_model = MagicMock()
         mock_self_model.get_belief_summary.return_value = {
             "my_leds_affect_lux": {
@@ -404,8 +454,13 @@ class TestExtractSelfSchema:
         schema = extract_self_schema(self_model=mock_self_model)
 
         led_edges = [e for e in schema.edges if e.source_id == "belief_my_leds_affect_lux"]
-        assert len(led_edges) == 1
-        assert led_edges[0].target_id == "anima_presence"
+        assert led_edges == []
+        assert any(
+            e.source_id == "sensor_light"
+            and e.target_id == "belief_my_leds_affect_lux"
+            and e.relation == "evidence_source"
+            for e in schema.edges
+        )
 
     def test_node_ids_unique(self):
         """Test all node IDs are unique."""
@@ -454,7 +509,7 @@ class TestExtractSelfSchema:
             assert edge.target_id in node_ids, f"Edge target {edge.target_id} not in nodes"
 
     def test_semantic_sensor_to_belief_edges(self):
-        """Test sensor→belief edges for beliefs that modulate sensor→anima."""
+        """Test sensor→belief edges are explicitly semantic evidence links."""
         mock_self_model = MagicMock()
         mock_self_model.get_belief_summary.return_value = {
             "temp_clarity_correlation": {
@@ -465,12 +520,20 @@ class TestExtractSelfSchema:
             },
         }
 
-        schema = extract_self_schema(self_model=mock_self_model)
+        schema = extract_self_schema(
+            self_model=mock_self_model,
+            light_attribution=READY_EXTERNAL_LIGHT,
+        )
 
         sensor_to_belief = [e for e in schema.edges if e.target_id.startswith("belief_") and e.source_id.startswith("sensor_")]
         assert len(sensor_to_belief) >= 2
+        assert all(e.relation == "evidence_source" for e in sensor_to_belief)
         assert any(e.source_id == "sensor_temp" and e.target_id == "belief_temp_clarity_correlation" for e in sensor_to_belief)
-        assert any(e.source_id == "sensor_light" and e.target_id == "belief_light_sensitive" for e in sensor_to_belief)
+        assert any(
+            e.source_id == "sensor_light"
+            and e.target_id == "belief_light_sensitive"
+            for e in sensor_to_belief
+        )
 
 
 class TestGetCurrentSchema:

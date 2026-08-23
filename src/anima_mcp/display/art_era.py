@@ -131,6 +131,7 @@ class ArtEra(Protocol):
 
         Returns (rgb_tuple, hue_category_string).
         hue_category is one of: "warm", "cool", "neutral", "vibrant" (for mood tracker).
-        light_regime: "dark" (<20 lux), "dim" (20-200), "bright" (>200) — total visual field.
+        light_regime: "dark", "dim", or "bright" from gated external lux;
+            "unknown" keeps the era's neutral palette behavior.
         """
         ...

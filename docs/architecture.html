@@ -131,7 +131,7 @@
             height: 100%; border-radius: 2px; transition: width 1s ease;
         }
 
-        /* EEG bands */
+        /* Computational dynamics rows (legacy class name retained) */
         .eeg-band {
             display: flex; align-items: center; gap: 8px; height: 20px;
         }
@@ -361,7 +361,7 @@
             document.getElementById('content').innerHTML = `
                 ${renderPhysical(d.physical)}
                 ${flowLine()}
-                ${renderNeural(d.neural)}
+                ${renderNeural(d.neural, d.neural_provenance)}
                 ${flowLine()}
                 ${renderAnima(d.body_anima || d.anima, d.feeling)}
                 ${flowLine()}
@@ -411,20 +411,20 @@
             const content = `<div class="metrics-grid">
                 ${p.ambient_temp_c != null ? metricBar('temp', p.ambient_temp_c, 50, c, `${p.ambient_temp_c.toFixed(1)}\u00b0C`) : ''}
                 ${p.humidity_pct != null ? metricBar('humidity', p.humidity_pct, 100, c, `${p.humidity_pct.toFixed(0)}%`) : ''}
-                ${p.light_lux != null ? metricBar('light', p.light_lux, 5000, c, `${Math.round(p.light_lux)} lux`) : ''}
+                ${p.light_lux != null ? metricBar('raw light (room+LED)', p.light_lux, 5000, c, `${Math.round(p.light_lux)} lux`) : ''}
                 ${p.pressure_hpa != null ? metricBar('pressure', p.pressure_hpa, 1013, c, `${p.pressure_hpa.toFixed(0)} hPa`) : ''}
             </div>`;
             return layerCard('\u25ce', 'Physical Sensors', 'exteroception', 'var(--accent-physical)', content);
         }
 
-        function renderNeural(n) {
+        function renderNeural(n, provenance) {
             if (!n || Object.keys(n).length === 0) return '';
             const bands = [
-                { name: '\u03b4 delta', key: 'delta', freq: '0.5\u20134 Hz', color: '#7a6ec4' },
-                { name: '\u03b8 theta', key: 'theta', freq: '4\u20138 Hz', color: '#9b8ed4' },
-                { name: '\u03b1 alpha', key: 'alpha', freq: '8\u201313 Hz', color: '#b8a4e8' },
-                { name: '\u03b2 beta',  key: 'beta',  freq: '13\u201330 Hz', color: '#d4b8f0' },
-                { name: '\u03b3 gamma', key: 'gamma', freq: '30\u2013100 Hz', color: '#e8ccf8' },
+                { name: '\u03b4 delta', key: 'delta', source: 'cpu/temp', color: '#7a6ec4' },
+                { name: '\u03b8 theta', key: 'theta', source: 'i/o', color: '#9b8ed4' },
+                { name: '\u03b1 alpha', key: 'alpha', source: '1 \u2212 beta', color: '#b8a4e8' },
+                { name: '\u03b2 beta',  key: 'beta',  source: 'cpu', color: '#d4b8f0' },
+                { name: '\u03b3 gamma', key: 'gamma', source: 'scheduler', color: '#e8ccf8' },
             ];
 
             const rows = bands.map(b => {
@@ -442,15 +442,15 @@
                             <div class="eeg-fill" style="width: ${pct}%; ${bg} ${glow}"></div>
                         </div>
                         <span class="eeg-val" style="color: ${valColor};">${val.toFixed(2)}</span>
-                        <span class="eeg-freq">${b.freq}</span>
+                        <span class="eeg-freq">${b.source}</span>
                     </div>`;
             }).join('');
 
             const content = `<div style="display: flex; flex-direction: column; gap: 4px;">${rows}</div>
                 <div style="margin-top: 8px; font-size: 9px; color: var(--text-faint); font-family: var(--mono); text-align: right;">
-                    computational proprioception
+                    ${provenance?.independent_views ?? 4} independent views &middot; alpha is derived &middot; not physical EEG
                 </div>`;
-            return layerCard('\u03c8', 'Neural Signals', 'interoception', 'var(--accent-neural)', content);
+            return layerCard('\u03c8', 'Computational Dynamics', 'normalized Pi substrate views', 'var(--accent-neural)', content);
         }
 
         function renderAnima(a, feeling) {

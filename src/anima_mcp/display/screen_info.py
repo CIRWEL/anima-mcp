@@ -104,7 +104,6 @@ class InfoMixin:
             C_WARM = (215, 160,  45)
             C_HOT  = (200,  80,  80)
             C_COOL = ( 65, 160, 220)
-            C_VIO  = (140,  90, 210)
 
             def _dim(c, f): return tuple(int(x * f) for x in c)
 
@@ -161,20 +160,14 @@ class InfoMixin:
 
             light = readings.light_lux
             if light is not None:
-                if light > 1000:
-                    feel, color = "vivid", C_WARM
-                elif light > 500:
-                    feel, color = "bright", C_WARM
-                elif light < 5:
-                    feel, color = "dark", C_VIO
-                elif light < 50:
-                    feel, color = "dim", C_VIO
-                else:
-                    feel, color = "soft", (150, 180, 200)
+                # This physical reading mixes room light with the adjacent
+                # DotStars. Show it as raw telemetry; without attribution it
+                # cannot honestly be called dark, dim, or bright room light.
+                feel, color = "room+LED", (150, 180, 200)
                 frac = max(0.0, min(1.0, light / 2000.0))
-                env_gauges.append(("light", f"{light:.0f} lux", frac, color, feel))
+                env_gauges.append(("raw lux", f"{light:.0f}", frac, color, feel))
             else:
-                env_gauges.append(("light", "--", 0.0, MUTED, ""))
+                env_gauges.append(("raw lux", "--", 0.0, MUTED, ""))
 
             # Track bar y positions for sparklines
             spark_bar_ys = []
@@ -324,7 +317,7 @@ class InfoMixin:
             hc = COLORS.SOFT_YELLOW if hum < 30 else COLORS.SOFT_BLUE if hum > 70 else COLORS.SOFT_GREEN
             lines_with_colors.append((f"humidity: {hum:.0f}%", hc))
         if readings.light_lux:
-            lines_with_colors.append((f"light: {readings.light_lux:.0f}", COLORS.TEXT_PRIMARY))
+            lines_with_colors.append((f"raw lux: {readings.light_lux:.0f} (room+LED)", COLORS.TEXT_PRIMARY))
         cpu_t = readings.cpu_temp_c or 0
         lines_with_colors.append((f"cpu: {cpu_t:.1f}\u00b0C", COLORS.SOFT_GREEN))
         if getattr(readings, 'undervoltage_now', None):

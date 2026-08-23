@@ -281,19 +281,20 @@ def generate_status_text(
         f"Presence: {anima.presence:.2f}",
     ]
 
-    # Add neural info if available
+    # Add computational-dynamics views if available. The Greek names are
+    # compatibility labels, not frequency measurements or EEG.
     if readings:
         alpha = getattr(readings, 'eeg_alpha_power', None)
         beta = getattr(readings, 'eeg_beta_power', None)
         gamma = getattr(readings, 'eeg_gamma_power', None)
         if any(v is not None for v in [alpha, beta, gamma]):
-            neural_parts = ["Neural:"]
+            neural_parts = ["Compute dynamics (not EEG):"]
             if alpha is not None:
-                neural_parts.append(f"Alpha={alpha:.2f}")
+                neural_parts.append(f"alpha(1-beta)={alpha:.2f}")
             if beta is not None:
-                neural_parts.append(f"Beta={beta:.2f}")
+                neural_parts.append(f"beta(cpu)={beta:.2f}")
             if gamma is not None:
-                neural_parts.append(f"Gamma={gamma:.2f}")
+                neural_parts.append(f"gamma(scheduler)={gamma:.2f}")
             status_parts.append(" ".join(neural_parts))
 
     # Name the producer: this is Lumen's body projection, not UNITARES state.
@@ -344,7 +345,9 @@ def compute_body_eisv_projection_from_readings(
     """
     from .anima import sense_self
     
-    anima = sense_self(readings)
+    # A readings-only projection has no capture-aligned efference copy.
+    # Treat environmental light as unknown instead of promoting raw self-glow.
+    anima = sense_self(readings, external_light_lux=None)
     return anima_to_body_eisv_projection(
         anima, readings, neural_weight, physical_weight
     )

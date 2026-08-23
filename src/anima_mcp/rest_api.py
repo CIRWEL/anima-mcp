@@ -25,6 +25,7 @@ from .eisv_mapper import (
     BODY_EISV_PROJECTION_SCHEMA,
     anima_to_body_eisv_projection,
 )
+from .computational_neural import computational_neural_provenance
 from .server_state import extract_neural_bands
 from .tool_registry import HANDLERS
 
@@ -358,7 +359,12 @@ async def rest_state(request):
             "surprise": 0,
             "cpu_temp": readings.cpu_temp_c or 0,
             "ambient_temp": readings.ambient_temp_c or 0,
+            # Compatibility name retained for the Control Center; the explicit
+            # fields prevent clients from mistaking the mixed physical channel
+            # for an environmental measurement.
             "light": readings.light_lux or 0,
+            "raw_light_lux": readings.light_lux or 0,
+            "light_composition": "room_light_plus_dotstar_glow",
             "light_attribution": light_attribution,
             "humidity": readings.humidity_pct or 0,
             "pressure": readings.pressure_hpa,
@@ -366,6 +372,7 @@ async def rest_state(request):
             "memory_percent": readings.memory_percent or 0,
             "disk_percent": readings.disk_percent or 0,
             "neural": neural,
+            "neural_provenance": computational_neural_provenance(),
             "governance": {
                 "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
                 "margin": gov.get("margin", "") if gov else "",
@@ -805,6 +812,8 @@ async def rest_layers(request):
             "ambient_temp_c": readings.ambient_temp_c or 0,
             "humidity_pct": readings.humidity_pct or 0,
             "light_lux": readings.light_lux or 0,
+            "raw_light_lux": readings.light_lux or 0,
+            "light_lux_composition": "room_light_plus_dotstar_glow",
             "pressure_hpa": readings.pressure_hpa,
         }
 
@@ -887,6 +896,7 @@ async def rest_layers(request):
         return JSONResponse({
             "physical": physical,
             "neural": neural,
+            "neural_provenance": computational_neural_provenance(),
             "feeling": feeling,
             "governance": governance_data,
             "system": system,
@@ -910,7 +920,13 @@ async def rest_schema_data(request):
     if auth_error:
         return auth_error
     try:
-        from .accessors import _get_schema_hub, _get_store, _get_readings_and_anima, _get_growth
+        from .accessors import (
+            _get_growth,
+            _get_last_shm_data,
+            _get_readings_and_anima,
+            _get_schema_hub,
+            _get_store,
+        )
 
         hub = _get_schema_hub()
 
@@ -932,6 +948,9 @@ async def rest_schema_data(request):
                     growth_system=_get_growth(),
                     include_preferences=True,
                     self_model=get_self_model(),
+                    light_attribution=(
+                        (_get_last_shm_data() or {}).get("light_attribution")
+                    ),
                 ).to_dict()
             except Exception:
                 pass

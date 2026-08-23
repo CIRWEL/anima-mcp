@@ -78,13 +78,14 @@ class SensorReadings:
     eeg_aux3: Optional[float] = None  # Auxiliary channel 3 (Reserved)
     eeg_aux4: Optional[float] = None  # Auxiliary channel 4 (Reserved)
 
-    # EEG frequency band powers (from Computational Proprioception)
-    # These are actively used - derived from environment + computation, not physical EEG hardware
-    eeg_delta_power: Optional[float] = None  # 0.5-4 Hz: Deep stability
-    eeg_theta_power: Optional[float] = None  # 4-8 Hz: Meditative state
-    eeg_alpha_power: Optional[float] = None  # 8-13 Hz: Relaxed awareness
-    eeg_beta_power: Optional[float] = None  # 13-30 Hz: Active focus
-    eeg_gamma_power: Optional[float] = None  # 30-100 Hz: High cognitive presence
+    # Normalized computational views in legacy ``eeg_*`` schema fields. These
+    # are not frequency powers: delta=CPU/thermal stability, theta=disk/network
+    # I/O, alpha=1-beta, beta=CPU utilization, gamma=switch/interrupt activity.
+    eeg_delta_power: Optional[float] = None
+    eeg_theta_power: Optional[float] = None
+    eeg_alpha_power: Optional[float] = None
+    eeg_beta_power: Optional[float] = None
+    eeg_gamma_power: Optional[float] = None
 
     def to_dict(self) -> dict:
         return {
@@ -122,7 +123,7 @@ class SensorReadings:
             "eeg_aux2": self.eeg_aux2,
             "eeg_aux3": self.eeg_aux3,
             "eeg_aux4": self.eeg_aux4,
-            # EEG frequency band powers
+            # Computational views in legacy EEG-named fields
             "eeg_delta_power": self.eeg_delta_power,
             "eeg_theta_power": self.eeg_theta_power,
             "eeg_alpha_power": self.eeg_alpha_power,

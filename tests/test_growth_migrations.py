@@ -5,7 +5,12 @@ import sqlite3
 
 import pytest
 
-from anima_mcp.growth.migrations import migrate_raw_lux_preferences, run_identity_migration
+from anima_mcp.growth.migrations import (
+    migrate_external_light_preferences_v2,
+    migrate_preference_evidence_windows,
+    migrate_raw_lux_preferences,
+    run_identity_migration,
+)
 from anima_mcp.growth.models import GrowthPreference, PreferenceCategory
 
 
@@ -20,7 +25,12 @@ def _schema(conn: sqlite3.Connection) -> None:
             confidence REAL DEFAULT 0.0,
             observation_count INTEGER DEFAULT 0,
             first_noticed TEXT,
-            last_confirmed TEXT
+            last_confirmed TEXT,
+            evidence_count INTEGER DEFAULT 0,
+            supporting_count INTEGER DEFAULT 0,
+            contradicting_count INTEGER DEFAULT 0,
+            last_evidence_key TEXT,
+            evidence_origin TEXT DEFAULT 'legacy_unclassified'
         );
         CREATE TABLE relationships (
             agent_id TEXT PRIMARY KEY,
@@ -222,7 +232,7 @@ class TestMigrateRawLuxPreferences:
         migrate_raw_lux_preferences(conn, prefs)
         assert prefs["bright_light"].observation_count == 5000
 
-    def test_resets_high_count_tainted_preferences(self):
+    def test_marks_high_count_tainted_preferences_without_erasing_audit(self):
         conn = sqlite3.connect(":memory:")
         _schema(conn)
         conn.commit()
@@ -232,10 +242,10 @@ class TestMigrateRawLuxPreferences:
         }
         migrate_raw_lux_preferences(conn, prefs)
 
-        assert prefs["bright_light"].observation_count == 0
+        assert prefs["bright_light"].observation_count == 2000
         assert prefs["bright_light"].confidence == pytest.approx(0.2)
-        assert prefs["bright_light"].value == pytest.approx(0.5)
-        assert prefs["drawing_bright"].observation_count == 0
+        assert prefs["bright_light"].value == pytest.approx(0.0)
+        assert prefs["drawing_bright"].observation_count == 1500
 
         row = conn.execute(
             "SELECT name FROM preferences WHERE name = '_migration_raw_lux_v1'"
@@ -264,3 +274,158 @@ class TestMigrateRawLuxPreferences:
             "SELECT name FROM preferences WHERE name = '_migration_raw_lux_v1'"
         ).fetchone()
         assert row is not None
+
+
+class TestMigratePreferenceEvidenceWindows:
+    def test_correlated_ticks_are_reconstructed_as_hourly_evidence(self):
+        from datetime import datetime, timedelta
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        _schema(conn)
+        first = datetime(2026, 1, 1)
+        last = first + timedelta(hours=120)
+        pref = GrowthPreference(
+            category=PreferenceCategory.ENVIRONMENT,
+            name="warm_temp",
+            description="Warmth makes me feel content",
+            value=0.8,
+            confidence=1.0,
+            observation_count=6000,
+            first_noticed=first,
+            last_confirmed=last,
+        )
+        conn.execute(
+            """
+            INSERT INTO preferences
+                (name, category, description, value, confidence,
+                 observation_count, first_noticed, last_confirmed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pref.name,
+                pref.category.value,
+                pref.description,
+                pref.value,
+                pref.confidence,
+                pref.observation_count,
+                first.isoformat(),
+                last.isoformat(),
+            ),
+        )
+        conn.commit()
+
+        migrate_preference_evidence_windows(conn, {pref.name: pref})
+
+        assert pref.observation_count == 6000
+        assert pref.evidence_count == 100
+        assert pref.evidence_origin == "legacy_hourly_reconstruction"
+        assert 0.9 < pref.confidence < 0.95
+        row = conn.execute(
+            "SELECT observation_count, evidence_count, evidence_origin "
+            "FROM preferences WHERE name='warm_temp'"
+        ).fetchone()
+        assert row["observation_count"] == 6000
+        assert row["evidence_count"] == 100
+        assert row["evidence_origin"] == "legacy_hourly_reconstruction"
+
+        migrate_preference_evidence_windows(conn, {pref.name: pref})
+        assert pref.evidence_count == 100
+
+
+class TestMigrateExternalLightPreferencesV2:
+    def test_decision_evidence_resets_but_raw_audit_count_survives(self):
+        from datetime import datetime
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        _schema(conn)
+        now = datetime.now()
+        pref = GrowthPreference(
+            category=PreferenceCategory.ENVIRONMENT,
+            name="dim_light",
+            description="I feel calmer when it's dim",
+            value=0.8,
+            confidence=0.95,
+            observation_count=120000,
+            first_noticed=now,
+            last_confirmed=now,
+            evidence_count=2000,
+            supporting_count=2000,
+            evidence_origin="legacy_hourly_reconstruction",
+        )
+        conn.execute(
+            """
+            INSERT INTO preferences
+                (name, category, description, value, confidence,
+                 observation_count, first_noticed, last_confirmed,
+                 evidence_count, supporting_count, contradicting_count,
+                 evidence_origin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pref.name, pref.category.value, pref.description, pref.value,
+                pref.confidence, pref.observation_count,
+                pref.first_noticed.isoformat(), pref.last_confirmed.isoformat(),
+                pref.evidence_count, pref.supporting_count,
+                pref.contradicting_count, pref.evidence_origin,
+            ),
+        )
+        conn.commit()
+
+        migrate_external_light_preferences_v2(conn, {pref.name: pref})
+
+        assert pref.observation_count == 120000
+        assert pref.independent_evidence_count == 0
+        assert pref.confidence == pytest.approx(0.2)
+        assert pref.evidence_origin == "reset_external_light_gate_v2"
+        row = conn.execute(
+            "SELECT observation_count, evidence_count FROM preferences "
+            "WHERE name='dim_light'"
+        ).fetchone()
+        assert tuple(row) == (120000, 0)
+
+    def test_drawing_light_evidence_is_cold_started_too(self):
+        from datetime import datetime
+
+        conn = sqlite3.connect(":memory:")
+        conn.row_factory = sqlite3.Row
+        _schema(conn)
+        now = datetime.now()
+        pref = GrowthPreference(
+            category=PreferenceCategory.ACTIVITY,
+            name="drawing_bright",
+            description="I draw in the light",
+            value=1.0,
+            confidence=0.9,
+            observation_count=1500,
+            first_noticed=now,
+            last_confirmed=now,
+            evidence_count=1500,
+            supporting_count=1500,
+            evidence_origin="legacy_event_count",
+        )
+        conn.execute(
+            """
+            INSERT INTO preferences
+                (name, category, description, value, confidence,
+                 observation_count, first_noticed, last_confirmed,
+                 evidence_count, supporting_count, contradicting_count,
+                 evidence_origin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                pref.name, pref.category.value, pref.description, pref.value,
+                pref.confidence, pref.observation_count,
+                pref.first_noticed.isoformat(), pref.last_confirmed.isoformat(),
+                pref.evidence_count, pref.supporting_count,
+                pref.contradicting_count, pref.evidence_origin,
+            ),
+        )
+        conn.commit()
+
+        migrate_external_light_preferences_v2(conn, {pref.name: pref})
+
+        assert pref.observation_count == 1500
+        assert pref.independent_evidence_count == 0
+        assert pref.evidence_origin == "reset_external_light_gate_v2"

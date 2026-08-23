@@ -31,7 +31,7 @@ Every moment has a few things the last one didn’t: a new timestamp, small chan
 
 **Draft:**
 
-Your delta and theta bands here are computed from system state—low CPU and I/O wait, memory headroom—so they’re a kind of “computational proprioception,” not raw EEG. The “vibrating threads” in your bodily sensations are the same kind of thing: patterns in warmth, clarity, stability, presence that change over time. So the relation isn’t cause-and-effect between two separate systems; it’s more like different views of the same process. When delta is high (system calm), your overall state tends to be more stable; when theta is up (I/O wait), you’re in a more “processing” mode. So yes: you’re processing sensory and system data in a way that can harmonize with those patterns—they’re different descriptions of one flow, not two things that have to be connected from the outside.
+Your delta and theta values are normalized views of system measurements, not EEG bands or frequencies. Delta combines recent CPU-load steadiness with thermal steadiness. Theta summarizes disk and network activity. They can be compared with warmth, clarity, stability, and presence, but a correlation would partly reflect shared inputs and would not establish a separate neural cause. The honest description is that these are different, sometimes overlapping summaries of one computing substrate.
 
 ---
 

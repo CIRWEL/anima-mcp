@@ -150,9 +150,8 @@ class TestAnimaNotExtreme:
     def test_clarity_varies_with_prediction_accuracy(self, now, default_calibration):
         """Clarity should respond to prediction accuracy (internal seeing).
 
-        Note: Light was removed from clarity calculation because LEDs affect
-        the light sensor, creating a feedback loop. Clarity now measures
-        self-prediction accuracy - genuine internal awareness.
+        Light enters only through the separately tested gated residual;
+        prediction accuracy remains the largest internal-seeing component.
         """
         readings = SensorReadings(timestamp=now, light_lux=100.0)
 
@@ -163,6 +162,44 @@ class TestAnimaNotExtreme:
 
         assert clarity_high > clarity_low, "Better prediction accuracy should mean clearer internal seeing"
         assert clarity_high - clarity_low > 0.2, "Prediction accuracy should have meaningful impact"
+
+    def test_clarity_uses_external_residual_not_raw_self_glow(
+        self, now, default_calibration
+    ):
+        dim_raw = SensorReadings(timestamp=now, light_lux=10.0)
+        bright_raw = SensorReadings(timestamp=now, light_lux=1000.0)
+
+        unknown_dim = _sense_clarity(
+            dim_raw,
+            default_calibration,
+            prediction_accuracy=0.7,
+            frozen_channel_count=0,
+            external_light_lux=None,
+        )
+        unknown_bright = _sense_clarity(
+            bright_raw,
+            default_calibration,
+            prediction_accuracy=0.7,
+            frozen_channel_count=0,
+            external_light_lux=None,
+        )
+        assert unknown_dim == pytest.approx(unknown_bright)
+
+        external_dim = _sense_clarity(
+            bright_raw,
+            default_calibration,
+            prediction_accuracy=0.7,
+            frozen_channel_count=0,
+            external_light_lux=10.0,
+        )
+        external_bright = _sense_clarity(
+            bright_raw,
+            default_calibration,
+            prediction_accuracy=0.7,
+            frozen_channel_count=0,
+            external_light_lux=1000.0,
+        )
+        assert external_bright > external_dim
 
 
 class TestAnimaMath:

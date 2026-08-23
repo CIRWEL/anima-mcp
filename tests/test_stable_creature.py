@@ -1906,18 +1906,19 @@ class TestVoiceIntegration:
         assert call_kwargs["warmth"] == 0.6
 
     def test_voice_update_environment(self):
-        """Voice.update_environment called with sensor data."""
+        """Voice receives no environmental-light claim without attribution."""
         voice = MagicMock()
         readings = _make_readings(ambient_temp_c=23.0, humidity_pct=50.0, light_lux=300.0)
 
         voice.update_environment(
             temperature=readings.ambient_temp_c or readings.cpu_temp_c or 22.0,
             humidity=readings.humidity_pct or 50.0,
-            light_level=readings.light_lux or 500.0,
+            light_level=None,
         )
         voice.update_environment.assert_called_once()
         call_kwargs = voice.update_environment.call_args.kwargs
         assert call_kwargs["temperature"] == 23.0
+        assert call_kwargs["light_level"] is None
 
     def test_voice_error_doesnt_crash(self):
         """Voice update error is caught and does not crash."""

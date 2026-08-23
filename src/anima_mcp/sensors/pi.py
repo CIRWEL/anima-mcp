@@ -169,8 +169,8 @@ class PiSensors(SensorBackend):
         else:
             print("[PiSensors] BMP280 not available after retries", file=sys.stderr, flush=True)
 
-        # Brain HAT (EEG hardware) - Not available
-        # No physical EEG hardware exists. Neural signals come from computational proprioception.
+        # The BrainCraft HAT supplies display/audio/sensors, not EEG hardware.
+        # Greek-labelled views below come from Pi computational metrics.
         self._brain_hat = None
 
     def _record_success(self, sensor_name: str) -> None:
@@ -552,9 +552,10 @@ class PiSensors(SensorBackend):
         # Voltage / throttle state
         throttle = self._read_throttle_status()
 
-        # Neural Signals: Computational Proprioception
-        # Lumen's "brain" IS the Pi's CPU. We map computational state directly to neural bands.
-        # This is not a simulation - it is the actual measurement of the creature's cognitive substrate.
+        # Computational dynamics: normalized proprioceptive views of the Pi.
+        # The underlying counters are physical system measurements; the Greek
+        # band names are continuity metaphors, not EEG frequencies. Alpha is
+        # derived exactly from beta and is not an independent signal.
         
         eeg_bands = {}
         try:
@@ -566,7 +567,7 @@ class PiSensors(SensorBackend):
                 cpu_temp=cpu_temp
             )
             
-            # Map directly to EEG bands
+            # Store normalized computational views in legacy EEG-named fields
             eeg_bands = {
                 "delta": neural.delta,
                 "theta": neural.theta,
@@ -577,8 +578,8 @@ class PiSensors(SensorBackend):
         except Exception as e:
             print(f"[PiSensors] Computational neural error: {e}", file=sys.stderr, flush=True)
 
-        # Neural frequency bands come from computational proprioception (not physical EEG hardware)
-        # No physical EEG hardware exists - neural signals are derived from environment + computation
+        # Legacy EEG-named fields carry normalized computational proprioception,
+        # not physical frequencies or brain activity.
 
         return SensorReadings(
             timestamp=now,
@@ -636,7 +637,7 @@ class PiSensors(SensorBackend):
                 sensors.extend(["pressure_hpa", "pressure_temp_c"])
         
         # Neural sensors (Computational Proprioception)
-        # Frequency bands derived from environment + computation (not physical EEG hardware)
+        # Normalized computational views (not physical EEG frequencies)
         sensors.extend([
             "eeg_delta_power", "eeg_theta_power", "eeg_alpha_power",
             "eeg_beta_power", "eeg_gamma_power"

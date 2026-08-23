@@ -578,6 +578,7 @@ class UnitaresBridge:
         is_first_check_in: bool = False,
         drawing_eisv: Optional[Dict[str, Any]] = None,
         experiential_summary: Optional[Dict[str, Any]] = None,
+        light_attribution: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         Check in with UNITARES governance.
@@ -592,6 +593,7 @@ class UnitaresBridge:
             identity: Optional CreatureIdentity for metadata sync
             is_first_check_in: If True, syncs identity metadata to UNITARES
             drawing_eisv: Optional DrawingEISV state from ScreenRenderer (None when not drawing)
+            light_attribution: Provenance-bearing LED/lux attribution snapshot
 
         Returns:
             Governance decision dict with:
@@ -634,6 +636,7 @@ class UnitaresBridge:
                     identity=identity,
                     drawing_eisv=drawing_eisv,
                     experiential_summary=experiential_summary,
+                    light_attribution=light_attribution,
                 )
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 self._circuit_failures = 0  # Success resets circuit
@@ -654,6 +657,7 @@ class UnitaresBridge:
                             identity=identity,
                             drawing_eisv=drawing_eisv,
                             experiential_summary=experiential_summary,
+                            light_attribution=light_attribution,
                         )
                         self._circuit_failures = 0
                         self._circuit_current_backoff = self._circuit_backoff_base
@@ -688,6 +692,7 @@ class UnitaresBridge:
         identity: Optional['CreatureIdentity'] = None,
         drawing_eisv: Optional[Dict[str, Any]] = None,
         experiential_summary: Optional[Dict[str, Any]] = None,
+        light_attribution: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Call UNITARES governance via HTTP/SSE."""
         try:
@@ -708,6 +713,10 @@ class UnitaresBridge:
                     "presence": anima.presence,
             }
             body_vector = body_projection.to_dict()
+            from .light_attribution import gated_external_light_lux
+
+            raw_light_lux = getattr(readings, 'light_lux', None)
+            external_light_lux = gated_external_light_lux(light_attribution)
             sensor_data = {
                 "body_eisv_projection": body_vector,
                 "body_anima": body_anima,
@@ -738,7 +747,15 @@ class UnitaresBridge:
                     "cpu_temp_c": getattr(readings, 'cpu_temp_c', None),
                     "ambient_temp_c": getattr(readings, 'ambient_temp_c', None),
                     "humidity_pct": getattr(readings, 'humidity_pct', None),
-                    "light_lux": getattr(readings, 'light_lux', None),
+                    "light_lux": raw_light_lux,
+                    "raw_light_lux": raw_light_lux,
+                    "light_lux_composition": "room_light_plus_dotstar_glow",
+                    "external_light_lux": external_light_lux,
+                    "light_attribution_status": (
+                        light_attribution.get("status")
+                        if isinstance(light_attribution, dict)
+                        else "unavailable"
+                    ),
                     "cpu_percent": getattr(readings, 'cpu_percent', None),
                     "memory_percent": getattr(readings, 'memory_percent', None),
                 },
