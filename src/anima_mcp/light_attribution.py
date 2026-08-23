@@ -547,6 +547,13 @@ class LearnedLedLuxResidual:
             float(item.get("alignment_error_seconds", 0.0))
             for item in transitions
         ]
+        latest_transition_at_unix = max(
+            (
+                float(item["captured_at_unix"])
+                for item in transitions
+            ),
+            default=None,
+        )
 
         direction_slopes = {
             direction: [
@@ -718,6 +725,7 @@ class LearnedLedLuxResidual:
             "drive_filter_alpha": LIGHT_SENSOR_EMA_ALPHA,
             "transition_count": count,
             "instrument_sample_count": count,
+            "latest_transition_at_unix": latest_transition_at_unix,
             "up_transitions": up_count,
             "down_transitions": down_count,
             "balanced_transition_count": balanced_count,

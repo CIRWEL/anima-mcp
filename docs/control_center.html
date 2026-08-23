@@ -2400,7 +2400,7 @@
                     established: 'established',
                     historical_claim: 'historical claim',
                 }[actionability] || actionability;
-                const epistemicSuffix = i.source_kind === 'qa_claim'
+                const epistemicSuffix = actionability === 'historical_claim'
                     ? 'timestamped claim, not current telemetry'
                     : 'observational, not causal';
                 const interpretation = i.interpretation

@@ -1237,7 +1237,17 @@
         const trackedPreferences = t.preferences_tracked
             ?? preferenceDetail.n_tracked
             ?? establishedPreferences;
-        let pc = `<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px">${establishedPreferences} established · ${trackedPreferences} tracked</div>`;
+        const reviewPreferences = t.preferences_review
+            ?? preferenceDetail.n_review
+            ?? 0;
+        const coldStartPreferences = t.preferences_cold_start
+            ?? preferenceDetail.n_cold_start
+            ?? 0;
+        const historicalPreferences = t.preferences_historical_claim
+            ?? preferenceDetail.n_historical_claim
+            ?? 0;
+        let pc = `<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px">canonical trajectory · ${establishedPreferences} established · ${trackedPreferences} tracked</div>`;
+        pc += `<div style="font-size:9px;color:rgba(255,255,255,0.24);margin-bottom:5px">${reviewPreferences} review · ${coldStartPreferences} cold-started · ${historicalPreferences} historical · identity vector shows established only</div>`;
         if (preferenceVector) {
             const preferenceLabels = Array.isArray(preferenceDetail.labels)
                 ? preferenceDetail.labels
@@ -1245,8 +1255,12 @@
             const preferencePresent = Array.isArray(preferenceDetail.present)
                 ? preferenceDetail.present
                 : [];
+            const preferenceStatuses = Array.isArray(preferenceDetail.statuses)
+                ? preferenceDetail.statuses
+                : null;
             preferenceVector.forEach((value, index) => {
                 if (preferencePresent[index] === false || typeof value !== 'number') return;
+                if (preferenceStatuses && preferenceStatuses[index] !== 'established') return;
                 const label = String(preferenceLabels[index] || `preference ${index + 1}`)
                     .replaceAll('_', ' ');
                 pc += mini(label, value, 'var(--c-preference)');
@@ -1268,7 +1282,10 @@
 
         // Beliefs
         const beliefDetail = t.beliefs_detail || {};
-        let bc = '';
+        const beliefCount = beliefDetail.n_beliefs
+            ?? (Array.isArray(beliefDetail.values) ? beliefDetail.values.length : 0);
+        const beliefEvidence = beliefDetail.total_evidence ?? 0;
+        let bc = `<div style="font-size:9px;color:rgba(255,255,255,0.28);margin-bottom:5px">${beliefCount} tracked hypotheses · ${beliefEvidence} evidence episodes · bars show source confidence</div>`;
         if (Array.isArray(beliefDetail.values)) {
             const beliefLabels = Array.isArray(beliefDetail.labels)
                 ? beliefDetail.labels

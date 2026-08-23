@@ -17,6 +17,7 @@ def test_control_center_renders_historical_claim_and_preference_evidence_lenses(
     assert "retired Q&amp;A claim rows" in dashboard
     assert "historical_claim: 'historical claim'" in dashboard
     assert "established \\u00b7 ${trackedCount} tracked" in dashboard
+    assert "epistemicSuffix = actionability === 'historical_claim'" in dashboard
 
 
 @pytest.mark.asyncio
@@ -83,6 +84,47 @@ class TestGetSelfKnowledgeExtended:
         assert view["sample_count"] == 0
         assert view["actionability"] == "review"
         assert "cold-started" in view["interpretation"]
+
+    async def test_led_belief_cannot_be_established_before_causal_model(self):
+        from anima_mcp.handlers.knowledge import _insight_view
+
+        insight = SimpleNamespace(
+            id="belief_my_leds_affect_lux",
+            to_dict=lambda: {
+                "id": "belief_my_leds_affect_lux",
+                "description": "My own LEDs affect my light sensor",
+                "confidence": 0.99,
+                "sample_count": 100,
+                "validation_count": 100,
+                "contradiction_count": 0,
+            },
+        )
+        belief = SimpleNamespace(
+            confidence=0.95,
+            value=0.8,
+            supporting_count=20,
+            contradicting_count=0,
+        )
+        self_model = SimpleNamespace(
+            beliefs={"my_leds_affect_lux": belief},
+            get_light_attribution_model_stats=lambda: {
+                "kind": "causal-v3",
+                "identification_status": "inconclusive",
+                "ready": False,
+                "confidence": 0.65,
+                "transition_count": 96,
+                "up_transitions": 48,
+                "down_transitions": 48,
+                "unknown_reasons": ["breathing_response_is_inconsistent"],
+            },
+        )
+
+        view = _insight_view(insight, self_model=self_model)
+
+        assert view["actionability"] == "review"
+        assert view["causal_test"]["ready"] is False
+        assert "closed-loop correlation pathway is retired" in view["interpretation"]
+        assert "has not established" in view["review_reason"]
 
     async def test_summary_uses_live_views_and_ranks_review_claims_last(self):
         from anima_mcp.handlers.knowledge import handle_get_self_knowledge
@@ -183,6 +225,42 @@ class TestGetSelfKnowledgeExtended:
         assert view["actionability"] == "established"
         assert view["evidence_support_label"] == "positive direction"
         assert view["evidence_contradiction_label"] == "negative direction"
+
+    async def test_retired_qa_preference_copy_is_a_historical_claim(self):
+        from anima_mcp.handlers.knowledge import _insight_view
+
+        insight = SimpleNamespace(
+            id="pref_insight_light",
+            to_dict=lambda: {
+                "id": "pref_insight_light",
+                "description": (
+                    "i know this about myself: from q&a: brightness matters"
+                ),
+                "confidence": 0.95,
+                "sample_count": 330,
+                "validation_count": 20,
+                "contradiction_count": 0,
+            },
+        )
+        preference = SimpleNamespace(
+            confidence=0.0,
+            observation_count=330,
+            independent_evidence_count=0,
+            supporting_count=0,
+            contradicting_count=0,
+            evidence_origin="retired_qa_claim_bridge_v1",
+            last_confirmed=datetime(2026, 8, 23, 12, 0, 0),
+        )
+        growth = SimpleNamespace(_preferences={"insight_light": preference})
+
+        view = _insight_view(insight, growth)
+
+        assert view["description"] == "historical Q&A claim: brightness matters"
+        assert view["actionability"] == "historical_claim"
+        assert view["record_role"] == "historical_claim"
+        assert view["current_state_authority"] == "none"
+        assert view["historical_as_of"] == "2026-08-23T12:00:00"
+        assert "no current-state or behavioral authority" in view["review_reason"]
 
     async def test_high_confidence_single_claim_is_not_established(self):
         from anima_mcp.handlers.knowledge import _insight_view
