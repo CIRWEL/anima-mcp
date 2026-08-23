@@ -1,15 +1,18 @@
 defmodule AnimaBroker.Governance.Client do
   @moduledoc """
-  UNITARES governance check-in client — Phase 2 of the Elixir broker
-  migration, SHADOW soak posture (see
-  docs/plans/2026-07-01-phase2-governance-seam-addendum.md, Option A).
+  UNITARES governance check-in client for the Elixir broker. The historical
+  Phase-2 shadow-soak plan remains in
+  docs/plans/2026-07-01-phase2-governance-seam-addendum.md, Option A, but the
+  deployed path has completed that cutover.
 
   Every `interval_ms` (default 180s, matching the Python bridge) it reads the
-  LIVE envelope for anima/readings, maps EISV, and checks in over the fleet's
+  LIVE envelope for `body_anima`/readings, builds the body EISV projection,
+  and checks in over the fleet's
   REST tool bridge (`POST /v1/tools/call`, the pattern every BEAM client uses
   — no MCP handshake needed). The decision is written into the SHADOW
-  envelope's `"governance"` slice, which nothing consumes yet: the soak is
-  inert to the creature until the Python passthrough flag flips at cutover.
+  envelope's `"governance"` slice. Python passthrough republishes that slice
+  into the live envelope, and the server consumes it; this is no longer an
+  inert soak path.
 
   Identity (operator decision, 2026-07-01): SCRATCH by default — the client
   onboards its own governance identity (`force_new`, parent chained across
@@ -210,8 +213,16 @@ defmodule AnimaBroker.Governance.Client do
 
       true ->
         case LiveState.read(state.live_state_opts) do
-          {:ok, %{"anima" => anima, "readings" => readings}} ->
-            attempt_checkin(state, anima, readings, _may_reanchor? = true)
+          {:ok, %{"readings" => readings} = live_state} ->
+            case Map.get(live_state, "body_anima") || Map.get(live_state, "anima") do
+              anima when is_map(anima) ->
+                attempt_checkin(state, anima, readings, _may_reanchor? = true)
+
+              _ ->
+                Logger.warning("[Governance.Client] live envelope has no body_anima; skipping")
+
+                state
+            end
 
           {:error, reason} ->
             Logger.warning("[Governance.Client] live envelope unavailable (#{reason}); skipping")
@@ -221,7 +232,7 @@ defmodule AnimaBroker.Governance.Client do
   end
 
   defp attempt_checkin(state, anima, readings, may_reanchor?) do
-    eisv = EisvMapper.anima_to_eisv(anima, readings)
+    body_projection = EisvMapper.anima_to_body_eisv_projection(anima, readings)
 
     args =
       %{
@@ -231,10 +242,33 @@ defmodule AnimaBroker.Governance.Client do
         "confidence" => EisvMapper.compute_confidence(anima, state.prev_anima),
         "ethical_drift" =>
           EisvMapper.compute_ethical_drift(anima, state.prev_anima, readings, state.prev_readings),
-        "response_text" => EisvMapper.status_text(anima, eisv),
+        "response_text" => EisvMapper.status_text(anima, body_projection),
         "sensor_data" => %{
-          "eisv" => eisv,
+          "body_eisv_projection" => body_projection,
+          "body_anima" => anima,
+          # Legacy aliases retained until all UNITARES deployments consume
+          # the provenance-aware sensor schema.
+          "eisv" => body_projection,
           "anima" => anima,
+          "state_space_provenance" => %{
+            "body_anima" => %{
+              "source" => "broker_published_anima",
+              "role" => "physical_self_sense"
+            },
+            "anima" => %{
+              "alias_of" => "body_anima",
+              "deprecated" => true
+            },
+            "body_eisv_projection" => %{
+              "schema" => "anima.body_eisv_projection.v1",
+              "source" => "anima_sensor_projection",
+              "role" => "governance_input_measurement"
+            },
+            "eisv" => %{
+              "alias_of" => "body_eisv_projection",
+              "deprecated" => true
+            }
+          },
           "environment" =>
             Map.take(readings, ["ambient_temp_c", "humidity_pct", "light_lux", "pressure_hpa"])
         },
@@ -251,7 +285,7 @@ defmodule AnimaBroker.Governance.Client do
 
     case call_tool(state, "process_agent_update", args, @checkin_timeout_ms) do
       {:ok, %{"action" => _} = result} ->
-        write_governance(result, eisv, state.identity)
+        write_governance(result, body_projection, state.identity)
 
         %{
           state
@@ -279,7 +313,13 @@ defmodule AnimaBroker.Governance.Client do
         # in the shadow slice and do NOT open the breaker (Sentinel lesson —
         # swallowing pause as tool_error left a resident dark for hours).
         Logger.warning("[Governance.Client] agent paused: #{inspect(detail)}")
-        write_governance(%{"action" => "pause", "reason" => "agent_paused"}, eisv, state.identity)
+
+        write_governance(
+          %{"action" => "pause", "reason" => "agent_paused"},
+          body_projection,
+          state.identity
+        )
+
         %{state | prev_anima: anima, prev_readings: readings}
 
       {:error, {:identity_refused, hint}} ->
@@ -480,7 +520,9 @@ defmodule AnimaBroker.Governance.Client do
       System.system_time(:second) - anchor["saved_at"] < @anchor_refresh_s
   end
 
-  defp write_governance(result, eisv, identity) do
+  defp write_governance(result, body_projection, identity) do
+    {governance_eisv, governance_eisv_source} = extract_governance_eisv(result)
+
     AnimaBroker.State.Store.merge(%{
       "governance" => %{
         # No "proceed" default — callers guarantee an action is present, and
@@ -488,7 +530,28 @@ defmodule AnimaBroker.Governance.Client do
         "action" => Map.fetch!(result, "action"),
         "margin" => Map.get(result, "margin", "comfortable"),
         "reason" => Map.get(result, "reason"),
-        "eisv" => eisv,
+        "body_eisv_projection" => body_projection,
+        "governance_eisv" => governance_eisv,
+        "governance_eisv_source" => governance_eisv_source,
+        # Compatibility only: this has always been the body projection, not
+        # UNITARES's primary/behavioral state.
+        "eisv" => body_projection,
+        "eisv_source" => "body_eisv_projection_legacy_alias",
+        "state_space_provenance" => %{
+          "body_eisv_projection" => %{
+            "schema" => "anima.body_eisv_projection.v1",
+            "source" => "anima_sensor_projection",
+            "role" => "body_measurement"
+          },
+          "governance_eisv" => %{
+            "source" => governance_eisv_source,
+            "role" => "unitares_inferred_state"
+          },
+          "eisv" => %{
+            "alias_of" => "body_eisv_projection",
+            "deprecated" => true
+          }
+        },
         "source" => "unitares_ex",
         "identity_mode" => to_string(identity.mode),
         "unitares_agent_id" => identity.agent_uuid,
@@ -496,6 +559,44 @@ defmodule AnimaBroker.Governance.Client do
       }
     })
   end
+
+  defp extract_governance_eisv(result) do
+    metrics = Map.get(result, "metrics", %{})
+
+    source =
+      Map.get(result, "primary_eisv_source") ||
+        if(is_map(metrics), do: Map.get(metrics, "primary_eisv_source"), else: nil)
+
+    vector =
+      [
+        Map.get(result, "primary_eisv"),
+        if(is_map(metrics), do: Map.get(metrics, "primary_eisv"), else: nil),
+        metrics,
+        result,
+        Map.get(result, "eisv")
+      ]
+      |> Enum.find_value(&validated_eisv_vector/1)
+
+    if vector do
+      {vector, source || "unitares_primary_response_source_omitted"}
+    else
+      {nil, "not_returned_by_unitares"}
+    end
+  end
+
+  defp validated_eisv_vector(candidate) when is_map(candidate) do
+    keys = ["E", "I", "S", "V"]
+
+    if Enum.all?(keys, fn key ->
+         value = Map.get(candidate, key)
+         lower = if key == "V", do: -1.0, else: 0.0
+         is_number(value) and value >= lower and value <= 1.0
+       end) do
+      Map.take(candidate, keys)
+    end
+  end
+
+  defp validated_eisv_vector(_candidate), do: nil
 
   # -- REST tool bridge ------------------------------------------------------
 

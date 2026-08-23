@@ -36,7 +36,11 @@ from unittest.mock import (
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.anima import Anima, MoodMomentum
 from anima_mcp.inner_life import InnerLife
-from anima_mcp.eisv_mapper import anima_to_eisv
+from anima_mcp.eisv_mapper import (
+    BODY_EISV_PROJECTION_SCHEMA,
+    anima_to_body_eisv_projection,
+    anima_to_eisv,
+)
 from anima_mcp.metacognition import (
     MetacognitiveMonitor, Prediction, PredictionError,
 )
@@ -533,11 +537,11 @@ class TestEISVMapping:
         """EISV metrics are in valid range."""
         anima = _make_anima(warmth=0.6, clarity=0.7, stability=0.8, presence=0.7)
         readings = anima.readings
-        eisv = anima_to_eisv(anima, readings)
-        assert 0.0 <= eisv.energy <= 1.0
-        assert 0.0 <= eisv.integrity <= 1.0
-        assert 0.0 <= eisv.entropy <= 1.0
-        assert -1.0 <= eisv.valence <= 1.0
+        body_projection = anima_to_body_eisv_projection(anima, readings)
+        assert 0.0 <= body_projection.energy <= 1.0
+        assert 0.0 <= body_projection.integrity <= 1.0
+        assert 0.0 <= body_projection.entropy <= 1.0
+        assert -1.0 <= body_projection.valence <= 1.0
 
     def test_eisv_to_dict(self):
         """EISV to_dict has expected keys."""
@@ -644,7 +648,7 @@ class TestSHMDataAssembly:
         anima = _make_anima(warmth=0.6, clarity=0.7, stability=0.8, presence=0.5)
         readings = anima.readings
         readings.led_brightness = 0.12
-        eisv = anima_to_eisv(anima, readings)
+        body_projection = anima_to_body_eisv_projection(anima, readings)
         il = InnerLife()
         inner_state = il.update(_make_anima(), anima)
         metacog = MetacognitiveMonitor()
@@ -654,10 +658,32 @@ class TestSHMDataAssembly:
         shm_data = {
             "timestamp": datetime.now().isoformat(),
             "readings": readings.to_dict(),
+            "body_anima": anima.to_dict(),
             "anima": anima.to_dict(),
             "inner_life": inner_state.to_dict() if inner_state else {},
             "drive_events": [],
-            "eisv": eisv.to_dict(),
+            "body_eisv_projection": body_projection.to_dict(),
+            "eisv": body_projection.to_dict(),
+            "eisv_source": "body_eisv_projection_legacy_alias",
+            "state_space_provenance": {
+                "body_anima": {
+                    "source": "broker_sensor_fusion",
+                    "role": "physical_self_sense",
+                },
+                "anima": {
+                    "alias_of": "body_anima",
+                    "deprecated": True,
+                },
+                "body_eisv_projection": {
+                    "schema": BODY_EISV_PROJECTION_SCHEMA,
+                    "source": "anima_sensor_projection",
+                    "role": "body_measurement",
+                },
+                "eisv": {
+                    "alias_of": "body_eisv_projection",
+                    "deprecated": True,
+                },
+            },
             "identity": {
                 "creature_id": identity.creature_id,
                 "name": identity.name,
@@ -673,8 +699,15 @@ class TestSHMDataAssembly:
         assert "timestamp" in shm_data
         assert "readings" in shm_data
         assert "anima" in shm_data
+        assert shm_data["body_anima"] == shm_data["anima"]
+        assert shm_data["state_space_provenance"]["anima"] == {
+            "alias_of": "body_anima",
+            "deprecated": True,
+        }
         assert "inner_life" in shm_data
         assert "eisv" in shm_data
+        assert shm_data["body_eisv_projection"] == shm_data["eisv"]
+        assert shm_data["eisv_source"] == "body_eisv_projection_legacy_alias"
         assert "identity" in shm_data
         assert "metacognition" in shm_data
         assert shm_data["identity"]["creature_id"] == "test-creature-id-1234"

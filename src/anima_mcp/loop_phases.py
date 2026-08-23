@@ -453,7 +453,7 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
     from .ctx_ref import get_ctx
     from .messages import add_observation, add_question, get_unanswered_questions, get_messages_for_lumen
     from .next_steps_advocate import get_advocate
-    from .eisv_mapper import anima_to_eisv
+    from .eisv_mapper import anima_to_body_eisv_projection
 
     _ctx = get_ctx()
 
@@ -473,14 +473,14 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
         from .accessors import _get_last_shm_data
         advocate = get_advocate()
         display_available = (_ctx.display.is_available() if _ctx and _ctx.display else False)
-        eisv = anima_to_eisv(anima, readings)
+        body_projection = anima_to_body_eisv_projection(anima, readings)
         # Read actual drives from inner_life (broker writes to SHM)
         _shm = _get_last_shm_data()
         _il = (_shm.get("inner_life") or {}) if _shm else {}
         _drives = _il.get("drives")
         _strongest = _il.get("strongest_drive")
         steps = advocate.analyze_current_state(
-            anima=anima, readings=readings, eisv=eisv,
+            anima=anima, readings=readings, eisv=body_projection,
             display_available=display_available,
             brain_hat_available=display_available,
             unitares_connected=bool(os.environ.get("UNITARES_URL")),

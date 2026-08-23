@@ -68,7 +68,7 @@
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/state` | GET | Current anima state and sensors |
+| `/state` | GET | Current `body_anima`, `body_eisv_projection`, sensors, and separately sourced governance state (legacy `anima`/`eisv` aliases retained) |
 | `/qa` | GET | List questions (answered and unanswered) |
 | `/answer` | POST | Submit answer to a question |
 | `/message` | POST | Post message to Lumen |

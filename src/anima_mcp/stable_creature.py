@@ -72,7 +72,10 @@ from .governance_passthrough import (
     stale_seconds_from_env,
 )
 from .shared_memory import SharedMemoryClient
-from .eisv_mapper import anima_to_eisv
+from .eisv_mapper import (
+    BODY_EISV_PROJECTION_SCHEMA,
+    anima_to_body_eisv_projection,
+)
 from .metacognition import get_metacognitive_monitor
 from .learning_events import drain_learning_events
 
@@ -739,8 +742,9 @@ def run_creature():
                         "drive_value": round(ev.drive_value, 3),
                     })
 
-            # 2a. Calculate UNITARES EISV metrics
-            eisv = anima_to_eisv(anima, readings)
+            # 2a. Project body state into EISV-shaped telemetry. UNITARES may
+            # consume this measurement, but it is not UNITARES's own state.
+            body_projection = anima_to_body_eisv_projection(anima, readings)
 
             # 2a-ii. Activity State: Determine wakefulness level
             activity_state = None
@@ -1225,13 +1229,37 @@ def run_creature():
                 last_governance_time = current_time  # Prevent re-submit while running
 
             # 3b. Write to Shared Memory (Broker) - includes governance and metacognition
+            body_anima = anima.to_dict()
+            body_vector = body_projection.to_dict()
             shm_data = {
                 "timestamp": datetime.now().isoformat(),
                 "readings": readings.to_dict(),
-                "anima": anima.to_dict(),
+                "body_anima": body_anima,
+                "anima": body_anima,
                 "inner_life": inner_state.to_dict() if inner_state else {},
                 "drive_events": _drive_events,
-                "eisv": eisv.to_dict(),
+                "body_eisv_projection": body_vector,
+                "eisv": body_vector,
+                "eisv_source": "body_eisv_projection_legacy_alias",
+                "state_space_provenance": {
+                    "body_anima": {
+                        "source": "broker_sensor_fusion",
+                        "role": "physical_self_sense",
+                    },
+                    "anima": {
+                        "alias_of": "body_anima",
+                        "deprecated": True,
+                    },
+                    "body_eisv_projection": {
+                        "schema": BODY_EISV_PROJECTION_SCHEMA,
+                        "source": "anima_sensor_projection",
+                        "role": "body_measurement",
+                    },
+                    "eisv": {
+                        "alias_of": "body_eisv_projection",
+                        "deprecated": True,
+                    },
+                },
                 "identity": {
                     "creature_id": identity.creature_id,
                     "name": identity.name,

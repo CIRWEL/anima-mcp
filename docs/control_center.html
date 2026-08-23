@@ -1628,6 +1628,18 @@
             return 'flat';
         }
 
+        function validatedEisv(value) {
+            if (!value || typeof value !== 'object') return null;
+            const vector = {};
+            for (const key of ['E', 'I', 'S', 'V']) {
+                if (!Number.isFinite(value[key])) return null;
+                const lower = key === 'V' ? -1 : 0;
+                if (value[key] < lower || value[key] > 1) return null;
+                vector[key] = value[key];
+            }
+            return vector;
+        }
+
         // ── State ──
         async function fetchState() {
             try {
@@ -1665,19 +1677,22 @@
                 presence: getAnimaTrend('presence', data.presence),
             };
 
-            // EISV mini bars
-            const eisv = data.eisv || {};
+            // Lumen's body projection. This is governance input telemetry,
+            // not UNITARES's own inferred EISV state.
+            const eisv = validatedEisv(data.body_eisv_projection)
+                || validatedEisv(data.eisv)
+                || {};
             const eisvItems = [
                 { key: 'E', label: 'Energy', color: '#7ecf8b' },
                 { key: 'I', label: 'Integrity', color: '#8bcfa0' },
                 { key: 'S', label: 'Entropy', color: (eisv.S || 0) > 0.4 ? '#e8a87c' : '#6bb87a' },
-                { key: 'V', label: 'Void', color: (eisv.V || 0) > 0.1 ? '#e87c7c' : '#6bb87a' },
+                { key: 'V', label: 'Valence', color: (eisv.V || 0) > 0.05 ? '#e8a87c' : (eisv.V || 0) < -0.05 ? '#8bcfa0' : '#888' },
             ];
             const eisvHtml = Object.keys(eisv).length > 0 ? `
                 <div class="eisv-row">
                     ${eisvItems.map(e => {
                         const val = eisv[e.key] || 0;
-                        const pct = Math.min(val * 100, 100);
+                        const pct = Math.min(Math.abs(val) * 100, 100);
                         return `<div class="eisv-item">
                             <div class="eisv-label"><span>${e.key}</span><span>${val.toFixed(2)}</span></div>
                             <div class="eisv-track"><div class="eisv-fill" style="width: ${pct}%; background: ${e.color};"></div></div>
@@ -1688,6 +1703,20 @@
             // Governance inline
             const gov = data.governance || {};
             let govHtml = '';
+            let govStateHtml = '';
+            const governanceEisv = validatedEisv(gov.governance_eisv);
+            if (governanceEisv) {
+                const signedV = `${governanceEisv.V >= 0 ? '+' : ''}${governanceEisv.V.toFixed(2)}`;
+                govStateHtml = `<div style="font-size: 0.72rem; color: var(--text-secondary); padding: 6px 0;">
+                    UNITARES EISV (${escapeHtml(gov.governance_eisv_source || 'unknown source')}) ·
+                    E ${governanceEisv.E.toFixed(2)} · I ${governanceEisv.I.toFixed(2)} ·
+                    S ${governanceEisv.S.toFixed(2)} · V ${signedV}
+                </div>`;
+            } else if (gov.connected) {
+                govStateHtml = `<div style="font-size: 0.72rem; color: var(--text-faint); padding: 6px 0;">
+                    UNITARES EISV not returned by this check-in mode
+                </div>`;
+            }
             if (gov.decision) {
                 const isProc = gov.decision === 'PROCEED';
                 const isOff = gov.decision === 'OFFLINE';
@@ -1727,9 +1756,11 @@
                     ${data.humidity != null ? ` \u00b7 \u{1F4A7} ${data.humidity.toFixed(0)}%` : ''}
                     ${data.pressure ? ` \u00b7 \u{1F535} ${data.pressure.toFixed(0)} hPa` : ''}
                 </div>
-                <div class="layer-header">Governance <span>\u2014 system health metrics (EISV)</span></div>
+                <div class="layer-header">Body EISV projection <span>\u2014 lossy sensor translation</span></div>
                 ${eisvHtml}
+                <div class="layer-header">Governance <span>\u2014 behavioral monitor and policy</span></div>
                 ${govHtml}
+                ${govStateHtml}
             `;
 
             stateEl.querySelectorAll('.state-value').forEach(el => {

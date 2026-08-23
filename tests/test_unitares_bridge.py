@@ -9,7 +9,11 @@ import json
 from datetime import datetime
 from unittest.mock import AsyncMock, patch, MagicMock
 
-from anima_mcp.unitares_bridge import UnitaresBridge, check_governance
+from anima_mcp.unitares_bridge import (
+    UnitaresBridge,
+    _extract_governance_eisv,
+    check_governance,
+)
 from anima_mcp.anima import Anima
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.eisv_mapper import EISVMetrics
@@ -53,6 +57,31 @@ def create_test_anima() -> Anima:
         presence=0.7,
         readings=readings
     )
+
+
+def test_extracts_flat_minimal_governance_eisv_without_inventing_source():
+    vector, source = _extract_governance_eisv(
+        {"_mode": "minimal", "E": 0.2, "I": 0.8, "S": 0.1, "V": -0.6}
+    )
+
+    assert vector == {"E": 0.2, "I": 0.8, "S": 0.1, "V": -0.6}
+    assert source == "unitares_primary_response_source_omitted"
+
+
+def test_missing_governance_eisv_stays_missing():
+    vector, source = _extract_governance_eisv({"action": "proceed"})
+
+    assert vector is None
+    assert source == "not_returned_by_unitares"
+
+
+def test_out_of_range_governance_eisv_stays_missing():
+    vector, source = _extract_governance_eisv(
+        {"E": 0.2, "I": 0.8, "S": 1.1, "V": -0.6}
+    )
+
+    assert vector is None
+    assert source == "not_returned_by_unitares"
 
 
 @pytest.mark.asyncio
@@ -191,7 +220,7 @@ async def test_bridge_with_session_id():
 
 @pytest.mark.asyncio
 async def test_decision_includes_eisv():
-    """Test that decision includes EISV metrics."""
+    """Legacy EISV remains an explicitly tagged alias of body telemetry."""
     bridge = UnitaresBridge(unitares_url=None)
     anima = create_test_anima()
     readings = create_test_readings()
@@ -207,6 +236,14 @@ async def test_decision_includes_eisv():
     assert 0.0 <= decision["eisv"]["I"] <= 1.0
     assert 0.0 <= decision["eisv"]["S"] <= 1.0
     assert -1.0 <= decision["eisv"]["V"] <= 1.0  # V is signed valence
+    assert decision["body_eisv_projection"] == decision["eisv"]
+    assert decision["eisv_source"] == "body_eisv_projection_legacy_alias"
+    assert decision["governance_eisv"] is None
+    assert decision["governance_eisv_source"] == "not_returned_by_unitares"
+    assert decision["state_space_provenance"]["eisv"] == {
+        "alias_of": "body_eisv_projection",
+        "deprecated": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -402,7 +439,16 @@ async def test_call_unitares_returns_parsed_governance_payload():
     bridge = UnitaresBridge(unitares_url="http://localhost:8767/mcp", agent_id="agent-123")
     bridge.set_session_id("sess-1")
 
-    governance_text = '{"action":"pause","margin":"tight","reason":"edge case","resolved_agent_id":"abc-123"}'
+    governance_text = json.dumps(
+        {
+            "action": "pause",
+            "margin": "tight",
+            "reason": "edge case",
+            "resolved_agent_id": "abc-123",
+            "metrics": {"E": 0.21, "I": 0.82, "S": 0.17, "V": -0.61},
+            "primary_eisv_source": "behavioral",
+        }
+    )
     mcp_result = json.dumps(
         {"result": {"content": [{"type": "text", "text": governance_text}]}}
     )
@@ -428,6 +474,25 @@ async def test_call_unitares_returns_parsed_governance_payload():
     assert decision["action"] == "pause"
     assert decision["margin"] == "tight"
     assert decision["unitares_agent_id"] == "abc-123"
+    assert decision["body_eisv_projection"] == eisv.to_dict()
+    assert decision["eisv"] == eisv.to_dict()
+    assert decision["governance_eisv"] == {
+        "E": 0.21,
+        "I": 0.82,
+        "S": 0.17,
+        "V": -0.61,
+    }
+    assert decision["governance_eisv_source"] == "behavioral"
+
+    posted = mock_session.post.call_args.kwargs["json"]
+    sensor_data = posted["params"]["arguments"]["sensor_data"]
+    assert sensor_data["body_eisv_projection"] == eisv.to_dict()
+    assert sensor_data["eisv"] == eisv.to_dict()
+    assert sensor_data["body_anima"] == sensor_data["anima"]
+    assert sensor_data["state_space_provenance"]["anima"] == {
+        "alias_of": "body_anima",
+        "deprecated": True,
+    }
 
 
 @pytest.mark.asyncio
@@ -588,4 +653,3 @@ def test_server_bridge_uses_get_identity():
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

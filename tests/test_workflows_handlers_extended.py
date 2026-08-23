@@ -49,12 +49,14 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.self_iteration.get_self_iteration_system", return_value=attention_system), \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection", return_value=eisv):
             data = parse_result(await handle_next_steps({}))
 
         assert data["summary"]["priority"] == "high"
         assert data["current_state"]["unitares_connected"] is True
         assert data["current_state"]["eisv"]["E"] == 0.7
+        assert data["current_state"]["body_eisv_projection"] == data["current_state"]["eisv"]
+        assert data["current_state"]["eisv_source"] == "body_eisv_projection_legacy_alias"
 
     async def test_next_steps_bridge_exception_sets_error_status(self):
         from anima_mcp.handlers.workflows import handle_next_steps
@@ -83,7 +85,7 @@ class TestNextStepsExtended:
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.next_steps_advocate.get_advocate", return_value=advocate), \
              patch("anima_mcp.self_iteration.get_self_iteration_system", return_value=attention_system), \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection", return_value=eisv):
             data = parse_result(await handle_next_steps({}))
 
         assert data["current_state"]["unitares_connected"] is False
@@ -181,7 +183,9 @@ class TestLumenContextExtended:
             presence=0.6,
             feeling=lambda: {"mood": "calm"},
         )
-        eisv = SimpleNamespace(to_dict=lambda: {"E": 0.3})
+        eisv = SimpleNamespace(
+            to_dict=lambda: {"E": 0.3, "I": 0.6, "S": 0.4, "V": -0.3}
+        )
         # interaction_level now comes from visitor records, not from scanning
         # the message board for a msg_type nothing produces.
         growth = SimpleNamespace(interaction_level=lambda: 0.5)
@@ -190,11 +194,14 @@ class TestLumenContextExtended:
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.accessors._get_growth", return_value=growth), \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection", return_value=eisv):
             data = parse_result(await handle_get_lumen_context({"include": ["identity", "anima", "sensors", "mood", "eisv"]}))
 
         assert data["identity"]["name"] == "Lumen"
         assert data["eisv"]["E"] == 0.3
+        assert data["body_eisv_projection"] == data["eisv"]
+        assert data["body_anima"] == data["anima"]
+        assert data["state_space_provenance"]["anima"]["alias_of"] == "body_anima"
         assert "mood" in data
         store.record_state.assert_called_once()
         recorded_sensor_data = store.record_state.call_args[0][4]

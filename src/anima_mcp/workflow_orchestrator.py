@@ -16,7 +16,11 @@ from enum import Enum
 
 from .anima import Anima, sense_self
 from .sensors.base import SensorReadings
-from .eisv_mapper import EISVMetrics, anima_to_eisv
+from .eisv_mapper import (
+    BODY_EISV_PROJECTION_SCHEMA,
+    BodyEISVProjection,
+    anima_to_body_eisv_projection,
+)
 from .unitares_bridge import UnitaresBridge
 from .shared_memory import SharedMemoryClient
 from .config import get_calibration
@@ -102,7 +106,9 @@ class UnifiedWorkflowOrchestrator:
         
         shm_data = self._shm_client.read()
         
-        if shm_data and "readings" in shm_data and "anima" in shm_data:
+        if shm_data and "readings" in shm_data and (
+            "body_anima" in shm_data or "anima" in shm_data
+        ):
             try:
                 # Reconstruct SensorReadings from shared memory
                 readings_dict = shm_data["readings"]
@@ -116,7 +122,10 @@ class UnifiedWorkflowOrchestrator:
                     raise ValueError("shared state is stale or future-dated")
                 
                 readings = readings_from_dict(readings_dict)
-                anima = anima_from_dict(shm_data["anima"], readings)
+                body_anima = shm_data.get("body_anima")
+                if body_anima is None:
+                    body_anima = shm_data["anima"]
+                anima = anima_from_dict(body_anima, readings)
                 
                 return readings, anima
             except Exception:
@@ -162,17 +171,42 @@ class UnifiedWorkflowOrchestrator:
         # Get identity
         identity = self._anima_store.get_identity()
         
-        # Compute EISV
-        eisv = anima_to_eisv(anima, readings)
+        # Project the physical self-sense into EISV-shaped telemetry. This is
+        # not a UNITARES behavioral/governance estimate.
+        body_projection = anima_to_body_eisv_projection(anima, readings)
+        body_anima = {
+            "warmth": anima.warmth,
+            "clarity": anima.clarity,
+            "stability": anima.stability,
+            "presence": anima.presence,
+        }
+        body_vector = body_projection.to_dict()
         
         return {
-            "anima": {
-                "warmth": anima.warmth,
-                "clarity": anima.clarity,
-                "stability": anima.stability,
-                "presence": anima.presence,
+            "body_anima": body_anima,
+            "anima": body_anima,
+            "body_eisv_projection": body_vector,
+            "eisv": body_vector,
+            "eisv_source": "body_eisv_projection_legacy_alias",
+            "state_space_provenance": {
+                "body_anima": {
+                    "source": "broker_published_anima",
+                    "role": "physical_self_sense",
+                },
+                "anima": {
+                    "alias_of": "body_anima",
+                    "deprecated": True,
+                },
+                "body_eisv_projection": {
+                    "schema": BODY_EISV_PROJECTION_SCHEMA,
+                    "source": "anima_sensor_projection",
+                    "role": "body_measurement",
+                },
+                "eisv": {
+                    "alias_of": "body_eisv_projection",
+                    "deprecated": True,
+                },
             },
-            "eisv": eisv.to_dict(),
             "sensors": readings.to_dict(),
             "identity": {
                 "name": identity.name,
@@ -187,7 +221,7 @@ class UnifiedWorkflowOrchestrator:
         self,
         anima: Optional[Anima] = None,
         readings: Optional[SensorReadings] = None,
-        eisv: Optional[EISVMetrics] = None
+        eisv: Optional[BodyEISVProjection] = None
     ) -> Dict[str, Any]:
         """
         Check governance decision from UNITARES.
@@ -195,7 +229,7 @@ class UnifiedWorkflowOrchestrator:
         Args:
             anima: Anima state (computed if None)
             readings: Sensor readings (read if None)
-            eisv: EISV metrics (computed if None)
+            eisv: Deprecated name for a body EISV projection (computed if None)
         
         Returns:
             Governance decision dict
@@ -208,7 +242,7 @@ class UnifiedWorkflowOrchestrator:
             readings, anima = self._get_readings_and_anima()
         
         if not eisv and anima and readings:
-            eisv = anima_to_eisv(anima, readings)
+            eisv = anima_to_body_eisv_projection(anima, readings)
         
         if not anima or not readings or not eisv:
             return {"error": "Cannot compute governance - missing data"}

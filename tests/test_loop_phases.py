@@ -910,7 +910,7 @@ class TestLumenUnifiedReflect:
              patch("anima_mcp.messages.get_unanswered_questions", return_value=[]), \
              patch("anima_mcp.messages.get_messages_for_lumen", return_value=[]), \
              patch("anima_mcp.next_steps_advocate.get_advocate") as mock_adv, \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv") as mock_eisv, \
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection") as mock_eisv, \
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.loop_phases.compose_grounded_observation", return_value="feeling low"):
             mock_adv.return_value.analyze_current_state.return_value = []
@@ -935,7 +935,7 @@ class TestLumenUnifiedReflect:
              patch("anima_mcp.messages.get_unanswered_questions", return_value=[]), \
              patch("anima_mcp.messages.get_messages_for_lumen", return_value=[]), \
              patch("anima_mcp.next_steps_advocate.get_advocate") as mock_adv, \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv"), \
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection"), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.loop_phases.compose_grounded_observation", return_value="why do I feel this way?"):
             mock_adv.return_value.analyze_current_state.return_value = []
@@ -960,7 +960,7 @@ class TestLumenUnifiedReflect:
              patch("anima_mcp.messages.get_unanswered_questions", return_value=[]), \
              patch("anima_mcp.messages.get_messages_for_lumen", return_value=[]), \
              patch("anima_mcp.next_steps_advocate.get_advocate") as mock_adv, \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv"), \
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection"), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.loop_phases.compose_grounded_observation", return_value=None):
             mock_adv.return_value.analyze_current_state.return_value = []
@@ -988,7 +988,7 @@ class TestLumenUnifiedReflect:
              patch("anima_mcp.messages.get_unanswered_questions", return_value=[]), \
              patch("anima_mcp.messages.get_messages_for_lumen", return_value=[]), \
              patch("anima_mcp.next_steps_advocate.get_advocate") as mock_adv, \
-             patch("anima_mcp.eisv_mapper.anima_to_eisv"), \
+             patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection"), \
              patch("anima_mcp.accessors._get_last_shm_data", return_value=None), \
              patch("anima_mcp.loop_phases.compose_grounded_observation", return_value="feeling ok"):
             mock_adv.return_value.analyze_current_state.return_value = []

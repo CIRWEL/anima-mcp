@@ -8,6 +8,7 @@ Provides fallback local governance if UNITARES server is unavailable.
 import asyncio
 import json
 import logging
+import math
 import os
 import time
 from pathlib import Path
@@ -17,8 +18,9 @@ if TYPE_CHECKING:
     from .identity.store import CreatureIdentity
 
 from .eisv_mapper import (
-    EISVMetrics,
-    anima_to_eisv,
+    BODY_EISV_PROJECTION_SCHEMA,
+    BodyEISVProjection,
+    anima_to_body_eisv_projection,
     estimate_complexity,
     generate_status_text,
     compute_ethical_drift,
@@ -29,6 +31,92 @@ from .atomic_write import atomic_json_write
 from .sensors.base import SensorReadings
 
 logger = logging.getLogger(__name__)
+
+_EISV_KEYS = ("E", "I", "S", "V")
+
+
+def _validated_eisv_vector(candidate: Any) -> Optional[Dict[str, float]]:
+    """Return a finite EISV vector, or None when a response is not one."""
+    if not isinstance(candidate, dict):
+        return None
+    vector: Dict[str, float] = {}
+    for key in _EISV_KEYS:
+        value = candidate.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        lower, upper = (-1.0, 1.0) if key == "V" else (0.0, 1.0)
+        if not lower <= numeric <= upper:
+            return None
+        vector[key] = numeric
+    return vector
+
+
+def _extract_governance_eisv(
+    response: Dict[str, Any],
+) -> tuple[Optional[Dict[str, float]], str]:
+    """Extract UNITARES's own inferred EISV without substituting body input.
+
+    UNITARES response modes have historically placed the primary vector at
+    ``primary_eisv``, at flat E/I/S/V fields inside ``metrics`` or the minimal
+    response itself, or at ``eisv``. All are server outputs here, so they may
+    be identified as governance state. Missing output remains explicitly
+    missing.
+    """
+    metrics = response.get("metrics")
+    candidates = [
+        response.get("primary_eisv"),
+        metrics.get("primary_eisv") if isinstance(metrics, dict) else None,
+        metrics,
+        response,
+        response.get("eisv"),
+    ]
+    source = response.get("primary_eisv_source")
+    if not source and isinstance(metrics, dict):
+        source = metrics.get("primary_eisv_source")
+    for candidate in candidates:
+        vector = _validated_eisv_vector(candidate)
+        if vector is not None:
+            return vector, str(
+                source or "unitares_primary_response_source_omitted"
+            )
+    return None, "not_returned_by_unitares"
+
+
+def _state_space_fields(
+    body_projection: BodyEISVProjection,
+    governance_response: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Build explicit state-space fields plus the legacy ``eisv`` alias."""
+    body_vector = body_projection.to_dict()
+    governance_vector, governance_source = _extract_governance_eisv(
+        governance_response or {}
+    )
+    return {
+        "body_eisv_projection": body_vector,
+        "governance_eisv": governance_vector,
+        "governance_eisv_source": governance_source,
+        # Compatibility only. New readers must use body_eisv_projection.
+        "eisv": body_vector,
+        "eisv_source": "body_eisv_projection_legacy_alias",
+        "state_space_provenance": {
+            "body_eisv_projection": {
+                "schema": BODY_EISV_PROJECTION_SCHEMA,
+                "source": "anima_sensor_projection",
+                "role": "body_measurement",
+            },
+            "governance_eisv": {
+                "source": governance_source,
+                "role": "unitares_inferred_state",
+            },
+            "eisv": {
+                "alias_of": "body_eisv_projection",
+                "deprecated": True,
+            },
+        },
+    }
 
 
 class _AnimaSnapshot:
@@ -494,7 +582,7 @@ class UnitaresBridge:
         """
         Check in with UNITARES governance.
 
-        Maps anima state to EISV metrics and requests governance decision.
+        Projects anima state into body telemetry and requests a governance decision.
 
         Args:
             anima: Anima state
@@ -510,13 +598,18 @@ class UnitaresBridge:
             - action: "proceed" | "pause" | "halt"
             - margin: "comfortable" | "tight" | "critical"
             - reason: Human-readable explanation
-            - eisv: EISV metrics used
+            - body_eisv_projection: Lumen's sensor-derived input projection
+            - governance_eisv: UNITARES's inferred state, or None if omitted
+            - eisv: deprecated alias of body_eisv_projection
             - source: "unitares" | "local" (which governance system responded)
         """
         logger.debug("check_in called: is_first_check_in=%s, identity=%s", is_first_check_in, identity is not None)
 
-        # Map anima to EISV first (always needed)
-        eisv = anima_to_eisv(anima, readings, neural_weight, physical_weight)
+        # Project the body first (always needed). This is UNITARES input, not
+        # UNITARES's inferred governance state.
+        body_projection = anima_to_body_eisv_projection(
+            anima, readings, neural_weight, physical_weight
+        )
 
         # Check if UNITARES is available BEFORE trying to sync
         unitares_available = await self.check_availability()
@@ -534,7 +627,14 @@ class UnitaresBridge:
         if unitares_available:
             try:
                 logger.info("Calling UNITARES (agent_id=%s)", self._agent_id[:8] if self._agent_id else 'None')
-                result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv, experiential_summary=experiential_summary)
+                result = await self._call_unitares(
+                    anima,
+                    readings,
+                    body_projection,
+                    identity=identity,
+                    drawing_eisv=drawing_eisv,
+                    experiential_summary=experiential_summary,
+                )
                 logger.info("UNITARES responded: %s", result.get('source', 'unknown'))
                 self._circuit_failures = 0  # Success resets circuit
                 self._circuit_current_backoff = self._circuit_backoff_base
@@ -547,7 +647,14 @@ class UnitaresBridge:
                 logger.warning("Identity refused — attempting re-anchor: %s", e)
                 if await self._try_reanchor():
                     try:
-                        result = await self._call_unitares(anima, readings, eisv, identity=identity, drawing_eisv=drawing_eisv, experiential_summary=experiential_summary)
+                        result = await self._call_unitares(
+                            anima,
+                            readings,
+                            body_projection,
+                            identity=identity,
+                            drawing_eisv=drawing_eisv,
+                            experiential_summary=experiential_summary,
+                        )
                         self._circuit_failures = 0
                         self._circuit_current_backoff = self._circuit_backoff_base
                         return result
@@ -555,7 +662,9 @@ class UnitaresBridge:
                         logger.warning("Post-re-anchor retry failed: %s", retry_err)
                 self._circuit_failures += 1
                 self._maybe_open_circuit(time.time())
-                return self._local_governance(anima, readings, eisv, error=str(e))
+                return self._local_governance(
+                    anima, readings, body_projection, error=str(e)
+                )
             except Exception as e:
                 # Fallback to local governance on error
                 logger.warning("UNITARES error, falling back to local: %s", e)
@@ -563,17 +672,19 @@ class UnitaresBridge:
                 self._maybe_open_circuit(time.time())
                 # Rebuild the session so the next check-in re-resolves DNS (self-heal)
                 await self._reset_session()
-                return self._local_governance(anima, readings, eisv, error=str(e))
+                return self._local_governance(
+                    anima, readings, body_projection, error=str(e)
+                )
         else:
             # Use local governance
             logger.debug("UNITARES not available, using local governance")
-            return self._local_governance(anima, readings, eisv)
+            return self._local_governance(anima, readings, body_projection)
     
     async def _call_unitares(
         self,
         anima: Anima,
         readings: SensorReadings,
-        eisv: EISVMetrics,
+        body_projection: BodyEISVProjection,
         identity: Optional['CreatureIdentity'] = None,
         drawing_eisv: Optional[Dict[str, Any]] = None,
         experiential_summary: Optional[Dict[str, Any]] = None,
@@ -582,16 +693,46 @@ class UnitaresBridge:
         try:
             # Prepare MCP request
             complexity = estimate_complexity(anima, readings)
-            status_text = generate_status_text(anima, readings, eisv, experiential_summary=experiential_summary)
+            status_text = generate_status_text(
+                anima,
+                readings,
+                body_projection,
+                experiential_summary=experiential_summary,
+            )
             
             # Build sensor_data payload — include raw sensors for dashboard visibility
-            sensor_data = {
-                "eisv": eisv.to_dict(),
-                "anima": {
+            body_anima = {
                     "warmth": anima.warmth,
                     "clarity": anima.clarity,
                     "stability": anima.stability,
                     "presence": anima.presence,
+            }
+            body_vector = body_projection.to_dict()
+            sensor_data = {
+                "body_eisv_projection": body_vector,
+                "body_anima": body_anima,
+                # Legacy aliases retained for UNITARES deployments that have
+                # not adopted the provenance-aware sensor schema yet.
+                "eisv": body_vector,
+                "anima": body_anima,
+                "state_space_provenance": {
+                    "body_anima": {
+                        "source": "broker_published_anima",
+                        "role": "physical_self_sense",
+                    },
+                    "anima": {
+                        "alias_of": "body_anima",
+                        "deprecated": True,
+                    },
+                    "body_eisv_projection": {
+                        "schema": BODY_EISV_PROJECTION_SCHEMA,
+                        "source": "anima_sensor_projection",
+                        "role": "governance_input_measurement",
+                    },
+                    "eisv": {
+                        "alias_of": "body_eisv_projection",
+                        "deprecated": True,
+                    },
                 },
                 "environment": {
                     "cpu_temp_c": getattr(readings, 'cpu_temp_c', None),
@@ -772,10 +913,12 @@ class UnitaresBridge:
                             "action": governance_result.get("action", "proceed"),
                             "margin": governance_result.get("margin", "comfortable"),
                             "reason": governance_result.get("reason", "Governance check completed"),
-                            "eisv": eisv.to_dict(),
                             "source": "unitares",
                             "unitares_agent_id": bound_id,  # For display identification
-                            "raw_response": governance_result
+                            "raw_response": governance_result,
+                            **_state_space_fields(
+                                body_projection, governance_result
+                            ),
                         }
                     elif "error" in result:
                         raise Exception(f"MCP error: {result['error']}")
@@ -798,13 +941,13 @@ class UnitaresBridge:
         self,
         anima: Anima,
         readings: SensorReadings,
-        eisv: EISVMetrics,
+        body_projection: BodyEISVProjection,
         error: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Local governance decision (fallback if UNITARES unavailable).
         
-        Uses simple thresholds based on EISV metrics.
+        Uses simple thresholds based on the body EISV projection.
         """
         # Compute signed margins (positive = within bounds, negative = crossed)
         # UNITARES thresholds (from governance_config.py):
@@ -816,8 +959,8 @@ class UnitaresBridge:
         # and gating on it homogenises agents, so the local fallback no longer
         # pauses on V (reported in eisv for observability only).
         margins = {
-            "risk": RISK_THRESHOLD - eisv.entropy,        # Higher entropy is worse
-            "coherence": eisv.integrity - COHERENCE_THRESHOLD,  # Lower integrity is worse
+            "risk": RISK_THRESHOLD - body_projection.entropy,
+            "coherence": body_projection.integrity - COHERENCE_THRESHOLD,
         }
 
         # Check if any threshold crossed
@@ -859,9 +1002,9 @@ class UnitaresBridge:
             "action": action,
             "margin": margin,
             "reason": reason,
-            "eisv": eisv.to_dict(),
             "source": "local",
-            "nearest_edge": nearest_edge
+            "nearest_edge": nearest_edge,
+            **_state_space_fields(body_projection),
         }
     
     def set_agent_id(self, agent_id: str):

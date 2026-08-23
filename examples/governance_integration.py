@@ -10,7 +10,7 @@ import os
 from anima_mcp.sensors import get_sensors
 from anima_mcp.anima import sense_self
 from anima_mcp.unitares_bridge import check_governance
-from anima_mcp.eisv_mapper import anima_to_eisv
+from anima_mcp.eisv_mapper import anima_to_body_eisv_projection
 
 
 async def main():
@@ -42,13 +42,14 @@ async def main():
     print(f"  Presence: {anima.presence:.2f}")
     print(f"  Mood: {anima.feeling()['mood']}")
     
-    # Map to EISV
-    eisv = anima_to_eisv(anima, readings)
-    print("\nEISV metrics:")
-    print(f"  Energy (E): {eisv.energy:.2f}")
-    print(f"  Integrity (I): {eisv.integrity:.2f}")
-    print(f"  Entropy (S): {eisv.entropy:.2f}")
-    print(f"  Void (V): {eisv.void:.2f}")
+    # Project the body into EISV-shaped telemetry. This is input evidence, not
+    # UNITARES's own inferred state.
+    body_projection = anima_to_body_eisv_projection(anima, readings)
+    print("\nBody EISV projection:")
+    print(f"  Energy proxy (E): {body_projection.energy:.2f}")
+    print(f"  Integrity proxy (I): {body_projection.integrity:.2f}")
+    print(f"  Entropy proxy (S): {body_projection.entropy:.2f}")
+    print(f"  Valence (V): {body_projection.valence:+.2f}")
     
     # Check governance
     print("\nChecking governance...")
@@ -60,6 +61,14 @@ async def main():
     print(f"  Margin: {decision['margin']}")
     print(f"  Reason: {decision['reason']}")
     print(f"  Source: {decision['source']}")
+    if decision.get("governance_eisv"):
+        print(
+            "  UNITARES EISV: "
+            f"{decision['governance_eisv']} "
+            f"({decision['governance_eisv_source']})"
+        )
+    else:
+        print("  UNITARES EISV: not returned by this check-in mode")
     
     if decision['action'] == 'proceed':
         print(f"\n✅ Proceeding with task (margin: {decision['margin']})")
@@ -69,4 +78,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-

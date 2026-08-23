@@ -107,7 +107,10 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
     """Get proactive next steps to achieve goals. Safe, never crashes."""
     from ..accessors import _get_store, _get_display, _get_readings_and_anima
     from ..next_steps_advocate import get_advocate
-    from ..eisv_mapper import anima_to_eisv
+    from ..eisv_mapper import (
+        BODY_EISV_PROJECTION_SCHEMA,
+        anima_to_body_eisv_projection,
+    )
 
     store = _get_store()
     if store is None:
@@ -129,7 +132,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
             )
         ]
 
-    eisv = anima_to_eisv(anima, readings)
+    body_projection = anima_to_body_eisv_projection(anima, readings)
 
     # Check availability
     display_available = display.is_available()
@@ -221,7 +224,7 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
     advocate.analyze_current_state(
         anima=anima,
         readings=readings,
-        eisv=eisv,
+        eisv=body_projection,
         display_available=display_available,
         brain_hat_available=brain_hat_hardware_available,
         unitares_connected=unitares_connected,
@@ -256,13 +259,40 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
             "brain_hat_hardware_available": brain_hat_hardware_available,
             "unitares_connected": unitares_connected,
             "unitares_status": unitares_status,
+            "body_anima": {
+                "warmth": anima.warmth,
+                "clarity": anima.clarity,
+                "stability": anima.stability,
+                "presence": anima.presence,
+            },
             "anima": {
                 "warmth": anima.warmth,
                 "clarity": anima.clarity,
                 "stability": anima.stability,
                 "presence": anima.presence,
             },
-            "eisv": eisv.to_dict(),
+            "body_eisv_projection": body_projection.to_dict(),
+            "eisv": body_projection.to_dict(),
+            "eisv_source": "body_eisv_projection_legacy_alias",
+            "state_space_provenance": {
+                "body_anima": {
+                    "source": "broker_published_anima",
+                    "role": "physical_self_sense",
+                },
+                "anima": {
+                    "alias_of": "body_anima",
+                    "deprecated": True,
+                },
+                "body_eisv_projection": {
+                    "schema": BODY_EISV_PROJECTION_SCHEMA,
+                    "source": "anima_sensor_projection",
+                    "role": "body_measurement",
+                },
+                "eisv": {
+                    "alias_of": "body_eisv_projection",
+                    "deprecated": True,
+                },
+            },
         },
         "self_iteration_attention": self_iteration_attention,
     }
@@ -419,16 +449,21 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
             except Exception as e:
                 result["identity"] = {"error": str(e)}
 
-    if "anima" in include:
+    if "anima" in include or "body_anima" in include:
         if anima:
-            result["anima"] = {
+            body_anima = {
                 "warmth": anima.warmth,
                 "clarity": anima.clarity,
                 "stability": anima.stability,
                 "presence": anima.presence,
             }
+            result["body_anima"] = body_anima
+            if "anima" in include:
+                result["anima"] = body_anima
         else:
-            result["anima"] = {"error": "Unable to read anima state"}
+            result["body_anima"] = {"error": "Unable to read anima state"}
+            if "anima" in include:
+                result["anima"] = result["body_anima"]
 
     if "sensors" in include:
         if readings:
@@ -477,13 +512,44 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         except Exception as e:
             result["self_iteration_attention"] = {"error": str(e)}
 
-    # Include EISV metrics when anima is available
-    if ("eisv" in include or "anima" in include) and anima and readings:
+    # Include the body projection when anima is available. Bare ``eisv`` is a
+    # compatibility alias, never a claim about UNITARES's inferred state.
+    if (
+        {"eisv", "body_eisv_projection", "anima", "body_anima"}
+        .intersection(include)
+        and anima
+        and readings
+    ):
         try:
-            from ..eisv_mapper import anima_to_eisv
+            from ..eisv_mapper import (
+                BODY_EISV_PROJECTION_SCHEMA,
+                anima_to_body_eisv_projection,
+            )
 
-            eisv = anima_to_eisv(anima, readings)
-            result["eisv"] = eisv.to_dict()
+            body_projection = anima_to_body_eisv_projection(anima, readings)
+            result["body_eisv_projection"] = body_projection.to_dict()
+            if "eisv" in include or "anima" in include:
+                result["eisv"] = body_projection.to_dict()
+                result["eisv_source"] = "body_eisv_projection_legacy_alias"
+            result["state_space_provenance"] = {
+                "body_anima": {
+                    "source": "broker_published_anima",
+                    "role": "physical_self_sense",
+                },
+                "anima": {
+                    "alias_of": "body_anima",
+                    "deprecated": True,
+                },
+                "body_eisv_projection": {
+                    "schema": BODY_EISV_PROJECTION_SCHEMA,
+                    "source": "anima_sensor_projection",
+                    "role": "body_measurement",
+                },
+                "eisv": {
+                    "alias_of": "body_eisv_projection",
+                    "deprecated": True,
+                },
+            }
         except Exception as e:
             note_suppressed("workflows.eisv", e)  # optional enrichment
 

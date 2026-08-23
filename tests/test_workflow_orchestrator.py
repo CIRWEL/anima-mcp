@@ -115,7 +115,11 @@ class TestGetLumenState:
         with patch.object(orchestrator, "_get_readings_and_anima", return_value=(readings, anima)):
             result = await orchestrator.get_lumen_state()
         assert "anima" in result
+        assert "body_anima" in result
         assert "eisv" in result
+        assert result["body_eisv_projection"] == result["eisv"]
+        assert result["eisv_source"] == "body_eisv_projection_legacy_alias"
+        assert result["state_space_provenance"]["anima"]["alias_of"] == "body_anima"
         assert "sensors" in result
         assert "identity" in result
         assert result["identity"]["name"] == "Lumen"
@@ -391,7 +395,7 @@ class TestGetReadingsAndAnima:
                 "disk_percent": readings.disk_percent,
                 "pressure_hpa": readings.pressure_hpa,
             },
-            "anima": {
+            "body_anima": {
                 "warmth": 0.51,
                 "clarity": 0.62,
                 "stability": 0.73,

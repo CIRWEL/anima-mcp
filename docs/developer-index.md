@@ -48,7 +48,7 @@
 | `src/anima_mcp/health.py` | Subsystem health monitoring (9 subsystems) |
 | `src/anima_mcp/anima.py` | Anima calculation (warmth, clarity, stability, presence) |
 | `src/anima_mcp/computational_neural.py` | Neural bands from Pi hardware |
-| `src/anima_mcp/eisv_mapper.py` | EISV mapping for UNITARES governance |
+| `src/anima_mcp/eisv_mapper.py` | Anima → body EISV projection; compatibility aliases and provenance schema |
 | `src/anima_mcp/display/screens.py` | Display screens, drawing engine |
 | `src/anima_mcp/display/art_era.py` | Art era protocol |
 | `src/anima_mcp/display/eras/` | Pluggable art era modules (gestural, pointillist, field, geometric, resonance) |

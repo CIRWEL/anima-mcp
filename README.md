@@ -32,7 +32,7 @@
 
 ## What Is This?
 
-Anima is a Raspberry Pi 4 sensor deployment and MCP server for studying physically grounded agent state. It maps temperature, light, humidity, pressure, and system telemetry into four continuous dimensions — warmth, clarity, stability, presence — then uses those dimensions for local display/drawing loops and periodic [UNITARES](https://github.com/CIRWEL/unitares) check-ins. The repo uses creature-facing vocabulary for the interface, but the research surface is the measured sensor-to-EISV pipeline and longitudinal trajectory data.
+Anima is a Raspberry Pi 4 sensor deployment and MCP server for studying physically grounded agent state. It maps temperature, light, humidity, pressure, and system telemetry into four continuous dimensions — warmth, clarity, stability, presence — then uses those dimensions for local display/drawing loops and periodic [UNITARES](https://github.com/CIRWEL/unitares) check-ins. The repo uses creature-facing vocabulary for the interface, but the research surface is the measured sensor→anima path, its explicitly lossy body-EISV projection, and longitudinal trajectory data.
 
 - **Grounded state** — four continuous dimensions derived from real sensor measurements
 - **Persistent identity** — birth, awakenings, alive time accumulate across restarts; discontinuities are first-class
@@ -95,7 +95,7 @@ Four continuous dimensions, each derived from physical sensors and system metric
 | **Stability** | Environmental order | Memory, humidity, pressure, sensor health |
 | **Presence** | Available capacity | CPU/memory/disk headroom |
 
-These map to [UNITARES](https://github.com/CIRWEL/unitares) EISV governance variables — Warmth to Energy, Clarity to Integrity, inverted Stability to Entropy, and the signed Energy−Integrity imbalance to Valence. Presence is *not* an EISV coordinate; it feeds the anima display and check-in confidence, not the reported V.
+These can be projected into EISV-shaped body telemetry — Warmth to an Energy proxy, Clarity to an Integrity proxy, inverted Stability to an Entropy proxy, and the signed Energy−Integrity imbalance to Valence. That projection is submitted as sensor evidence; it is not [UNITARES](https://github.com/CIRWEL/unitares)'s own behavioral EISV estimate. Presence is *not* an EISV coordinate; it feeds the anima display and check-in confidence, not the projected V.
 
 Anima also computes neural bands (delta, theta, alpha, beta, gamma) from system metrics — computational proprioception, not real EEG. High delta means a stable system, not a sleeping one. Note that alpha is defined as `1 − beta` and both derive from CPU percent: they are one variable reported as two bands, and any consumer treating them as independent is double-counting.
 
@@ -177,7 +177,7 @@ Three systemd services cooperate via shared memory:
 
 ```
 anima-broker-ex (Elixir broker)
-  owns the I2C env sensors; sole UNITARES caller — EISV mapping,
+  owns the I2C env sensors; sole UNITARES caller — body EISV projection,
   check-in every ~180s <-> UNITARES governance (Mac, port 8767),
   advisory verdicts return
         |
@@ -263,33 +263,33 @@ Sandbox artifacts live under `~/.anima/self_iteration_sandboxes`, and the sandbo
 
 ## EISV Integration
 
-Anima is a first-class UNITARES agent. Its anima state maps directly to EISV governance variables:
+Anima is a first-class UNITARES agent. Its anima state is projected into an EISV-shaped body measurement submitted with check-ins:
 
-| Anima | EISV | Mapping |
+| Anima input | Body projection coordinate | Mapping |
 |-------|------|---------|
 | Warmth | Energy (E) | Direct + neural Beta/Gamma |
 | Clarity | Integrity (I) | Direct — alpha deliberately excluded (it is `1 − beta`; see the neural-band note above) |
 | 1 - Stability | Entropy (S) | Inverted |
 | E − I | Valence (V) | Signed imbalance, clamped to −1..1 |
 
-Valence is the one row that is not a direct anima reading: `V = clamp(E − I)`, positive when running hot (E>I) and negative when running careful (I>E). Governance's own V is a differential accumulator (`dV/dt = κ(E−I) − δV`); Anima reports the instantaneous readout, so it does not damp. Presence does not enter the EISV mapping at all — the old `(1 − Presence) × 0.3 → Void` reading only ever produced the positive half and was not comparable to other agents' V. It is retired from both governance reporting and trajectory awareness.
+Valence is the one row that is not a direct anima reading: `V = clamp(E − I)`, positive when the body projection runs hot (E>I) and negative when it runs careful (I>E). This instantaneous value does not damp. UNITARES independently estimates its primary EISV from behavioral evidence when that channel is sufficiently grounded; its ODE EISV remains fallback/diagnostic state. Presence does not enter the body projection at all — the old `(1 − Presence) × 0.3 → Void` reading only ever produced the positive half and was not comparable to other agents' V. It is retired from both check-in input and trajectory awareness.
 
-**Trajectory awareness** — Anima classifies its own EISV trajectory into 9 dynamical shapes (settled_presence, rising_entropy, convergence, etc.) and uses them to generate primitive expressions. A distilled 20-tree RandomForest student model (`student_tiny` from [eisv-lumen](https://github.com/CIRWEL/eisv-lumen)) runs on-device with zero external dependencies.
+**Trajectory awareness** — Anima classifies the trajectory of its body EISV projection into 9 dynamical shapes (settled_presence, rising_entropy, convergence, etc.) and uses them to generate primitive expressions. A distilled 20-tree RandomForest student model (`student_tiny` from [eisv-lumen](https://github.com/CIRWEL/eisv-lumen)) runs on-device with zero external dependencies.
 
-**Expression pipeline**: EISV state → trajectory classification → shape-token affinity → primitive tokens (~warmth~, ~curiosity~, etc.). The student model was trained on real on-device trajectory data; see [eisv-lumen](https://github.com/CIRWEL/eisv-lumen) for the research, training, and evaluation framework.
+**Expression pipeline**: body EISV projection → trajectory classification → shape-token affinity → primitive tokens (~warmth~, ~curiosity~, etc.). The student model was trained on real on-device trajectory data; see [eisv-lumen](https://github.com/CIRWEL/eisv-lumen) for the research, training, and evaluation framework.
 
-**Four EISV contexts** (important for understanding the architecture — mapped telemetry is shared, while drawing and governance have their own dynamics):
+**Four named runtime states** (three use EISV coordinates; the names are part of the data contract):
 
 | Context | Location | Role |
 |---------|----------|------|
-| **DrawingEISV** | `display/drawing_engine.py` | Proprioceptive drawing state. Marks are steered by behavioral coherence and attention signals; the ODE-integrated variables run for reporting only, and its V is a damped accumulator with its own parameters and a roughly inverted sign tendency — not numerically comparable to the mapped V |
-| **Mapped EISV** | `eisv_mapper.py` (Python) + `anima_broker/.../eisv_mapper.ex` (live check-in path) | Anima→EISV translation for governance reporting, `V = clamp(E−I)` |
-| **Trajectory EISV** | `eisv/mapping.py` | Feeds the on-device shape classifier from the same canonical mapped EISV; the live server forwards its exact operational snapshot |
-| **Governance EISV** | Mac (unitares repo, `governance_core/dynamics.py`) | Continuous-time ODE over all four variables — advisory, open loop |
+| **Body anima** | `anima.py` + broker SHM | Lumen's grounded physical self-sense: warmth, clarity, stability, presence |
+| **Body EISV projection** | `eisv_mapper.py` (Python) + `anima_broker/.../eisv_mapper.ex` (live check-in path) | Lossy anima→EISV translation used as trajectory input and submitted sensor evidence, `V = clamp(E−I)` |
+| **DrawingEISV** | `display/drawing_engine.py` | Independent drawing proprioception. Marks are steered by behavioral coherence and attention signals; its ODE-integrated variables run for reporting only and are not numerically comparable to the body projection |
+| **Governance EISV** | UNITARES | Behavioral state estimate used by governance when sufficiently grounded, with a separately exposed ODE fallback/diagnostic vector |
 
-The drawing engine has its own EISV state that evolves independently from governance. This separation means the art responds to Anima's own sensor-derived state, not to the governance server's verdict on that state.
+Trajectory awareness is a consumer of the exact body projection, not a fifth state. The drawing engine evolves independently, and governance never substitutes the submitted body vector for its own estimate. When a state is present in a runtime payload it is named explicitly as `body_anima`, `body_eisv_projection`, `drawing_eisv`, or `governance_eisv`; bare `anima` and `eisv` remain tagged compatibility aliases.
 
-Key files: `eisv_mapper.py` (anima→EISV mapping), `eisv/` package (trajectory awareness + student model), `unitares_bridge.py` (governance check-ins with circuit breaker — 2 failures trigger exponential backoff).
+Key files: `eisv_mapper.py` (anima→body projection), `eisv/` package (trajectory awareness + student model), `unitares_bridge.py` (governance check-ins with explicit input/output provenance and a circuit breaker — 2 failures trigger exponential backoff).
 
 ---
 

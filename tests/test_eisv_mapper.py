@@ -7,7 +7,10 @@ Validates anima → EISV mapping accuracy and edge cases.
 import pytest
 from datetime import datetime
 from anima_mcp.eisv_mapper import (
+    BODY_EISV_PROJECTION_SCHEMA,
+    BodyEISVProjection,
     EISVMetrics,
+    anima_to_body_eisv_projection,
     anima_to_eisv,
     estimate_complexity,
     generate_status_text,
@@ -244,6 +247,24 @@ def test_eisv_to_dict():
     assert d["V"] == 0.2
 
 
+def test_body_projection_is_canonical_and_legacy_type_is_alias():
+    anima = create_test_anima()
+    readings = create_test_readings()
+
+    projection = anima_to_body_eisv_projection(anima, readings)
+    legacy = anima_to_eisv(anima, readings)
+
+    assert isinstance(projection, BodyEISVProjection)
+    assert isinstance(projection, EISVMetrics)
+    assert projection.to_dict() == legacy.to_dict()
+    assert projection.to_envelope() == {
+        "schema": BODY_EISV_PROJECTION_SCHEMA,
+        "kind": "body_eisv_projection",
+        "source": "anima_sensor_projection",
+        "vector": projection.to_dict(),
+        "role": "lossy_body_measurement_for_trajectory_and_governance_input",
+    }
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

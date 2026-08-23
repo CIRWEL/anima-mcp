@@ -573,7 +573,7 @@ slice into the live envelope. The **server** (`server.py`) reads governance from
 UNITARES_URL=http://<tailscale-ip>:8767/mcp/  # verify Mac IP with `tailscale status`
 ```
 
-Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy, clamp(E−I)→**Valence**
+Projects anima into body EISV telemetry: Warmth→Energy proxy, Clarity→Integrity proxy, 1-Stability→Entropy proxy, clamp(E−I)→**Valence**. This is check-in input, not UNITARES's inferred state.
 
 ⚠️ **V is Valence, not Void.** `eisv_mapper.py` computes `V = max(-1, min(1, E - integrity))` — a signed value (+hot / −careful), not a [0,1] magnitude. Presence is **not** in the EISV mapping. The old `(1-Presence)*0.3→Void` reading is retired: it only reported the positive half and was not comparable to other agents' V. Anything that assumes V ≥ 0, or that reads V as inverse-presence, is wrong.
 
@@ -581,8 +581,10 @@ Maps anima to EISV: Warmth→Energy, Clarity→Integrity, 1-Stability→Entropy,
 
 **Three EISV contexts:**
 - **DrawingEISV** (screens.py) — proprioceptive, drives drawing behavior (closed loop)
-- **Mapped EISV** (eisv_mapper.py) — anima→EISV for governance reporting
-- **Governance EISV** (Mac, dynamics.py) — full thermodynamics (open loop, advisory)
+- **Body EISV projection** (eisv_mapper.py) — lossy anima→EISV telemetry used by trajectory awareness and submitted as governance sensor evidence
+- **Governance EISV** (UNITARES) — behavioral primary estimate plus separately exposed ODE fallback/diagnostics; never substitute the body projection
+
+Runtime payloads use `body_anima`, `body_eisv_projection`, `drawing_eisv`, and `governance_eisv`. Bare `anima` and `eisv` are compatibility aliases and must carry provenance.
 
 Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
 Server syncs `_last_governance_decision` from SHM when `governance_at` is within `SHM_GOVERNANCE_STALE_SECONDS` (210s).
@@ -620,7 +622,7 @@ not transitive identity.
 
 **Restore / fork:** `restore_lumen.sh` and restoring `anima.db` **preserve** record identity and accumulated history. A **fresh** DB (new install, no copy) yields a **new** `creature_id`. Copying DB to another Pi **forks** record identity; behavior and trajectory may diverge with environment.
 
-**Governance boundary:** UNITARES is **advisory** (thermodynamic check-in, verdicts). The broker still owns sensors and learning; **SHM** carries governance for the server. **`_local_governance()`** when Mac is unreachable is a **fallback**, not a substitute for embodied state — it keeps check-ins from going silent, not from replacing sensors.
+**Governance boundary:** UNITARES is **advisory** (behavioral state estimation and policy verdicts; ODE state is fallback/diagnostics). The broker still owns sensors and learning; **SHM** carries governance for the server. **`_local_governance()`** when Mac is unreachable is a **fallback**, not a substitute for embodied state — it keeps check-ins from going silent, not from replacing sensors.
 
 **Damping time scales (broker tick ≈ 2s):** Fast noise is filtered so state reads as a creature, not a flickering meter.
 
