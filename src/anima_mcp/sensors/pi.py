@@ -19,6 +19,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 from .base import SensorBackend, SensorReadings
+from ..config import LIGHT_SENSOR_EMA_ALPHA
 
 
 class PiSensors(SensorBackend):
@@ -50,6 +51,8 @@ class PiSensors(SensorBackend):
         self._bmp280 = None
         self._last_pressure = None
         self._smoothed_lux: Optional[float] = None  # EMA for light sensor
+        self._env_shadow_updated_at: Optional[datetime] = None
+        self._env_shadow_timestamp_precision_s: Optional[float] = None
 
         # Phase-1 Elixir broker cutover: when set, the three I2C environment
         # sensors (AHT20 / VEML7700 / BMP280) are NOT initialized here — the
@@ -369,13 +372,25 @@ class PiSensors(SensorBackend):
         try:
             with open(self._env_shadow_path, "r") as f:
                 envelope = json.load(f)
-            updated_at = datetime.fromisoformat(str(envelope.get("updated_at")))
+            updated_at_text = str(envelope.get("updated_at"))
+            updated_at = datetime.fromisoformat(updated_at_text)
             age = abs((datetime.now() - updated_at).total_seconds())
             if age > self._env_shadow_stale_s:
+                self._env_shadow_updated_at = None
+                self._env_shadow_timestamp_precision_s = None
                 return None
             readings = envelope.get("data", {}).get("readings", {})
+            self._env_shadow_updated_at = updated_at
+            # The current Elixir envelope uses whole seconds. Preserve that
+            # uncertainty so action-history pairing does not claim false
+            # sub-second precision if the writer later changes its format.
+            self._env_shadow_timestamp_precision_s = (
+                0.001 if "." in updated_at_text else 1.0
+            )
             return readings if isinstance(readings, dict) else None
         except Exception:
+            self._env_shadow_updated_at = None
+            self._env_shadow_timestamp_precision_s = None
             return None
 
     def read(self) -> SensorReadings:
@@ -404,7 +419,10 @@ class PiSensors(SensorBackend):
                 if self._smoothed_lux is None:
                     self._smoothed_lux = light
                 else:
-                    self._smoothed_lux = 0.8 * self._smoothed_lux + 0.2 * light
+                    alpha = LIGHT_SENSOR_EMA_ALPHA
+                    self._smoothed_lux = (
+                        (1.0 - alpha) * self._smoothed_lux + alpha * light
+                    )
                 light = self._smoothed_lux
             pressure = shadow.get("pressure_hpa")
             pressure_temp = shadow.get("pressure_temp_c")
@@ -450,7 +468,10 @@ class PiSensors(SensorBackend):
                     if self._smoothed_lux is None:
                         self._smoothed_lux = light
                     else:
-                        self._smoothed_lux = 0.8 * self._smoothed_lux + 0.2 * light
+                        alpha = LIGHT_SENSOR_EMA_ALPHA
+                        self._smoothed_lux = (
+                            (1.0 - alpha) * self._smoothed_lux + alpha * light
+                        )
                     light = self._smoothed_lux
                 else:
                     self._record_failure("veml7700")
@@ -522,6 +543,16 @@ class PiSensors(SensorBackend):
             ambient_temp_c=ambient_temp,
             humidity_pct=humidity,
             light_lux=light,
+            light_observed_at=(
+                self._env_shadow_updated_at
+                if self._env_shadow_path and light is not None
+                else (now if light is not None else None)
+            ),
+            light_observed_precision_seconds=(
+                self._env_shadow_timestamp_precision_s
+                if self._env_shadow_path and light is not None
+                else (0.001 if light is not None else None)
+            ),
             cpu_percent=cpu_percent,
             memory_percent=memory.percent,
             disk_percent=disk.percent,

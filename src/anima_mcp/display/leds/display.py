@@ -69,6 +69,7 @@ class LEDDisplay:
         self._hardware_brightness_floor = 0.008
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
+        self._last_applied_colors = [(0, 0, 0)] * self.NUM_LEDS
         self._last_colors = [None, None, None]
         self._last_light_level: Optional[float] = None
         self._last_state_values: Optional[Tuple[float, float, float, float]] = None
@@ -94,6 +95,7 @@ class LEDDisplay:
         self._flash_until = 0.0
         self._flash_color = (100, 100, 100)
         self._last_applied_brightness = self._base_brightness  # Actual brightness sent to hardware
+        self._last_proprioception_publish = 0.0
         self._spi_lock = threading.Lock()
         self._animation_running = False
         self._animation_thread: Optional[threading.Thread] = None
@@ -149,14 +151,35 @@ class LEDDisplay:
                     # RGB scaling: dim below base via RGB values (hardware brightness has a floor)
                     rgb_scale = min(1.0, brightness / self._base_brightness) if self._base_brightness > 0 else 1.0
                     with self._spi_lock:
+                        applied_colors = []
                         for i, color in enumerate(colors):
                             phase = t * 2 * math.pi / self._pulse_cycle + i * math.pi * 2 / 3
                             mod = (0.92 + 0.08 * math.sin(phase)) * rgb_scale
-                            self._dots[i] = tuple(max(0, min(255, int(c * mod))) for c in color)
+                            applied_color = tuple(
+                                max(0, min(255, int(c * mod))) for c in color
+                            )
+                            self._dots[i] = applied_color
+                            applied_colors.append(applied_color)
                         final_brightness = max(self._hardware_brightness_floor, perceptual)
                         self._dots.brightness = final_brightness
                         self._dots.show()
+                    self._last_applied_colors = applied_colors
                     self._last_applied_brightness = final_brightness
+                    # Publish close to the 200ms VEML integration window. The
+                    # slower server display loop cannot timestamp the breathing
+                    # phase precisely enough for causal system identification.
+                    if t - self._last_proprioception_publish >= 0.5:
+                        try:
+                            from ...light_attribution import publish_led_proprioception
+
+                            publish_led_proprioception(
+                                self.get_proprioceptive_state(), captured_at=t
+                            )
+                            self._last_proprioception_publish = t
+                        except Exception:
+                            # Server-loop diagnostics retain the hardware state;
+                            # a missing/stale action copy fails closed in broker.
+                            pass
             except Exception:
                 pass
             time.sleep(0.25)
@@ -226,8 +249,10 @@ class LEDDisplay:
     def get_proprioceptive_state(self) -> dict:
         return {
             "brightness": self._last_applied_brightness,
+            "target_brightness": self._cached_pipeline_brightness,
             "expression_mode": self._expression_mode,
             "is_dancing": self._current_dance is not None and not self._current_dance.is_complete,
+            "is_flashing": time.time() < self._flash_until,
             "dance_type": self._current_dance.dance_type.value if self._current_dance and not self._current_dance.is_complete else None,
             "manual_dimmed": self._manual_brightness_factor < 1.0,
             "colors": [
@@ -235,6 +260,10 @@ class LEDDisplay:
                 self._last_state.led1 if self._last_state else (0, 0, 0),
                 self._last_state.led2 if self._last_state else (0, 0, 0),
             ],
+            # The animation loop applies activity/manual RGB scaling and a
+            # per-LED breathing phase before writing.  These are the actual
+            # channel values paired with ``brightness`` for optical drive.
+            "applied_colors": list(self._last_applied_colors),
         }
 
     def get_diagnostics(self) -> dict:

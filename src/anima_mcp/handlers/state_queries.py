@@ -90,6 +90,9 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
                 "drives": il.get("drives"),
                 "strongest_drive": il.get("strongest_drive"),
             }
+        light_attribution = shm.get("light_attribution") if shm else None
+        if isinstance(light_attribution, dict):
+            result["light_attribution"] = light_attribution
     except Exception as e:
         note_suppressed("state_queries.inner_life", e)
 
@@ -98,9 +101,9 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
     # swallowed: a sensor that quietly stops appearing in state_history is
     # indistinguishable from one that had nothing to report.
     sensors_for_history = readings.to_dict()
-    # Own LED brightness is not carried through shared memory, so fill it in
-    # from live proprioception — lux is recorded raw and mixes room light with
-    # Lumen's own glow, and this is the only field that makes them separable.
+    # New broker snapshots carry capture-aligned LED brightness. Fill from live
+    # proprioception only for older/partial SHM payloads so history remains
+    # decomposable without relabelling raw lux.
     if sensors_for_history.get("led_brightness") is None:
         try:
             from ..accessors import _get_led_brightness
@@ -159,7 +162,12 @@ async def handle_get_identity(arguments: dict) -> list[TextContent]:
 
 async def handle_read_sensors(arguments: dict) -> list[TextContent]:
     """Read raw sensor values - returns only active sensors (nulls suppressed)."""
-    from ..accessors import _get_sensors, _get_readings_and_anima, _get_shm_client
+    from ..accessors import (
+        _get_last_shm_data,
+        _get_readings_and_anima,
+        _get_sensors,
+        _get_shm_client,
+    )
 
     sensors = _get_sensors()
 
@@ -181,6 +189,9 @@ async def handle_read_sensors(arguments: dict) -> list[TextContent]:
         "is_pi": sensors.is_pi(),
         "source": "shared_memory" if (shm := _get_shm_client()) and shm.read() else "direct_sensors",
     }
+    light_attribution = (_get_last_shm_data() or {}).get("light_attribution")
+    if isinstance(light_attribution, dict):
+        result["light_attribution"] = light_attribution
 
     return [TextContent(type="text", text=json.dumps(result, indent=2))]
 

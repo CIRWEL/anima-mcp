@@ -178,7 +178,9 @@ def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
         weights[("sensor_temp", "anima_warmth")] = temp_to_warmth
 
     # --- Clarity ---
-    # Clarity ← world_light (env light, self-glow subtracted). Fallback to "light" for legacy configs.
+    # Clarity ← world_light (raw VEML7700 lux, including self-glow). The learned
+    # residual is shadow telemetry and intentionally does not move this edge.
+    # Fall back to "light" for legacy configs.
     light_to_clarity = cal.clarity_weights.get("world_light", 0) or cal.clarity_weights.get("light", 0)
     if light_to_clarity > 0:
         weights[("sensor_light", "anima_clarity")] = light_to_clarity

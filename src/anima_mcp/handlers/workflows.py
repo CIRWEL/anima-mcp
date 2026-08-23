@@ -415,7 +415,12 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
     Get Lumen's complete current context in one call.
     Consolidates: get_state + get_identity + read_sensors
     """
-    from ..accessors import _get_store, _get_sensors, _get_readings_and_anima
+    from ..accessors import (
+        _get_last_shm_data,
+        _get_readings_and_anima,
+        _get_sensors,
+        _get_store,
+    )
 
     store = _get_store()
     sensors = _get_sensors()
@@ -471,6 +476,16 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
             result["sensors"]["is_pi"] = sensors.is_pi()
         else:
             result["sensors"] = {"error": "Unable to read sensor data"}
+
+    if "sensors" in include or "light_attribution" in include:
+        light_attribution = (_get_last_shm_data() or {}).get("light_attribution")
+        if isinstance(light_attribution, dict):
+            result["light_attribution"] = light_attribution
+        elif "light_attribution" in include:
+            result["light_attribution"] = {
+                "status": "unavailable",
+                "reason": "broker_has_not_published_light_attribution",
+            }
 
     if "mood" in include:
         if anima:
@@ -556,9 +571,9 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
     # Record state for history if we have it (enriched with interaction context)
     if store and anima and readings:
         sensors_for_history = readings.to_dict()
-        # Own LED brightness is not carried through shared memory, so fill it in
-        # from live proprioception — lux is recorded raw and mixes room light with
-        # Lumen's own glow, and this is the only field that makes them separable.
+        # New broker snapshots carry capture-aligned LED brightness. Fill from
+        # live proprioception only for older/partial SHM payloads; lux itself
+        # remains the unmodified combined measurement.
         if sensors_for_history.get("led_brightness") is None:
             try:
                 from ..accessors import _get_led_brightness

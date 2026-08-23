@@ -336,9 +336,16 @@ async def rest_state(request):
             auth_mode = "strict-no-token"
 
         activity_manager = _get_activity()
-        cached_activity = (_get_last_shm_data() or {}).get("activity")
+        shm_data = _get_last_shm_data() or {}
+        cached_activity = shm_data.get("activity")
         if not isinstance(cached_activity, dict):
             cached_activity = {"level": "unknown", "reason": "broker state unavailable"}
+        light_attribution = shm_data.get("light_attribution")
+        if not isinstance(light_attribution, dict):
+            light_attribution = {
+                "status": "unavailable",
+                "reason": "broker_has_not_published_light_attribution",
+            }
 
         return JSONResponse({
             "name": identity.name if identity else "Lumen",
@@ -352,6 +359,7 @@ async def rest_state(request):
             "cpu_temp": readings.cpu_temp_c or 0,
             "ambient_temp": readings.ambient_temp_c or 0,
             "light": readings.light_lux or 0,
+            "light_attribution": light_attribution,
             "humidity": readings.humidity_pct or 0,
             "pressure": readings.pressure_hpa,
             "cpu_percent": readings.cpu_percent or 0,

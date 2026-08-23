@@ -398,10 +398,10 @@ def _get_activity():
 def _get_led_brightness() -> float | None:
     """Lumen's own LED brightness right now, or None if unknown.
 
-    The display loop keeps `_ctx.led_proprioception` current (server.py), but
-    the SensorReadings used for state_history come from shared memory, where
-    `led_brightness` is None — so it was persisted as NULL in all 255,720
-    history rows.
+    The display loop keeps `_ctx.led_proprioception` current (server.py). New
+    broker snapshots carry the capture-aligned brightness through shared
+    memory; this accessor remains the compatibility fallback for older or
+    partial snapshots (historically that field was NULL in most rows).
 
     That matters because the VEML7700 sits beside the DotStars and lux is used
     RAW, with no glow correction (see anima.py). Lux therefore mixes room light

@@ -320,6 +320,12 @@ class TestRestStateAndLayers:
                      "brightness_multiplier": 0.5,
                      "reason": "broker body state",
                  },
+                 "light_attribution": {
+                     "mode": "shadow",
+                     "status": "warming",
+                     "external_lux_residual": None,
+                     "used_by_clarity": False,
+                 },
              }), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"beta": 0.2}), \
              patch("anima_mcp.rest_api.anima_to_body_eisv_projection", return_value=eisv):
@@ -340,6 +346,9 @@ class TestRestStateAndLayers:
         assert data["api_security"]["mode"] == "token"
         assert "age_seconds" in data["governance"]
         assert data["activity"]["level"] == "drowsy"
+        assert data["light_attribution"]["status"] == "warming"
+        assert data["light_attribution"]["external_lux_residual"] is None
+        assert data["light_attribution"]["used_by_clarity"] is False
         activity.get_status.assert_not_called()
 
     async def test_rest_layers_includes_schema_hub_data(self, monkeypatch):

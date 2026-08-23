@@ -149,16 +149,31 @@ def readings_from_dict(data: dict) -> SensorReadings:
     else:
         timestamp = datetime.now()
 
+    light_observed_at = None
+    light_observed_str = data.get("light_observed_at")
+    if isinstance(light_observed_str, str):
+        try:
+            light_observed_at = datetime.fromisoformat(
+                light_observed_str.replace("Z", "+00:00")
+            )
+        except (ValueError, AttributeError):
+            light_observed_at = None
+
     return SensorReadings(
         timestamp=timestamp,
         cpu_temp_c=data.get("cpu_temp_c"),
         ambient_temp_c=data.get("ambient_temp_c"),
         humidity_pct=data.get("humidity_pct"),
         light_lux=data.get("light_lux"),
+        light_observed_at=light_observed_at,
+        light_observed_precision_seconds=data.get(
+            "light_observed_precision_seconds"
+        ),
         cpu_percent=data.get("cpu_percent"),
         memory_percent=data.get("memory_percent"),
         disk_percent=data.get("disk_percent"),
         power_watts=data.get("power_watts"),
+        led_brightness=data.get("led_brightness"),
         pressure_hpa=data.get("pressure_hpa"),
         pressure_temp_c=data.get("pressure_temp_c"),
         # EEG raw channels
