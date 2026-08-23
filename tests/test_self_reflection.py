@@ -3,6 +3,8 @@ Tests for self_reflection.py — insight persistence, pattern analysis,
 preference/belief/drawing analyzers, and reflect() orchestration.
 """
 
+import json
+
 import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch, MagicMock
@@ -156,6 +158,49 @@ class TestInsightPersistence:
             "migration_external_light_insights_v1"
         )
         assert derived.id in audit
+        second.close()
+
+    def test_inverted_low_sensor_migration_retracts_only_buggy_ids(self, tmp_path):
+        db = str(tmp_path / "inverted-sensor.db")
+        first = SelfReflectionSystem(db_path=db)
+        now = datetime.now()
+
+        inverted = SelfInsight(
+            id="low_humidity_lower_stability",
+            category=InsightCategory.ENVIRONMENT,
+            description="I feel more lower stability when the air is dry",
+            confidence=1.0,
+            sample_count=287,
+            discovered_at=now,
+            last_validated=now,
+        )
+        valid = SelfInsight(
+            id="high_humidity_lower_stability",
+            category=InsightCategory.ENVIRONMENT,
+            description="I feel less stability when it's humid",
+            confidence=0.8,
+            sample_count=40,
+            discovered_at=now,
+            last_validated=now,
+        )
+        first._save_insight(inverted)
+        first._save_insight(valid)
+        first._connect().execute(
+            "DELETE FROM reflection_state WHERE key = ?",
+            ("migration_inverted_low_sensor_insights_v1",),
+        )
+        first._connect().commit()
+        first.close()
+
+        second = SelfReflectionSystem(db_path=db)
+
+        assert second._insights[inverted.id].active is False
+        assert second._insights[valid.id].active is True
+        audit = json.loads(second._get_reflection_state(
+            "migration_inverted_low_sensor_insights_v1"
+        ))
+        assert audit["reason"] == "negative_high_minus_low_branch_was_inverted"
+        assert audit["rows"][inverted.id]["corrected_claim_id"] == valid.id
         second.close()
 
 
