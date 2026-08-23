@@ -52,7 +52,12 @@ def _make_light_rows(n=30):
             0.3 + (frac * 0.4),    # clarity: rises with light
             0.6,                    # stability: constant
             0.7,                    # presence: constant
-            {"light_lux": light, "ambient_temp_c": 22.0},
+            {
+                "light_lux": light,
+                "external_light_lux": light,
+                "light_attribution_status": "ready_shadow",
+                "ambient_temp_c": 22.0,
+            },
         ))
     return rows
 

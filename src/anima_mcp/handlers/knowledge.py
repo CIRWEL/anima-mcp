@@ -10,9 +10,188 @@ from mcp.types import TextContent
 from ..eisv import get_trajectory_awareness
 
 
+def _insight_view(insight, growth=None, self_model=None) -> dict:
+    """Attach source-specific epistemic labels without rewriting stored history."""
+    view = insight.to_dict()
+    insight_id = getattr(insight, "id", view.get("id", ""))
+    evidence_supports = int(view.get("validation_count", 0) or 0)
+    evidence_contradictions = int(view.get("contradiction_count", 0) or 0)
+    evidence_support_label = "validation"
+    evidence_contradiction_label = "challenge"
+    pref_name = (
+        insight_id.removeprefix("pref_")
+        if insight_id.startswith("pref_")
+        else insight_id
+    )
+    pref = None
+    if growth is not None:
+        pref = growth._preferences.get(pref_name)
+    is_preference_insight = insight_id.startswith("pref_") or (
+        insight_id.startswith("drawing_") and pref is not None
+    )
+
+    if is_preference_insight:
+        source_kind = "preference_observation"
+        confidence_kind = "95% Wilson lower bound on signed evidence windows"
+        evidence_basis = "independent preference evidence windows"
+        evidence_support_label = "positive direction"
+        evidence_contradiction_label = "negative direction"
+        if pref is not None:
+            evidence_supports = int(getattr(pref, "supporting_count", 0) or 0)
+            evidence_contradictions = int(
+                getattr(pref, "contradicting_count", 0) or 0
+            )
+            evidence_origin = getattr(
+                pref, "evidence_origin", "legacy_unclassified"
+            )
+            view.update({
+                "confidence": pref.confidence,
+                "sample_count": getattr(
+                    pref, "independent_evidence_count", pref.observation_count
+                ),
+                "raw_observation_count": pref.observation_count,
+                "supporting_count": evidence_supports,
+                "contradicting_count": evidence_contradictions,
+                "evidence_origin": evidence_origin,
+            })
+            evidence_basis = {
+                "legacy_hourly_reconstruction": (
+                    "conservative hourly reconstruction of legacy broker ticks"
+                ),
+                "legacy_event_count": "legacy event episodes",
+                "native_hourly_windows": "signed hourly state windows",
+                "native_events": "distinct event episodes",
+                "reset_external_light_gate_v2": (
+                    "cold-started after raw/self-glow contamination; awaiting gated residual"
+                ),
+            }.get(evidence_origin, evidence_basis)
+            if view["description"].startswith("i know this about myself: "):
+                view["description"] = view["description"].replace(
+                    "i know this about myself: ", "observational pattern: ", 1
+                )
+    elif insight_id.startswith("belief_"):
+        source_kind = "self_model_belief"
+        confidence_kind = "episode-bucketed belief confidence"
+        evidence_basis = "supporting and contradicting belief episodes"
+        evidence_support_label = "support"
+        evidence_contradiction_label = "challenge"
+        belief_id = insight_id.removeprefix("belief_")
+        belief = None
+        if self_model is not None:
+            belief = (getattr(self_model, "beliefs", None) or {}).get(belief_id)
+        if belief is not None:
+            evidence_supports = int(getattr(belief, "supporting_count", 0) or 0)
+            evidence_contradictions = int(
+                getattr(belief, "contradicting_count", 0) or 0
+            )
+            view.update({
+                "confidence": float(getattr(belief, "confidence", 0.0)),
+                "belief_value": float(getattr(belief, "value", 0.5)),
+                "sample_count": evidence_supports + evidence_contradictions,
+                "supporting_count": evidence_supports,
+                "contradicting_count": evidence_contradictions,
+            })
+        if insight_id == "belief_my_leds_affect_lux":
+            view["interpretation"] = (
+                "Narrative correlation belief only. The separately gated "
+                "light_attribution residual determines whether self-glow can "
+                "be estimated; raw lux remains physical telemetry, not room light."
+            )
+        elif insight_id == "belief_light_warmth_correlation":
+            view["interpretation"] = (
+                "Historical raw-lux evidence was cold-started because it mixed "
+                "room light with self-glow. New episodes are admitted only when "
+                "the learned external-light residual is ready."
+            )
+    elif insight_id.startswith("qa_"):
+        source_kind = "qa_claim"
+        confidence_kind = "claim confidence with later validation/retraction"
+        evidence_basis = "Q&A assertion plus independent re-derivations"
+    elif insight_id.startswith("trend_"):
+        source_kind = "long_term_trend"
+        confidence_kind = "summary-window heuristic, not a probability"
+        evidence_basis = "distinct rest or daily summaries"
+    else:
+        source_kind = "state_association"
+        confidence_kind = "association heuristic, not a probability"
+        evidence_basis = "state-history pattern samples; observational, not causal"
+
+    confidence = max(0.0, min(1.0, float(view.get("confidence", 0.0))))
+    reported_samples = max(0, int(view.get("sample_count", 0) or 0))
+    if source_kind == "preference_observation":
+        evidence_majority = max(evidence_supports, evidence_contradictions)
+        evidence_minority = min(evidence_supports, evidence_contradictions)
+        actionability_evidence = evidence_supports + evidence_contradictions
+        contested = (
+            evidence_minority > 0
+            and evidence_minority * 3 >= max(1, evidence_majority)
+        )
+    elif source_kind == "self_model_belief":
+        actionability_evidence = evidence_supports + evidence_contradictions
+        contested = (
+            evidence_contradictions > 0
+            and evidence_contradictions * 3 >= max(1, evidence_supports)
+        )
+    else:
+        # Q&A `sample_count` is its source-reference count while validation and
+        # contradiction counters represent later checks. Use the larger, not
+        # their sum: they can refer to the same underlying claim episode.
+        actionability_evidence = max(
+            reported_samples,
+            evidence_supports + evidence_contradictions,
+        )
+        contested = (
+            evidence_contradictions > 0
+            and evidence_contradictions * 3 >= max(1, evidence_supports)
+        )
+    minimum_evidence = {
+        "preference_observation": 10,
+        "self_model_belief": 5,
+        "qa_claim": 3,
+        "long_term_trend": 3,
+        "state_association": 10,
+    }[source_kind]
+    if contested:
+        actionability = "review"
+        review_reason = (
+            "both preference directions have material evidence"
+            if source_kind == "preference_observation"
+            else "contradictions are material relative to supporting evidence"
+        )
+    elif actionability_evidence < minimum_evidence:
+        actionability = "review"
+        review_reason = (
+            f"only {actionability_evidence} source evidence item(s); "
+            f"{minimum_evidence} required for established status"
+        )
+    elif confidence < 0.8:
+        actionability = "review"
+        review_reason = "reported confidence is below the established threshold"
+    else:
+        actionability = "established"
+        review_reason = ""
+
+    view.update({
+        "confidence_kind": confidence_kind,
+        "evidence_basis": evidence_basis,
+        "source_kind": source_kind,
+        "causal_claim": False,
+        "reported_uncertainty": round(1.0 - confidence, 3),
+        "actionability": actionability,
+        "review_reason": review_reason,
+        "evidence_supporting_count": evidence_supports,
+        "evidence_contradicting_count": evidence_contradictions,
+        "evidence_support_label": evidence_support_label,
+        "evidence_contradiction_label": evidence_contradiction_label,
+        "actionability_evidence_count": actionability_evidence,
+        "minimum_established_evidence": minimum_evidence,
+    })
+    return view
+
+
 async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
     """Get Lumen's accumulated self-knowledge from pattern analysis."""
-    from ..accessors import _get_store
+    from ..accessors import _get_growth, _get_store
 
     store = _get_store()
     if store is None:
@@ -39,15 +218,28 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
 
         active_insights = reflection_system.get_insights()
         insights = (
-            reflection_system.get_insights(category=category)[:limit]
-            if category else active_insights[:limit]
+            reflection_system.get_insights(category=category)
+            if category else active_insights
         )
+        growth = _get_growth()
+        try:
+            from ..self_model import get_self_model
+
+            self_model = get_self_model()
+        except Exception:
+            self_model = None
 
         # Build result
         result = {
             "total_insights": len(active_insights),
-            "insights": [i.to_dict() for i in insights],
+            "insights": [
+                _insight_view(i, growth, self_model) for i in insights[:limit]
+            ],
             "summary": reflection_system.get_self_knowledge_summary(),
+            "epistemic_note": (
+                "Confidence fields have source-specific meanings; inspect "
+                "confidence_kind and evidence_basis. None implies causality."
+            ),
         }
 
         return [TextContent(type="text", text=json.dumps(result, indent=2))]
@@ -88,11 +280,26 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
                         "name": p.name,
                         "description": p.description,
                         "confidence": round(p.confidence, 2),
-                        "observations": p.observation_count
+                        "evidence_windows": getattr(
+                            p, "independent_evidence_count", p.observation_count
+                        ),
+                        "raw_observation_calls": p.observation_count,
+                        "supporting_windows": getattr(p, "supporting_count", None),
+                        "contradicting_windows": getattr(p, "contradicting_count", None),
+                        "positive_direction_windows": getattr(
+                            p, "supporting_count", None
+                        ),
+                        "negative_direction_windows": getattr(
+                            p, "contradicting_count", None
+                        ),
+                        "evidence_origin": getattr(p, "evidence_origin", "legacy_unclassified"),
                     })
             result["preferences"] = {
                 "count": len(growth._preferences),
-                "learned": sorted(prefs, key=lambda p: -p["observations"]),
+                "learned": sorted(
+                    prefs,
+                    key=lambda p: (-p["confidence"], -p["evidence_windows"]),
+                ),
             }
 
         if "relationships" in include:

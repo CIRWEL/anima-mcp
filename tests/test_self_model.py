@@ -343,6 +343,76 @@ class TestPersistence:
         restarted = SelfModel(persistence_path=path)
         assert restarted.beliefs["morning_clarity"].supporting_count == 1
 
+    def test_raw_light_warmth_belief_is_cold_started_for_residual_v4(self, tmp_path):
+        path = tmp_path / "self_model.json"
+        path.write_text(json.dumps({
+            "beliefs": {
+                "light_warmth_correlation": {
+                    "confidence": 0.99,
+                    "value": 0.9,
+                    "supporting_count": 400,
+                    "contradicting_count": 2,
+                },
+            },
+            "_migrated_noise_reset": True,
+            "_migrated_episode_evidence_v2": True,
+            "_migrated_dead_channel_reset_v3": True,
+        }))
+
+        model = SelfModel(persistence_path=path)
+        belief = model.beliefs["light_warmth_correlation"]
+        assert (belief.confidence, belief.value) == (0.5, 0.5)
+        assert (belief.supporting_count, belief.contradicting_count) == (0, 0)
+
+        saved = json.loads(path.read_text())
+        audit = saved["_migrated_light_attribution_reset_v4"]
+        assert audit["light_warmth_correlation"]["supporting_count"] == 400
+
+    def test_clarity_target_beliefs_cold_start_after_equation_change_v5(self, tmp_path):
+        path = tmp_path / "self_model.json"
+        path.write_text(json.dumps({
+            "beliefs": {
+                "temp_clarity_correlation": {
+                    "confidence": 0.95,
+                    "value": 0.8,
+                    "supporting_count": 80,
+                    "contradicting_count": 4,
+                },
+                "interaction_clarity_boost": {
+                    "confidence": 0.9,
+                    "value": 0.9,
+                    "supporting_count": 20,
+                    "contradicting_count": 1,
+                },
+                "morning_clarity": {
+                    "confidence": 0.88,
+                    "value": 0.85,
+                    "supporting_count": 30,
+                    "contradicting_count": 2,
+                },
+            },
+            "_migrated_noise_reset": True,
+            "_migrated_episode_evidence_v2": True,
+            "_migrated_dead_channel_reset_v3": True,
+            "_migrated_light_attribution_reset_v4": True,
+        }))
+
+        model = SelfModel(persistence_path=path)
+
+        expected = {
+            "temp_clarity_correlation": (0.5, 0.5),
+            "interaction_clarity_boost": (0.5, 0.7),
+            "morning_clarity": (0.3, 0.5),
+        }
+        for belief_id, prior in expected.items():
+            belief = model.beliefs[belief_id]
+            assert (belief.confidence, belief.value) == prior
+            assert (belief.supporting_count, belief.contradicting_count) == (0, 0)
+
+        saved = json.loads(path.read_text())
+        audit = saved["_migrated_clarity_semantics_reset_v5"]
+        assert audit["temp_clarity_correlation"]["supporting_count"] == 80
+
 
 class TestEpisodeEvidence:
     def test_time_pattern_counts_once_per_day(self, tmp_path):

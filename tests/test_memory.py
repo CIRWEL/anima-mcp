@@ -178,20 +178,29 @@ class TestAnticipateFromSensors:
         m = _populated_memory()
         result = m.anticipate_from_sensors({
             "ambient_temp_c": 24.0,
-            "light_lux": 50.0,
+            "external_light_lux": 50.0,
             "humidity_pct": 45.0,
         })
         assert result is not None
 
     def test_missing_temp_returns_none(self, memory):
-        result = memory.anticipate_from_sensors({"light_lux": 50.0})
+        result = memory.anticipate_from_sensors({"external_light_lux": 50.0})
+        assert result is None
+
+    def test_raw_light_without_attribution_returns_none(self):
+        m = _populated_memory()
+        result = m.anticipate_from_sensors({
+            "ambient_temp_c": 24.0,
+            "light_lux": 50.0,
+            "humidity_pct": 45.0,
+        })
         assert result is None
 
     def test_falls_back_to_cpu_temp(self):
         m = _populated_memory()
         result = m.anticipate_from_sensors({
             "cpu_temp_c": 24.0,  # No ambient_temp_c
-            "light_lux": 50.0,
+            "external_light_lux": 50.0,
             "humidity_pct": 45.0,
         })
         assert result is not None

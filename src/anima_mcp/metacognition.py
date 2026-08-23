@@ -711,7 +711,15 @@ class MetacognitiveMonitor:
         observations = []
         if "light" in error.surprise_sources:
             if error.actual_light_lux and error.prediction.light_lux:
-                observations.append("Light " + ("increased" if error.actual_light_lux > error.prediction.light_lux else "decreased") + " unexpectedly")
+                observations.append(
+                    "Raw light-sensor reading "
+                    + (
+                        "increased"
+                        if error.actual_light_lux > error.prediction.light_lux
+                        else "decreased"
+                    )
+                    + " unexpectedly"
+                )
         if "ambient_temp" in error.surprise_sources:
             if error.actual_ambient_temp_c and error.prediction.ambient_temp_c:
                 observations.append("Temperature " + ("rose" if error.actual_ambient_temp_c > error.prediction.ambient_temp_c else "dropped") + " unexpectedly")

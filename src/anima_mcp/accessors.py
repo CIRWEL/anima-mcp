@@ -348,7 +348,13 @@ def _get_readings_and_anima(fallback_to_sensors: bool = False) -> tuple[SensorRe
             anticipation = _get_warm_start_anticipation() or anticipate_state(readings.to_dict() if readings else {})
 
             drift = _get_calibration_drift()
-            anima = sense_self_with_memory(readings, anticipation, calibration, drift_midpoints=drift.get_midpoints())
+            anima = sense_self_with_memory(
+                readings,
+                anticipation,
+                calibration,
+                drift_midpoints=drift.get_midpoints(),
+                external_light_lux=None,
+            )
             if anima is None:
                 logger.warning("[Server] Failed to create anima from readings")
                 return None, None
@@ -403,13 +409,12 @@ def _get_led_brightness() -> float | None:
     memory; this accessor remains the compatibility fallback for older or
     partial snapshots (historically that field was NULL in most rows).
 
-    That matters because the VEML7700 sits beside the DotStars and lux is used
-    RAW, with no glow correction (see anima.py). Lux therefore mixes room light
-    with Lumen's own output, and lux feeds both clarity (weight 0.15) and the
-    activity score (weight 0.15) — which in turn sets LED brightness. Without
-    this field recorded alongside lux, that loop is not decomposable after the
-    fact, and `SelfModel.observe_led_lux()` — which exists precisely to learn
-    it — can never fire from history.
+    That matters because the VEML7700 sits beside the DotStars: raw lux mixes
+    room light with Lumen's own output. Capture-aligned LED state lets the body
+    broker learn a self-glow residual. Raw lux remains physical telemetry, while
+    environmental clarity, activity, memory, and preference consumers now admit
+    only the evidence-gated external-light residual. Without this field beside
+    lux, that attribution would not be identifiable after the fact.
     """
     ctx = _cr._ctx
     if not ctx:

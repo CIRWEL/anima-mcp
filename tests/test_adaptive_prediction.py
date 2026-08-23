@@ -154,7 +154,7 @@ class TestExtractFeatures:
         assert f1.to_key() == f2.to_key()
         # Verify the key includes the expected components
         key = f1.to_key()
-        assert key == "14:3:0:dim:comfortable"
+        assert key == "lagged_external_context_v2:14:3:0:dim:comfortable"
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +246,38 @@ class TestObserveAndSurprise:
         m.observe({"light": 300.0}, current_time=t)
         assert len(m._history) == 1
 
+    def test_observe_does_not_key_target_by_its_current_value(self, tmp_path):
+        """No explicit lagged context means unknown, not target leakage."""
+        m = AdaptivePredictionModel(persistence_path=tmp_path / "p.json")
+        t = datetime(2025, 1, 6, 14, 5)
+
+        m.observe({"light": 300.0, "ambient_temp": 22.0}, current_time=t)
+
+        keys = set(m._patterns["light"])
+        assert keys == {"lagged_external_context_v2:14:0:0:unknown:unknown"}
+
+    def test_hour_fallback_under_schema_prefixed_keys(self, tmp_path):
+        """A different minute bucket can reuse a sufficiently sampled hour."""
+        m = AdaptivePredictionModel(persistence_path=tmp_path / "p.json")
+        observed_at = datetime(2025, 1, 6, 14, 5)
+        for _ in range(5):
+            m.observe(
+                {"clarity": 0.72},
+                current_time=observed_at,
+                current_light=50.0,
+                current_temp=22.0,
+            )
+
+        predicted, confidence = m.predict(
+            "clarity",
+            current_time=observed_at.replace(minute=25),
+            current_light=500.0,
+            current_temp=30.0,
+        )
+
+        assert predicted == pytest.approx(0.72)
+        assert confidence > 0
+
     def test_surprising_deviation_no_prior_pattern(self, tmp_path):
         """With no learned pattern, get_surprising_deviation returns is_surprising=True."""
         m = AdaptivePredictionModel(persistence_path=tmp_path / "p.json")
@@ -286,6 +318,13 @@ class TestObserveAndSurprise:
         )
         # log10(1000) - log10(100) = 1.0; normalised by /3 => ~0.333
         assert dev == pytest.approx(1.0 / 3.0, abs=0.05)
+
+    def test_external_light_uses_log_scale_error_normalization(self, tmp_path):
+        m = AdaptivePredictionModel(persistence_path=tmp_path / "p.json")
+        m.record_prediction_error("external_light_lux", 100.0, 1000.0)
+        stats = m.get_accuracy_stats()
+        assert stats["overall_mean_error"] == pytest.approx(1.0 / 3.0)
+        assert stats["external_light_lux_sample_count"] == 1
 
 
 # ---------------------------------------------------------------------------

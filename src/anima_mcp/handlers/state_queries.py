@@ -10,6 +10,7 @@ from mcp.types import TextContent
 from ..server_state import extract_neural_bands
 from ..config import ConfigManager
 from ..error_recovery import note_suppressed
+from ..light_attribution import gated_external_light_lux
 
 
 async def handle_get_state(arguments: dict) -> list[TextContent]:
@@ -80,6 +81,7 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
     }
 
     # Add inner life from shared memory (temperament, drives)
+    light_attribution = None
     try:
         from ..accessors import _get_last_shm_data
         shm = _get_last_shm_data()
@@ -101,6 +103,15 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
     # swallowed: a sensor that quietly stops appearing in state_history is
     # indistinguishable from one that had nothing to report.
     sensors_for_history = readings.to_dict()
+    external_light = gated_external_light_lux(light_attribution)
+    sensors_for_history["external_light_lux"] = external_light
+    sensors_for_history["light_attribution_status"] = (
+        light_attribution.get("status")
+        if isinstance(light_attribution, dict)
+        else "unavailable"
+    )
+    if external_light is not None:
+        sensors_clean["environment"]["external_light_lux"] = external_light
     # New broker snapshots carry capture-aligned LED brightness. Fill from live
     # proprioception only for older/partial SHM payloads so history remains
     # decomposable without relabelling raw lux.

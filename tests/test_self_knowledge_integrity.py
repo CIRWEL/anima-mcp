@@ -205,7 +205,8 @@ class TestSignAwareVerification:
             conn.execute(
                 "INSERT INTO state_history VALUES (?, ?, ?, ?, ?, ?)",
                 ((base + timedelta(hours=i)).isoformat(),
-                 0.5, clarity, 0.8, 0.7, json.dumps({"light_lux": lux})))
+                 0.5, clarity, 0.8, 0.7,
+                 json.dumps({"external_light_lux": lux})))
         conn.commit()
 
     def test_wrong_direction_contradicted(self, srs):
@@ -257,7 +258,7 @@ class TestSignAwareVerification:
                 "INSERT INTO state_history VALUES (?, ?, ?, ?, ?, ?)",
                 ((base + timedelta(hours=i)).isoformat(),
                  0.5, 0.4 + (i / 60) * 0.4, 0.8, 0.7,
-                 json.dumps({"light_lux": 4.0})))
+                 json.dumps({"external_light_lux": 4.0})))
         conn.commit()
         result = srs._verify_qa_insight(
             "light increases my clarity", InsightCategory.ENVIRONMENT)

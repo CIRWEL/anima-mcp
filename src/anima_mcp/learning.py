@@ -157,9 +157,14 @@ class AdaptiveLearner:
                 if "humidity_pct" in sensors and sensors["humidity_pct"] is not None:
                     humidities.append(float(sensors["humidity_pct"]))
 
-                # Collect light readings
-                if "light_lux" in sensors and sensors["light_lux"] is not None:
-                    lux = float(sensors["light_lux"])
+                # Calibrate the clarity light scale only from the gated
+                # environmental residual. Raw VEML7700 lux includes DotStar
+                # self-glow and would bake Lumen's own output into the scale.
+                if (
+                    "external_light_lux" in sensors
+                    and sensors["external_light_lux"] is not None
+                ):
+                    lux = float(sensors["external_light_lux"])
                     if lux > 0:
                         light_readings.append(lux)
 

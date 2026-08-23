@@ -76,7 +76,7 @@ from .eisv_mapper import (
     BODY_EISV_PROJECTION_SCHEMA,
     anima_to_body_eisv_projection,
 )
-from .light_attribution import read_led_proprioception
+from .light_attribution import gated_external_light_lux, read_led_proprioception
 from .metacognition import get_metacognitive_monitor
 from .learning_events import drain_learning_events
 
@@ -632,6 +632,11 @@ def run_creature():
     last_self_model_observed_at = time.monotonic()
     last_learning_save = time.time()  # Track periodic learning saves
     last_body_update_at = time.monotonic()
+    # Predictor context must predate the values being scored. These lagged
+    # values prevent the current light/temp target from leaking into its own
+    # pattern key. Light context is the gated external residual, never raw lux.
+    _adaptive_context_light = None
+    _adaptive_context_temp = None
     readings = None  # Initialize before loop (first iteration has no prior readings)
     last_pattern_apply = 0  # Track periodic learned pattern application
     last_learning_event_drain = 0.0
@@ -728,13 +733,52 @@ def run_creature():
                 )
                 _led_brightness_source = "broker_brightness_estimate"
 
-            # 2. Update Anima State (now has correct led_brightness for correction)
+            # Close the efference-copy loop before deriving felt state. The
+            # physical sample remains raw; only a capture-aligned, statistically
+            # ready residual may enter environmental consumers below.
+            _external_light_for_environment = None
+            if self_model:
+                try:
+                    _light_capture_unix = (
+                        _paired_led_proprioception.get(
+                            "paired_to_light_observed_at_unix"
+                        )
+                        if _paired_led_proprioception is not None
+                        else None
+                    )
+                    light_attribution = self_model.observe_led_lux(
+                        readings.led_brightness,
+                        readings.light_lux,
+                        led_proprioception=_paired_led_proprioception,
+                        brightness_source=_led_brightness_source,
+                        observed_at=_light_capture_unix,
+                        observation_id=(
+                            readings.light_observed_at.isoformat()
+                            if readings.light_observed_at is not None
+                            else None
+                        ),
+                    )
+                    _external_light_for_environment = gated_external_light_lux(
+                        light_attribution
+                    )
+                except Exception as e:
+                    print(
+                        f"[LightAttribution] Observation error: {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+
+            # 2. Update Anima State with provenance-gated environmental light.
             # Layer 2: Apply experiential filter — perception colored by accumulated experience
             _body_now = time.monotonic()
             _body_elapsed = max(0.0, _body_now - last_body_update_at)
             last_body_update_at = _body_now
             _salience = exp_filter.get_all_saliences() if exp_filter else None
-            raw_anima = sense_self(readings, salience_weights=_salience)
+            raw_anima = sense_self(
+                readings,
+                salience_weights=_salience,
+                external_light_lux=_external_light_for_environment,
+            )
             anima = _mood_momentum.smooth(
                 raw_anima, elapsed_seconds=_body_elapsed,
             )
@@ -801,7 +845,7 @@ def run_creature():
                 activity_state = activity_manager.get_state(
                     presence=anima.presence,
                     stability=anima.stability,
-                    light_level=readings.light_lux,
+                    light_level=_external_light_for_environment,
                 )
                 # Update LED brightness estimate for next cycle
                 # Preset brightness × agency dimmer × activity multiplier
@@ -871,7 +915,12 @@ def run_creature():
             if adaptive_model:
                 try:
                     observations = {
-                        "light": readings.light_lux,
+                        # Accuracy is a clarity input, so self-induced DotStar
+                        # changes must not count as environmental prediction
+                        # failures. The raw sensor has its own explicitly
+                        # proprioceptive metacognition channel; this learner sees
+                        # external lux only after the attribution gate opens.
+                        "external_light_lux": _external_light_for_environment,
                         "ambient_temp": readings.ambient_temp_c,
                         "humidity": readings.humidity_pct,
                         "warmth": anima.warmth,
@@ -898,8 +947,8 @@ def run_creature():
                         try:
                             _predicted, _ = adaptive_model.predict(
                                 _var,
-                                current_light=readings.light_lux,
-                                current_temp=readings.ambient_temp_c,
+                                current_light=_adaptive_context_light,
+                                current_temp=_adaptive_context_temp,
                             )
                             if _predicted is not None:
                                 adaptive_model.record_prediction_error(
@@ -910,9 +959,11 @@ def run_creature():
 
                     adaptive_model.observe(
                         observations,
-                        current_light=readings.light_lux,
-                        current_temp=readings.ambient_temp_c
+                        current_light=_adaptive_context_light,
+                        current_temp=_adaptive_context_temp,
                     )
+                    _adaptive_context_light = _external_light_for_environment
+                    _adaptive_context_temp = readings.ambient_temp_c
                 except Exception as e:
                     print(f"[Learning] Adaptive prediction error: {e}", file=sys.stderr, flush=True)
 
@@ -951,11 +1002,11 @@ def run_creature():
                     }
                     last_self_model_observed_at = _self_model_now
 
-                    # Track correlations against the physical raw measurement.
-                    # The learned decomposition below remains telemetry-only.
+                    # Temperature is physically direct. VEML7700 lux is not:
+                    # it mixes room light with DotStar self-glow, so it must not
+                    # enter the environmental light→warmth belief here.
                     sensor_vals = {
                         "ambient_temp": readings.ambient_temp_c,
-                        "light": readings.light_lux,
                     }
                     anima_vals = {
                         "warmth": anima.warmth,
@@ -964,28 +1015,16 @@ def run_creature():
                     }
                     self_model.observe_correlation(sensor_vals, anima_vals)
 
-                    # Track LED-lux proprioception (own outputs affecting inputs)
-                    _light_capture_unix = (
-                        _paired_led_proprioception.get(
-                            "paired_to_light_observed_at_unix"
+                    # The v4 channel contract promotes only a statistically
+                    # ready external-light residual into the environmental
+                    # correlation belief. The explanatory LED→lux belief and
+                    # quantitative residual keep their separate evidence gates.
+                    _external_lux = _external_light_for_environment
+                    if _external_lux is not None:
+                        self_model.observe_correlation(
+                            {"light": _external_lux},
+                            {"warmth": anima.warmth},
                         )
-                        if _paired_led_proprioception is not None
-                        else None
-                    )
-                    light_attribution = self_model.observe_led_lux(
-                        readings.led_brightness,
-                        readings.light_lux,
-                        led_proprioception=_paired_led_proprioception,
-                        brightness_source=_led_brightness_source,
-                        # Use the physical capture window, not broker processing
-                        # time, for both interval gates and durable evidence.
-                        observed_at=_light_capture_unix,
-                        observation_id=(
-                            readings.light_observed_at.isoformat()
-                            if readings.light_observed_at is not None
-                            else None
-                        ),
-                    )
 
                     # Track time patterns
                     hour = datetime.now().hour
@@ -1213,7 +1252,7 @@ def run_creature():
                     voice.update_environment(
                         temperature=readings.ambient_temp_c or readings.cpu_temp_c or 22.0,
                         humidity=readings.humidity_pct or 50.0,
-                        light_level=readings.light_lux or 500.0
+                        light_level=_external_light_for_environment,
                     )
                 except Exception as e:
                     print(f"[StableCreature] Voice update error: {e}", file=sys.stderr, flush=True)
@@ -1273,6 +1312,7 @@ def run_creature():
                 _gov_identity = identity
                 _gov_first = first_check_in
                 _gov_time = current_time
+                _gov_light_attribution = light_attribution
 
                 _gov_exp = _exp_state  # capture for closure
 
@@ -1285,6 +1325,7 @@ def run_creature():
                             identity=_gov_identity,
                             is_first_check_in=_gov_first,
                             experiential_summary=_gov_exp or None,
+                            light_attribution=_gov_light_attribution,
                         ),
                         timeout=15.0  # budget: availability (3+3s) + check-in (3s) + headroom
                     )

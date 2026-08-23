@@ -6,11 +6,32 @@ Standalone functions that take a connection parameter.
 
 import sys
 import json
+import math
 import sqlite3
 from datetime import datetime
 from typing import Dict
 
-from .models import GrowthPreference
+from .models import GrowthPreference, preference_evidence_confidence
+
+
+# These preferences were historically sampled from the broker loop, nominally
+# about once per minute. Their raw counts describe scheduler cadence, not
+# independent experience. Drawing and Q&A preferences are event-triggered and
+# therefore retain one evidence item per historical observation.
+_CORRELATED_STATE_PREFERENCES = {
+    "active_engagement",
+    "bright_light",
+    "cool_temp",
+    "dim_light",
+    "dry_air",
+    "evening_calm",
+    "humid_air",
+    "morning_peace",
+    "night_calm",
+    "quiet_presence",
+    "warm_temp",
+}
+_LEGACY_STATE_CALLS_PER_HOUR = 60
 
 
 def run_identity_migration(conn: sqlite3.Connection):
@@ -122,13 +143,14 @@ def migrate_raw_lux_preferences(
     conn: sqlite3.Connection,
     preferences: Dict[str, GrowthPreference],
 ):
-    """One-time reset of light preferences learned from raw (LED-dominated) lux.
+    """Legacy one-time marker for preferences learned from LED-dominated lux.
 
     Before the world-light correction (commits ad2195a..d410648), the light
     sensor read ~488 lux at typical LED brightness — all self-glow. Preferences
     like "bright_light" (69K observations) learned "my LEDs correlate with
-    wellness," not "environmental light makes me feel good." Reset these so
-    they can relearn honestly from corrected world light.
+    wellness," not "environmental light makes me feel good." The later v2
+    evidence migration performs the durable cold start. This compatibility
+    step now preserves the raw call count as audit data rather than erasing it.
     """
     SENTINEL = "_migration_raw_lux_v1"
 
@@ -147,14 +169,13 @@ def migrate_raw_lux_preferences(
             if pref.observation_count > 1000:
                 print(f"[Growth] Resetting '{name}' preference ({pref.observation_count} "
                       f"observations from raw-lux era)", file=sys.stderr, flush=True)
-                pref.observation_count = 0
                 pref.confidence = 0.2
-                pref.value = 0.5  # neutral — let it relearn
+                pref.value = 0.0  # neutral on the documented [-1, 1] scale
                 pref.last_confirmed = datetime.now()
                 conn.execute("""
                     UPDATE preferences SET value=?, confidence=?,
-                    observation_count=?, last_confirmed=? WHERE name=?
-                """, (pref.value, pref.confidence, pref.observation_count,
+                    last_confirmed=? WHERE name=?
+                """, (pref.value, pref.confidence,
                       pref.last_confirmed.isoformat(), name))
 
     # Write sentinel so this never runs again
@@ -163,4 +184,166 @@ def migrate_raw_lux_preferences(
         (name, category, description, value, confidence, observation_count, last_confirmed)
         VALUES (?, 'system', 'raw-lux migration sentinel', 1.0, 1.0, 1, ?)
     """, (SENTINEL, datetime.now().isoformat()))
+    conn.commit()
+
+
+def migrate_preference_evidence_windows(
+    conn: sqlite3.Connection,
+    preferences: Dict[str, GrowthPreference],
+):
+    """One-time cadence correction for preference confidence and evidence.
+
+    Historical state preferences were updated on every eligible broker pass.
+    We cannot recover their exact independent episodes after the fact, so this
+    migration stores a deliberately conservative reconstruction: at most one
+    evidence item per nominal hour and never more than elapsed clock hours.
+    The untouched raw count remains available for audit. Event-driven drawing
+    and Q&A preferences retain their historical event counts.
+
+    Historical polarity was not stored, so reconstructed items inherit the
+    sign of the last learned value and are explicitly marked reconstructed.
+    Native v2 observations subsequently record signed hourly windows.
+    """
+    sentinel = "_migration_preference_evidence_v1"
+    row = conn.execute(
+        "SELECT name FROM preferences WHERE name = ?", (sentinel,)
+    ).fetchone()
+    if row:
+        return
+
+    migrated = 0
+    for pref in preferences.values():
+        raw_count = max(0, int(pref.observation_count))
+        if pref.name in _CORRELATED_STATE_PREFERENCES and raw_count:
+            nominal_hours = max(
+                1,
+                math.ceil(raw_count / _LEGACY_STATE_CALLS_PER_HOUR),
+            )
+            elapsed_hours = max(
+                1,
+                math.ceil(
+                    max(
+                        0.0,
+                        (pref.last_confirmed - pref.first_noticed).total_seconds(),
+                    )
+                    / 3600.0
+                ),
+            )
+            evidence_count = min(raw_count, nominal_hours, elapsed_hours)
+            origin = "legacy_hourly_reconstruction"
+        else:
+            evidence_count = raw_count
+            origin = "legacy_event_count"
+
+        pref.evidence_count = evidence_count
+        pref.supporting_count = evidence_count if pref.value >= 0.0 else 0
+        pref.contradicting_count = evidence_count if pref.value < 0.0 else 0
+        pref.last_evidence_key = None
+        pref.evidence_origin = origin
+        if evidence_count:
+            pref.confidence = preference_evidence_confidence(
+                pref.supporting_count,
+                pref.contradicting_count,
+            )
+        else:
+            pref.confidence = min(pref.confidence, 0.2)
+
+        conn.execute(
+            """
+            UPDATE preferences
+               SET confidence=?, evidence_count=?, supporting_count=?,
+                   contradicting_count=?, last_evidence_key=?, evidence_origin=?
+             WHERE name=?
+            """,
+            (
+                pref.confidence,
+                pref.evidence_count,
+                pref.supporting_count,
+                pref.contradicting_count,
+                pref.last_evidence_key,
+                pref.evidence_origin,
+                pref.name,
+            ),
+        )
+        migrated += 1
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO preferences
+            (name, category, description, value, confidence,
+             observation_count, evidence_count, supporting_count,
+             contradicting_count, evidence_origin, last_confirmed)
+        VALUES (?, 'system', 'preference evidence migration sentinel',
+                1.0, 1.0, 1, 1, 1, 0, 'system', ?)
+        """,
+        (sentinel, datetime.now().isoformat()),
+    )
+    conn.commit()
+    print(
+        f"[Growth] Preference evidence migration v1 complete ({migrated} rows).",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def migrate_external_light_preferences_v2(
+    conn: sqlite3.Connection,
+    preferences: Dict[str, GrowthPreference],
+):
+    """Reset interpreted light evidence before the gated-residual era.
+
+    The first raw-lux migration assumed a subtraction would remain in the
+    caller. It was later removed because the fixed quadratic overcorrected, but
+    raw VEML7700 lux then resumed feeding state and drawing preferences while
+    their descriptions still claimed room light. Preserve raw call counts for
+    audit, but cold-start the decision-bearing evidence fields. New light
+    evidence is admitted only from a ready learned residual.
+    """
+    sentinel = "_migration_external_light_gate_v2"
+    if conn.execute(
+        "SELECT name FROM preferences WHERE name = ?", (sentinel,)
+    ).fetchone():
+        return
+
+    now = datetime.now()
+    for name in ("dim_light", "bright_light", "drawing_dim", "drawing_bright"):
+        pref = preferences.get(name)
+        if pref is None:
+            continue
+        pref.value = 0.0
+        pref.confidence = 0.2
+        pref.evidence_count = 0
+        pref.supporting_count = 0
+        pref.contradicting_count = 0
+        pref.last_evidence_key = None
+        pref.evidence_origin = "reset_external_light_gate_v2"
+        pref.last_confirmed = now
+        conn.execute(
+            """
+            UPDATE preferences
+               SET value=?, confidence=?, evidence_count=0,
+                   supporting_count=0, contradicting_count=0,
+                   last_evidence_key=NULL, evidence_origin=?, last_confirmed=?
+             WHERE name=?
+            """,
+            (
+                pref.value,
+                pref.confidence,
+                pref.evidence_origin,
+                pref.last_confirmed.isoformat(),
+                name,
+            ),
+        )
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO preferences
+            (name, category, description, value, confidence,
+             observation_count, evidence_count, supporting_count,
+             contradicting_count, evidence_origin, last_confirmed)
+        VALUES (?, 'system', 'external-light gate migration sentinel',
+                1.0, 1.0, 1, 1, 1, 0, 'system', ?)
+        """,
+        (sentinel, now.isoformat()),
+    )
     conn.commit()

@@ -28,6 +28,102 @@ class TestGetSelfKnowledgeExtended:
         assert data["summary"] == "dim light helps calm"
         assert data["insights"][0]["text"] == "I feel calmer in dim light"
 
+    async def test_belief_view_uses_live_cold_started_evidence(self):
+        from anima_mcp.handlers.knowledge import handle_get_self_knowledge
+
+        insight = SimpleNamespace(
+            id="belief_light_warmth_correlation",
+            to_dict=lambda: {
+                "id": "belief_light_warmth_correlation",
+                "description": "Light level affects my warmth",
+                "confidence": 0.99,
+                "sample_count": 500,
+                "validation_count": 20,
+                "contradiction_count": 0,
+            },
+        )
+        reflection = SimpleNamespace(
+            get_insights=lambda category=None: [insight],
+            get_self_knowledge_summary=lambda: "historical summary",
+        )
+        belief = SimpleNamespace(
+            confidence=0.5,
+            value=0.5,
+            supporting_count=0,
+            contradicting_count=0,
+        )
+        self_model = SimpleNamespace(
+            beliefs={"light_warmth_correlation": belief}
+        )
+        store = SimpleNamespace(db_path=":memory:")
+
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_growth", return_value=None), \
+             patch(
+                 "anima_mcp.self_reflection.get_reflection_system",
+                 return_value=reflection,
+             ), \
+             patch("anima_mcp.self_model.get_self_model", return_value=self_model):
+            data = parse_result(await handle_get_self_knowledge({"limit": 5}))
+
+        view = data["insights"][0]
+        assert view["confidence"] == 0.5
+        assert view["sample_count"] == 0
+        assert view["actionability"] == "review"
+        assert "cold-started" in view["interpretation"]
+
+    async def test_negative_preference_direction_is_not_called_contradiction(self):
+        from anima_mcp.handlers.knowledge import _insight_view
+
+        insight = SimpleNamespace(
+            id="pref_dim_light",
+            to_dict=lambda: {
+                "id": "pref_dim_light",
+                "description": "Dim light makes me feel uncertain",
+                "confidence": 0.99,
+                "sample_count": 500,
+                "validation_count": 30,
+                "contradiction_count": 0,
+            },
+        )
+        preference = SimpleNamespace(
+            confidence=0.85,
+            observation_count=500,
+            independent_evidence_count=40,
+            supporting_count=0,
+            contradicting_count=40,
+            evidence_origin="native_hourly_windows",
+        )
+        growth = SimpleNamespace(_preferences={"dim_light": preference})
+
+        view = _insight_view(insight, growth)
+
+        assert view["actionability"] == "established"
+        assert view["evidence_support_label"] == "positive direction"
+        assert view["evidence_contradiction_label"] == "negative direction"
+
+    async def test_high_confidence_single_claim_is_not_established(self):
+        from anima_mcp.handlers.knowledge import _insight_view
+
+        insight = SimpleNamespace(
+            id="qa_single_claim",
+            to_dict=lambda: {
+                "id": "qa_single_claim",
+                "description": "A single answer asserted this",
+                "confidence": 1.0,
+                "sample_count": 1,
+                "validation_count": 1,
+                "contradiction_count": 0,
+            },
+        )
+
+        view = _insight_view(insight)
+
+        assert view["actionability"] == "review"
+        assert view["actionability_evidence_count"] == 1
+        assert view["minimum_established_evidence"] == 3
+        assert "only 1 source evidence" in view["review_reason"]
+
 
 @pytest.mark.asyncio
 class TestGetGrowthExtended:

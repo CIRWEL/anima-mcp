@@ -18,16 +18,27 @@ import json
 import subprocess
 import os
 import base64
+import hmac
 import urllib.request
 import urllib.error
 from urllib.parse import unquote, urlsplit
 
 # 8771, not 8768: the UNITARES gateway (`com.unitares.gateway-mcp`) is allocated
-# 8768 and binds 127.0.0.1 there. This server binds the wildcard, so both could
-# start, but loopback dials resolved to the gateway — which broke the Control
+# 8768 and binds 127.0.0.1 there. The relay now also defaults to loopback; the
+# distinct port prevents loopback dials resolving to the gateway — which broke the Control
 # Center whenever control_center.html was opened as a file:// URL (shared.js
 # falls back to http://localhost:<PORT> in that case). See DEFINITIVE_PORTS.md.
 PORT = 8771
+BIND_HOST = (os.environ.get("LUMEN_BIND_HOST") or "127.0.0.1").strip()
+CONTROL_TOKEN = os.environ.get("LUMEN_CONTROL_TOKEN", "")
+_DEFAULT_ALLOWED_ORIGINS = f"null,http://localhost:{PORT},http://127.0.0.1:{PORT}"
+ALLOWED_ORIGINS = frozenset(
+    origin.strip()
+    for origin in os.environ.get(
+        "LUMEN_ALLOWED_ORIGINS", _DEFAULT_ALLOWED_ORIGINS
+    ).split(",")
+    if origin.strip()
+)
 PI_USER = "unitares-anima"
 PI_HOST = os.environ.get("LUMEN_HOST", "lumen-local")  # SSH config alias (local network)
 
@@ -107,11 +118,35 @@ def ssh_command(python_code: str, timeout: int = 10) -> tuple[bool, str]:
 
 class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
 
+    def _allowed_cors_origin(self) -> str | None:
+        """Echo only an explicitly trusted browser origin."""
+        headers = getattr(self, "headers", None)
+        origin = headers.get("Origin") if headers else None
+        return origin if origin in ALLOWED_ORIGINS else None
+
+    def _send_cors_headers(self) -> None:
+        origin = self._allowed_cors_origin()
+        if origin:
+            self.send_header("Access-Control-Allow-Origin", origin)
+            self.send_header("Vary", "Origin")
+
+    def _require_control_auth(self) -> bool:
+        """Require bearer auth when a token is configured."""
+        if not CONTROL_TOKEN:
+            return True
+        headers = getattr(self, "headers", None)
+        supplied = headers.get("Authorization", "") if headers else ""
+        expected = f"Bearer {CONTROL_TOKEN}"
+        if hmac.compare_digest(supplied, expected):
+            return True
+        self.send_json({"error": "Control relay authentication required"}, 401)
+        return False
+
     def send_json(self, data: dict, status: int = 200):
         """Send JSON response with CORS headers."""
         self.send_response(status)
         self.send_header('Content-type', 'application/json')
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self._send_cors_headers()
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
@@ -127,7 +162,7 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-type", content_type)
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Access-Control-Allow-Origin", "*")
+        self._send_cors_headers()
         if cache_control:
             self.send_header("Cache-Control", cache_control)
         self.end_headers()
@@ -198,6 +233,8 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         return self.proxy_http_request(method="POST", body=body, timeout=timeout)
 
     def do_GET(self):
+        if not self._require_control_auth():
+            return
         route = urlsplit(self.path).path
         if route == '/state':
             self.handle_get_state()
@@ -213,20 +250,44 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
             self.handle_get_gallery()
         elif route.startswith('/gallery/'):
             self.handle_get_gallery_image(route)
-        elif route in {'/health/detailed', '/self-knowledge', '/growth'}:
+        elif (
+            route in {
+                '/health/detailed', '/self-knowledge', '/growth',
+                '/dashboard', '/architecture', '/layers', '/schema',
+                '/schema-data', '/gallery-page',
+            }
+            or route.startswith('/static/')
+        ):
             self.handle_get_upstream_json()
+        elif route == '/':
+            self.send_response(302)
+            self.send_header('Location', '/dashboard')
+            self._send_cors_headers()
+            self.end_headers()
         elif route == '/health':
             self.send_json({
                 "status": "ok",
                 "http_url": LUMEN_HTTP_URL or None,
                 "ssh_host": PI_HOST,
-                "mode": "http" if LUMEN_HTTP_URL else "ssh"
+                "mode": "http" if LUMEN_HTTP_URL else "ssh",
+                "bind_host": BIND_HOST,
+                "auth_required": bool(CONTROL_TOKEN),
             })
         else:
             self.send_response(404)
             self.end_headers()
 
     def do_POST(self):
+        if not self._require_control_auth():
+            return
+        origin = self.headers.get("Origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            self.send_json({"error": "Origin not allowed"}, 403)
+            return
+        content_type = self.headers.get("Content-Type", "").split(";", 1)[0].lower()
+        if content_type != "application/json":
+            self.send_json({"error": "Content-Type must be application/json"}, 415)
+            return
         route = urlsplit(self.path).path
         if route == '/message':
             self.handle_post_message()
@@ -237,10 +298,14 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
 
     def do_OPTIONS(self):
+        origin = self.headers.get("Origin")
+        if not origin or origin not in ALLOWED_ORIGINS:
+            self.send_json({"error": "Origin not allowed"}, 403)
+            return
         self.send_response(200)
-        self.send_header('Access-Control-Allow-Origin', '*')
+        self._send_cors_headers()
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
-        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type, Authorization')
         self.end_headers()
 
     def handle_get_state(self):
@@ -261,6 +326,7 @@ sys.stdout = sys.stderr = io.StringIO()
 try:
     from src.anima_mcp.shared_memory import SharedMemoryClient
     from src.anima_mcp.anima import Anima, SensorReadings
+    from src.anima_mcp.computational_neural import computational_neural_provenance
     from src.anima_mcp.identity import IdentityStore
 
     # Read from shared memory (same source as Pi display)
@@ -336,6 +402,7 @@ try:
             "memory_percent": readings.memory_percent or 0,
             "disk_percent": readings.disk_percent or 0,
             "neural": neural,
+            "neural_provenance": computational_neural_provenance(),
             "body_anima": shm_data.get("body_anima") or a,
             "body_eisv_projection": body_projection,
             "eisv": body_projection,
@@ -612,7 +679,7 @@ else:
                 img_data = base64.b64decode(output)
                 self.send_response(200)
                 self.send_header('Content-type', 'image/png')
-                self.send_header('Access-Control-Allow-Origin', '*')
+                self._send_cors_headers()
                 self.send_header('Cache-Control', 'max-age=3600')
                 self.end_headers()
                 self.wfile.write(img_data)
@@ -793,9 +860,13 @@ print(result[0].text if result else json.dumps({"success": True}))
 
 
 def main():
+    if BIND_HOST not in {"127.0.0.1", "::1", "localhost"} and not CONTROL_TOKEN:
+        raise SystemExit(
+            "Refusing a non-loopback control relay without LUMEN_CONTROL_TOKEN"
+        )
     print("╭──────────────────────────────────────────╮")
     print("│  Lumen Control Server                    │")
-    print(f"│  http://localhost:{PORT}                    │")
+    print(f"│  http://{BIND_HOST}:{PORT}                    │")
     print("╰──────────────────────────────────────────╯")
     print()
     if LUMEN_HTTP_URL:
@@ -822,7 +893,7 @@ def main():
             allow_reuse_address = True
             daemon_threads = True
 
-        with ThreadedServer(("", PORT), LumenControlHandler) as httpd:
+        with ThreadedServer((BIND_HOST, PORT), LumenControlHandler) as httpd:
             httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nShutting down.")

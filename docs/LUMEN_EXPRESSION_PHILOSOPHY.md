@@ -196,11 +196,11 @@ From `FACE_LED_IMPROVEMENTS.md`:
 
 From NEURO_PSYCH_FRAMING.md:
 
-**"Does adding neural signals (EEG) to computational proprioception improve AI self-awareness and self-regulation?"**
+**Historical question:** "Would adding physical EEG signals to computational proprioception improve AI self-awareness and self-regulation?" Lumen does not currently have EEG hardware; its live Greek-labelled values are normalized Pi computational views.
 
 **For expression:**
 - Does multi-layer proprioception (physical + neural) improve expression authenticity?
-- Does neural data help Lumen express its state more accurately?
+- Do provenance-labelled computational dynamics help Lumen express its state more accurately?
 - Is expression more authentic when based on full proprioceptive awareness?
 
 ---

@@ -4,7 +4,8 @@ Self-Schema Graph (G_t) - Lumen's internal representation of self.
 Nodes:
 - 1 identity (center)
 - 4 anima dimensions (warmth, clarity, stability, presence)
-- 4 physical sensors (light, temp, humidity, pressure)
+- 4 physical sensors (raw mixed lux, temp, humidity, pressure)
+- Optional gated external-light residual
 - 3 resources (memory, cpu, disk)
 - Optional: preference, belief, reflection, tension, drift, trajectory, mark, experiential nodes
 
@@ -19,27 +20,34 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Any, Tuple
 from datetime import datetime
 
+from .light_attribution import gated_external_light_lux
 
-# === Declarative belief-to-edge modulation maps ===
+
+# === Declarative belief relationship maps ===
 #
-# Correlation beliefs: a specific belief modulates a specific sensor→anima edge.
-# Value 0.5 = neutral, >0.5 = positive, <0.5 = negative influence.
-# Formula: learned = (value - 0.5) * 2 -> weight = learned * 0.4
+# These maps describe what a belief is ABOUT. They do not modify the actual
+# sensor→anima computation. Earlier versions overwrote calibration-derived
+# wiring with belief values in this visualization even though the runtime
+# equation did not do so; that made a hypothesis look like implemented causality.
 
-BELIEF_EDGE_MODULATIONS: Dict[str, Tuple[str, str]] = {
+BELIEF_SENSOR_ANIMA_HYPOTHESES: Dict[str, Tuple[str, str]] = {
     "temp_clarity_correlation": ("sensor_temp", "anima_clarity"),
-    "light_warmth_correlation": ("sensor_light", "anima_warmth"),
-    "my_leds_affect_lux": ("sensor_light", "anima_presence"),
+    "light_warmth_correlation": ("sensor_external_light", "anima_warmth"),
 }
 
-# Sensitivity beliefs: modulate the MAGNITUDE of ALL edges from a given sensor.
-# Value 0.5 = default sensitivity (1.0x), 1.0 = amplified (1.5x), 0.0 = dampened (0.5x).
-# Formula: multiplier = 0.5 + value
-
-BELIEF_SENSITIVITY_MODULATIONS: Dict[str, str] = {
+BELIEF_SENSOR_SENSITIVITY_RELATIONS: Dict[str, str] = {
     "temp_sensitive": "sensor_temp",
+    # This belief is learned from surprise in the mixed physical reading. It
+    # describes raw sensor sensitivity, not external-room-light sensitivity.
     "light_sensitive": "sensor_light",
 }
+
+# Semantic sensor relations that do not assert a sensor→anima influence.
+BELIEF_SENSOR_RELATIONS: Dict[str, str] = {
+    "my_leds_affect_lux": "sensor_light",
+}
+
+MIN_BELIEF_GRAPH_EVIDENCE = 5
 
 
 @dataclass
@@ -66,13 +74,15 @@ class SchemaEdge:
     """An edge in Lumen's self-schema graph."""
     source_id: str
     target_id: str
-    weight: float  # -1 to 1, strength and direction of influence
+    weight: float  # -1 to 1; interpretation is defined by ``relation``
+    relation: str = "influence"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "source": self.source_id,
             "target": self.target_id,
             "weight": self.weight,
+            "relation": self.relation,
         }
 
 
@@ -159,7 +169,7 @@ def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
         cal = get_calibration()
     except Exception:
         return {
-            ("sensor_light", "anima_clarity"): 0.4,
+            ("sensor_external_light", "anima_clarity"): 0.4,
             ("sensor_temp", "anima_warmth"): 0.3,
             ("sensor_humidity", "anima_stability"): -0.25,
             ("sensor_memory", "anima_stability"): -0.3,
@@ -178,12 +188,13 @@ def _get_sensor_anima_weights() -> Dict[Tuple[str, str], float]:
         weights[("sensor_temp", "anima_warmth")] = temp_to_warmth
 
     # --- Clarity ---
-    # Clarity ← world_light (raw VEML7700 lux, including self-glow). The learned
-    # residual is shadow telemetry and intentionally does not move this edge.
-    # Fall back to "light" for legacy configs.
+    # Clarity ← world_light is a potential structural edge. Runtime admits the
+    # learned external-light residual only after its evidence gate; raw VEML7700
+    # telemetry never activates this environmental edge. Fall back to "light"
+    # for legacy configs.
     light_to_clarity = cal.clarity_weights.get("world_light", 0) or cal.clarity_weights.get("light", 0)
     if light_to_clarity > 0:
-        weights[("sensor_light", "anima_clarity")] = light_to_clarity
+        weights[("sensor_external_light", "anima_clarity")] = light_to_clarity
 
     # --- Stability ---
     # Stability ← humidity deviation (inverse: deviation hurts stability)
@@ -239,7 +250,7 @@ def _parse_evidence_count(evidence: str) -> int:
 def _belief_label(belief_id: str) -> str:
     """Human-readable label for a belief node in the schema graph."""
     labels = {
-        "light_sensitive": "Light sensitive",
+        "light_sensitive": "Raw-lux sensitive",
         "temp_sensitive": "Temp sensitive",
         "stability_recovery": "Stability recovery",
         "warmth_recovery": "Warmth recovery",
@@ -261,11 +272,13 @@ def extract_self_schema(
     growth_system=None,
     include_preferences: bool = True,
     self_model=None,
+    light_attribution=None,
 ) -> SelfSchema:
     """
     Extract G_t from Lumen's current state.
 
-    Base: 12 nodes (1 identity + 4 anima + 4 sensors + 3 resources), ~15 edges.
+    Base: 12 nodes (1 identity + 4 anima + 4 sensors + 3 resources).
+    A thirteenth external-light node appears only when attribution is ready.
     Enhanced: +N preference nodes, +N belief nodes from self-model.
 
     Args:
@@ -275,6 +288,7 @@ def extract_self_schema(
         growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
         self_model: SelfModel for learned self-beliefs (optional)
+        light_attribution: Provenance-bearing LED/lux attribution snapshot
     """
     now = datetime.now()
     nodes: List[SchemaNode] = []
@@ -374,7 +388,7 @@ def extract_self_schema(
             resource_values["disk"] = disk / 100.0
 
     sensor_labels = {
-        "light": "Light",
+        "light": "Raw lux",
         "temp": "Temp",
         "humidity": "Humid",
         "pressure": "Press",
@@ -386,12 +400,34 @@ def extract_self_schema(
     }
 
     for sensor_id, value in sensor_values.items():
+        raw_value = value
+        if sensor_id == "light":
+            raw_lux = getattr(readings, "light_lux", None) if readings else None
+            raw_value = {
+                "lux": raw_lux,
+                "composition": "room_light_plus_dotstar_glow",
+                "role": "physical_measurement",
+            }
         nodes.append(SchemaNode(
             node_id=f"sensor_{sensor_id}",
             node_type="sensor",
             label=sensor_labels[sensor_id],
             value=value,
-            raw_value=value,
+            raw_value=raw_value,
+        ))
+
+    external_light = gated_external_light_lux(light_attribution)
+    if external_light is not None:
+        nodes.append(SchemaNode(
+            node_id="sensor_external_light",
+            node_type="derived_sensor",
+            label="Ext lux",
+            value=min(1.0, max(0.0, external_light / 1000.0)),
+            raw_value={
+                "lux": external_light,
+                "role": "gated_external_residual",
+                "attribution_status": light_attribution.get("status"),
+            },
         ))
 
     for resource_id, value in resource_values.items():
@@ -430,8 +466,8 @@ def extract_self_schema(
                 ))
 
     # === BELIEF NODES (ring 4, from SelfModel) ===
-    # Beliefs Lumen has learned about itself — only included if confident enough.
-    # Correlation beliefs also modulate sensor→anima edge weights below.
+    # Beliefs Lumen has learned about itself. A one-sample posterior is useful
+    # for review but not established enough to occupy the rendered self graph.
     belief_summary = None
     if self_model:
         try:
@@ -439,19 +475,14 @@ def extract_self_schema(
         except Exception:
             pass
 
-    _correlation_beliefs = {}  # belief_id → value, for modulating edges below
     if belief_summary:
         for belief_id, bdata in belief_summary.items():
             confidence = bdata.get("confidence", 0)
             evidence = bdata.get("evidence", "0+ / 0-")
-            # Only include beliefs that have been tested (have evidence) and are confident
+            # Match the self-knowledge API's minimum for belief actionability.
             total_evidence = _parse_evidence_count(evidence)
-            if total_evidence < 1 or confidence < 0.3:
-                continue  # Untested or not confident enough
-
-            # Track beliefs that modulate sensor→anima edges
-            if belief_id in BELIEF_EDGE_MODULATIONS or belief_id in BELIEF_SENSITIVITY_MODULATIONS:
-                _correlation_beliefs[belief_id] = bdata.get("value", 0.5)
+            if total_evidence < MIN_BELIEF_GRAPH_EVIDENCE or confidence < 0.3:
+                continue
 
             nodes.append(SchemaNode(
                 node_id=f"belief_{belief_id}",
@@ -463,6 +494,7 @@ def extract_self_schema(
                     "confidence": confidence,
                     "strength": bdata.get("strength", "uncertain"),
                     "evidence": bdata.get("evidence", "0+ / 0-"),
+                    "minimum_graph_evidence": MIN_BELIEF_GRAPH_EVIDENCE,
                 },
             ))
 
@@ -473,28 +505,13 @@ def extract_self_schema(
             source_id="identity",
             target_id=f"anima_{dim}",
             weight=anima_values.get(dim, 0.5),
+            relation="constitutes",
         ))
 
     # === EDGES (sensor → anima influences, derived from NervousSystemCalibration) ===
-    # Correlation beliefs modulate these weights: learned knowledge overrides static config
+    # These are the actual configured computation. Learned hypotheses are kept
+    # on separate, explicitly typed edges below.
     sensor_weights = _get_sensor_anima_weights()
-
-    # Apply learned beliefs to sensor→anima edges (declarative map replaces hardcoded blocks)
-    if _correlation_beliefs:
-        # Direct modulations: specific belief → specific sensor→anima edge
-        for belief_id, (source, target) in BELIEF_EDGE_MODULATIONS.items():
-            if belief_id in _correlation_beliefs:
-                learned = (_correlation_beliefs[belief_id] - 0.5) * 2  # Map 0..1 → -1..1
-                if (source, target) in sensor_weights or abs(learned) > 0.2:
-                    sensor_weights[(source, target)] = learned * 0.4
-
-        # Sensitivity modulations: scale ALL edges from a sensor
-        for belief_id, sensor_source in BELIEF_SENSITIVITY_MODULATIONS.items():
-            if belief_id in _correlation_beliefs:
-                multiplier = 0.5 + _correlation_beliefs[belief_id]  # 0.5x to 1.5x
-                for key in list(sensor_weights.keys()):
-                    if key[0] == sensor_source:
-                        sensor_weights[key] *= multiplier
     node_ids = {n.node_id for n in nodes}
     for (source_id, target_id), weight in sensor_weights.items():
         if source_id in node_ids and target_id in node_ids:
@@ -502,6 +519,7 @@ def extract_self_schema(
                 source_id=source_id,
                 target_id=target_id,
                 weight=weight,
+                relation="computational_influence",
             ))
 
     # === EDGES (preference → anima satisfaction) ===
@@ -527,19 +545,26 @@ def extract_self_schema(
                             source_id=f"pref_{dim}",
                             target_id=f"anima_{dim}",
                             weight=satisfaction * sign,
+                            relation="satisfaction",
                         ))
                     except Exception:
                         pass  # Non-fatal
 
     # === EDGES (sensor → belief: "this belief is about this sensor") ===
-    # Semantic: beliefs that modulate sensor→anima edges are informed by those sensors
+    # Semantic: sensor-linked beliefs are informed by those sensors.
     node_ids = {n.node_id for n in nodes}
-    for belief_id in (BELIEF_EDGE_MODULATIONS.keys() | BELIEF_SENSITIVITY_MODULATIONS.keys()):
+    for belief_id in (
+        BELIEF_SENSOR_ANIMA_HYPOTHESES.keys()
+        | BELIEF_SENSOR_SENSITIVITY_RELATIONS.keys()
+        | BELIEF_SENSOR_RELATIONS.keys()
+    ):
         sensor_id = None
-        if belief_id in BELIEF_EDGE_MODULATIONS:
-            sensor_id = BELIEF_EDGE_MODULATIONS[belief_id][0]
-        elif belief_id in BELIEF_SENSITIVITY_MODULATIONS:
-            sensor_id = BELIEF_SENSITIVITY_MODULATIONS[belief_id]
+        if belief_id in BELIEF_SENSOR_ANIMA_HYPOTHESES:
+            sensor_id = BELIEF_SENSOR_ANIMA_HYPOTHESES[belief_id][0]
+        elif belief_id in BELIEF_SENSOR_SENSITIVITY_RELATIONS:
+            sensor_id = BELIEF_SENSOR_SENSITIVITY_RELATIONS[belief_id]
+        elif belief_id in BELIEF_SENSOR_RELATIONS:
+            sensor_id = BELIEF_SENSOR_RELATIONS[belief_id]
         if sensor_id:
             belief_node_id = f"belief_{belief_id}"
             if sensor_id in node_ids and belief_node_id in node_ids:
@@ -547,14 +572,17 @@ def extract_self_schema(
                     source_id=sensor_id,
                     target_id=belief_node_id,
                     weight=0.3,  # Semantic "informs" edge
+                    relation="evidence_source",
                 ))
 
     # === EDGES (belief → belief: beliefs sharing a sensor domain) ===
     # e.g., temp_sensitive and temp_clarity_correlation both relate to temp
     _belief_sensor_map: Dict[str, str] = {}
-    for bid, (sensor, _) in BELIEF_EDGE_MODULATIONS.items():
+    for bid, (sensor, _) in BELIEF_SENSOR_ANIMA_HYPOTHESES.items():
         _belief_sensor_map[bid] = sensor
-    for bid, sensor in BELIEF_SENSITIVITY_MODULATIONS.items():
+    for bid, sensor in BELIEF_SENSOR_SENSITIVITY_RELATIONS.items():
+        _belief_sensor_map[bid] = sensor
+    for bid, sensor in BELIEF_SENSOR_RELATIONS.items():
         _belief_sensor_map[bid] = sensor
     # Group beliefs by sensor
     _sensor_to_beliefs: Dict[str, List[str]] = {}
@@ -570,14 +598,13 @@ def extract_self_schema(
                         source_id=a,
                         target_id=b,
                         weight=0.2,  # Weak "related" edge
+                        relation="related",
                     ))
 
     # === EDGES (belief → anima: "I believe X affects Y") ===
     if belief_summary:
         # Map belief_id to which anima dimension it relates to
         _belief_anima_map = {
-            "light_sensitive": "anima_clarity",
-            "temp_sensitive": "anima_warmth",
             "stability_recovery": "anima_stability",
             "warmth_recovery": "anima_warmth",
             "temp_clarity_correlation": "anima_clarity",
@@ -586,20 +613,25 @@ def extract_self_schema(
             "evening_warmth_increase": "anima_warmth",
             "morning_clarity": "anima_clarity",
             "question_asking_tendency": "anima_clarity",  # asking = seeking clarity
-            "my_leds_affect_lux": "anima_presence",  # proprioceptive self-awareness
         }
+        _belief_anima_map.update({
+            belief_id: target
+            for belief_id, (_, target) in BELIEF_SENSOR_ANIMA_HYPOTHESES.items()
+        })
         node_ids = {n.node_id for n in nodes}
         for belief_id, bdata in belief_summary.items():
             source = f"belief_{belief_id}"
             target = _belief_anima_map.get(belief_id)
             if source in node_ids and target and target in node_ids:
-                # Weight = confidence * direction (value > 0.5 = positive influence)
+                # Weight is hypothesis confidence × signed direction. The
+                # relation type prevents this from masquerading as live wiring.
                 confidence = bdata.get("confidence", 0)
                 direction = (bdata.get("value", 0.5) - 0.5) * 2  # -1 to 1
                 edges.append(SchemaEdge(
                     source_id=source,
                     target_id=target,
                     weight=confidence * direction,
+                    relation="belief_about",
                 ))
 
     return SelfSchema(
@@ -616,6 +648,7 @@ def get_current_schema(
     growth_system=None,
     include_preferences: bool = True,
     self_model=None,
+    light_attribution=None,
 ) -> SelfSchema:
     """
     Get current G_t.
@@ -630,6 +663,7 @@ def get_current_schema(
         growth_system: GrowthSystem for learned preferences
         include_preferences: Whether to include preference nodes (default: True)
         self_model: SelfModel for learned self-beliefs (optional)
+        light_attribution: Provenance-bearing LED/lux attribution snapshot
     """
     return extract_self_schema(
         identity=identity,
@@ -638,4 +672,5 @@ def get_current_schema(
         growth_system=growth_system,
         include_preferences=include_preferences,
         self_model=self_model,
+        light_attribution=light_attribution,
     )

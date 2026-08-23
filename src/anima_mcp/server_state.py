@@ -126,7 +126,7 @@ def is_broker_running() -> bool:
 
 
 def extract_neural_bands(readings) -> dict:
-    """Extract neural band powers from sensor readings."""
+    """Extract normalized computational views from legacy band fields."""
     if not readings:
         return {}
     raw = readings.to_dict() if hasattr(readings, 'to_dict') else (readings if isinstance(readings, dict) else {})
@@ -185,7 +185,7 @@ def readings_from_dict(data: dict) -> SensorReadings:
         eeg_aux2=data.get("eeg_aux2"),
         eeg_aux3=data.get("eeg_aux3"),
         eeg_aux4=data.get("eeg_aux4"),
-        # EEG frequency band powers
+        # Normalized computational views in legacy EEG-named fields
         eeg_delta_power=data.get("eeg_delta_power"),
         eeg_theta_power=data.get("eeg_theta_power"),
         eeg_alpha_power=data.get("eeg_alpha_power"),

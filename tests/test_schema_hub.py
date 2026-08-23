@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from anima_mcp.schema_hub import SchemaHub, GapDelta
-from anima_mcp.self_schema import SelfSchema, SchemaNode
+from anima_mcp.self_schema import SelfSchema, SchemaEdge, SchemaNode
 
 
 # ---------------------------------------------------------------------------
@@ -256,6 +256,23 @@ class TestLoadPreviousSchema:
         loaded = hub2.load_previous_schema()
         # Base schema has identity->anima edges and sensor->anima edges
         assert len(loaded.edges) > 0
+
+    def test_restored_schema_preserves_edge_relation(self, tmp_path):
+        schema = make_schema()
+        schema.edges.append(
+            SchemaEdge(
+                "anima_warmth",
+                "anima_clarity",
+                0.4,
+                relation="belief_about",
+            )
+        )
+        data = schema.to_dict()
+
+        loaded = SchemaHub._deserialize_schema(data)
+
+        assert loaded is not None
+        assert loaded.edges[0].relation == "belief_about"
 
 
 # ---------------------------------------------------------------------------
@@ -678,6 +695,7 @@ class TestInjectTrajectoryFeedback:
             if e.source_id == "traj_attractor_position" and e.target_id == "anima_warmth"
         ]
         assert len(attractor_edges) == 1
+        assert attractor_edges[0].relation == "derived_summary"
 
     def test_with_variance_adds_stability_node_and_edge(self):
         """With attractor variance, traj_stability_score node and stability edge are added."""
@@ -706,6 +724,7 @@ class TestInjectTrajectoryFeedback:
             if e.source_id == "traj_stability_score" and e.target_id == "anima_stability"
         ]
         assert len(stability_edges) == 1
+        assert stability_edges[0].relation == "derived_summary"
 
     def test_without_attractor_no_position_or_stability_nodes(self):
         """Without attractor data, no position or stability nodes are added."""
@@ -774,6 +793,7 @@ class TestInjectReflectionSummary:
             if e.source_id == "reflection_focus" and e.target_id == "anima_warmth"
         ]
         assert len(focus_edges) == 1
+        assert focus_edges[0].relation == "reflection_about"
 
 
 # ---------------------------------------------------------------------------
@@ -894,3 +914,48 @@ class TestComputeTrajectoryFromHistory:
         assert traj.observation_count == 13
         assert traj.attractor is not None
         assert traj.attractor["n_observations"] == 10
+
+    def test_profiles_from_graph_have_canonical_labels_and_summary_fields(self):
+        hub = SchemaHub()
+        for _ in range(9):
+            hub.schema_history.append(make_schema())
+        latest = make_schema()
+        latest.nodes.extend([
+            SchemaNode(
+                "pref_clarity",
+                "preference",
+                "Pref clarity",
+                0.75,
+                {"valence": 0.5, "confidence": 0.8},
+            ),
+            SchemaNode(
+                "pref_warmth",
+                "preference",
+                "Pref warmth",
+                0.6,
+                {"valence": 0.2, "confidence": 0.7},
+            ),
+            SchemaNode(
+                "belief_my_leds_affect_lux",
+                "belief",
+                "LEDs affect lux",
+                0.8,
+                {"confidence": 0.75, "evidence": "6+ / 2-"},
+            ),
+        ])
+        hub.schema_history.append(latest)
+
+        traj = hub._compute_trajectory_from_history()
+        summary = traj.summary()
+
+        assert traj.preferences["n_learned"] == 2
+        assert traj.preferences["labels"] == ["clarity", "warmth"]
+        assert traj.preferences["dimensions"] == {
+            "clarity": 0.5,
+            "warmth": 0.2,
+        }
+        assert traj.beliefs["labels"] == ["my_leds_affect_lux"]
+        assert traj.beliefs["avg_confidence"] == pytest.approx(0.75)
+        assert traj.beliefs["beliefs"]["my_leds_affect_lux"]["evidence_count"] == 8
+        assert summary["preferences_learned"] == 2
+        assert summary["belief_confidence"] == pytest.approx(0.75)

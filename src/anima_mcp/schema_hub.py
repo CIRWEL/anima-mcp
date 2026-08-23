@@ -18,7 +18,13 @@ from typing import Any, Deque, Dict, List, Optional, TYPE_CHECKING
 import json
 
 from .atomic_write import atomic_json_write
-from .self_schema import SelfSchema, SchemaNode, SchemaEdge, extract_self_schema
+from .self_schema import (
+    SelfSchema,
+    SchemaNode,
+    SchemaEdge,
+    _parse_evidence_count,
+    extract_self_schema,
+)
 
 # Bounded window of schema history persisted to disk so trajectory structure
 # survives a restart, not just the single last snapshot. Without this the
@@ -83,6 +89,7 @@ class SchemaHub:
         readings: Optional[Any] = None,
         growth_system: Optional['GrowthSystem'] = None,
         self_model: Optional['SelfModel'] = None,
+        light_attribution: Optional[Dict[str, Any]] = None,
         drift_offsets: Optional[Dict[str, float]] = None,
         tension_conflicts: Optional[list] = None,
         reflection_summary: Optional[Dict[str, Any]] = None,
@@ -99,6 +106,7 @@ class SchemaHub:
             readings: SensorReadings with sensor data
             growth_system: GrowthSystem for preferences
             self_model: SelfModel for beliefs
+            light_attribution: Gated LED/lux attribution snapshot
 
         Returns:
             SelfSchema with all nodes and edges
@@ -111,6 +119,7 @@ class SchemaHub:
             growth_system=growth_system,
             self_model=self_model,
             include_preferences=True,
+            light_attribution=light_attribution,
         )
 
         # 2. Inject identity enrichment nodes
@@ -281,6 +290,7 @@ class SchemaHub:
                     source_id=e["source"],
                     target_id=e["target"],
                     weight=e["weight"],
+                    relation=e.get("relation", "influence"),
                 )
                 for e in data.get("edges", [])
             ]
@@ -527,19 +537,81 @@ class SchemaHub:
                 "n_observations": len(anima_values),
             }
 
-        # Extract belief patterns from latest schema
-        beliefs = {"values": [], "confidences": []}
+        # Extract canonical, labelled preference and belief profiles from the
+        # latest graph. The old history path emitted only anonymous belief
+        # arrays and an empty preference dict, while TrajectorySignature and
+        # the schema UI expect n_learned/avg_confidence plus labels. That made
+        # four visible preference nodes summarize as zero and array indexes
+        # render as belief names.
         latest = self.schema_history[-1]
-        for node in latest.nodes:
-            if node.node_type == "belief" and node.raw_value:
-                beliefs["values"].append(node.value)
-                beliefs["confidences"].append(node.raw_value.get("confidence", 0) if isinstance(node.raw_value, dict) else 0)
+        preference_nodes = sorted(
+            (node for node in latest.nodes if node.node_type == "preference"),
+            key=lambda node: node.node_id,
+        )
+        preference_labels = [
+            node.node_id.removeprefix("pref_") for node in preference_nodes
+        ]
+        preference_values = []
+        preference_confidences = []
+        preference_dimensions = {}
+        for label, node in zip(preference_labels, preference_nodes):
+            raw = node.raw_value if isinstance(node.raw_value, dict) else {}
+            value = float(raw.get("valence", node.value * 2.0 - 1.0))
+            confidence = float(raw.get("confidence", 0.0))
+            preference_values.append(value * confidence)
+            preference_confidences.append(confidence)
+            preference_dimensions[label] = value
+        preferences = {
+            "vector": preference_values,
+            "confidences": preference_confidences,
+            "labels": preference_labels,
+            "dimensions": preference_dimensions,
+            "n_learned": len(preference_nodes),
+        }
+
+        belief_nodes = sorted(
+            (node for node in latest.nodes if node.node_type == "belief"),
+            key=lambda node: node.node_id,
+        )
+        belief_labels = [
+            node.node_id.removeprefix("belief_") for node in belief_nodes
+        ]
+        belief_values = []
+        belief_confidences = []
+        belief_details = {}
+        total_evidence = 0
+        for label, node in zip(belief_labels, belief_nodes):
+            raw = node.raw_value if isinstance(node.raw_value, dict) else {}
+            confidence = float(raw.get("confidence", 0.0))
+            evidence = str(raw.get("evidence", "0+ / 0-"))
+            evidence_count = _parse_evidence_count(evidence)
+            belief_values.append(node.value)
+            belief_confidences.append(confidence)
+            total_evidence += evidence_count
+            belief_details[label] = {
+                "value": node.value,
+                "confidence": confidence,
+                "evidence": evidence,
+                "evidence_count": evidence_count,
+            }
+        beliefs = {
+            "values": belief_values,
+            "confidences": belief_confidences,
+            "labels": belief_labels,
+            "beliefs": belief_details,
+            "total_evidence": total_evidence,
+            "avg_confidence": (
+                sum(belief_confidences) / len(belief_confidences)
+                if belief_confidences else 0.0
+            ),
+            "n_beliefs": len(belief_nodes),
+        }
 
         # Create signature
         signature = TrajectorySignature(
             attractor=attractor,
             beliefs=beliefs,
-            preferences={},
+            preferences=preferences,
             recovery={},
             relational={},
             observation_count=len(self.schema_history),
@@ -586,6 +658,7 @@ class SchemaHub:
                 source_id="traj_attractor_position",
                 target_id="anima_warmth",
                 weight=center_magnitude,
+                relation="derived_summary",
             ))
 
         # Stability (inverse of variance)
@@ -606,6 +679,7 @@ class SchemaHub:
                 source_id="traj_stability_score",
                 target_id="anima_stability",
                 weight=stability,
+                relation="derived_summary",
             ))
 
         return schema
@@ -650,6 +724,7 @@ class SchemaHub:
                 source_id=f"drift_{dim_name}",
                 target_id=f"anima_{dim_name}",
                 weight=abs(offset) * 5,  # Stronger edge for larger drift
+                relation="calibration_offset",
             ))
 
         return schema
@@ -712,11 +787,13 @@ class SchemaHub:
                 source_id=node_id,
                 target_id=f"anima_{dim_a}",
                 weight=edge_weight,
+                relation="tension_about",
             ))
             schema.edges.append(SchemaEdge(
                 source_id=node_id,
                 target_id=f"anima_{dim_b}",
                 weight=edge_weight,
+                relation="tension_about",
             ))
 
         return schema
@@ -843,6 +920,7 @@ class SchemaHub:
                     source_id=focus_node_id,
                     target_id=target_id,
                     weight=max(0.2, min(1.0, dominant_focus.get("count", 1) / 5.0)),
+                    relation="reflection_about",
                 ))
 
         learning_yield = reflection_summary.get("learning_yield") or {}
@@ -878,6 +956,7 @@ class SchemaHub:
                     source_id="reflection_rumination",
                     target_id=target_id,
                     weight=max(0.2, min(1.0, float(rumination.get("ratio", 0.0)))),
+                    relation="reflection_about",
                 ))
 
         return schema

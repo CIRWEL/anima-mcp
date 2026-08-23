@@ -43,7 +43,7 @@ def _create_schema(db_path: Path):
 
 
 def _seed_rows(db_path: Path, n: int, temp=22.0, pressure=827.0, humidity=40.0,
-               light_lux=None, days_ago=0):
+               external_light_lux=None, raw_light_lux=None, days_ago=0):
     """Insert n sensor rows spread over recent hours."""
     conn = sqlite3.connect(str(db_path))
     now = datetime.now()
@@ -54,8 +54,10 @@ def _seed_rows(db_path: Path, n: int, temp=22.0, pressure=827.0, humidity=40.0,
             "pressure_hpa": pressure + (i % 5) * 0.2,
             "humidity_pct": humidity + (i % 4) * 0.3,
         }
-        if light_lux is not None:
-            data["light_lux"] = light_lux + (i % 6) * 50.0
+        if external_light_lux is not None:
+            data["external_light_lux"] = external_light_lux + (i % 6) * 50.0
+        if raw_light_lux is not None:
+            data["light_lux"] = raw_light_lux + (i % 6) * 50.0
         sensors = json.dumps(data)
         conn.execute(
             "INSERT INTO state_history (timestamp, sensors) VALUES (?, ?)",
@@ -438,18 +440,18 @@ class TestGetLearner:
 
 class TestLightLearning:
     def test_light_readings_collected(self, learning_db, learner):
-        _seed_rows(learning_db, 5, light_lux=500.0)
+        _seed_rows(learning_db, 5, external_light_lux=500.0)
         _, _, _, light = learner.get_recent_observations()
         assert len(light) == 5
         assert all(lx > 0 for lx in light)
 
     def test_light_readings_empty_when_not_seeded(self, learning_db, learner):
-        _seed_rows(learning_db, 5)  # No light_lux
+        _seed_rows(learning_db, 5)  # No gated external light
         _, _, _, light = learner.get_recent_observations()
         assert len(light) == 0
 
     def test_light_max_learned_from_p95(self, learning_db, learner):
-        _seed_rows(learning_db, 60, light_lux=200.0)
+        _seed_rows(learning_db, 60, external_light_lux=200.0)
         cal = NervousSystemCalibration()
         learned = learner.learn_calibration(cal, min_observations=50)
         assert learned is not None
@@ -457,6 +459,11 @@ class TestLightLearning:
         # p95 should be near the high end
         assert learned.light_max_lux > 200.0
         assert learned.light_max_lux != cal.light_max_lux  # Changed from default 1000
+
+    def test_raw_self_glow_does_not_calibrate_external_light(self, learning_db, learner):
+        _seed_rows(learning_db, 60, raw_light_lux=500.0)
+        _, _, _, light = learner.get_recent_observations()
+        assert light == []
 
     def test_light_change_triggers_adaptation(self):
         learner = AdaptiveLearner(db_path="/nonexistent")

@@ -210,8 +210,8 @@ def test_generate_status_text():
     
     assert "Anima state" in text
     assert "Warmth: 0.70" in text
-    assert "Neural" in text
-    assert "Alpha" in text
+    assert "Compute dynamics (not EEG)" in text
+    assert "alpha(1-beta)=0.50" in text
 
 
 def test_compute_eisv_from_readings():

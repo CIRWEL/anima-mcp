@@ -183,6 +183,25 @@ class SelfModel:
         "question_asking_tendency": (0.5, 0.7),
     }
 
+    # Raw VEML7700 lux mixes room light with DotStar self-glow. Historical
+    # light→warmth evidence therefore cannot support an environmental belief.
+    # V4 cold-starts that one channel; the broker now supplies only the gated
+    # learned external-light residual to this correlation test.
+    _LIGHT_ATTRIBUTION_RESET_V4 = {
+        "light_warmth_correlation": (0.5, 0.5),
+    }
+
+    # Clarity's live equation changed from mixed raw lux to a gated external
+    # residual, and its CPU-derived alpha term is now explicitly disabled by
+    # calibration. Beliefs whose outcome variable is clarity cannot carry
+    # evidence across that semantic boundary as if the measurement were the
+    # same. Preserve the old state in an audit field and relearn them.
+    _CLARITY_SEMANTICS_RESET_V5 = {
+        "temp_clarity_correlation": (0.5, 0.5),
+        "interaction_clarity_boost": (0.5, 0.7),
+        "morning_clarity": (0.3, 0.5),
+    }
+
     def __init__(self, persistence_path: Optional[Path] = None,
                  read_only: bool = False):
         self.persistence_path = persistence_path or Path.home() / ".anima" / "self_model.json"
@@ -356,6 +375,12 @@ class SelfModel:
         self._light_attribution_model.load_dict(data.get("light_attribution_model"))
         # Retain the dead-channel audit trail across load/save cycles.
         self._dead_channel_audit = data.get("_migrated_dead_channel_reset_v3", None)
+        self._light_channel_audit = data.get(
+            "_migrated_light_attribution_reset_v4", None
+        )
+        self._clarity_semantics_audit = data.get(
+            "_migrated_clarity_semantics_reset_v5", None
+        )
 
     def _load(self):
         """Load self-model from disk."""
@@ -419,6 +444,54 @@ class SelfModel:
                     self._dead_channel_audit = audit or True
                     migrated = True
 
+                if not self.read_only and not data.get(
+                    "_migrated_light_attribution_reset_v4"
+                ):
+                    audit = {}
+                    for bid, (conf, value) in self._LIGHT_ATTRIBUTION_RESET_V4.items():
+                        belief = self._beliefs.get(bid)
+                        if belief is None:
+                            continue
+                        audit[bid] = {
+                            "confidence": belief.confidence,
+                            "value": belief.value,
+                            "supporting_count": belief.supporting_count,
+                            "contradicting_count": belief.contradicting_count,
+                        }
+                        belief.confidence = conf
+                        belief.value = value
+                        belief.supporting_count = 0
+                        belief.contradicting_count = 0
+                    self._correlation_data["light_warmth"].clear()
+                    self._light_channel_audit = audit or True
+                    migrated = True
+
+                if not self.read_only and not data.get(
+                    "_migrated_clarity_semantics_reset_v5"
+                ):
+                    audit = {}
+                    for bid, (conf, value) in self._CLARITY_SEMANTICS_RESET_V5.items():
+                        belief = self._beliefs.get(bid)
+                        if belief is None:
+                            continue
+                        audit[bid] = {
+                            "confidence": belief.confidence,
+                            "value": belief.value,
+                            "supporting_count": belief.supporting_count,
+                            "contradicting_count": belief.contradicting_count,
+                        }
+                        belief.confidence = conf
+                        belief.value = value
+                        belief.supporting_count = 0
+                        belief.contradicting_count = 0
+                    self._correlation_data["temp_clarity"].clear()
+                    self._evidence_buckets.pop(
+                        "correlation:temp_clarity_correlation", None
+                    )
+                    self._evidence_buckets.pop("time:morning_clarity", None)
+                    self._clarity_semantics_audit = audit or True
+                    migrated = True
+
                 if migrated:
                     self._save()
 
@@ -478,6 +551,10 @@ class SelfModel:
                 # True when there was nothing to reset. Preserved across loads.
                 "_migrated_dead_channel_reset_v3":
                     getattr(self, "_dead_channel_audit", None) or True,
+                "_migrated_light_attribution_reset_v4":
+                    getattr(self, "_light_channel_audit", None) or True,
+                "_migrated_clarity_semantics_reset_v5":
+                    getattr(self, "_clarity_semantics_audit", None) or True,
             }
             atomic_json_write(self.persistence_path, data, indent=2)
             try:
@@ -663,7 +740,7 @@ class SelfModel:
         observed_at: Optional[float] = None,
         observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Track LED/lux correlation and update the shadow residual model.
+        """Track LED/lux correlation and update the gated residual model.
 
         This is proprioceptive learning: discovering that one's own outputs
         affect one's own sensor inputs.  The explanatory belief and the
@@ -740,7 +817,7 @@ class SelfModel:
         led_brightness: Optional[float] = None,
         brightness_source: str = "broker_brightness_estimate",
     ) -> Dict[str, Any]:
-        """Describe current shadow attribution without adding evidence."""
+        """Describe current gated attribution without adding evidence."""
         if isinstance(led_proprioception, dict):
             led_state = dict(led_proprioception)
         else:
@@ -981,9 +1058,13 @@ class SelfModel:
 
             if belief_id == "light_sensitive":
                 if belief.value > 0.6:
-                    descriptions.append(f"I am {strength} that I'm sensitive to light changes")
+                    descriptions.append(
+                        f"I am {strength} that I'm sensitive to changes in my raw light sensor"
+                    )
                 elif belief.value < 0.4:
-                    descriptions.append(f"I am {strength} that light changes don't affect me much")
+                    descriptions.append(
+                        f"I am {strength} that raw light-sensor changes don't affect me much"
+                    )
 
             elif belief_id == "stability_recovery":
                 if belief.value > 0.6:

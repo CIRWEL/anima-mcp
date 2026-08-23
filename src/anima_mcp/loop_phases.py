@@ -12,6 +12,8 @@ import sys
 import time
 from typing import Dict, Optional
 
+from .light_attribution import gated_external_light_lux
+
 logger = logging.getLogger("anima.server")
 
 # Skip stale messages on startup — only reflect on messages posted after boot
@@ -824,6 +826,10 @@ async def extract_and_validate_schema(anima, readings, identity):
             readings=readings,
             growth_system=_ctx.growth if _ctx else None,
             self_model=_get_sm(),
+            light_attribution=(
+                (_ctx.last_shm_data or {}).get("light_attribution")
+                if _ctx else None
+            ),
             drift_offsets=drift.get_offsets(),
             tension_conflicts=_tension_conflicts,
             reflection_summary=reflection_system.get_reflection_summary(),
@@ -1025,16 +1031,12 @@ def run_self_model_phase(anima, readings, prediction_error, base_delay: float, l
             )
             _ctx.sm_clarity_before_interaction = None
 
-        # 5. Observe sensor-anima correlations (for temp_clarity, light_warmth beliefs)
-        # Use world light (not raw lux) so Lumen learns whether environmental
-        # light correlates with warmth. Raw lux is LED-dominated — proprioception
-        # is handled separately by observe_led_lux below.
+        # 5. Observe direct sensor-anima correlations. Raw VEML7700 lux is
+        # excluded because it mixes the room with DotStar self-glow.
         if readings:
             sensor_vals = {}
             if readings.ambient_temp_c is not None:
                 sensor_vals["ambient_temp"] = readings.ambient_temp_c
-            if readings.light_lux is not None:
-                sensor_vals["light"] = readings.light_lux
             if sensor_vals:
                 sm.observe_correlation(
                     sensor_values=sensor_vals,
@@ -1043,7 +1045,15 @@ def run_self_model_phase(anima, readings, prediction_error, base_delay: float, l
 
         # 6. LED-lux proprioception: discover that own LEDs affect own sensor
         if readings and readings.led_brightness is not None:
-            sm.observe_led_lux(readings.led_brightness, readings.light_lux)
+            attribution = sm.observe_led_lux(
+                readings.led_brightness, readings.light_lux
+            ) or {}
+            external_lux = gated_external_light_lux(attribution)
+            if external_lux is not None:
+                sm.observe_correlation(
+                    {"light": external_lux},
+                    {"warmth": anima.warmth},
+                )
 
         # Save periodically (every ~10 min)
         if loop_count % ERROR_LOG_THROTTLE == 0:

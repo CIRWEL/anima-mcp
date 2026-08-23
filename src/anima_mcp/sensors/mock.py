@@ -2,7 +2,7 @@
 Mock sensors for development on Mac.
 
 Simulates sensor readings with slight variation to feel alive.
-Uses computational neural for EEG bands (same as Pi).
+Uses normalized computational views in legacy EEG-named fields (same as Pi).
 """
 
 import random
@@ -50,7 +50,7 @@ class MockSensors(SensorBackend):
         except Exception:
             pass
 
-        # Computational neural - same as Pi, derives EEG bands from system state
+        # Computational dynamics — same normalized system-counter views as Pi.
         eeg_bands = {}
         try:
             from ..computational_neural import get_computational_neural_state

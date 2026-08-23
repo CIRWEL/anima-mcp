@@ -19,7 +19,12 @@ from .models import (
     PreferenceCategory, GoalStatus, VisitorFrequency, VisitorType,
     Relationship,
 )
-from .migrations import run_identity_migration, migrate_raw_lux_preferences
+from .migrations import (
+    migrate_external_light_preferences_v2,
+    migrate_preference_evidence_windows,
+    migrate_raw_lux_preferences,
+    run_identity_migration,
+)
 from .preferences import PreferencesMixin
 from .visitors import VisitorsMixin
 from .goals import GoalsMixin
@@ -86,6 +91,8 @@ class GrowthSystem(
         self._initialize_db()
         self._load_all()
         migrate_raw_lux_preferences(self._connect(), self._preferences)
+        migrate_preference_evidence_windows(self._connect(), self._preferences)
+        migrate_external_light_preferences_v2(self._connect(), self._preferences)
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -112,7 +119,12 @@ class GrowthSystem(
                 confidence REAL DEFAULT 0.0,
                 observation_count INTEGER DEFAULT 0,
                 first_noticed TEXT,
-                last_confirmed TEXT
+                last_confirmed TEXT,
+                evidence_count INTEGER DEFAULT 0,
+                supporting_count INTEGER DEFAULT 0,
+                contradicting_count INTEGER DEFAULT 0,
+                last_evidence_key TEXT,
+                evidence_origin TEXT DEFAULT 'legacy_unclassified'
             );
 
             -- Relationships table
@@ -189,6 +201,7 @@ class GrowthSystem(
                 presence REAL,
                 wellness REAL,
                 light_lux REAL,
+                external_light_lux REAL,
                 ambient_temp_c REAL,
                 humidity_pct REAL,
                 hour INTEGER
@@ -238,7 +251,17 @@ class GrowthSystem(
         migrations = [
             ("relationships", "self_dialogue_topics", "TEXT DEFAULT '[]'"),
             ("relationships", "visitor_type", "TEXT DEFAULT 'agent'"),
+            ("preferences", "evidence_count", "INTEGER DEFAULT 0"),
+            ("preferences", "supporting_count", "INTEGER DEFAULT 0"),
+            ("preferences", "contradicting_count", "INTEGER DEFAULT 0"),
+            ("preferences", "last_evidence_key", "TEXT"),
+            (
+                "preferences",
+                "evidence_origin",
+                "TEXT DEFAULT 'legacy_unclassified'",
+            ),
             ("drawing_records", "epoch", "INTEGER NOT NULL DEFAULT 1"),
+            ("drawing_records", "external_light_lux", "REAL"),
             ("drawing_records", "piece_uid", "TEXT"),
             ("drawing_records", "completion_reason", "TEXT"),
             ("drawing_records", "era", "TEXT"),
@@ -290,6 +313,11 @@ class GrowthSystem(
                 observation_count=row["observation_count"],
                 first_noticed=datetime.fromisoformat(row["first_noticed"]) if row["first_noticed"] else datetime.now(),
                 last_confirmed=datetime.fromisoformat(row["last_confirmed"]) if row["last_confirmed"] else datetime.now(),
+                evidence_count=row["evidence_count"] or 0,
+                supporting_count=row["supporting_count"] or 0,
+                contradicting_count=row["contradicting_count"] or 0,
+                last_evidence_key=row["last_evidence_key"],
+                evidence_origin=row["evidence_origin"] or "legacy_unclassified",
             )
 
         # Load visitor records (legacy: "relationships")

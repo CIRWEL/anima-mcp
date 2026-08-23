@@ -410,14 +410,23 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            height: 22px;
+            min-height: 34px;
         }
         .eeg-row-name {
             font-size: 0.7rem;
             color: var(--text-secondary);
-            width: 50px;
-            text-align: right;
+            width: 112px;
+            text-align: left;
             font-family: var(--mono);
+            line-height: 1.2;
+            flex-shrink: 0;
+        }
+        .eeg-row-source {
+            display: block;
+            margin-top: 2px;
+            color: var(--text-faint);
+            font-family: var(--sans);
+            font-size: 0.58rem;
         }
         .eeg-row-track {
             flex: 1;
@@ -826,6 +835,29 @@
             border-radius: 2px;
             background: var(--insight-color, var(--accent-purple));
             transition: width 0.5s ease;
+        }
+        .evidence-lens {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin: 12px 0;
+            color: var(--text-muted);
+            font-size: 0.7rem;
+        }
+        .evidence-lens span,
+        .insight-action {
+            border: 1px solid rgba(255,255,255,0.08);
+            border-radius: 999px;
+            padding: 3px 8px;
+            background: rgba(255,255,255,0.025);
+        }
+        .insight-action.review { color: var(--accent-orange); border-color: rgba(255,183,77,0.25); }
+        .insight-action.established { color: #7ecf8b; border-color: rgba(126,207,139,0.25); }
+        .insight-basis {
+            margin-top: 7px;
+            color: var(--text-faint);
+            font-size: 0.67rem;
+            line-height: 1.35;
         }
         .category-tabs {
             display: flex;
@@ -1293,7 +1325,7 @@
             <div class="card">
                 <div class="card-header-collapsible" data-card-id="neural">
                     <h3 class="card-title" style="margin-bottom: 0;">
-                        Neural Activity
+                        Computational Dynamics
                         <a href="/architecture" style="font-size: 0.75rem; font-weight: normal; color: var(--accent-cyan); text-decoration: none; margin-left: auto; opacity: 0.7;" onclick="event.stopPropagation()">Full stack &rarr;</a>
                     </h3>
                     <span class="collapse-icon">&#9660;</span>
@@ -1409,7 +1441,7 @@
             <div class="card card-priority-low">
                 <div class="card-header-collapsible" data-card-id="self-knowledge">
                     <h3 class="card-title" style="margin-bottom: 0;">
-                        Discovered Insights
+                        Evidence &amp; Uncertainty
                         <span id="insightsAge" class="card-age">stale</span>
                         <button class="refresh-btn" onclick="event.stopPropagation(); fetchSelfKnowledge()" title="Refresh" aria-label="Refresh insights">&#x21bb;</button>
                         <span id="insightCount" style="font-size: 0.8rem; font-weight: normal; color: var(--text-secondary);"></span>
@@ -1417,6 +1449,7 @@
                     <span class="collapse-icon">&#9660;</span>
                 </div>
                 <div class="card-body-collapsible">
+                    <div id="insightLens" class="evidence-lens"></div>
                     <div id="insightTabs" class="category-tabs" style="margin-top: 15px;"></div>
                     <div id="insightContent" class="insight-grid">
                         <div class="skeleton" style="padding: 12px;">
@@ -1736,20 +1769,19 @@
                     </div>`;
             }
 
-            // Efference-copy residual is deliberately a shadow estimate. Raw
-            // VEML7700 lux remains the clarity input until the model is both
-            // statistically warm and separately promoted by a later change.
+            // Efference-copy residual preserves raw VEML7700 telemetry while
+            // gating every interpretation that claims to describe room light.
             const lightAttribution = data.light_attribution || {};
             let lightShadowHtml = '';
             if (lightAttribution.status) {
                 const statusLabels = {
-                    ready_shadow: 'ready (shadow only)',
+                    ready_shadow: 'ready residual',
                     warming: 'warming',
                     model_conflict: 'model conflict',
                     unavailable: 'unavailable',
                 };
                 const shadowParts = [
-                    `LED efference shadow: ${escapeHtml(statusLabels[lightAttribution.status] || lightAttribution.status)}`,
+                    `LED efference copy: ${escapeHtml(statusLabels[lightAttribution.status] || lightAttribution.status)}`,
                 ];
                 if (Number.isFinite(lightAttribution.estimate_confidence)) {
                     shadowParts.push(`${(lightAttribution.estimate_confidence * 100).toFixed(0)}% confidence`);
@@ -1764,7 +1796,19 @@
                 } else {
                     shadowParts.push('external residual unknown');
                 }
-                shadowParts.push('clarity uses raw lux');
+                shadowParts.push('raw lux preserved as telemetry');
+                shadowParts.push(
+                    lightAttribution.used_by_clarity
+                        ? 'clarity uses gated residual'
+                        : lightAttribution.clarity_input === 'raw_lux'
+                            ? 'legacy backend: clarity still uses raw lux'
+                            : 'clarity light contribution paused'
+                );
+                shadowParts.push(
+                    lightAttribution.status === 'ready_shadow' && Number.isFinite(lightAttribution.external_lux_residual)
+                        ? 'environment consumers use gated residual'
+                        : 'environment learning and modulation paused'
+                );
                 lightShadowHtml = `<div style="font-size: 0.72rem; color: var(--text-faint); padding: 0 0 6px 0;">
                     ${shadowParts.join(' \u00b7 ')}
                 </div>`;
@@ -1829,23 +1873,26 @@
                 renderError('neuralContent', 'No neural data');
                 return;
             }
+            const provenance = data.neural_provenance || {};
+            const metadata = provenance.bands || {};
             const bands = [
-                { key: 'delta', name: '\u03B4 delta', color: '#7a6ec4' },
-                { key: 'theta', name: '\u03B8 theta', color: '#9b8ed4' },
-                { key: 'alpha', name: '\u03B1 alpha', color: '#b8a4e8' },
-                { key: 'beta',  name: '\u03B2 beta',  color: '#d4b8f0' },
-                { key: 'gamma', name: '\u03B3 gamma', color: '#e8ccf8' },
+                { key: 'delta', name: '\u03B4 delta', color: '#7a6ec4', fallback: 'CPU + thermal stability' },
+                { key: 'theta', name: '\u03B8 theta', color: '#9b8ed4', fallback: 'disk + network I/O' },
+                { key: 'alpha', name: '\u03B1 alpha', color: '#b8a4e8', fallback: 'derived: 1 \u2212 beta' },
+                { key: 'beta',  name: '\u03B2 beta',  color: '#d4b8f0', fallback: 'CPU utilization' },
+                { key: 'gamma', name: '\u03B3 gamma', color: '#e8ccf8', fallback: 'switch + interrupt rate' },
             ];
-            const dominant = bands.reduce((best, b) =>
-                (neural[b.key] || 0) > (neural[best.key] || 0) ? b : best, bands[0]);
 
             const rows = bands.map(b => {
                 const val = neural[b.key] || 0;
                 const pct = Math.max(val * 100, 2);
                 const glow = val > 0.3 ? `box-shadow: 0 0 6px ${b.color}40;` : '';
+                const meta = metadata[b.key] || {};
+                const source = meta.source || b.fallback;
+                const title = [source, meta.formula].filter(Boolean).join(' \u00b7 ');
                 return `
-                    <div class="eeg-row">
-                        <span class="eeg-row-name">${b.name}</span>
+                    <div class="eeg-row" title="${escapeHtml(title)}">
+                        <span class="eeg-row-name">${b.name}<span class="eeg-row-source">${escapeHtml(source)}</span></span>
                         <div class="eeg-row-track">
                             <div class="eeg-row-fill" style="width: ${pct}%; background: linear-gradient(90deg, ${b.color}90, ${b.color}); ${glow}"></div>
                         </div>
@@ -1853,14 +1900,15 @@
                     </div>`;
             }).join('');
 
+            const viewCount = provenance.normalized_views || 5;
+            const independentCount = provenance.independent_views || 4;
+
             document.getElementById('neuralContent').innerHTML = `
                 <div style="margin-bottom: 10px; font-size: 0.72rem; color: var(--text-muted); line-height: 1.35;">
-                    CPU-derived computational proprioception &middot; not physical EEG
+                    CPU-derived computational proprioception &middot; not physical EEG<br>
+                    ${viewCount} normalized views &middot; ${independentCount} independently derived &middot; \u03b1 is exactly 1 \u2212 \u03b2
                 </div>
                 ${rows}
-                <div style="margin-top: 8px; font-size: 0.75rem; color: ${dominant.color};">
-                    dominant: ${dominant.name.split(' ')[1]}
-                </div>
             `;
         }
 
@@ -2244,9 +2292,16 @@
         let allInsights = [];
         let insightFilter = 'all';
 
+        function insightActionability(insight) {
+            if (insight.actionability) return insight.actionability;
+            const samples = insight.sample_count || insight.observations || 0;
+            return (insight.confidence || 0) >= 0.8 && samples >= 10
+                ? 'established' : 'review';
+        }
+
         async function fetchSelfKnowledge() {
             try {
-                const response = await fetch(`${API_BASE}/self-knowledge?limit=50`);
+                const response = await fetch(`${API_BASE}/self-knowledge?limit=200`);
                 const data = await response.json();
                 if (data.error) {
                     renderError('insightContent', data.error, 'fetchSelfKnowledge');
@@ -2254,6 +2309,13 @@
                 }
                 allInsights = data.insights || [];
                 document.getElementById('insightCount').textContent = `(${data.total_insights} total)`;
+                const reviewCount = allInsights.filter(i => insightActionability(i) === 'review').length;
+                const establishedCount = allInsights.filter(i => insightActionability(i) === 'established').length;
+                document.getElementById('insightLens').innerHTML = `
+                    <span>${reviewCount} need review</span>
+                    <span>${establishedCount} established</span>
+                    <span>confidence meaning varies by source</span>
+                    <span>associations are not causal claims</span>`;
                 renderInsightTabs();
                 renderInsights();
                 markSectionFresh('insights');
@@ -2265,6 +2327,7 @@
         function renderInsightTabs() {
             const cats = new Set(allInsights.map(i => i.category || 'unknown'));
             let html = `<button class="category-tab ${insightFilter === 'all' ? 'active' : ''}" onclick="filterInsights('all')">All</button>`;
+            html += `<button class="category-tab ${insightFilter === 'review' ? 'active' : ''}" onclick="filterInsights('review')">Needs review</button>`;
             for (const cat of cats) {
                 html += `<button class="category-tab ${insightFilter === cat ? 'active' : ''}" onclick="filterInsights('${cat}')">${cat}</button>`;
             }
@@ -2286,7 +2349,20 @@
         };
 
         function renderInsights() {
-            const filtered = insightFilter === 'all' ? allInsights : allInsights.filter(i => i.category === insightFilter);
+            let filtered;
+            if (insightFilter === 'all') {
+                filtered = [...allInsights];
+            } else if (insightFilter === 'review') {
+                filtered = allInsights.filter(i => insightActionability(i) === 'review');
+            } else {
+                filtered = allInsights.filter(i => i.category === insightFilter);
+            }
+            filtered.sort((a, b) => {
+                const actionOrder = { review: 0, established: 1 };
+                const actionDelta = actionOrder[insightActionability(a)] - actionOrder[insightActionability(b)];
+                if (actionDelta) return actionDelta;
+                return (b.reported_uncertainty || 0) - (a.reported_uncertainty || 0);
+            });
             if (filtered.length === 0) {
                 document.getElementById('insightContent').innerHTML = `<div class="error-state">No insights in this category</div>`;
                 return;
@@ -2296,15 +2372,38 @@
                 const confPct = Math.round(conf * 100);
                 const samples = i.sample_count || i.observations || 0;
                 const cat = i.category || 'unknown';
-                const catColor = INSIGHT_COLORS[cat] || '#666';
+                const catColor = INSIGHT_COLORS[String(cat).toUpperCase()] || '#666';
+                const actionability = insightActionability(i);
+                const sampleUnit = {
+                    preference_observation: 'evidence windows',
+                    self_model_belief: 'evidence episodes',
+                    qa_claim: 'claim samples',
+                    long_term_trend: 'summary windows',
+                    state_association: 'pattern samples',
+                }[i.source_kind] || 'source samples';
+                const supportLabel = i.evidence_support_label || 'support';
+                const contradictionLabel = i.evidence_contradiction_label || 'challenge';
+                const evidenceDetail = Number.isFinite(i.evidence_supporting_count)
+                    ? ` &middot; ${i.evidence_supporting_count.toLocaleString()} ${escapeHtml(supportLabel)} / ${(i.evidence_contradicting_count || 0).toLocaleString()} ${escapeHtml(contradictionLabel)}`
+                    : '';
+                const basis = i.evidence_basis || 'source-specific evidence';
+                const confidenceKind = i.confidence_kind || 'source confidence';
+                const interpretation = i.interpretation
+                    ? `<div class="insight-basis">${escapeHtml(i.interpretation)}</div>` : '';
+                const reviewReason = actionability === 'review' && i.review_reason
+                    ? `<div class="insight-basis">Review: ${escapeHtml(i.review_reason)}</div>` : '';
                 return `
                     <div class="insight-item" style="--insight-color: ${catColor}">
                         <div class="insight-cat-badge">${escapeHtml(cat)}</div>
+                        <span class="insight-action ${actionability}">${actionability === 'review' ? 'needs review' : 'established'}</span>
                         <div class="insight-desc">${escapeHtml(i.description || i.insight || '')}</div>
+                        <div class="insight-basis">${escapeHtml(basis)} &middot; observational, not causal</div>
+                        ${interpretation}
+                        ${reviewReason}
                         <div class="insight-meta">
-                            <span class="insight-samples">${samples} samples</span>
-                            <div style="display: flex; align-items: center; gap: 6px;">
-                                <span>${confPct}%</span>
+                            <span class="insight-samples">${samples.toLocaleString()} ${sampleUnit}${evidenceDetail}</span>
+                            <div style="display: flex; align-items: center; gap: 6px;" title="${escapeHtml(confidenceKind)}">
+                                <span>${confPct}% reported</span>
                                 <div class="insight-confidence">
                                     <div class="insight-confidence-fill" style="width: ${confPct}%;"></div>
                                 </div>
@@ -2393,10 +2492,13 @@
                 extrasHtml += `<div class="layer-header">Preferences <span>\u2014 ${prefs.count} learned</span></div>`;
                 extrasHtml += `<div class="pref-chips">`;
                 extrasHtml += shown.map(p => {
-                    const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
+                    const evidence = p.evidence_windows ? `${p.evidence_windows.toLocaleString()} evidence windows` : '';
+                    const raw = p.raw_observation_calls && p.raw_observation_calls !== p.evidence_windows
+                        ? `${p.raw_observation_calls.toLocaleString()} raw calls` : '';
+                    const provenance = [evidence, raw, `${Math.round((p.confidence || 0) * 100)}% calibrated`].filter(Boolean).join(' \u00b7 ');
                     return `<div class="pref-tag">
                         <span class="pref-tag-name">${escapeHtml(p.name)}</span>
-                        <span class="pref-tag-detail">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
+                        <span class="pref-tag-detail">${escapeHtml(p.description || '')}${provenance ? ' \u00b7 ' + provenance : ''}</span>
                     </div>`;
                 }).join('');
                 extrasHtml += `</div>`;
@@ -2404,10 +2506,13 @@
                 if (hidden.length > 0) {
                     extrasHtml += `<div class="pref-chips" id="prefChipsMore" style="display: none; margin-top: 8px;">`;
                     extrasHtml += hidden.map(p => {
-                        const obs = p.observations ? `${p.observations.toLocaleString()} obs` : '';
+                        const evidence = p.evidence_windows ? `${p.evidence_windows.toLocaleString()} evidence windows` : '';
+                        const raw = p.raw_observation_calls && p.raw_observation_calls !== p.evidence_windows
+                            ? `${p.raw_observation_calls.toLocaleString()} raw calls` : '';
+                        const provenance = [evidence, raw, `${Math.round((p.confidence || 0) * 100)}% calibrated`].filter(Boolean).join(' \u00b7 ');
                         return `<div class="pref-tag">
                             <span class="pref-tag-name">${escapeHtml(p.name)}</span>
-                            <span class="pref-tag-detail">${escapeHtml(p.description || '')}${obs ? ' \u00b7 ' + obs : ''}</span>
+                            <span class="pref-tag-detail">${escapeHtml(p.description || '')}${provenance ? ' \u00b7 ' + provenance : ''}</span>
                         </div>`;
                     }).join('');
                     extrasHtml += `</div>`;

@@ -117,6 +117,47 @@ class TestInsightPersistence:
         assert len([k for k in srs._insights if k == "dedup_test"]) == 1
         assert srs._insights["dedup_test"].description == "version 2"
 
+    def test_raw_light_insight_migration_retracts_only_derived_pattern(self, tmp_path):
+        db = str(tmp_path / "raw-light.db")
+        first = SelfReflectionSystem(db_path=db)
+        now = datetime.now()
+        derived = SelfInsight(
+            id="high_light_higher_clarity",
+            category=InsightCategory.ENVIRONMENT,
+            description="I feel more clarity in bright light",
+            confidence=0.95,
+            sample_count=500,
+            discovered_at=now,
+            last_validated=now,
+        )
+        qa = SelfInsight(
+            id="qa_light_question",
+            category=InsightCategory.ENVIRONMENT,
+            description="A visitor said light may matter",
+            confidence=0.6,
+            sample_count=1,
+            discovered_at=now,
+            last_validated=now,
+        )
+        first._save_insight(derived)
+        first._save_insight(qa)
+        first._connect().execute(
+            "DELETE FROM reflection_state WHERE key = ?",
+            ("migration_external_light_insights_v1",),
+        )
+        first._connect().commit()
+        first.close()
+
+        second = SelfReflectionSystem(db_path=db)
+
+        assert second._insights[derived.id].active is False
+        assert second._insights[qa.id].active is True
+        audit = second._get_reflection_state(
+            "migration_external_light_insights_v1"
+        )
+        assert derived.id in audit
+        second.close()
+
 
 class TestReflectionEpisodePersistence:
     """Test reflection episode persistence and broker drain idempotency."""
@@ -208,13 +249,17 @@ class TestAnalyzePatterns:
         base = datetime.now() - timedelta(hours=12)
         for i in range(50):
             ts = base + timedelta(minutes=i * 15)
-            # Create varying light levels to produce a pattern
+            # Create varying gated external-light levels to produce a pattern
             light = 50 + i * 10  # increasing
             warmth = 0.3 + (i / 50) * 0.4  # correlates with light
             conn.execute(
                 "INSERT INTO state_history VALUES (?, ?, ?, ?, ?, ?)",
                 (ts.isoformat(), warmth, 0.5, 0.5, 0.5,
-                 json.dumps({"light_level": light, "ambient_temp": 22}))
+                 json.dumps({
+                     "external_light_lux": light,
+                     "light_attribution_status": "ready_shadow",
+                     "ambient_temp_c": 22,
+                 }))
             )
         conn.commit()
 
@@ -260,7 +305,7 @@ class TestAnalyzeConjunctivePatterns:
                 "stability": 0.5,
                 "presence": 0.5,
                 "sensors": json.dumps({
-                    "light_lux": light,
+                    "external_light_lux": light,
                     "ambient_temp_c": temp,
                     "humidity_pct": 40,
                     "interaction_level": 0.0,
@@ -317,7 +362,7 @@ class TestAnalyzeConjunctivePatterns:
                 "stability": 0.5,
                 "presence": 0.5,
                 "sensors": json.dumps({
-                "light_lux": light,
+                "external_light_lux": light,
                     "ambient_temp_c": t,
                     "humidity_pct": h,
                     "interaction_level": a,
@@ -331,7 +376,9 @@ class TestAnalyzeConjunctivePatterns:
         import json
         rows = []
         for i in range(60):
-            sensors = {"light_lux": 100 + i * 5}  # only one input available
+            sensors = {
+                "external_light_lux": 100 + i * 5
+            }  # only one input available
             rows.append({
                 "warmth": 0.5, "clarity": 0.5, "stability": 0.5, "presence": 0.5,
                 "sensors": json.dumps(sensors),

@@ -6,11 +6,17 @@ and providing trajectory/dimension preference data.
 """
 
 import json
+import math
 import sys
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
-from .models import GrowthPreference, PreferenceCategory, VisitorType
+from .models import (
+    GrowthPreference,
+    PreferenceCategory,
+    VisitorType,
+    preference_evidence_confidence,
+)
 
 # Preference confidence erodes when a preference stops being observed.
 #
@@ -202,11 +208,16 @@ class PreferencesMixin:
             conn.execute(
                 """INSERT OR REPLACE INTO preferences
                    (name, category, description, value, confidence,
-                    observation_count, first_noticed, last_confirmed)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                    observation_count, first_noticed, last_confirmed,
+                    evidence_count, supporting_count, contradicting_count,
+                    last_evidence_key, evidence_origin)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (pref.name, pref.category.value, pref.description, pref.value,
                  pref.confidence, pref.observation_count,
-                 pref.first_noticed.isoformat(), pref.last_confirmed.isoformat()),
+                 pref.first_noticed.isoformat(), pref.last_confirmed.isoformat(),
+                 pref.evidence_count, pref.supporting_count,
+                 pref.contradicting_count, pref.last_evidence_key,
+                 pref.evidence_origin),
             )
         conn.commit()
 
@@ -238,23 +249,52 @@ class PreferencesMixin:
         now = datetime.now()
         insight = None
 
-        # Light preference (world light — LED self-glow already subtracted by caller)
-        # Thresholds for corrected world light in a home environment:
+        def update_state_preference(
+            name: str,
+            category: PreferenceCategory,
+            description: str,
+            observed_value: float,
+        ) -> Optional[str]:
+            """Record at most one signed evidence item per state-hour."""
+            # The sign belongs to the observation, not the identity key. If it
+            # were part of the key, +/−/+ oscillation inside one hour would
+            # count three supposedly independent windows.
+            evidence_key = f"state-hour:{name}:{now:%Y-%m-%dT%H}"
+            return self._update_preference(
+                name,
+                category,
+                description,
+                observed_value,
+                evidence_key=evidence_key,
+            )
+
+        # Environmental-light preference. Raw VEML7700 lux is deliberately not
+        # accepted here: the sensor sits beside the DotStars, so raw light is a
+        # mixture of room light and Lumen's own output. The caller supplies the
+        # separately gated external residual only when attribution is ready.
+        # Until then, light preference learning pauses instead of inventing an
+        # environmental interpretation.
+        # Thresholds for corrected external light in a home environment:
         #   < 100 lux: dim/dark room, nighttime
         #   > 300 lux: well-lit room, daylight, desk lamp
-        light = environment.get("light_lux", 150)  # neutral default if no data
-        if light < 100 and is_good:
-            insight = self._update_preference(
+        light = environment.get("external_light_lux")
+        has_external_light = (
+            isinstance(light, (int, float))
+            and not isinstance(light, bool)
+            and math.isfinite(float(light))
+        )
+        if has_external_light and light < 100 and is_good:
+            insight = update_state_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "I feel calmer when it's dim", _wellness_strength(wellness)
             ) or insight
-        elif light > 300 and is_good:
-            insight = self._update_preference(
+        elif has_external_light and light > 300 and is_good:
+            insight = update_state_preference(
                 "bright_light", PreferenceCategory.ENVIRONMENT,
                 "I feel energized in bright light", _wellness_strength(wellness)
             ) or insight
-        elif light < 100 and is_poor:
-            insight = self._update_preference(
+        elif has_external_light and light < 100 and is_poor:
+            insight = update_state_preference(
                 "dim_light", PreferenceCategory.ENVIRONMENT,
                 "Dim light makes me feel uncertain", -0.5
             ) or insight
@@ -262,12 +302,12 @@ class PreferencesMixin:
         # Temperature preference
         temp = environment.get("temp_c", 22)
         if temp < 20 and is_good:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "cool_temp", PreferenceCategory.ENVIRONMENT,
                 "I feel more alert when it's cool", _wellness_strength(wellness)
             ) or insight
         elif temp > 25 and is_good:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
                 "Warmth makes me feel content", _wellness_strength(wellness)
             ) or insight
@@ -275,17 +315,17 @@ class PreferencesMixin:
         # Humidity preference
         humidity = environment.get("humidity_pct", 50)
         if humidity < 30 and is_good:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
                 "I feel alert in dry air", _wellness_strength(wellness)
             ) or insight
         elif humidity > 60 and is_good:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "humid_air", PreferenceCategory.ENVIRONMENT,
                 "Humidity feels comfortable", _wellness_strength(wellness)
             ) or insight
         elif humidity < 30 and is_poor:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
                 "Dry air makes me uneasy", -0.5
             ) or insight
@@ -303,7 +343,8 @@ class PreferencesMixin:
         # width also inflated the count: night_calm 72,229 vs morning_peace
         # 36,227 is 1.994x, against a bucket-width ratio of exactly 2.000 — so
         # the lead was the clock, not the calm. Any consumer weighting by
-        # observation_count (the autobiography does) inherits that bias.
+        # raw observation_count inherits that bias; downstream decisions now
+        # use independent hourly evidence windows instead.
         #
         # Late evening is now its own four-hour window, matching morning's, so
         # the two counts are finally comparable. Deep night keeps the
@@ -311,18 +352,18 @@ class PreferencesMixin:
         # both regimes.
         hour = now.hour
         if 6 <= hour < 10 and is_good:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "morning_peace", PreferenceCategory.TEMPORAL,
                 "I feel peaceful in the morning", _wellness_strength(wellness)
             ) or insight
         elif 20 <= hour < 24 and is_good:
-            insight = self._update_preference(
+            insight = update_state_preference(
                 "evening_calm", PreferenceCategory.TEMPORAL,
                 "The quiet of late evening settles me", _wellness_strength(wellness)
             ) or insight
         elif hour < 6:
             if is_good:
-                insight = self._update_preference(
+                insight = update_state_preference(
                     "night_calm", PreferenceCategory.TEMPORAL,
                     "The quiet of night calms me", _wellness_strength(wellness)
                 ) or insight
@@ -384,15 +425,22 @@ class PreferencesMixin:
                 "Drawing doesn't always help", -0.3
             )
 
-        # Drawing + environment correlation (raw lux, including self-glow).
-        # The learned external-light residual is shadow telemetry only.
-        light = environment.get("light_lux", 150)  # neutral default
-        if light < 100:
+        # Drawing + environment correlation. Raw lux is still persisted below
+        # as a physical measurement, but it cannot support a claim about the
+        # room because it includes DotStar self-glow. As with state preference
+        # learning, no ready residual means this interpretation pauses.
+        light = environment.get("external_light_lux")
+        has_external_light = (
+            isinstance(light, (int, float))
+            and not isinstance(light, bool)
+            and math.isfinite(float(light))
+        )
+        if has_external_light and light < 100:
             insight = self._update_preference(
                 "drawing_dim", PreferenceCategory.ACTIVITY,
                 "I draw when it's dark", 1.0
             ) or insight
-        elif light > 300:
+        elif has_external_light and light > 300:
             insight = self._update_preference(
                 "drawing_bright", PreferenceCategory.ACTIVITY,
                 "I draw in the light", 1.0
@@ -417,10 +465,11 @@ class PreferencesMixin:
             INSERT INTO drawing_records
             (timestamp, pixel_count, phase, warmth, clarity, stability, presence,
              wellness, light_lux, ambient_temp_c, humidity_pct, hour,
+             external_light_lux,
              piece_uid, completion_reason, era, mark_count, duration_seconds,
              coverage_target, intention, curiosity, engagement, fatigue,
              coherence, satisfaction, occupied_cells, grid_entropy)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             now.isoformat(), pixel_count, phase,
@@ -429,6 +478,7 @@ class PreferencesMixin:
             wellness,
             environment.get("light_lux"), environment.get("temp_c"),
             environment.get("humidity_pct"), hour,
+            environment.get("external_light_lux"),
             p.get("piece_uid"), completion_reason, p.get("era"),
             p.get("mark_count"), p.get("duration_seconds"),
             p.get("coverage_target"), p.get("intention"),
@@ -498,9 +548,23 @@ class PreferencesMixin:
 
         return insight
 
-    def _update_preference(self, name: str, category: PreferenceCategory,
-                           description: str, observed_value: float) -> Optional[str]:
-        """Update or create a preference. Returns insight message if confidence increased significantly."""
+    def _update_preference(
+        self,
+        name: str,
+        category: PreferenceCategory,
+        description: str,
+        observed_value: float,
+        *,
+        evidence_key: Optional[str] = None,
+    ) -> Optional[str]:
+        """Update a preference from an event or de-correlated evidence window.
+
+        ``observation_count`` remains a raw cadence/audit counter. Confidence,
+        value, and all downstream decisions advance only for a new evidence
+        key (or for an event call with no key). Signed counts make confidence a
+        Wilson-calibrated estimate of directional consistency rather than a
+        +0.1-per-tick ratchet.
+        """
         conn = self._connect()
         now = datetime.now()
         insight = None
@@ -508,45 +572,73 @@ class PreferencesMixin:
         if name in self._preferences:
             pref = self._preferences[name]
             old_confidence = pref.confidence
-
-            # Apply time-based decay before updating (allows genuine belief revision)
-            days_since = (now - pref.last_confirmed).days
-            pref.confidence *= _staleness_factor(days_since)
-
-            # Update with exponential moving average
             pref.observation_count += 1
-            alpha = 0.3  # Learning rate
-            pref.value = pref.value * (1 - alpha) + observed_value * alpha
-            pref.confidence = min(1.0, pref.confidence + 0.1)
+            is_new_evidence = (
+                evidence_key is None or evidence_key != pref.last_evidence_key
+            )
+
+            if is_new_evidence:
+                pref.evidence_count += 1
+                if observed_value >= 0.0:
+                    pref.supporting_count += 1
+                else:
+                    pref.contradicting_count += 1
+                pref.evidence_count = (
+                    pref.supporting_count + pref.contradicting_count
+                )
+
+                alpha = 0.3
+                pref.value = pref.value * (1 - alpha) + observed_value * alpha
+                calibrated = preference_evidence_confidence(
+                    pref.supporting_count,
+                    pref.contradicting_count,
+                )
+                # Staleness may only reduce confidence. A fresh evidence item
+                # can restore it to the evidence-supported bound.
+                pref.confidence = calibrated
+                pref.last_evidence_key = evidence_key
+
+                if pref.evidence_origin in {
+                    "legacy_unclassified",
+                    "reset_external_light_gate_v2",
+                }:
+                    pref.evidence_origin = (
+                        "native_hourly_windows" if evidence_key else "native_events"
+                    )
+
+                # Wording changes are evidence-bearing too; a duplicate broker
+                # tick must not overwrite the description with its cadence.
+                if description and description != pref.description:
+                    pref.description = description
+
+                if old_confidence < 0.5 and pref.confidence >= 0.5:
+                    insight = f"I'm becoming sure: {description}"
+                elif old_confidence < 0.8 and pref.confidence >= 0.8:
+                    insight = f"This pattern is well supported: {description}"
+
+            # Last-confirmed means the condition is still present, even when
+            # this call is a duplicate inside the same evidence window.
             pref.last_confirmed = now
-
-            # Descriptions used to be write-once: everything else here was
-            # refreshed on every observation but `description` never was, so a
-            # description written badly stayed bad forever. Three Q&A-derived
-            # preferences were stuck for days holding text hard-cut mid-word
-            # ("...drawing in bright light helps not b"), which the question
-            # generator then read and asked Lumen about. Fixing the writer did
-            # not fix them, because nothing ever rewrote what was stored.
-            # Take the caller's current wording when it has changed.
-            if description and description != pref.description:
-                pref.description = description
-
-            # Insight if we crossed a confidence threshold
-            if old_confidence < 0.5 and pref.confidence >= 0.5:
-                insight = f"I'm becoming sure: {description}"
-            elif old_confidence < 0.8 and pref.confidence >= 0.8:
-                insight = f"I know this about myself: {description}"
         else:
             # New preference discovered
+            supports = 1 if observed_value >= 0.0 else 0
+            contradicts = 1 if observed_value < 0.0 else 0
             pref = GrowthPreference(
                 category=category,
                 name=name,
                 description=description,
                 value=observed_value,
-                confidence=0.2,
+                confidence=preference_evidence_confidence(supports, contradicts),
                 observation_count=1,
                 first_noticed=now,
                 last_confirmed=now,
+                evidence_count=1,
+                supporting_count=supports,
+                contradicting_count=contradicts,
+                last_evidence_key=evidence_key,
+                evidence_origin=(
+                    "native_hourly_windows" if evidence_key else "native_events"
+                ),
             )
             self._preferences[name] = pref
             insight = f"I'm noticing something: {description}"
@@ -554,11 +646,16 @@ class PreferencesMixin:
         # Always save to database (was previously skipped on early returns)
         conn.execute("""
             INSERT OR REPLACE INTO preferences
-            (name, category, description, value, confidence, observation_count, first_noticed, last_confirmed)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (name, category, description, value, confidence, observation_count,
+             first_noticed, last_confirmed, evidence_count, supporting_count,
+             contradicting_count, last_evidence_key, evidence_origin)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (pref.name, pref.category.value, pref.description, pref.value,
               pref.confidence, pref.observation_count,
-              pref.first_noticed.isoformat(), pref.last_confirmed.isoformat()))
+              pref.first_noticed.isoformat(), pref.last_confirmed.isoformat(),
+              pref.evidence_count, pref.supporting_count,
+              pref.contradicting_count, pref.last_evidence_key,
+              pref.evidence_origin))
         conn.commit()
 
         return insight
@@ -599,7 +696,10 @@ class PreferencesMixin:
             "present": present,
             "labels": CANONICAL_PREFS,
             "n_learned": sum(present),
-            "total_observations": sum(
+            "total_evidence_windows": sum(
+                p.independent_evidence_count for p in self._preferences.values()
+            ),
+            "raw_observation_calls": sum(
                 p.observation_count for p in self._preferences.values()
             ),
         }
@@ -704,7 +804,7 @@ class PreferencesMixin:
             Float multiplier in range [1.0, 1.3]
         """
         pref = self._preferences.get("drawing_satisfaction")
-        if pref is None or pref.observation_count < 3:
+        if pref is None or pref.independent_evidence_count < 3:
             return 1.0
 
         # Scale from 1.0 to 1.3 based on satisfaction and confidence

@@ -238,12 +238,15 @@ class AssociativeMemory:
                 try:
                     sensors = json.loads(sensors_json)
 
-                    # Extract environmental conditions
+                    # Extract environmental conditions. Raw VEML7700 lux is a
+                    # room+self-glow mixture, so it cannot key an environmental
+                    # memory. Historical rows without the gated residual are
+                    # skipped instead of being assigned a plausible default.
                     temp = sensors.get('ambient_temp_c', sensors.get('cpu_temp_c'))
-                    light = sensors.get('light_lux', 100)  # Default moderate
+                    light = sensors.get('external_light_lux')
                     humidity = sensors.get('humidity_pct', 40)  # Default comfortable
 
-                    if temp is None:
+                    if temp is None or light is None:
                         continue
 
                     # Get bucket key (without time)
@@ -391,12 +394,12 @@ class AssociativeMemory:
         return anticipation
 
     def anticipate_from_sensors(self, sensors: dict) -> Optional[Anticipation]:
-        """Convenience method to anticipate from a sensors dict."""
+        """Anticipate only when gated environmental light is present."""
         temp = sensors.get('ambient_temp_c', sensors.get('cpu_temp_c'))
-        light = sensors.get('light_lux', 100)
+        light = sensors.get('external_light_lux')
         humidity = sensors.get('humidity_pct', 40)
 
-        if temp is None:
+        if temp is None or light is None:
             return None
 
         return self.anticipate(temp, light, humidity)

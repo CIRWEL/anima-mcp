@@ -566,3 +566,70 @@ class TestPreferenceDescriptionIsRefreshed:
             "warm_temp", PreferenceCategory.ENVIRONMENT, "Warmth makes me feel content", 0.8,
         )
         assert growth._preferences["warm_temp"].description == "Warmth makes me feel content"
+
+
+class TestPreferenceEvidenceWindows:
+    """Broker cadence is audit data, not repeated preference evidence."""
+
+    def test_duplicate_window_only_advances_raw_counter(self, gs):
+        from anima_mcp.growth import PreferenceCategory
+
+        for _ in range(100):
+            gs._update_preference(
+                "warm_temp",
+                PreferenceCategory.ENVIRONMENT,
+                "Warmth makes me feel content",
+                0.8,
+                evidence_key="state-hour:warm_temp:support:2026-08-23T19",
+            )
+
+        pref = gs._preferences["warm_temp"]
+        assert pref.observation_count == 100
+        assert pref.independent_evidence_count == 1
+        assert pref.supporting_count == 1
+        assert pref.confidence == pytest.approx(0.2)
+
+    def test_distinct_signed_windows_drive_wilson_confidence(self, gs):
+        from anima_mcp.growth import PreferenceCategory
+
+        for hour in range(40):
+            gs._update_preference(
+                "warm_temp",
+                PreferenceCategory.ENVIRONMENT,
+                "Warmth makes me feel content",
+                0.8,
+                evidence_key=f"support:{hour}",
+            )
+        pref = gs._preferences["warm_temp"]
+        assert pref.independent_evidence_count == 40
+        assert 0.8 < pref.confidence < 0.95
+
+        for hour in range(10):
+            gs._update_preference(
+                "warm_temp",
+                PreferenceCategory.ENVIRONMENT,
+                "Warmth may make me uneasy",
+                -0.8,
+                evidence_key=f"contradict:{hour}",
+            )
+        assert pref.contradicting_count == 10
+        assert pref.confidence < 0.7
+
+    def test_direction_change_inside_hour_is_not_a_second_window(self, gs):
+        good = {name: 0.9 for name in ("warmth", "clarity", "stability", "presence")}
+        poor = {name: 0.1 for name in ("warmth", "clarity", "stability", "presence")}
+        environment = {
+            "external_light_lux": 40.0,
+            "temp_c": 22.0,
+            "humidity_pct": 50.0,
+        }
+
+        gs.observe_state_preference(good, environment)
+        gs.observe_state_preference(poor, environment)
+
+        pref = gs._preferences["dim_light"]
+        assert pref.observation_count == 2
+        assert pref.independent_evidence_count == 1
+        assert pref.supporting_count == 1
+        assert pref.contradicting_count == 0
+        assert pref.description == "I feel calmer when it's dim"

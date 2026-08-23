@@ -157,14 +157,18 @@ def analyze_correlation(dimension: str,
 
     Args:
         dimension: anima dimension (warmth, clarity, stability, presence, wellness)
-                   or environment (light_lux, ambient_temp_c, humidity_pct)
+                   or environment (external_light_lux, ambient_temp_c,
+                   humidity_pct). ``raw_light_lux`` is the mixed physical
+                   VEML7700 reading and is exposed only when explicitly named.
         group_by: optional grouping — "hour", "phase", or an environment column
     """
     # Map friendly names to column names
     col_map = {
         "warmth": "warmth", "clarity": "clarity", "stability": "stability",
         "presence": "presence", "wellness": "wellness",
-        "light": "light_lux", "light_lux": "light_lux",
+        "light": "external_light_lux",
+        "external_light_lux": "external_light_lux",
+        "raw_light": "light_lux", "raw_light_lux": "light_lux",
         "temperature": "ambient_temp_c", "temp": "ambient_temp_c",
         "ambient_temp_c": "ambient_temp_c",
         "humidity": "humidity_pct", "humidity_pct": "humidity_pct",

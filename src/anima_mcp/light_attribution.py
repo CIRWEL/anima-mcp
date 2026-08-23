@@ -1,4 +1,4 @@
-"""Learned, shadow-only attribution of VEML7700 lux to Lumen's LEDs.
+"""Learned, raw-preserving attribution of VEML7700 lux to Lumen's LEDs.
 
 The light sensor measures one physical quantity: room light plus DotStar glow.
 This module never rewrites that measurement.  It carries the actual LED action
@@ -6,6 +6,10 @@ from the hardware-owning server to the sensor-owning broker, then learns a
 robust response from the internal breathing pulse while the logical LED command
 is fixed.  Until the evidence gate passes, the external-light residual is
 explicitly unknown.
+
+The ready residual is a gated secondary signal for environmental consumers.
+It never rewrites the physical reading. Until ready, clarity omits its light
+component and preferences pause rather than treating self-glow as room light.
 """
 
 from __future__ import annotations
@@ -38,6 +42,20 @@ def _finite_float(value: Any) -> float | None:
         return None
     result = float(value)
     return result if math.isfinite(result) else None
+
+
+def gated_external_light_lux(attribution: Any) -> float | None:
+    """Return the secondary external-light signal only after its evidence gate.
+
+    All consumers share this one admission rule so a UI, preference, or belief
+    cannot accidentally promote the residual earlier than another subsystem.
+    Raw lux remains available through its original sensor channel regardless.
+    """
+    if not isinstance(attribution, dict):
+        return None
+    if attribution.get("status") != "ready_shadow":
+        return None
+    return _finite_float(attribution.get("external_lux_residual"))
 
 
 def _bounded_float(value: Any, lower: float, upper: float) -> float | None:
@@ -569,7 +587,7 @@ class LearnedLedLuxResidual:
         model_drive: float | None = None,
         drive_filter_ready: bool | None = None,
     ) -> dict[str, Any]:
-        """Return provenance-rich shadow attribution without changing raw lux."""
+        """Return provenance-rich gated attribution without changing raw lux."""
         raw = _finite_float(raw_lux)
         if raw is not None and raw < 0.0:
             raw = None
@@ -632,10 +650,12 @@ class LearnedLedLuxResidual:
             "self-glow is anchored to zero at zero optical drive",
         ]
 
+        residual_ready = status == "ready_shadow" and external is not None
+
         return {
             "schema": LIGHT_ATTRIBUTION_SCHEMA,
-            "mode": "shadow",
-            "authority": "telemetry_only",
+            "mode": "raw_preserving_gated",
+            "authority": "gated_secondary_signal",
             "status": status,
             "raw_lux": rounded(raw),
             "raw_lux_composition": "room_light_plus_dotstar_glow",
@@ -653,8 +673,18 @@ class LearnedLedLuxResidual:
             "self_glow_estimate_lux": rounded(self_glow),
             "external_lux_residual": rounded(external),
             "estimate_confidence": rounded(stats["confidence"]),
-            "used_by_clarity": False,
-            "clarity_input": "raw_lux",
+            "used_by_clarity": residual_ready,
+            "clarity_input": (
+                "external_lux_residual" if residual_ready else None
+            ),
+            "clarity_light_policy": "omit_until_gated_residual_ready",
+            "used_by_environment_preferences": residual_ready,
+            "used_by_environment_consumers": residual_ready,
+            "environment_preference_input": (
+                "external_lux_residual"
+                if residual_ready
+                else None
+            ),
             "model": model,
             "provenance": {
                 "raw_lux": {
@@ -676,7 +706,7 @@ class LearnedLedLuxResidual:
                 },
                 "residual": {
                     "source": self.MODEL_KIND,
-                    "role": "learned_shadow_estimate",
+                    "role": "learned_gated_estimate",
                 },
             },
         }

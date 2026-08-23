@@ -181,8 +181,8 @@ class TestGenerateStatusText:
         assert "Clarity:" in text
         assert "Stability:" in text
         assert "Presence:" in text
-        # Should NOT have Neural or EISV
-        assert "Neural:" not in text
+        # Should NOT have computational dynamics or EISV
+        assert "Compute dynamics" not in text
         assert "EISV:" not in text
 
     def test_with_readings_adds_neural(self):
@@ -191,10 +191,10 @@ class TestGenerateStatusText:
         r.eeg_beta_power = 0.4
         r.eeg_gamma_power = 0.2
         text = generate_status_text(_anima(), readings=r)
-        assert "Neural:" in text
-        assert "Alpha=0.60" in text
-        assert "Beta=0.40" in text
-        assert "Gamma=0.20" in text
+        assert "Compute dynamics (not EEG):" in text
+        assert "alpha(1-beta)=0.60" in text
+        assert "beta(cpu)=0.40" in text
+        assert "gamma(scheduler)=0.20" in text
 
     def test_with_eisv_adds_eisv_line(self):
         eisv = EISVMetrics(energy=0.5, integrity=0.7, entropy=0.3, valence=0.1)
@@ -206,13 +206,13 @@ class TestGenerateStatusText:
         r = _readings()
         # No eeg_* attributes set
         text = generate_status_text(_anima(), readings=r)
-        assert "Neural:" not in text
+        assert "Compute dynamics" not in text
 
     def test_partial_neural(self):
         r = _readings()
         r.eeg_alpha_power = 0.5
         # beta and gamma not set
         text = generate_status_text(_anima(), readings=r)
-        assert "Neural:" in text
-        assert "Alpha=0.50" in text
-        assert "Beta" not in text
+        assert "Compute dynamics (not EEG):" in text
+        assert "alpha(1-beta)=0.50" in text
+        assert "beta(cpu)" not in text
