@@ -61,6 +61,38 @@ def test_sensor_health_probe_requires_a_valid_fresh_broker_heartbeat(monkeypatch
         assert sensor_probe() is False
 
 
+def test_day_summary_writer_health_probe_registration(monkeypatch):
+    from anima_mcp import anima_history, health, lifecycle
+
+    registrations = {}
+    registry = MagicMock()
+    registry.register.side_effect = (
+        lambda name, probe, **kwargs: registrations.__setitem__(
+            name, (probe, kwargs)
+        )
+    )
+    details = {
+        "ok": False,
+        "last_error": "write failed",
+        "last_attempt_at": "2026-08-23T12:00:00+00:00",
+    }
+    history = MagicMock()
+    history.day_summary_health.return_value = details
+    monkeypatch.setattr(health, "get_health_registry", lambda: registry)
+    monkeypatch.setattr(anima_history, "get_anima_history", lambda: history)
+
+    lifecycle._register_health_probes()
+
+    probe, options = registrations["day_summary_writer"]
+    assert probe() == details
+    history.day_summary_health.assert_called_once_with()
+    assert options == {
+        "stale_threshold": 36 * 60 * 60,
+        "debounce_seconds": 0.0,
+        "optional": False,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

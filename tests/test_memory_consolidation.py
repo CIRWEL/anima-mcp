@@ -41,6 +41,19 @@ def _populate(history, n=200, base_warmth=0.5, base_clarity=0.5,
         )
 
 
+def _populate_recent(history, now, n=120, *, start_hours_ago=1.0, value=0.5):
+    """Populate deterministic observations that are eligible at ``now``."""
+    start = now - timedelta(hours=start_hours_ago)
+    for i in range(n):
+        history.record(
+            warmth=value,
+            clarity=value,
+            stability=value,
+            presence=value,
+            timestamp=start + timedelta(seconds=i),
+        )
+
+
 # ==================== DaySummary Round-Trip ====================
 
 class TestDaySummaryRoundTrip:
@@ -155,6 +168,322 @@ class TestConsolidate:
         summary = history.consolidate()
         assert summary is not None
         assert summary.notable_perturbations >= 5  # Outliers should count
+
+
+# ==================== Server-Owned Daily Writer ====================
+
+class TestDailyConsolidation:
+    """Test the durable 24h writer contract used by the MCP server."""
+
+    def test_first_eligible_check_writes_evidence_and_writer_times(
+        self, history, tmp_path
+    ):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now)
+
+        summary = history.maybe_consolidate_daily(now=now)
+
+        assert summary is not None
+        assert summary.n_observations == 120
+        assert summary.date == (now - timedelta(hours=1) + timedelta(seconds=119)).isoformat()
+        document = json.loads((tmp_path / "day_summaries.json").read_text())
+        assert document["written_at"] == now.isoformat()
+        assert document["summaries"][0]["date"] == summary.date
+
+    def test_cadence_and_restart_are_idempotent(self, history, tmp_path):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now)
+        assert history.maybe_consolidate_daily(now=now) is not None
+        assert history.maybe_consolidate_daily(now=now + timedelta(hours=23)) is None
+
+        restarted = AnimaHistory(
+            max_size=5000,
+            persistence_path=tmp_path / "anima_history.json",
+            auto_save_interval=99999,
+        )
+        _populate_recent(restarted, now + timedelta(hours=23), value=0.8)
+        assert restarted.maybe_consolidate_daily(
+            now=now + timedelta(hours=23)
+        ) is None
+        document = json.loads((tmp_path / "day_summaries.json").read_text())
+        assert len(document["summaries"]) == 1
+
+    def test_multi_day_gap_adds_one_real_summary_without_backfill(
+        self, history, tmp_path
+    ):
+        first = datetime(2026, 8, 20, 12, 0, 0)
+        _populate_recent(history, first)
+        assert history.maybe_consolidate_daily(now=first) is not None
+
+        history.clear()
+        current = first + timedelta(days=3)
+        _populate_recent(history, current, value=0.8)
+        summary = history.maybe_consolidate_daily(now=current)
+
+        assert summary is not None
+        assert summary.attractor_center == [0.8, 0.8, 0.8, 0.8]
+        document = json.loads((tmp_path / "day_summaries.json").read_text())
+        assert len(document["summaries"]) == 2
+
+    def test_fresh_writer_stamp_cannot_defer_stale_evidence(
+        self, history, tmp_path
+    ):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        stale = now - timedelta(days=10)
+        path = tmp_path / "day_summaries.json"
+        path.write_text(json.dumps({
+            "summaries": [{
+                "date": stale.isoformat(),
+                "center": [0.2] * 4,
+                "variance": [0.0] * 4,
+                "n_obs": 100,
+                "hours": 1.0,
+                "perturbations": 0,
+                "trends": {},
+            }],
+            "written_at": now.isoformat(),
+            "version": "1.0",
+        }))
+        _populate_recent(history, now, value=0.8)
+
+        summary = history.maybe_consolidate_daily(now=now)
+
+        assert summary is not None
+        assert summary.attractor_center == [0.8, 0.8, 0.8, 0.8]
+        document = json.loads(path.read_text())
+        assert len(document["summaries"]) == 2
+        assert document["summaries"][-1]["date"] == summary.date
+
+    def test_under_100_defers_then_rechecks(self, history, tmp_path):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now, n=99)
+        assert history.maybe_consolidate_daily(now=now) is None
+        document = json.loads((tmp_path / "day_summaries.json").read_text())
+        assert document == {
+            "summaries": [],
+            "writer_started_at": now.isoformat(),
+            "version": "1.0",
+        }
+
+        history.record(0.5, 0.5, 0.5, 0.5, timestamp=now)
+        assert history.maybe_consolidate_daily(now=now) is not None
+
+    def test_old_loaded_observations_cannot_be_relabelled_current(
+        self, history, tmp_path
+    ):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now - timedelta(days=2), n=200)
+        history.record(0.9, 0.9, 0.9, 0.9, timestamp=now)
+
+        assert history.maybe_consolidate_daily(now=now) is None
+        document = json.loads((tmp_path / "day_summaries.json").read_text())
+        assert document["summaries"] == []
+        assert document["writer_started_at"] == now.isoformat()
+
+    def test_empty_legacy_document_is_upgraded_with_bounded_marker(
+        self, history, tmp_path
+    ):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        path = tmp_path / "day_summaries.json"
+        path.write_text(json.dumps({"summaries": [], "version": "1.0"}))
+
+        assert history.maybe_consolidate_daily(now=now) is None
+
+        document = json.loads(path.read_text())
+        assert document["writer_started_at"] == now.isoformat()
+        assert history.day_summary_health(now=now)["status"] == "warming_up"
+
+    def test_malformed_existing_file_is_preserved_and_reported(
+        self, history, tmp_path
+    ):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now)
+        path = tmp_path / "day_summaries.json"
+        damaged = "{not valid json"
+        path.write_text(damaged)
+
+        with pytest.raises(json.JSONDecodeError):
+            history.maybe_consolidate_daily(now=now)
+
+        assert path.read_text() == damaged
+        health = history.day_summary_health(now=now)
+        assert health["ok"] is False
+        assert health["status"] == "error"
+        assert "JSONDecodeError" in health["writer"]["last_error"]
+
+    def test_atomic_failure_propagates_and_retries_without_false_success(
+        self, history, tmp_path, monkeypatch
+    ):
+        from anima_mcp import anima_history as module
+
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now)
+        real_write = module.atomic_json_write
+        calls = 0
+
+        def fail_write(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise OSError("disk full")
+
+        monkeypatch.setattr(module, "atomic_json_write", fail_write)
+        with pytest.raises(OSError, match="disk full"):
+            history.maybe_consolidate_daily(now=now)
+        assert calls == 1
+        assert not (tmp_path / "day_summaries.json").exists()
+        assert history.day_summary_health(now=now)["status"] == "error"
+
+        # The live callback runs every ~10s, but failed writes retry on a
+        # bounded backoff instead of hammering the SD card.
+        assert history.maybe_consolidate_daily(now=now + timedelta(minutes=4)) is None
+        assert calls == 1
+
+        monkeypatch.setattr(module, "atomic_json_write", real_write)
+        summary = history.maybe_consolidate_daily(now=now + timedelta(minutes=5))
+        assert summary is not None
+        assert history.day_summary_health(now=now + timedelta(minutes=5))["ok"] is True
+
+    def test_post_replace_failure_retries_without_duplicate_summary(
+        self, history, tmp_path, monkeypatch
+    ):
+        """A directory-fsync error leaves the rename outcome uncertain."""
+        from anima_mcp import anima_history as module
+
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now)
+        real_write = module.atomic_json_write
+
+        def write_then_fail(*args, **kwargs):
+            real_write(*args, **kwargs)
+            raise OSError("directory fsync failed after replace")
+
+        monkeypatch.setattr(module, "atomic_json_write", write_then_fail)
+        with pytest.raises(OSError, match="directory fsync failed"):
+            history.maybe_consolidate_daily(now=now)
+
+        path = tmp_path / "day_summaries.json"
+        assert len(json.loads(path.read_text())["summaries"]) == 1
+        assert history.day_summary_health(now=now)["status"] == "error"
+
+        monkeypatch.setattr(module, "atomic_json_write", real_write)
+        summary = history.maybe_consolidate_daily(now=now + timedelta(minutes=5))
+
+        assert summary is not None
+        document = json.loads(path.read_text())
+        assert len(document["summaries"]) == 1
+        assert document["summaries"][0] == summary.to_dict()
+        assert document["written_at"] == (now + timedelta(minutes=5)).isoformat()
+        assert history.day_summary_health(
+            now=now + timedelta(minutes=5)
+        )["ok"] is True
+
+    def test_separate_process_role_instances_do_not_share_a_deque(self, tmp_path):
+        path = tmp_path / "anima_history.json"
+        broker_history = AnimaHistory(
+            max_size=5000, persistence_path=path, auto_save_interval=99999
+        )
+        server_history = AnimaHistory(
+            max_size=5000, persistence_path=path, auto_save_interval=99999
+        )
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(server_history, now)
+
+        assert len(broker_history) == 0
+        assert broker_history.maybe_consolidate_daily(now=now) is None
+        assert server_history.maybe_consolidate_daily(now=now) is not None
+
+
+class TestDaySummaryHealth:
+    """Freshness considers both commit liveness and source evidence."""
+
+    def test_bootstrap_is_bounded_and_source_aware(self, history):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        assert history.day_summary_health(now=now)["status"] == "missing"
+
+        assert history.maybe_consolidate_daily(now=now) is None
+        health = history.day_summary_health(now=now)
+        assert health["ok"] is True
+        assert health["status"] == "warming_up"
+        assert health["bootstrap"]["started_at"] == now.isoformat()
+
+        _populate_recent(history, now)
+        health = history.day_summary_health(now=now)
+        assert health["ok"] is False
+        assert health["status"] == "missing"
+
+    def test_bootstrap_marker_expires_even_without_eligible_source(self, history):
+        started = datetime(2026, 8, 23, 12, 0, 0)
+        assert history.maybe_consolidate_daily(now=started) is None
+
+        health = history.day_summary_health(
+            now=started + timedelta(minutes=31)
+        )
+
+        assert health["ok"] is False
+        assert health["status"] == "bootstrap_timeout"
+        assert health["bootstrap"]["age_seconds"] == 31 * 60
+
+    def test_fresh_summary_exposes_both_freshness_axes(self, history):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        _populate_recent(history, now)
+        history.maybe_consolidate_daily(now=now)
+
+        health = history.day_summary_health(now=now)
+
+        assert health["ok"] is True
+        assert health["status"] == "ok"
+        assert health["writer"]["written_at"] == now.isoformat()
+        assert health["writer"]["last_success_at"] == now.isoformat()
+        assert health["evidence"]["age_seconds"] > 0
+
+    @pytest.mark.parametrize("stale_axis", ["writer", "evidence"])
+    def test_either_stale_axis_degrades(self, history, tmp_path, stale_axis):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        old = now - timedelta(hours=37)
+        evidence_at = old if stale_axis == "evidence" else now
+        written_at = old if stale_axis == "writer" else now
+        path = tmp_path / "day_summaries.json"
+        path.write_text(json.dumps({
+            "summaries": [{
+                "date": evidence_at.isoformat(),
+                "center": [0.5] * 4,
+                "variance": [0.0] * 4,
+                "n_obs": 100,
+                "hours": 1.0,
+                "perturbations": 0,
+                "trends": {},
+            }],
+            "written_at": written_at.isoformat(),
+            "version": "1.0",
+        }))
+
+        health = history.day_summary_health(now=now)
+
+        assert health["ok"] is False
+        assert health["status"] == "stale"
+
+    def test_future_and_malformed_timestamps_degrade(self, history, tmp_path):
+        now = datetime(2026, 8, 23, 12, 0, 0)
+        path = tmp_path / "day_summaries.json"
+        row = {
+            "date": (now + timedelta(minutes=6)).isoformat(),
+            "center": [0.5] * 4,
+            "variance": [0.0] * 4,
+            "n_obs": 100,
+            "hours": 1.0,
+            "perturbations": 0,
+            "trends": {},
+        }
+        path.write_text(json.dumps({
+            "summaries": [row], "written_at": now.isoformat(), "version": "1.0"
+        }))
+        assert history.day_summary_health(now=now)["status"] == "future"
+
+        row["date"] = "not-a-date"
+        path.write_text(json.dumps({
+            "summaries": [row], "written_at": now.isoformat(), "version": "1.0"
+        }))
+        assert history.day_summary_health(now=now)["status"] == "malformed"
 
 
 # ==================== get_day_summaries() ====================

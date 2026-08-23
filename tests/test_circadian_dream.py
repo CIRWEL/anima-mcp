@@ -1,6 +1,6 @@
 """
-Tests for circadian dream state — consolidation on rest entry,
-wake-up summaries, dream prompt, and integration.
+Tests for circadian dream state — rest transitions, wake-up summaries,
+dream prompt, and integration.
 
 Run with: pytest tests/test_circadian_dream.py -v
 """
@@ -8,7 +8,7 @@ Run with: pytest tests/test_circadian_dream.py -v
 import time
 import pytest
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from anima_mcp.activity_state import ActivityManager, ActivityLevel
 
@@ -34,41 +34,23 @@ def _populate_history(history, n=200):
         )
 
 
-# ==================== Consolidation on Rest Entry ====================
+# ==================== Rest Entry Ownership ====================
 
-class TestConsolidationOnRestEntry:
-    """Test that entering RESTING triggers memory consolidation."""
+class TestRestEntryOwnership:
+    """Activity transitions must not write the server-owned history."""
 
-    def test_entering_resting_calls_consolidate(self, mgr, tmp_path):
-        """Transitioning to RESTING calls consolidate on the history."""
-        from anima_mcp.anima_history import AnimaHistory, reset_anima_history
-
-        reset_anima_history()
-
-        history = AnimaHistory(
-            persistence_path=tmp_path / "anima_history.json",
-            auto_save_interval=99999,
-        )
-        _populate_history(history, n=200)
-
-        # Patch where the lazy import resolves
-        with patch("anima_mcp.anima_history.get_anima_history", return_value=history):
+    def test_entering_resting_does_not_touch_anima_history(self, mgr):
+        """The broker-side ActivityManager cannot own consolidation."""
+        with patch("anima_mcp.anima_history.get_anima_history") as get_history:
             mgr._current_level = ActivityLevel.ACTIVE
             mgr._transition_to(ActivityLevel.RESTING, "test")
 
-        summaries = history.get_day_summaries()
-        assert len(summaries) >= 1
-
-        reset_anima_history()
+        get_history.assert_not_called()
 
     def test_entering_resting_sets_rest_entry_time(self, mgr):
         """Entering RESTING sets _rest_entry_time."""
-        mock_history = MagicMock()
-        mock_history.consolidate.return_value = None
-
-        with patch("anima_mcp.anima_history.get_anima_history", return_value=mock_history):
-            mgr._current_level = ActivityLevel.ACTIVE
-            mgr._transition_to(ActivityLevel.RESTING, "test")
+        mgr._current_level = ActivityLevel.ACTIVE
+        mgr._transition_to(ActivityLevel.RESTING, "test")
 
         assert mgr._rest_entry_time is not None
         assert mgr._rest_entry_time > 0
@@ -81,14 +63,10 @@ class TestWakeupSummary:
 
     def test_short_rest_no_summary(self, mgr):
         """Rest <30min produces no wake-up summary."""
-        mock_history = MagicMock()
-        mock_history.consolidate.return_value = None
-
-        with patch("anima_mcp.anima_history.get_anima_history", return_value=mock_history):
-            mgr._current_level = ActivityLevel.ACTIVE
-            mgr._transition_to(ActivityLevel.RESTING, "test")
-            mgr._last_sleep_start = datetime.now() - timedelta(minutes=5)
-            mgr._transition_to(ActivityLevel.ACTIVE, "interaction")
+        mgr._current_level = ActivityLevel.ACTIVE
+        mgr._transition_to(ActivityLevel.RESTING, "test")
+        mgr._last_sleep_start = datetime.now() - timedelta(minutes=5)
+        mgr._transition_to(ActivityLevel.ACTIVE, "interaction")
 
         assert mgr._wakeup_summary is None
 
@@ -143,6 +121,7 @@ class TestWakeupSummary:
         assert "2.0 hours" in summary
         assert "200 moments" in summary
         assert "warmth" in summary
+        assert "latest day summary" in summary
 
 
 # ==================== Rest Duration ====================
@@ -158,5 +137,3 @@ class TestRestDuration:
         """Returns positive value when resting."""
         mgr._rest_entry_time = time.time() - 100
         assert mgr.get_rest_duration() >= 99.0
-
-

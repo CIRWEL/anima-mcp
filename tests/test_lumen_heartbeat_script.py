@@ -50,6 +50,8 @@ def rig(tmp_path):
     log = tmp_path / "heartbeat.log"
     shm = tmp_path / "anima_state.json"
     shadow = tmp_path / "anima_state.shadow.json"
+    day_summary = tmp_path / "day_summaries.json"
+    anima_history = tmp_path / "anima_history.json"
 
     def run(extra_env=None):
         env = dict(os.environ)
@@ -58,6 +60,8 @@ def rig(tmp_path):
         env["ANIMA_HEARTBEAT_LOG"] = str(log)
         env["ANIMA_SHM_PATH"] = str(shm)
         env["ANIMA_HEARTBEAT_SHADOW_PATH"] = str(shadow)
+        env["DAY_SUMMARY_PATH"] = str(day_summary)
+        env["ANIMA_HISTORY_PATH"] = str(anima_history)
         # The curl stub answers 200 for everything, so the server probe passes
         # unless a test overrides it.
         env["ANIMA_HEARTBEAT_SERVER_URL"] = "http://server.test/health"
@@ -91,11 +95,73 @@ def rig(tmp_path):
     def write_shadow(age_seconds=0):
         _write(shadow, age_seconds)
 
+    def write_day_summary(
+        writer_age_seconds=0,
+        evidence_age_seconds=0,
+        *,
+        include_written_at=True,
+        mtime_age_seconds=None,
+    ):
+        payload = {
+            "summaries": [{
+                "date": (
+                    datetime.now() - timedelta(seconds=evidence_age_seconds)
+                ).isoformat(),
+                "center": [0.5, 0.5, 0.5, 0.5],
+                "variance": [0.0, 0.0, 0.0, 0.0],
+                "n_obs": 100,
+                "hours": 1.0,
+                "perturbations": 0,
+                "trends": {},
+            }],
+            "version": "1.0",
+        }
+        if include_written_at:
+            payload["written_at"] = (
+                datetime.now() - timedelta(seconds=writer_age_seconds)
+            ).isoformat()
+        day_summary.write_text(json.dumps(payload))
+        if mtime_age_seconds is not None:
+            modified = time.time() - mtime_age_seconds
+            os.utime(day_summary, (modified, modified))
+
+    def write_anima_history(count=100, age_seconds=0):
+        observed_at = (
+            datetime.now() - timedelta(seconds=age_seconds)
+        ).isoformat()
+        anima_history.write_text(json.dumps({
+            "observations": [
+                {"t": observed_at, "w": 0.5, "c": 0.5, "s": 0.5, "p": 0.5}
+                for _ in range(count)
+            ],
+            "version": "1.0",
+        }))
+
+    def write_bootstrap_marker(age_seconds=0):
+        day_summary.write_text(json.dumps({
+            "summaries": [],
+            "writer_started_at": (
+                datetime.now() - timedelta(seconds=age_seconds)
+            ).isoformat(),
+            "version": "1.0",
+        }))
+
+    # Existing heartbeat tests exercise other components. Give them honest,
+    # fresh long-clock work output by default so a newly added probe cannot be
+    # bypassed merely because the fixture forgot to model it.
+    write_day_summary()
+    write_anima_history()
+
     return type(
         "Rig", (), {"run": staticmethod(run), "pinged": staticmethod(pinged),
                     "write_envelope": staticmethod(write_envelope),
                     "write_shadow": staticmethod(write_shadow),
-                    "log": log, "shm": shm, "shadow": shadow, "env_file": env_file}
+                    "write_day_summary": staticmethod(write_day_summary),
+                    "write_anima_history": staticmethod(write_anima_history),
+                    "write_bootstrap_marker": staticmethod(write_bootstrap_marker),
+                    "log": log, "shm": shm, "shadow": shadow,
+                    "day_summary": day_summary, "anima_history": anima_history,
+                    "env_file": env_file}
     )
 
 
@@ -169,11 +235,158 @@ def test_max_age_is_configurable(rig):
     assert rig.pinged() == [PING]
 
 
+def test_anima_env_override_is_resolved_after_sourcing(rig):
+    rig.env_file.write_text(
+        f"ANIMA_HEARTBEAT_URL={PING}\nANIMA_HEARTBEAT_MAX_AGE=300\n"
+    )
+    rig.write_envelope(age_seconds=200)
+
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [PING]
+
+
+@pytest.mark.parametrize("invalid", ["bogus", "0", "-1", "999999999999999999999"])
+def test_invalid_broker_max_age_fails_closed(rig, invalid):
+    rig.write_envelope(age_seconds=0)
+
+    assert rig.run({"ANIMA_HEARTBEAT_MAX_AGE": invalid}).returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "MAX_AGE" in rig.log.read_text()
+
+
 def test_happy_path_stays_quiet_in_the_log(rig):
     """This runs every 5 minutes forever; a chatty success path buries the signal."""
     rig.write_envelope(age_seconds=0)
     rig.run()
     assert not rig.log.exists() or rig.log.read_text().strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# The long clock must prove both writer liveness and current source evidence
+# ---------------------------------------------------------------------------
+
+
+def test_fresh_day_summary_pings_success(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_day_summary(writer_age_seconds=30, evidence_age_seconds=60)
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [PING]
+
+
+def test_stale_day_summary_evidence_fails_with_fresh_writer(rig):
+    """A live writer republishing frozen evidence is not healthy work output."""
+    rig.write_envelope(age_seconds=0)
+    rig.write_day_summary(writer_age_seconds=0, evidence_age_seconds=36 * 3600 + 1)
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "day_summary stale" in rig.log.read_text()
+    assert "evidence" in rig.log.read_text()
+
+
+def test_stale_day_summary_writer_fails_with_fresh_evidence(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_day_summary(writer_age_seconds=36 * 3600 + 1, evidence_age_seconds=0)
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "day_summary stale" in rig.log.read_text()
+    assert "writer" in rig.log.read_text()
+
+
+def test_legacy_day_summary_uses_mtime_as_writer_freshness(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_day_summary(
+        evidence_age_seconds=0,
+        include_written_at=False,
+        mtime_age_seconds=36 * 3600 + 1,
+    )
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "day_summary stale" in rig.log.read_text()
+
+
+def test_corrupt_day_summary_fails(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.day_summary.write_text("{not json")
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "day_summary unreadable" in rig.log.read_text()
+
+
+def test_missing_day_summary_fails_without_a_writer_marker(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.day_summary.unlink()
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "no bootstrap marker" in rig.log.read_text()
+
+
+def test_durable_bootstrap_marker_allows_initial_history_absence(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_bootstrap_marker(age_seconds=60)
+    rig.anima_history.unlink()
+
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [PING]
+
+
+def test_bootstrap_marker_allows_below_100_recent_observations(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_bootstrap_marker(age_seconds=60)
+    rig.write_anima_history(count=99, age_seconds=60)
+
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [PING]
+
+
+def test_bootstrap_marker_fails_once_source_is_eligible(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_bootstrap_marker(age_seconds=60)
+    rig.write_anima_history(count=100, age_seconds=60)
+
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "empty with eligible source" in rig.log.read_text()
+
+
+def test_bootstrap_marker_expires_without_progress(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_bootstrap_marker(age_seconds=1801)
+    rig.anima_history.unlink()
+
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "bootstrap grace expired" in rig.log.read_text()
+
+
+@pytest.mark.parametrize("variable", ["DAY_SUMMARY_MAX_AGE", "DAY_SUMMARY_BOOTSTRAP_GRACE_SECONDS"])
+@pytest.mark.parametrize("invalid", ["bogus", "0", "nan", "inf"])
+def test_invalid_day_summary_age_configuration_fails_closed(rig, variable, invalid):
+    rig.write_envelope(age_seconds=0)
+
+    assert rig.run({variable: invalid}).returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "invalid" in rig.log.read_text()
+
+
+@pytest.mark.parametrize("future_field", ["writer", "evidence"])
+def test_future_day_summary_timestamp_fails(rig, future_field):
+    rig.write_envelope(age_seconds=0)
+    writer_age = -301 if future_field == "writer" else 0
+    evidence_age = -301 if future_field == "evidence" else 0
+    rig.write_day_summary(
+        writer_age_seconds=writer_age,
+        evidence_age_seconds=evidence_age,
+    )
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [f"{PING}/fail"]
+    assert "future-dated" in rig.log.read_text()
+
+
+def test_small_clock_skew_is_tolerated(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.write_day_summary(writer_age_seconds=-299, evidence_age_seconds=-299)
+    assert rig.run().returncode == 0
+    assert rig.pinged() == [PING]
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +433,16 @@ def test_skip_list_allows_a_documented_rollback(rig):
     """Reverting the Elixir broker leaves a stale shadow that would page forever."""
     rig.write_envelope(age_seconds=0, shadow_age=99999)
     assert rig.run({"ANIMA_HEARTBEAT_SKIP": "broker_ex"}).returncode == 0
+    assert rig.pinged() == [PING]
+
+
+def test_skip_list_allows_day_summary_writer_rollback(rig):
+    rig.write_envelope(age_seconds=0)
+    rig.day_summary.write_text("{not json")
+    rig.env_file.write_text(
+        f"ANIMA_HEARTBEAT_URL={PING}\nANIMA_HEARTBEAT_SKIP=day_summary\n"
+    )
+    assert rig.run().returncode == 0
     assert rig.pinged() == [PING]
 
 

@@ -18,7 +18,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Dict, Optional, Any
+from typing import Any, Callable, Dict, Optional
+
+
+ProbeResult = bool | Dict[str, Any]
 
 
 # How long before a missing heartbeat means "stale"
@@ -33,7 +36,7 @@ class SubsystemHealth:
     """Health state for a single subsystem."""
     name: str
     last_heartbeat: float = field(default_factory=time.time)
-    probe_fn: Optional[Callable[[], bool]] = None
+    probe_fn: Optional[Callable[[], ProbeResult]] = None
     last_probe_time: float = 0.0
     last_probe_ok: bool = True
     last_probe_error: str = ""
@@ -43,6 +46,7 @@ class SubsystemHealth:
     optional: bool = False  # capability may legitimately not exist on this host
     _first_bad_at: float = 0.0  # when status first went non-ok
     _ever_ok: bool = False  # probe has succeeded at least once this process
+    last_probe_details: Optional[Dict[str, Any]] = None
 
     def heartbeat(self) -> None:
         self.last_heartbeat = time.time()
@@ -57,6 +61,7 @@ class SubsystemHealth:
         if self.probe_fn is None:
             self.last_probe_ok = True
             self.last_probe_time = now
+            self.last_probe_details = None
             return True
 
         if now - self.last_probe_time < PROBE_INTERVAL_SECONDS:
@@ -65,12 +70,18 @@ class SubsystemHealth:
         self.last_probe_time = now
         try:
             result = self.probe_fn()
-            self.last_probe_ok = bool(result)
+            if isinstance(result, dict):
+                self.last_probe_details = dict(result)
+                self.last_probe_ok = bool(result.get("ok", False))
+            else:
+                self.last_probe_details = None
+                self.last_probe_ok = bool(result)
             if self.last_probe_ok:
                 self._ever_ok = True
             self.last_probe_error = "" if self.last_probe_ok else "probe returned False"
         except Exception as e:
             self.last_probe_ok = False
+            self.last_probe_details = None
             self.last_probe_error = str(e)[:100]
         return self.last_probe_ok
 
@@ -155,6 +166,8 @@ class SubsystemHealth:
                 result["probe"] = "absent: optional capability unavailable on this host"
             else:
                 result["probe"] = "ok" if self.last_probe_ok else f"failed: {self.last_probe_error}"
+            if self.last_probe_details is not None:
+                result["probe_details"] = dict(self.last_probe_details)
         if self.is_debouncing:
             result["debouncing"] = True
         return result
@@ -169,7 +182,7 @@ class HealthRegistry:
 
     def register(
         self, name: str,
-        probe: Optional[Callable[[], bool]] = None,
+        probe: Optional[Callable[[], ProbeResult]] = None,
         stale_threshold: float = 0.0,
         debounce_seconds: float = 0.0,
         optional: bool = False,
@@ -178,8 +191,9 @@ class HealthRegistry:
 
         Args:
             name: Subsystem identifier (e.g., "growth", "sensors").
-            probe: Optional callable returning True if subsystem is functional.
-                   Called at most once per PROBE_INTERVAL_SECONDS.
+            probe: Optional callable returning True if subsystem is functional,
+                   or a details dict containing an ``ok`` value. Called at most
+                   once per PROBE_INTERVAL_SECONDS.
             stale_threshold: Per-subsystem stale threshold in seconds.
                    0 = use global HEARTBEAT_STALE_SECONDS default (30s).
                    Subsystems with longer check-in intervals should set this

@@ -250,7 +250,56 @@ class TestHealthProbeWiring:
 
 
 # ============================================================
-# 4. Anima → EISV mapping → governance bridge
+# 4. Server history recorder -> daily consolidation writer
+# ============================================================
+
+class TestDaySummaryWriterWiring:
+    """The process with the live deque must be the sole summary writer."""
+
+    def test_server_record_path_owns_writer_and_success_heartbeat(self, monkeypatch):
+        from anima_mcp import anima_history, server
+
+        history = MagicMock()
+        history.maybe_consolidate_daily.return_value = MagicMock()
+        health = MagicMock()
+        anima = MagicMock()
+        monkeypatch.setattr(anima_history, "get_anima_history", lambda: history)
+
+        result = server._record_anima_history(anima, health)
+
+        assert result is history.maybe_consolidate_daily.return_value
+        history.record_from_anima.assert_called_once_with(anima)
+        history.maybe_consolidate_daily.assert_called_once_with()
+        health.heartbeat.assert_called_once_with("day_summary_writer")
+
+    def test_no_writer_heartbeat_when_no_commit(self, monkeypatch):
+        from anima_mcp import anima_history, server
+
+        history = MagicMock()
+        history.maybe_consolidate_daily.return_value = None
+        health = MagicMock()
+        monkeypatch.setattr(anima_history, "get_anima_history", lambda: history)
+
+        server._record_anima_history(MagicMock(), health)
+
+        health.heartbeat.assert_not_called()
+
+    def test_writer_failure_propagates_without_success_heartbeat(self, monkeypatch):
+        from anima_mcp import anima_history, server
+
+        history = MagicMock()
+        history.maybe_consolidate_daily.side_effect = OSError("disk full")
+        health = MagicMock()
+        monkeypatch.setattr(anima_history, "get_anima_history", lambda: history)
+
+        with pytest.raises(OSError, match="disk full"):
+            server._record_anima_history(MagicMock(), health)
+
+        health.heartbeat.assert_not_called()
+
+
+# ============================================================
+# 5. Anima → EISV mapping → governance bridge
 # ============================================================
 
 class TestAnimaToGovernanceWiring:

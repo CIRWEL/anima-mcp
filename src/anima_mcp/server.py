@@ -105,6 +105,31 @@ from .agency_runtime import run_agency_phase as _run_agency_phase  # noqa: E402
 logger = logging.getLogger("anima.server")
 
 
+def _record_anima_history(anima, health_registry=None):
+    """Record live state and run the server-owned day-summary writer.
+
+    The broker owns activity transitions, but this process owns the live
+    AnimaHistory deque.  Keeping both recording and consolidation here avoids
+    summarizing a broker-local snapshot that was loaded from disk only once.
+    """
+    from .anima_history import get_anima_history
+
+    history = get_anima_history()
+    history.record_from_anima(anima)
+    summary = history.maybe_consolidate_daily()
+    if summary is not None and health_registry is not None:
+        # A writer heartbeat means an atomic commit completed, not merely that
+        # the scheduling path ran.
+        health_registry.heartbeat("day_summary_writer")
+    if summary is not None:
+        logger.info(
+            "[AnimaHistory] Day summary committed: %d observations through %s",
+            summary.n_observations,
+            summary.date,
+        )
+    return summary
+
+
 async def _update_display_loop():
     """Background task to continuously update display and LEDs."""
     if _ctx is None:
@@ -1217,14 +1242,11 @@ async def _update_display_loop():
             # Every 5 iterations (~10 seconds) - builds time-series for attractor basin
             # See: trajectory-identity paper (cirwel/trajectory-identity-paper, separate repo)
             if loop_count % TRAJECTORY_INTERVAL == 0 and anima:
-                from .anima_history import get_anima_history
-
-                def record_history():
-                    """Record anima state for trajectory computation."""
-                    history = get_anima_history()
-                    history.record_from_anima(anima)
-
-                safe_call(record_history, default=None, log_error=True)
+                safe_call(
+                    lambda: _record_anima_history(anima, _health),
+                    default=None,
+                    log_error=True,
+                )
 
             # Governance is handled by the broker (sole UNITARES caller).
             # Server reads governance from SHM in the display block above.

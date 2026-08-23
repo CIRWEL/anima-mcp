@@ -80,6 +80,40 @@ class TestSubsystemHealth:
         d = sub.to_dict()
         assert "probe" in d
         assert d["probe"] == "ok"
+        assert "probe_details" not in d
+
+    def test_dict_probe_retains_and_exposes_details(self):
+        details = {
+            "ok": True,
+            "last_success_at": "2026-08-23T12:00:00+00:00",
+            "summary_age_hours": 3.5,
+        }
+        sub = SubsystemHealth(name="test", probe_fn=lambda: details)
+        sub.heartbeat()
+        sub.last_probe_time = 0
+
+        d = sub.to_dict()
+
+        assert d["status"] == "ok"
+        assert d["probe"] == "ok"
+        assert d["probe_details"] == details
+        assert sub.last_probe_details == details
+
+    def test_dict_probe_uses_ok_for_status_and_exposes_failure_details(self):
+        details = {
+            "ok": False,
+            "last_error": "permission denied",
+            "last_attempt_at": "2026-08-23T12:00:00+00:00",
+        }
+        sub = SubsystemHealth(name="test", probe_fn=lambda: details)
+        sub.heartbeat()
+        sub.last_probe_time = 0
+
+        d = sub.to_dict()
+
+        assert d["status"] == "degraded"
+        assert d["probe"] == "failed: probe returned False"
+        assert d["probe_details"] == details
 
     def test_to_dict_no_probe_when_none(self):
         sub = SubsystemHealth(name="test")

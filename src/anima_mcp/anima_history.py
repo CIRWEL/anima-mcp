@@ -10,13 +10,41 @@ See: trajectory-identity paper (cirwel/trajectory-identity-paper, separate repo)
 
 from collections import deque
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 import json
 import sys
 
 from .atomic_write import atomic_json_write
+
+
+DAY_SUMMARY_INTERVAL = timedelta(hours=24)
+DAY_SUMMARY_LOOKBACK = timedelta(hours=24)
+DAY_SUMMARY_RETRY_INTERVAL = timedelta(minutes=5)
+DAY_SUMMARY_MIN_OBSERVATIONS = 100
+DAY_SUMMARY_MAX_AGE_SECONDS = 36 * 60 * 60
+DAY_SUMMARY_FUTURE_TOLERANCE_SECONDS = 5 * 60
+DAY_SUMMARY_BOOTSTRAP_GRACE_SECONDS = 30 * 60
+
+
+def _comparable_datetime(value: datetime) -> datetime:
+    """Return a UTC-naive datetime so legacy/local stamps remain comparable."""
+    if value.tzinfo is not None:
+        return value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value
+
+
+def _parse_summary_timestamp(value: Any, field: str) -> datetime:
+    """Parse a persisted ISO timestamp or raise with its field provenance."""
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{field} is missing or malformed")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} is malformed") from exc
+    return _comparable_datetime(parsed)
+
 
 # Numpy is optional - graceful fallback if not available
 try:
@@ -112,7 +140,7 @@ class AnimaHistory:
 
     def __init__(
         self,
-        max_size: int = 2000,  # ~30 min at 1Hz
+        max_size: int = 2000,  # ~5.5h at the server's ~10s history cadence
         persistence_path: Optional[Path] = None,
         auto_save_interval: int = 100,  # Save every N records
     ):
@@ -121,6 +149,12 @@ class AnimaHistory:
         self.auto_save_interval = auto_save_interval
         self._history: deque = deque(maxlen=max_size)
         self._records_since_save = 0
+        self._next_day_summary_check_at: Optional[datetime] = None
+        self._day_summary_last_attempt_at: Optional[datetime] = None
+        self._day_summary_last_success_at: Optional[datetime] = None
+        self._day_summary_last_error: Optional[str] = None
+        self._day_summary_pending: Optional[DaySummary] = None
+        self._day_summary_bootstrap_checked = False
         self._load()
 
     def record(
@@ -391,7 +425,11 @@ class AnimaHistory:
 
     # === Memory Consolidation ===
 
-    def consolidate(self) -> Optional[DaySummary]:
+    def consolidate(
+        self,
+        observations: Optional[List[AnimaSnapshot]] = None,
+        now: Optional[datetime] = None,
+    ) -> Optional[DaySummary]:
         """
         Consolidate current buffer into a DaySummary.
 
@@ -402,10 +440,10 @@ class AnimaHistory:
         Returns:
             DaySummary if enough data, None otherwise
         """
-        if len(self._history) < 100:
+        observations = list(self._history) if observations is None else list(observations)
+        if len(observations) < DAY_SUMMARY_MIN_OBSERVATIONS:
             return None
 
-        observations = list(self._history)
         n = len(observations)
 
         # Compute center (mean per dimension)
@@ -443,7 +481,9 @@ class AnimaHistory:
         trends = {name: round(center[i], 4) for i, name in enumerate(dim_names)}
 
         summary = DaySummary(
-            date=datetime.now().isoformat(),
+            # This is evidence time, not writer time. A restarted writer must
+            # never make an old deque look current merely by attempting a save.
+            date=observations[-1].timestamp.isoformat(),
             attractor_center=[round(c, 4) for c in center],
             attractor_variance=[round(v, 6) for v in variance],
             n_observations=n,
@@ -452,10 +492,331 @@ class AnimaHistory:
             dimension_trends=trends,
         )
 
-        # Persist to day summaries file
-        self._save_day_summary(summary)
+        attempted_at = _comparable_datetime(now or datetime.now())
+        return self._commit_day_summary(summary, attempted_at)
+
+    def _commit_day_summary(
+        self,
+        summary: DaySummary,
+        attempted_at: datetime,
+        *,
+        deduplicate: bool = False,
+    ) -> DaySummary:
+        """Commit a summary and retain it for an idempotent uncertain retry."""
+        self._day_summary_last_attempt_at = attempted_at
+        self._day_summary_pending = summary
+        try:
+            self._save_day_summary(
+                summary,
+                written_at=attempted_at,
+                deduplicate=deduplicate,
+            )
+        except Exception as exc:
+            self._day_summary_last_error = f"{type(exc).__name__}: {exc}"
+            self._next_day_summary_check_at = attempted_at + DAY_SUMMARY_RETRY_INTERVAL
+            raise
+
+        self._day_summary_last_success_at = attempted_at
+        self._day_summary_last_error = None
+        self._day_summary_pending = None
+        self._next_day_summary_check_at = attempted_at + DAY_SUMMARY_INTERVAL
 
         return summary
+
+    def _ensure_day_summary_bootstrap_marker(self, current: datetime) -> None:
+        """Persist a bounded startup clock before enough evidence exists."""
+        path = self._get_summaries_path()
+        if (
+            self._day_summary_bootstrap_checked
+            and path.exists()
+            and self._day_summary_last_error is None
+        ):
+            return
+
+        self._day_summary_last_attempt_at = current
+        try:
+            if path.exists():
+                document = self._read_day_summary_document()
+                if document["summaries"]:
+                    # The prior error was not an uncertain bootstrap write
+                    # (for example, an operator repaired a malformed legacy
+                    # document). A successful strict read is enough to clear
+                    # that non-pending error; real summary writes retain their
+                    # pending object and take the retry branch above.
+                    self._day_summary_last_error = None
+                    self._next_day_summary_check_at = None
+                    self._day_summary_bootstrap_checked = True
+                    return
+                if "writer_started_at" not in document:
+                    # Upgrade an empty pre-marker document in place. Mere file
+                    # existence cannot prove the writer ever started.
+                    document["writer_started_at"] = current.isoformat()
+                else:
+                    started_at = _parse_summary_timestamp(
+                        document["writer_started_at"], "writer_started_at"
+                    )
+                    if started_at > current + timedelta(
+                        seconds=DAY_SUMMARY_FUTURE_TOLERANCE_SECONDS
+                    ):
+                        raise ValueError("day summary writer_started_at is future-dated")
+
+                    if self._day_summary_last_error is None:
+                        self._day_summary_bootstrap_checked = True
+                        return
+                    # A prior marker write may have reached replace() and then
+                    # failed directory fsync. Rewrite the observed document to
+                    # confirm durability instead of treating existence as success.
+            else:
+                document = {
+                    "summaries": [],
+                    "writer_started_at": current.isoformat(),
+                    "version": "1.0",
+                }
+            atomic_json_write(path, document)
+        except Exception as exc:
+            self._day_summary_last_error = f"{type(exc).__name__}: {exc}"
+            self._next_day_summary_check_at = current + DAY_SUMMARY_RETRY_INTERVAL
+            raise
+
+        self._day_summary_last_error = None
+        self._next_day_summary_check_at = None
+        self._day_summary_bootstrap_checked = True
+
+    def maybe_consolidate_daily(
+        self, now: Optional[datetime] = None
+    ) -> Optional[DaySummary]:
+        """Write at most one real summary per 24 hours from this live deque.
+
+        The server calls this on each history tick. In-memory scheduling keeps
+        the common path free of disk reads, while persisted ``written_at``
+        makes the cadence idempotent across restarts. Missing days are not
+        backfilled: one write always represents one actual observation set.
+        """
+        current = _comparable_datetime(now or datetime.now())
+        if (
+            self._next_day_summary_check_at is not None
+            and current < self._next_day_summary_check_at
+        ):
+            return None
+        if self._day_summary_pending is not None:
+            # atomic_json_write can raise after replace() if directory fsync
+            # fails. Re-append idempotently so both "old file" and "new file"
+            # outcomes converge on one confirmed summary and one heartbeat.
+            return self._commit_day_summary(
+                self._day_summary_pending,
+                current,
+                deduplicate=True,
+            )
+        # No subset can be eligible yet. Persist one bounded bootstrap clock,
+        # then keep the ordinary warm-up path free of disk writes. Do not
+        # schedule a future recheck: the 100th record must get an immediate
+        # write opportunity on that same server tick.
+        if len(self._history) < DAY_SUMMARY_MIN_OBSERVATIONS:
+            self._ensure_day_summary_bootstrap_marker(current)
+            return None
+
+        try:
+            document = self._read_day_summary_document()
+            latest_evidence = self._latest_summary_evidence(document)
+            written_at = self._summary_written_at(document, latest_evidence)
+        except Exception as exc:
+            self._day_summary_last_attempt_at = current
+            self._day_summary_last_error = f"{type(exc).__name__}: {exc}"
+            self._next_day_summary_check_at = current + DAY_SUMMARY_RETRY_INTERVAL
+            raise
+
+        future_limit = current + timedelta(
+            seconds=DAY_SUMMARY_FUTURE_TOLERANCE_SECONDS
+        )
+        if latest_evidence is not None and latest_evidence > future_limit:
+            future_error = ValueError("newest summary evidence is future-dated")
+            self._day_summary_last_attempt_at = current
+            self._day_summary_last_error = f"ValueError: {future_error}"
+            self._next_day_summary_check_at = current + DAY_SUMMARY_RETRY_INTERVAL
+            raise future_error
+        if written_at is not None and written_at > future_limit:
+            future_error = ValueError("day summary written_at is future-dated")
+            self._day_summary_last_attempt_at = current
+            self._day_summary_last_error = f"ValueError: {future_error}"
+            self._next_day_summary_check_at = current + DAY_SUMMARY_RETRY_INTERVAL
+            raise future_error
+
+        # A strict read/validation retry repaired a prior non-write error.
+        # A pending write takes the idempotent branch above and is cleared only
+        # by a confirmed atomic commit.
+        if self._day_summary_last_error is not None:
+            self._day_summary_last_error = None
+
+        writer_due = (
+            written_at is None or current - written_at >= DAY_SUMMARY_INTERVAL
+        )
+        evidence_due = (
+            latest_evidence is None
+            or current - latest_evidence >= DAY_SUMMARY_INTERVAL
+        )
+        if not writer_due and not evidence_due:
+            assert written_at is not None
+            assert latest_evidence is not None
+            self._next_day_summary_check_at = min(
+                written_at + DAY_SUMMARY_INTERVAL,
+                latest_evidence + DAY_SUMMARY_INTERVAL,
+            )
+            return None
+
+        cutoff = current - DAY_SUMMARY_LOOKBACK
+        if latest_evidence is not None:
+            cutoff = max(cutoff, latest_evidence)
+        candidates = [
+            snapshot
+            for snapshot in self._history
+            if cutoff < _comparable_datetime(snapshot.timestamp) <= current
+        ]
+        if len(candidates) < DAY_SUMMARY_MIN_OBSERVATIONS:
+            # The deque may contain old load-time rows. Re-evaluate on the next
+            # live record so the moment 100 current rows exist is not hidden
+            # behind a timer while the dead-man switch already sees eligibility.
+            # A missing output still needs a durable, bounded startup marker;
+            # total deque length alone cannot prove the live writer started.
+            self._ensure_day_summary_bootstrap_marker(current)
+            self._next_day_summary_check_at = None
+            return None
+
+        return self.consolidate(observations=candidates, now=current)
+
+    def day_summary_health(
+        self,
+        now: Optional[datetime] = None,
+        max_age_seconds: float = DAY_SUMMARY_MAX_AGE_SECONDS,
+    ) -> Dict[str, Any]:
+        """Return detailed freshness for health surfaces and operator probes."""
+        current = _comparable_datetime(now or datetime.now())
+        recent_cutoff = current - DAY_SUMMARY_LOOKBACK
+        recent_count = sum(
+            1
+            for snapshot in self._history
+            if recent_cutoff < _comparable_datetime(snapshot.timestamp) <= current
+        )
+        eligible = recent_count >= DAY_SUMMARY_MIN_OBSERVATIONS
+
+        def stamp(value: Optional[datetime]) -> Optional[str]:
+            return value.isoformat() if value is not None else None
+
+        result: Dict[str, Any] = {
+            "ok": False,
+            "status": "unknown",
+            "reason": None,
+            "eligible": eligible,
+            "recent_observations": recent_count,
+            "max_age_seconds": max_age_seconds,
+            "bootstrap": {
+                "started_at": None,
+                "age_seconds": None,
+                "max_age_seconds": DAY_SUMMARY_BOOTSTRAP_GRACE_SECONDS,
+            },
+            "evidence": {"newest_at": None, "age_seconds": None},
+            "writer": {
+                "written_at": None,
+                "age_seconds": None,
+                "last_attempt_at": stamp(self._day_summary_last_attempt_at),
+                "last_success_at": stamp(self._day_summary_last_success_at),
+                "last_error": self._day_summary_last_error,
+            },
+        }
+
+        if self._day_summary_last_error is not None:
+            result.update(
+                status="error",
+                reason=f"last writer attempt failed: {self._day_summary_last_error}",
+            )
+            return result
+
+        summaries_path = self._get_summaries_path()
+        if not summaries_path.exists():
+            result.update(
+                status="missing",
+                reason="day summary writer has no bootstrap marker",
+            )
+            return result
+
+        try:
+            document = self._read_day_summary_document()
+            latest_evidence = self._latest_summary_evidence(document)
+            if latest_evidence is None:
+                started_at = _parse_summary_timestamp(
+                    document.get("writer_started_at"),
+                    "writer_started_at",
+                )
+                bootstrap_age = (current - started_at).total_seconds()
+                result["bootstrap"] = {
+                    "started_at": started_at.isoformat(),
+                    "age_seconds": round(bootstrap_age, 1),
+                    "max_age_seconds": DAY_SUMMARY_BOOTSTRAP_GRACE_SECONDS,
+                }
+                if bootstrap_age < -DAY_SUMMARY_FUTURE_TOLERANCE_SECONDS:
+                    result.update(
+                        status="future",
+                        reason="day summary writer_started_at is future-dated",
+                    )
+                elif eligible:
+                    result.update(
+                        status="missing",
+                        reason="eligible source has no day summary",
+                    )
+                elif bootstrap_age > DAY_SUMMARY_BOOTSTRAP_GRACE_SECONDS:
+                    result.update(
+                        status="bootstrap_timeout",
+                        reason="day summary bootstrap grace expired",
+                    )
+                else:
+                    result.update(
+                        ok=True,
+                        status="warming_up",
+                        reason="source not yet eligible",
+                    )
+                return result
+            written_at = self._summary_written_at(
+                document,
+                latest_evidence,
+                legacy_mtime=True,
+            )
+            if written_at is None:
+                raise ValueError("day summary writer timestamp is missing")
+        except Exception as exc:
+            result.update(
+                status="malformed",
+                reason=f"{type(exc).__name__}: {exc}",
+            )
+            return result
+
+        evidence_age = (current - latest_evidence).total_seconds()
+        writer_age = (current - written_at).total_seconds()
+        result["evidence"] = {
+            "newest_at": latest_evidence.isoformat(),
+            "age_seconds": round(evidence_age, 1),
+        }
+        result["writer"].update(
+            written_at=written_at.isoformat(),
+            age_seconds=round(writer_age, 1),
+        )
+
+        tolerance = DAY_SUMMARY_FUTURE_TOLERANCE_SECONDS
+        if evidence_age < -tolerance or writer_age < -tolerance:
+            result.update(status="future", reason="day summary timestamp is future-dated")
+            return result
+
+        worst_age = max(evidence_age, writer_age)
+        if worst_age > max_age_seconds:
+            result.update(
+                status="stale",
+                reason=(
+                    f"day summary stale: writer={writer_age:.0f}s "
+                    f"evidence={evidence_age:.0f}s max={max_age_seconds:.0f}s"
+                ),
+            )
+            return result
+
+        result.update(ok=True, status="ok", reason=None)
+        return result
 
     def get_day_summaries(self, limit: int = 30) -> List[DaySummary]:
         """
@@ -573,28 +934,74 @@ class AnimaHistory:
         """Get path for day summaries persistence."""
         return self.persistence_path.parent / "day_summaries.json"
 
-    def _save_day_summary(self, summary: DaySummary):
-        """Append a day summary to persistent storage, keeping max 30."""
+    def _read_day_summary_document(self) -> Dict[str, Any]:
+        """Strictly read the mutation document; never convert damage to empty."""
         summaries_path = self._get_summaries_path()
+        if not summaries_path.exists():
+            return {"summaries": [], "version": "1.0"}
 
-        existing = []
-        if summaries_path.exists():
-            try:
-                with open(summaries_path, 'r') as f:
-                    data = json.load(f)
-                existing = data.get("summaries", [])
-            except Exception:
-                existing = []
+        with open(summaries_path, "r") as handle:
+            document = json.load(handle)
+        if not isinstance(document, dict):
+            raise ValueError("day summary document must be an object")
+        if "summaries" not in document or not isinstance(document["summaries"], list):
+            raise ValueError("day summary document has no summaries list")
+        return document
 
-        existing.append(summary.to_dict())
+    def _latest_summary_evidence(
+        self, document: Dict[str, Any]
+    ) -> Optional[datetime]:
+        """Return newest embedded evidence time, validating every stored row."""
+        evidence: List[datetime] = []
+        for index, row in enumerate(document["summaries"]):
+            if not isinstance(row, dict):
+                raise ValueError(f"day summary row {index} must be an object")
+            evidence.append(
+                _parse_summary_timestamp(row.get("date"), f"summary row {index} date")
+            )
+        return max(evidence) if evidence else None
 
-        # Keep only last 30
+    def _summary_written_at(
+        self,
+        document: Dict[str, Any],
+        latest_evidence: Optional[datetime],
+        *,
+        legacy_mtime: bool = False,
+    ) -> Optional[datetime]:
+        """Resolve writer time, with explicit backward-compatible fallbacks."""
+        if "written_at" in document:
+            return _parse_summary_timestamp(document["written_at"], "written_at")
+        if legacy_mtime and self._get_summaries_path().exists():
+            return datetime.fromtimestamp(self._get_summaries_path().stat().st_mtime)
+        # For cadence, a v1 row is the best durable record of the last write.
+        return latest_evidence
+
+    def _save_day_summary(
+        self,
+        summary: DaySummary,
+        *,
+        written_at: Optional[datetime] = None,
+        deduplicate: bool = False,
+    ) -> None:
+        """Append atomically, preserving the old file on any read/write error."""
+        summaries_path = self._get_summaries_path()
+        document = self._read_day_summary_document()
+        existing = list(document["summaries"])
+
+        serialized = summary.to_dict()
+        if not (deduplicate and existing and existing[-1] == serialized):
+            existing.append(serialized)
         existing = existing[-30:]
 
-        try:
-            atomic_json_write(summaries_path, {"summaries": existing, "version": "1.0"})
-        except Exception as e:
-            print(f"[AnimaHistory] Could not save day summary: {e}", file=sys.stderr)
+        payload = dict(document)
+        payload.update({
+            "summaries": existing,
+            "written_at": _comparable_datetime(
+                written_at or datetime.now()
+            ).isoformat(),
+            "version": "1.0",
+        })
+        atomic_json_write(summaries_path, payload)
 
     def __len__(self) -> int:
         return len(self._history)

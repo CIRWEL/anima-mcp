@@ -37,6 +37,7 @@ def _register_health_probes():
     Store-dependent probes fail open on ctx.store is None."""
     from .health import get_health_registry
     from .eisv import get_trajectory_awareness
+    from .anima_history import get_anima_history
     from .accessors import _get_last_shm_data
     from .server_state import (
         SHM_STALE_THRESHOLD_SECONDS, SHM_GOVERNANCE_STALE_SECONDS,
@@ -71,6 +72,14 @@ def _register_health_probes():
     _health.register("governance", probe=_gov_probe, stale_threshold=SHM_GOVERNANCE_STALE_SECONDS)
     _health.register("drawing", probe=lambda: _get_ctx() and _get_ctx().screen_renderer is not None and hasattr(_get_ctx().screen_renderer, '_canvas'), debounce_seconds=6.0)
     _health.register("trajectory", probe=lambda: get_trajectory_awareness() is not None)
+    _health.register(
+        "day_summary_writer",
+        probe=lambda: get_anima_history().day_summary_health(),
+        stale_threshold=36 * 60 * 60,
+        debounce_seconds=0.0,
+        optional=False,
+    )
+
     def _voice_probe():
         ctx = _get_ctx()
         voice = ctx.voice_instance if ctx else None

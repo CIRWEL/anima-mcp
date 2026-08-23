@@ -125,7 +125,7 @@ Handler modules import state accessors from `accessors.py` (e.g., `from ..access
 
 ### Health Monitoring
 
-`health.py` tracks 11 subsystems with heartbeats + functional probes. Rendered on LCD health screen.
+`health.py` tracks 12 subsystems with heartbeats + functional probes. Rendered on LCD health screen.
 
 | Status | Color | Meaning |
 |--------|-------|---------|
@@ -144,6 +144,14 @@ worked even once, a later failure is a genuine `degraded`, not `absent`.
 Do not "fix" a failing probe by making it return True.
 
 Per-subsystem stale thresholds: fast subsystems (sensors, anima) use 30s default; slow subsystems (growth) use 90s. Governance uses dedicated SHM freshness thresholds (currently 210s).
+
+**Day-summary health** checks both writer liveness (`written_at`) and the newest
+contributing observation timestamp. The MCP server is the sole writer because
+it owns the live `AnimaHistory` deque; activity transitions in the broker must
+not write this file. A failed atomic commit degrades immediately, and either
+timestamp older than 36 hours is stale. On first boot, an empty file with
+`writer_started_at` permits at most 30 minutes to collect 100 observations; file
+absence, source eligibility without a summary, or grace expiry is unhealthy.
 
 **Governance health** checks the shared-memory governance data (the Elixir broker `anima-broker-ex` is the sole UNITARES caller, ~180s cadence). Stale threshold: 210s.
 

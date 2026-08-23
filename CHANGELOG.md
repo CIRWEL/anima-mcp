@@ -2,6 +2,7 @@
 
 ## August 2026
 
+- **Honest day-summary writer** — the MCP server now consolidates its live anima history on a bounded daily cadence, surfaces failed or stale writes in health and the outbound dead-man switch, and no longer lets the broker relabel a frozen process-local snapshot as current evidence.
 - **State-space provenance** — runtime payloads now distinguish Lumen's `body_anima` and lossy `body_eisv_projection` from independent `drawing_eisv` and UNITARES-produced `governance_eisv`. Legacy `anima`/`eisv` keys remain tagged aliases for compatible clients.
 - **Honest EISV screens** — browser and on-device diagnostics identify body input versus governance state, use signed Valence rather than the retired Void interpretation, and leave omitted UNITARES vectors explicitly unavailable.
 

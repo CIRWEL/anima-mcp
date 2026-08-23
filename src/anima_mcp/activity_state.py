@@ -226,16 +226,6 @@ class ActivityManager:
             self._last_sleep_start = now
             self._rest_entry_time = time.time()
 
-            # Consolidate memory on entering rest
-            try:
-                from .anima_history import get_anima_history
-                summary = get_anima_history().consolidate()
-                if summary:
-                    print(f"[Activity] Memory consolidated: {summary.n_observations} obs",
-                          file=sys.stderr, flush=True)
-            except Exception as e:
-                print(f"[Activity] Consolidation failed: {e}", file=sys.stderr, flush=True)
-
         elif old_level == ActivityLevel.RESTING and new_level != ActivityLevel.RESTING:
             # Waking up
             if self._last_sleep_start:
@@ -295,7 +285,7 @@ class ActivityManager:
                 )
                 return (
                     f"i rested for {hours:.1f} hours. "
-                    f"before sleep, my state centered around {center_desc} "
+                    f"my latest day summary centered around {center_desc} "
                     f"with {s.notable_perturbations} notable shifts "
                     f"across {s.n_observations} moments."
                 )

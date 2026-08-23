@@ -28,14 +28,15 @@ forbids.
 So the heartbeat gates on Lumen's own **work output**, never on
 `systemctl is-active` — a live PID is not work output.
 
-Three processes make up the creature, and the same argument says one process's
-work output is not the creature's:
+Three processes make up the creature, plus one server-owned long-clock output;
+the same argument says one component's work output is not the creature's:
 
 | component | what it does | probe |
 |---|---|---|
 | `anima-broker` | sensors, learning | freshness of `/dev/shm/anima_state.json` |
 | `anima-broker-ex` | Elixir; owns the governance check-ins | freshness of `…shadow.json` |
 | `anima` | MCP server: agency learner (authoritative), metacognition, growth, drawing, display, the tool surface | `GET http://127.0.0.1:8766/health` |
+| `day_summary` | long-term evidence writer | worse of writer and newest-summary age in `~/.anima/day_summaries.json` |
 
 **The worst result decides.** The first version of this script checked only the
 first envelope — so if the MCP server had died, the broker would have kept
@@ -46,6 +47,13 @@ exists to prevent, and it took an adversarial review to catch it.
 The server gets a functional probe rather than a file, deliberately: it either
 answers or it does not, so there is no cached artifact that can go stale in a
 way that reads healthy.
+
+The day-summary writer creates an empty `day_summaries.json` containing a
+`writer_started_at` marker on its first live-history tick. That marker permits a
+30-minute first-boot warm-up while fewer than 100 observations exist. A missing
+marker, an eligible source with no summary, or a marker older than the bounded
+grace is unhealthy. Once summaries exist, both top-level `written_at` and the
+newest row's evidence `date` must remain within 36 hours; the worse age wins.
 
 It does **not** gate on governance reachability. Governance lives on the Mac, so
 folding it in would page you about a Mac outage under the heading "Lumen is
@@ -65,10 +73,10 @@ spot alone, which is the point.
 ## Failure direction
 
 ```
-envelope fresh          -> ping success
-envelope stale/absent   -> ping the /fail endpoint (alerts immediately)
-this script dead        -> no ping at all -> alerts after the grace period
-Pi has no power/network -> no ping at all -> alerts after the grace period
+all unskipped probes healthy -> ping success
+any probe stale/absent/bad   -> ping the /fail endpoint (alerts immediately)
+this script dead             -> no ping at all -> alerts after the grace period
+Pi has no power/network      -> no ping at all -> alerts after the grace period
 ```
 
 All roads lead to you. There is no path where a broken heartbeat reads as a
@@ -134,12 +142,18 @@ nobody knows is wired.
   un-provisioned Pi is not a crash loop.
 - Tunables: `ANIMA_HEARTBEAT_MAX_AGE` (default 120s), `ANIMA_HEARTBEAT_FAIL_URL`
   (defaults to `<url>/fail`), `ANIMA_SHM_PATH`, `ANIMA_HEARTBEAT_SHADOW_PATH`,
-  `ANIMA_HEARTBEAT_SERVER_URL`.
-- `ANIMA_HEARTBEAT_SKIP` is a comma list (`broker`, `broker_ex`, `server`) for
+  `ANIMA_HEARTBEAT_SERVER_URL`, `DAY_SUMMARY_PATH`, `ANIMA_HISTORY_PATH`, and
+  `DAY_SUMMARY_MAX_AGE` (default 129600s / 36h), plus
+  `DAY_SUMMARY_BOOTSTRAP_GRACE_SECONDS` (default 1800s / 30 min). Invalid age
+  values fail closed and signal the provider's `/fail` endpoint. All tunables
+  may be set in `anima.env`.
+- `ANIMA_HEARTBEAT_SKIP` is a comma list (`broker`, `broker_ex`, `server`,
+  `day_summary`) for
   **documented rollbacks only**. Reverting the Elixir broker leaves a stale
-  shadow envelope that would otherwise page forever. Skipping a component is
-  choosing not to be told about it — set it deliberately, and unset it when the
-  rollback ends.
+  shadow envelope that would otherwise page forever; rolling back the summary
+  writer may likewise require a temporary `day_summary` skip. Skipping a
+  component is choosing not to be told about it — set it deliberately, and
+  unset it when the rollback ends.
 
 ## What this still does not cover
 
