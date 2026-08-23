@@ -290,6 +290,17 @@ def test_schema_page_visually_distinguishes_wiring_from_hypotheses():
     assert "derived_sensor" in text
 
 
+def test_schema_trajectory_uses_canonical_profile_labels_and_confidences():
+    schema = Path(__file__).parents[1] / "docs" / "schema.html"
+    text = schema.read_text()
+
+    assert "preferenceDetail.vector" in text
+    assert "preferenceDetail.labels" in text
+    assert "beliefDetail.values" in text
+    assert "beliefDetail.labels" in text
+    assert "beliefDetail.confidences" in text
+
+
 def test_control_relay_root_redirects_to_dashboard():
     module = load_message_server()
     handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
