@@ -1226,31 +1226,80 @@
             </div>`);
 
         // Preferences
-        const pv = t.preferences_detail?.preference_vector || t.preferences_detail?.dimensions || {};
+        const preferenceDetail = t.preferences_detail || {};
+        const preferenceVector = Array.isArray(preferenceDetail.vector)
+            ? preferenceDetail.vector
+            : null;
         let pc = `<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px">${t.preferences_learned || 0} learned</div>`;
-        Object.keys(pv).forEach(k => {
-            const v = pv[k];
-            pc += mini(k, typeof v === 'number' ? v : (v.mean || 0), 'var(--c-preference)');
-        });
+        if (preferenceVector) {
+            const preferenceLabels = Array.isArray(preferenceDetail.labels)
+                ? preferenceDetail.labels
+                : preferenceVector.map((_, index) => `preference ${index + 1}`);
+            const preferencePresent = Array.isArray(preferenceDetail.present)
+                ? preferenceDetail.present
+                : [];
+            preferenceVector.forEach((value, index) => {
+                if (preferencePresent[index] === false || typeof value !== 'number') return;
+                const label = String(preferenceLabels[index] || `preference ${index + 1}`)
+                    .replaceAll('_', ' ');
+                pc += mini(label, value, 'var(--c-preference)');
+            });
+        } else {
+            const legacyPreferences = preferenceDetail.preference_vector
+                || preferenceDetail.dimensions
+                || {};
+            Object.keys(legacyPreferences).forEach(key => {
+                const value = legacyPreferences[key];
+                pc += mini(
+                    key,
+                    typeof value === 'number' ? value : (value.mean || 0),
+                    'var(--c-preference)',
+                );
+            });
+        }
         html += tc('\u03a0', 'Preferences', false, pc);
 
         // Beliefs
-        const bv = t.beliefs_detail?.beliefs || t.beliefs_detail?.values || {};
+        const beliefDetail = t.beliefs_detail || {};
         let bc = '';
-        const bk = Object.keys(bv).slice(0, 8);
-        if (bk.length > 0) {
-            bk.forEach(k => {
-                const b = bv[k];
-                const conf = typeof b === 'number' ? b : (b.confidence || 0);
-                const ev = typeof b === 'object' ? (b.evidence_count || b.n_evidence || '') : '';
+        if (Array.isArray(beliefDetail.values)) {
+            const beliefLabels = Array.isArray(beliefDetail.labels)
+                ? beliefDetail.labels
+                : beliefDetail.values.map((_, index) => `belief ${index + 1}`);
+            const beliefConfidences = Array.isArray(beliefDetail.confidences)
+                ? beliefDetail.confidences
+                : beliefDetail.values;
+            beliefDetail.values.slice(0, 8).forEach((value, index) => {
+                const label = String(beliefLabels[index] || `belief ${index + 1}`)
+                    .replaceAll('_', ' ');
+                const confidence = typeof beliefConfidences[index] === 'number'
+                    ? beliefConfidences[index]
+                    : 0;
                 bc += `<div class="belief-row">
-                    <span class="belief-name">${escapeHtml(k)}</span>
-                    <div class="belief-track"><div class="belief-fill" style="width:${(conf*100).toFixed(0)}%"></div></div>
-                    ${ev !== '' ? `<span class="belief-ev">${ev}</span>` : ''}
+                    <span class="belief-name">${escapeHtml(label)}</span>
+                    <div class="belief-track" title="value ${Number(value).toFixed(2)} · confidence ${confidence.toFixed(2)}"><div class="belief-fill" style="width:${(confidence*100).toFixed(0)}%"></div></div>
                 </div>`;
             });
         } else {
-            bc = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">avg: ${(t.belief_confidence || 0).toFixed(2)}</div>`;
+            const legacyBeliefs = beliefDetail.beliefs || {};
+            const beliefKeys = Object.keys(legacyBeliefs).slice(0, 8);
+            beliefKeys.forEach(key => {
+                const belief = legacyBeliefs[key];
+                const confidence = typeof belief === 'number'
+                    ? belief
+                    : (belief.confidence || 0);
+                const evidence = typeof belief === 'object'
+                    ? (belief.evidence_count || belief.n_evidence || '')
+                    : '';
+                bc += `<div class="belief-row">
+                    <span class="belief-name">${escapeHtml(key)}</span>
+                    <div class="belief-track"><div class="belief-fill" style="width:${(confidence*100).toFixed(0)}%"></div></div>
+                    ${evidence !== '' ? `<span class="belief-ev">${evidence}</span>` : ''}
+                </div>`;
+            });
+            if (beliefKeys.length === 0) {
+                bc = `<div style="font-size:10px;color:rgba(255,255,255,0.2)">avg: ${(t.belief_confidence || 0).toFixed(2)}</div>`;
+            }
         }
         html += tc('\u0392', 'Beliefs', false, bc);
 
