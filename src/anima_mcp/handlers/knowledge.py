@@ -229,13 +229,63 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
         except Exception:
             self_model = None
 
+        # The reflection store retains the historical wording/confidence that
+        # existed when an insight was written.  `_insight_view` reconciles that
+        # history with live preference and belief evidence (including resets),
+        # so every part of this response must be built from the same views.
+        # Otherwise `insights` can correctly call a claim cold-started while
+        # `summary.strongest` still presents its pre-reset confidence as 1.0.
+        active_view_pairs = [
+            (insight, _insight_view(insight, growth, self_model))
+            for insight in active_insights
+        ]
+        active_views_by_id = {
+            view.get("id", getattr(insight, "id", "")): view
+            for insight, view in active_view_pairs
+        }
+
+        def current_view(insight):
+            insight_id = getattr(insight, "id", "")
+            view = active_views_by_id.get(insight_id)
+            if view is not None:
+                return view
+            return _insight_view(insight, growth, self_model)
+
+        summary = reflection_system.get_self_knowledge_summary()
+        if isinstance(summary, dict):
+            # Preserve the reflection system's source-aware strength ordering,
+            # but never surface a review claim ahead of established evidence.
+            ranked_pairs = sorted(
+                active_view_pairs,
+                key=lambda pair: pair[1].get("actionability") != "established",
+            )
+            by_category = {}
+            for insight_category in InsightCategory:
+                category_views = [
+                    view
+                    for insight, view in ranked_pairs
+                    if getattr(insight, "category", None) == insight_category
+                ]
+                if category_views:
+                    by_category[insight_category.value] = [
+                        view.get("description", "") for view in category_views[:3]
+                    ]
+            summary = {
+                **summary,
+                "total_insights": len(active_insights),
+                "strongest": [view for _, view in ranked_pairs[:3]],
+                "by_category": by_category,
+                "ranking_note": (
+                    "Established claims precede review claims; confidence "
+                    "remains source-specific and is not directly comparable."
+                ),
+            }
+
         # Build result
         result = {
             "total_insights": len(active_insights),
-            "insights": [
-                _insight_view(i, growth, self_model) for i in insights[:limit]
-            ],
-            "summary": reflection_system.get_self_knowledge_summary(),
+            "insights": [current_view(i) for i in insights[:limit]],
+            "summary": summary,
             "epistemic_note": (
                 "Confidence fields have source-specific meanings; inspect "
                 "confidence_kind and evidence_basis. None implies causality."
