@@ -72,6 +72,74 @@ class TestGetSelfKnowledgeExtended:
         assert view["actionability"] == "review"
         assert "cold-started" in view["interpretation"]
 
+    async def test_summary_uses_live_views_and_ranks_review_claims_last(self):
+        from anima_mcp.handlers.knowledge import handle_get_self_knowledge
+        from anima_mcp.self_reflection import InsightCategory
+
+        stale_light = SimpleNamespace(
+            id="pref_dim_light",
+            category=InsightCategory.ENVIRONMENT,
+            to_dict=lambda: {
+                "id": "pref_dim_light",
+                "description": "i know this about myself: dim light calms me",
+                "confidence": 1.0,
+                "sample_count": 100_000,
+                "validation_count": 600,
+                "contradiction_count": 0,
+            },
+        )
+        established = SimpleNamespace(
+            id="qa_rederived",
+            category=InsightCategory.BEHAVIORAL,
+            to_dict=lambda: {
+                "id": "qa_rederived",
+                "description": "Repeated checks support this claim",
+                "confidence": 1.0,
+                "sample_count": 3,
+                "validation_count": 3,
+                "contradiction_count": 0,
+            },
+        )
+        reflection = SimpleNamespace(
+            get_insights=lambda category=None: [stale_light, established],
+            get_self_knowledge_summary=lambda: {
+                "total_insights": 2,
+                "strongest": [stale_light.to_dict()],
+                "by_category": {
+                    "environment": [stale_light.to_dict()["description"]]
+                },
+                "reflection_summary": {},
+            },
+        )
+        preference = SimpleNamespace(
+            confidence=0.2,
+            observation_count=100_000,
+            independent_evidence_count=0,
+            supporting_count=0,
+            contradicting_count=0,
+            evidence_origin="reset_external_light_gate_v2",
+        )
+        growth = SimpleNamespace(_preferences={"dim_light": preference})
+        store = SimpleNamespace(db_path=":memory:")
+
+        with patch("anima_mcp.accessors._get_store", return_value=store), \
+             patch("anima_mcp.accessors._get_growth", return_value=growth), \
+             patch(
+                 "anima_mcp.self_reflection.get_reflection_system",
+                 return_value=reflection,
+             ), \
+             patch("anima_mcp.self_model.get_self_model", return_value=None):
+            data = parse_result(await handle_get_self_knowledge({"limit": 5}))
+
+        strongest = data["summary"]["strongest"]
+        assert strongest[0]["id"] == "qa_rederived"
+        assert strongest[1]["id"] == "pref_dim_light"
+        assert strongest[1]["confidence"] == 0.2
+        assert strongest[1]["actionability"] == "review"
+        assert data["summary"]["by_category"]["environment"] == [
+            "observational pattern: dim light calms me"
+        ]
+
     async def test_negative_preference_direction_is_not_called_contradiction(self):
         from anima_mcp.handlers.knowledge import _insight_view
 
