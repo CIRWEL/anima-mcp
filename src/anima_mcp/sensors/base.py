@@ -25,6 +25,10 @@ class SensorReadings:
 
     # Light (lux)
     light_lux: Optional[float] = None
+    # Capture time for the physical light sample. This can precede the broker
+    # read when environment sensors arrive through the Elixir SHM shadow.
+    light_observed_at: Optional[datetime] = None
+    light_observed_precision_seconds: Optional[float] = None
 
     # Hearing (acoustic channel — sound LEVEL only, never content)
     # hearing_available: is the mic actually delivering audio right now?
@@ -89,6 +93,12 @@ class SensorReadings:
             "ambient_temp_c": self.ambient_temp_c,
             "humidity_pct": self.humidity_pct,
             "light_lux": self.light_lux,
+            "light_observed_at": (
+                self.light_observed_at.isoformat()
+                if self.light_observed_at is not None
+                else None
+            ),
+            "light_observed_precision_seconds": self.light_observed_precision_seconds,
             "hearing_available": self.hearing_available,
             "sound_level": self.sound_level,
             "cpu_percent": self.cpu_percent,

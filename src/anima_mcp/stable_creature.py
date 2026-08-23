@@ -76,6 +76,7 @@ from .eisv_mapper import (
     BODY_EISV_PROJECTION_SCHEMA,
     anima_to_body_eisv_projection,
 )
+from .light_attribution import read_led_proprioception
 from .metacognition import get_metacognitive_monitor
 from .learning_events import drain_learning_events
 
@@ -122,6 +123,25 @@ def _snapshot_self_beliefs(self_model) -> dict:
         except (TypeError, ValueError):
             continue
     return snapshot
+
+
+def _pair_led_action_to_light_capture(readings):
+    """Return the efference copy nearest the physical light capture window."""
+    observed_at = getattr(readings, "light_observed_at", None)
+    if observed_at is None:
+        return None
+    try:
+        observed_unix = observed_at.timestamp()
+        precision = getattr(readings, "light_observed_precision_seconds", None)
+        if isinstance(precision, (int, float)):
+            observed_unix += max(0.0, float(precision)) / 2.0
+        return read_led_proprioception(
+            max_age_seconds=2.0,
+            at_time=observed_unix,
+            max_alignment_error_seconds=0.75,
+        )
+    except (OSError, OverflowError, ValueError):
+        return None
 
 
 def _snapshot_preferences(preferences) -> dict:
@@ -630,9 +650,13 @@ def run_creature():
         pass
     _prev_led_brightness = _preset_led_brightness  # Estimate for proprioception
     _agency_led_brightness = 1.0  # Agency-desired manual brightness factor [0.05, 1.0]
+    _latest_led_proprioception = None
+    _paired_led_proprioception = None
+    light_attribution = None
 
     try:
         while running:
+            light_attribution = None
             # Apply durable semantic learning events from the server.  This is
             # the only cross-process mutation seam for broker-owned JSON state.
             if time.time() - last_learning_event_drain >= 5.0:
@@ -655,8 +679,20 @@ def run_creature():
                 last_learning_event_drain = time.time()
 
             # 0. Metacognition: Generate prediction BEFORE sensing
-            # Pass LED brightness for proprioceptive light prediction if available
-            _led_br = readings.led_brightness if readings and readings.led_brightness is not None else None
+            # Read the server's timestamped copy of the action already applied
+            # to the DotStars.  Reading before the VEML7700 sample ensures the
+            # paired action did not occur after the measurement it explains.
+            _latest_led_proprioception = read_led_proprioception(
+                max_age_seconds=2.0
+            )
+            if _latest_led_proprioception is not None:
+                _led_br = _latest_led_proprioception["brightness"]
+            else:
+                _led_br = (
+                    readings.led_brightness
+                    if readings and readings.led_brightness is not None
+                    else None
+                )
             prediction = metacog.predict(led_brightness=_led_br)
             
             # 1. Robust Sensor Read
@@ -675,9 +711,22 @@ def run_creature():
                 time.sleep(UPDATE_INTERVAL)
                 continue
 
-            # 1b. LED Proprioception: track brightness for awareness (not correction)
-            _instantaneous_led = estimate_instantaneous_brightness(_prev_led_brightness)
-            readings.led_brightness = _instantaneous_led
+            _paired_led_proprioception = _pair_led_action_to_light_capture(readings)
+
+            # 1b. LED proprioception.  The actual action copy is authoritative;
+            # the old preset reconstruction remains an explicitly labelled
+            # fallback and is never allowed to train the residual model.
+            _observed_led_proprioception = (
+                _paired_led_proprioception or _latest_led_proprioception
+            )
+            if _observed_led_proprioception is not None:
+                readings.led_brightness = _observed_led_proprioception["brightness"]
+                _led_brightness_source = "led_hardware_controller"
+            else:
+                readings.led_brightness = estimate_instantaneous_brightness(
+                    _prev_led_brightness
+                )
+                _led_brightness_source = "broker_brightness_estimate"
 
             # 2. Update Anima State (now has correct led_brightness for correction)
             # Layer 2: Apply experiential filter — perception colored by accumulated experience
@@ -758,7 +807,8 @@ def run_creature():
                 # Preset brightness × agency dimmer × activity multiplier
                 _base_br = _preset_led_brightness
                 _prev_led_brightness = _base_br * _agency_led_brightness * activity_state.brightness_multiplier
-                readings.led_brightness = _prev_led_brightness
+                if _observed_led_proprioception is None:
+                    readings.led_brightness = _prev_led_brightness
                 # Skip some updates when resting/drowsy (power saving)
                 if activity_manager.should_skip_update():
                     time.sleep(UPDATE_INTERVAL)
@@ -901,8 +951,8 @@ def run_creature():
                     }
                     last_self_model_observed_at = _self_model_now
 
-                    # Track correlations (raw lux includes LED glow — that's fine,
-                    # Lumen's LEDs are part of its environment)
+                    # Track correlations against the physical raw measurement.
+                    # The learned decomposition below remains telemetry-only.
                     sensor_vals = {
                         "ambient_temp": readings.ambient_temp_c,
                         "light": readings.light_lux,
@@ -915,7 +965,27 @@ def run_creature():
                     self_model.observe_correlation(sensor_vals, anima_vals)
 
                     # Track LED-lux proprioception (own outputs affecting inputs)
-                    self_model.observe_led_lux(readings.led_brightness, readings.light_lux)
+                    _light_capture_unix = (
+                        _paired_led_proprioception.get(
+                            "paired_to_light_observed_at_unix"
+                        )
+                        if _paired_led_proprioception is not None
+                        else None
+                    )
+                    light_attribution = self_model.observe_led_lux(
+                        readings.led_brightness,
+                        readings.light_lux,
+                        led_proprioception=_paired_led_proprioception,
+                        brightness_source=_led_brightness_source,
+                        # Use the physical capture window, not broker processing
+                        # time, for both interval gates and durable evidence.
+                        observed_at=_light_capture_unix,
+                        observation_id=(
+                            readings.light_observed_at.isoformat()
+                            if readings.light_observed_at is not None
+                            else None
+                        ),
+                    )
 
                     # Track time patterns
                     hour = datetime.now().hour
@@ -1271,7 +1341,19 @@ def run_creature():
                     "cumulative_surprise": metacog._cumulative_surprise,
                     "prediction_confidence": prediction.confidence,
                 },
+                "led_proprioception": (
+                    _observed_led_proprioception
+                    if _observed_led_proprioception is not None
+                    else {
+                        "source": _led_brightness_source,
+                        "brightness": readings.led_brightness,
+                        "optical_drive": None,
+                        "fresh": False,
+                    }
+                ),
             }
+            if light_attribution is not None:
+                shm_data["light_attribution"] = light_attribution
             if _last_reflection_event:
                 shm_data["metacognition"]["last_reflection"] = _last_reflection_event
             if gov_shadow_path is not None:

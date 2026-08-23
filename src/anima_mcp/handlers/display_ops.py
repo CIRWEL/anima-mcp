@@ -608,8 +608,14 @@ async def handle_manage_display(arguments: dict) -> list[TextContent]:
             "current_config": {
                 "LED_LUX_QUADRATIC": 1150.0,
                 "model": "quadratic: glow = 1150 * brightness^2",
+                "runtime_authority": False,
+                "status": "retired_diagnostics_only",
             },
-            "note": "Compare fitted data against current_config. Update config.py if significantly different.",
+            "note": (
+                "Diagnostic sweep only. Do not restore fixed subtraction or "
+                "rewrite raw lux from this fit; the capture-aligned learned "
+                "shadow model owns LED attribution."
+            ),
         }, indent=2))]
 
     else:

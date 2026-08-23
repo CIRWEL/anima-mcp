@@ -59,6 +59,8 @@ def test_shadow_mode_reads_env_channels(shadow_file):
     assert r.ambient_temp_c == 24.5
     assert r.humidity_pct == 23.1
     assert r.light_lux == 60.0  # first read seeds the EMA
+    assert r.light_observed_at is not None
+    assert r.light_observed_precision_seconds == 0.001
     assert r.pressure_hpa == 819.9
     assert r.pressure_temp_c == 29.8
 
@@ -70,6 +72,18 @@ def test_shadow_lux_ema_matches_i2c_path(shadow_file):
     shadow_file({**ENV, "light_lux": 100.0})
     r = s.read()
     assert r.light_lux == pytest.approx(0.8 * 60.0 + 0.2 * 100.0)
+
+
+def test_shadow_whole_second_capture_reports_timestamp_uncertainty(shadow_file):
+    path = shadow_file(ENV)
+    envelope = json.loads(path.read_text())
+    observed_at = datetime.now().replace(microsecond=0)
+    envelope["updated_at"] = observed_at.isoformat()
+    path.write_text(json.dumps(envelope))
+
+    readings = PiSensors().read()
+    assert readings.light_observed_at == observed_at
+    assert readings.light_observed_precision_seconds == 1.0
 
 
 def test_stale_shadow_degrades_to_none(shadow_file):

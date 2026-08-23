@@ -50,18 +50,24 @@ class TestGetStateExtended:
         # From visitor records now — the message board carried no msg_type
         # "user" on the live system, so the old source was always 0.0.
         growth = SimpleNamespace(interaction_level=lambda: 0.75)
+        light_attribution = {
+            "mode": "shadow",
+            "status": "warming",
+            "external_lux_residual": None,
+        }
 
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.handlers.state_queries.extract_neural_bands", return_value={"alpha": 0.2}), \
-             patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}}), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}, "light_attribution": light_attribution}), \
              patch("anima_mcp.accessors._get_growth", return_value=growth):
             data = parse_result(await handle_get_state({}))
 
         assert data["mood"] == "calm"
         assert data["identity"]["name"] == "Lumen"
         assert data["inner_life"]["temperament"] == "gentle"
+        assert data["light_attribution"] == light_attribution
         store.record_state.assert_called_once()
         assert store.record_state.call_args[0][4]["interaction_level"] == 0.75
 
@@ -87,12 +93,15 @@ class TestReadSensorsExtended:
                 return {"timestamp": "now", "cpu_temp_c": 50, "ambient_temp_c": None}
 
         shm = SimpleNamespace(read=lambda: {"ok": True})
+        light_attribution = {"status": "ready_shadow", "external_lux_residual": 42.0}
         with patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace(available_sensors=lambda: ["cpu"], is_pi=lambda: True)), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), None)), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value={"light_attribution": light_attribution}), \
              patch("anima_mcp.accessors._get_shm_client", return_value=shm):
             data = parse_result(await handle_read_sensors({}))
 
         assert data["source"] == "shared_memory"
+        assert data["light_attribution"] == light_attribution
         assert "ambient_temp_c" not in data["readings"]  # null suppressed
 
     async def test_read_sensors_direct_source_when_no_shm(self):

@@ -24,6 +24,7 @@ from pathlib import Path
 import math
 
 from .atomic_write import atomic_json_write
+from .light_attribution import LearnedLedLuxResidual
 
 
 def _learning_multiplier(update_bonus: float) -> float:
@@ -300,6 +301,10 @@ class SelfModel:
         self._prev_led_brightness: Optional[float] = None  # Track LED changes
         self._temperament_samples: deque = deque(maxlen=30)  # Recent temperament snapshots
         self.belief_update_bonus: float = 0.0  # From experiential marks
+        # Calibration is distinct from the explanatory belief above.  The
+        # belief can say "my LEDs affect lux" while this model still reports
+        # the size of that effect as unknown until transition evidence is warm.
+        self._light_attribution_model = LearnedLedLuxResidual()
 
         # Load persisted model
 
@@ -348,6 +353,7 @@ class SelfModel:
         event_ids = data.get("applied_event_ids", [])
         if isinstance(event_ids, list):
             self._applied_event_ids = [str(value) for value in event_ids[-2000:]]
+        self._light_attribution_model.load_dict(data.get("light_attribution_model"))
         # Retain the dead-channel audit trail across load/save cycles.
         self._dead_channel_audit = data.get("_migrated_dead_channel_reset_v3", None)
 
@@ -465,6 +471,7 @@ class SelfModel:
                 "last_saved": datetime.now().isoformat(),
                 "evidence_buckets": self._evidence_buckets,
                 "applied_event_ids": self._applied_event_ids[-2000:],
+                "light_attribution_model": self._light_attribution_model.to_dict(),
                 "_migrated_noise_reset": True,
                 "_migrated_episode_evidence_v2": True,
                 # Truthy dict carrying the pre-reset state (audit trail), or
@@ -646,14 +653,40 @@ class SelfModel:
             })
             self._test_correlation_belief("light_warmth_correlation", "light_warmth")
 
-    def observe_led_lux(self, led_brightness: Optional[float], light_lux: Optional[float]):
-        """Track correlation between own LED brightness and lux readings.
+    def observe_led_lux(
+        self,
+        led_brightness: Optional[float],
+        light_lux: Optional[float],
+        *,
+        led_proprioception: Optional[Dict[str, Any]] = None,
+        brightness_source: str = "broker_brightness_estimate",
+        observed_at: Optional[float] = None,
+        observation_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Track LED/lux correlation and update the shadow residual model.
 
         This is proprioceptive learning: discovering that one's own outputs
-        affect one's own sensor inputs.
+        affect one's own sensor inputs.  The explanatory belief and the
+        quantitative residual have separate evidence gates: a correlation is
+        not enough to claim a calibrated self-glow value.
         """
+        if isinstance(led_proprioception, dict):
+            led_state = dict(led_proprioception)
+        else:
+            led_state = {
+                "brightness": led_brightness,
+                "source": brightness_source,
+            }
+        attribution = self._light_attribution_model.observe(
+            light_lux,
+            led_state,
+            observed_at=observed_at,
+            observation_id=observation_id,
+            learn=not self.read_only,
+        )
+
         if led_brightness is None or light_lux is None:
-            return
+            return attribution
 
         now = datetime.now()
 
@@ -696,6 +729,26 @@ class SelfModel:
         # Also test via correlation approach periodically
         if len(self._correlation_data["led_lux"]) >= 10:
             self._test_correlation_belief("my_leds_affect_lux", "led_lux")
+
+        return attribution
+
+    def get_light_attribution(
+        self,
+        light_lux: Optional[float],
+        *,
+        led_proprioception: Optional[Dict[str, Any]] = None,
+        led_brightness: Optional[float] = None,
+        brightness_source: str = "broker_brightness_estimate",
+    ) -> Dict[str, Any]:
+        """Describe current shadow attribution without adding evidence."""
+        if isinstance(led_proprioception, dict):
+            led_state = dict(led_proprioception)
+        else:
+            led_state = {
+                "brightness": led_brightness,
+                "source": brightness_source,
+            }
+        return self._light_attribution_model.attribute(light_lux, led_state)
 
     def _test_correlation_belief(self, belief_id: str, data_key: str):
         """Test a correlation belief against accumulated data."""

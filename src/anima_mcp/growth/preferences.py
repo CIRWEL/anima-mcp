@@ -384,7 +384,8 @@ class PreferencesMixin:
                 "Drawing doesn't always help", -0.3
             )
 
-        # Drawing + environment correlation (world light, self-glow subtracted)
+        # Drawing + environment correlation (raw lux, including self-glow).
+        # The learned external-light residual is shadow telemetry only.
         light = environment.get("light_lux", 150)  # neutral default
         if light < 100:
             insight = self._update_preference(

@@ -1736,6 +1736,40 @@
                     </div>`;
             }
 
+            // Efference-copy residual is deliberately a shadow estimate. Raw
+            // VEML7700 lux remains the clarity input until the model is both
+            // statistically warm and separately promoted by a later change.
+            const lightAttribution = data.light_attribution || {};
+            let lightShadowHtml = '';
+            if (lightAttribution.status) {
+                const statusLabels = {
+                    ready_shadow: 'ready (shadow only)',
+                    warming: 'warming',
+                    model_conflict: 'model conflict',
+                    unavailable: 'unavailable',
+                };
+                const shadowParts = [
+                    `LED efference shadow: ${escapeHtml(statusLabels[lightAttribution.status] || lightAttribution.status)}`,
+                ];
+                if (Number.isFinite(lightAttribution.estimate_confidence)) {
+                    shadowParts.push(`${(lightAttribution.estimate_confidence * 100).toFixed(0)}% confidence`);
+                }
+                if (Number.isFinite(lightAttribution.self_glow_estimate_lux)) {
+                    shadowParts.push(`self-glow ${lightAttribution.self_glow_estimate_lux.toFixed(1)} lux`);
+                } else if (Number.isFinite(lightAttribution.candidate_self_glow_lux)) {
+                    shadowParts.push(`ungated candidate ${lightAttribution.candidate_self_glow_lux.toFixed(1)} lux`);
+                }
+                if (Number.isFinite(lightAttribution.external_lux_residual)) {
+                    shadowParts.push(`external residual ${lightAttribution.external_lux_residual.toFixed(1)} lux`);
+                } else {
+                    shadowParts.push('external residual unknown');
+                }
+                shadowParts.push('clarity uses raw lux');
+                lightShadowHtml = `<div style="font-size: 0.72rem; color: var(--text-faint); padding: 0 0 6px 0;">
+                    ${shadowParts.join(' \u00b7 ')}
+                </div>`;
+            }
+
             const stateEl = document.getElementById('stateContent');
             stateEl.innerHTML = `
                 <div class="mood-display">
@@ -1756,6 +1790,7 @@
                     ${data.humidity != null ? ` \u00b7 \u{1F4A7} ${data.humidity.toFixed(0)}%` : ''}
                     ${data.pressure ? ` \u00b7 \u{1F535} ${data.pressure.toFixed(0)} hPa` : ''}
                 </div>
+                ${lightShadowHtml}
                 <div class="layer-header">Body EISV projection <span>\u2014 lossy sensor translation</span></div>
                 ${eisvHtml}
                 <div class="layer-header">Governance <span>\u2014 behavioral monitor and policy</span></div>

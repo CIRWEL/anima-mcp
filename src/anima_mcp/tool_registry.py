@@ -166,7 +166,8 @@ TOOLS = [
         name="get_lumen_context",
         description=(
             "Get Lumen's complete context: identity, body anima, sensors, mood, "
-            "body EISV projection, and self-iteration attention in one call. "
+            "shadow light attribution, body EISV projection, and self-iteration "
+            "attention in one call. "
             "The legacy eisv field is a body projection, not UNITARES state."
         ),
         inputSchema={
@@ -183,6 +184,7 @@ TOOLS = [
                             "body_eisv_projection",
                             "eisv",
                             "sensors",
+                            "light_attribution",
                             "mood",
                             "attention",
                             "code",
@@ -190,7 +192,8 @@ TOOLS = [
                     },
                     "description": (
                         "What to include (default: identity, anima/body_anima, "
-                        "sensors, mood, body_eisv_projection, attention; code "
+                        "sensors with shadow light attribution, mood, "
+                        "body_eisv_projection, attention; code "
                         "is opt-in). eisv is a deprecated alias of "
                         "body_eisv_projection."
                     ),

@@ -23,6 +23,8 @@ def full_readings(now):
         ambient_temp_c=22.0,
         humidity_pct=40.0,
         light_lux=300.0,
+        light_observed_at=now,
+        light_observed_precision_seconds=0.001,
         cpu_percent=15.0,
         memory_percent=35.0,
         disk_percent=50.0,
@@ -68,6 +70,8 @@ class TestSensorReadingsAttributes:
         assert minimal_readings.ambient_temp_c is None
         assert minimal_readings.humidity_pct is None
         assert minimal_readings.light_lux is None
+        assert minimal_readings.light_observed_at is None
+        assert minimal_readings.light_observed_precision_seconds is None
         assert minimal_readings.cpu_percent is None
         assert minimal_readings.memory_percent is None
         assert minimal_readings.disk_percent is None
@@ -118,6 +122,8 @@ class TestSensorReadingsSerialization:
         assert "led_brightness" in d
         assert "pressure_hpa" in d
         assert d["light_lux"] == 300.0
+        assert d["light_observed_at"] == full_readings.timestamp.isoformat()
+        assert d["light_observed_precision_seconds"] == 0.001
 
     def test_to_dict_no_lux_key(self, full_readings):
         """to_dict should NOT have a 'lux' key — it's 'light_lux'."""

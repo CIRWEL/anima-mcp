@@ -245,9 +245,9 @@ Source: `computational_neural.py` (used by both `pi.py` and `mock.py` sensors).
 
 The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCraft HAT. Configured with gain 1x and 200ms integration time for indoor precision.
 
-**Lux = lux.** Raw sensor reading used everywhere — no glow correction. The sensor reads LED glow + room light together. Lumen knows its LED brightness separately as a proprioceptive signal.
+**Lux remains lux.** The canonical light channel is the uncorrected combined VEML7700 reading (room + LED glow), with the longstanding per-broker-sample EMA (`alpha=0.2`) applied in `sensors/pi.py`. Here “raw lux” means **no self-glow subtraction**, not “no temporal filtering.” It is never overwritten by a correction.
 
-All consumers use raw lux directly: clarity, activity state, growth preferences, drawing light_regime, ethical drift, self-model correlations. LED brightness is tracked as a separate known value, not decomposed from the lux reading.
+All behavioral consumers still use raw lux directly: clarity, activity state, growth preferences, drawing light_regime, ethical drift, and self-model correlations. The DotStar animation thread publishes a short timestamped history of actual applied brightness and post-scaling RGB output; the broker aligns that history to the Elixir sensor-capture timestamp (including its one-second precision interval). `light_attribution.py` applies the same `alpha=0.2` EMA to optical drive, then uses the internally generated breathing pulse as a causal instrument: it learns lux-per-filtered-optical-drive only while logical color and target brightness stay fixed, rejecting the closed-loop correlation where room lux changes activity and activity changes the LEDs. It publishes a **shadow-only** `external_lux_residual`; the value stays `null` while warming, alignment is unavailable, or the candidate conflicts with the physical reading. This telemetry moves no gate (`used_by_clarity=false`, `clarity_input=raw_lux`). Do not restore the retired hardcoded `1150*b²` subtraction.
 
 **Drawing light regime thresholds** (raw lux):
 - `< 5 lux` → dark (LEDs off + room dark)
@@ -667,6 +667,8 @@ Things agents keep re-discovering. Read this so you don't waste time.
   "data": {
     "readings": { "cpu_temp_c": ..., "eeg_delta_power": ... },
     "anima": { "warmth": 0.36, "clarity": 0.73, ... },
+    "led_proprioception": { "source": "led_hardware_controller", "brightness": 0.04, "optical_drive": 0.02 },
+    "light_attribution": { "mode": "shadow", "status": "warming", "raw_lux": 12.8, "external_lux_residual": null, "used_by_clarity": false },
     "wifi_connected": true,
     "activity": { "level": "active", "reason": "engaged" },
     "learning": {

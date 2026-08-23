@@ -634,6 +634,26 @@ class TestLEDBrightnessEstimate:
         result = estimate_instantaneous_brightness(1.0)
         assert 0.9 <= result <= 1.2  # should be near 1.0
 
+    def test_pairs_action_history_to_midpoint_of_light_timestamp_precision(self):
+        from anima_mcp.stable_creature import _pair_led_action_to_light_capture
+
+        readings = _make_readings(
+            light_observed_at=datetime.fromtimestamp(100.0),
+            light_observed_precision_seconds=1.0,
+        )
+        paired = {"brightness": 0.08, "alignment_error_seconds": 0.1}
+        with patch(
+            "anima_mcp.stable_creature.read_led_proprioception",
+            return_value=paired,
+        ) as read_action:
+            assert _pair_led_action_to_light_capture(readings) == paired
+
+        assert read_action.call_args.kwargs == {
+            "max_age_seconds": 2.0,
+            "at_time": 100.5,
+            "max_alignment_error_seconds": 0.75,
+        }
+
 
 # =====================================================================
 # SHM data assembly
