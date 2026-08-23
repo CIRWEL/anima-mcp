@@ -299,6 +299,10 @@ def test_schema_trajectory_uses_canonical_profile_labels_and_confidences():
     assert "beliefDetail.values" in text
     assert "beliefDetail.labels" in text
     assert "beliefDetail.confidences" in text
+    assert "canonical trajectory" in text
+    assert "identity vector shows established only" in text
+    assert "preferenceDetail.statuses" in text
+    assert "tracked hypotheses" in text
 
 
 def test_control_relay_root_redirects_to_dashboard():

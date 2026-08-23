@@ -532,6 +532,7 @@ def test_breathing_instrument_survives_slow_ambient_drift_and_sensor_noise():
     stats = model.model_stats()
     assert stats["ready"] is True
     assert stats["slope_lux_per_drive"] == pytest.approx(500.0, rel=0.08)
+    assert stats["latest_transition_at_unix"] == 196.0
 
 
 def test_estimated_brightness_without_colors_cannot_train_or_claim_residual():

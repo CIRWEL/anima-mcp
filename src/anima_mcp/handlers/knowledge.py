@@ -25,6 +25,8 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
         else insight_id
     )
     pref = None
+    historical_preference_claim = False
+    led_causal_model_ready = None
     if growth is not None:
         pref = growth._preferences.get(pref_name)
     is_preference_insight = insight_id.startswith("pref_") or (
@@ -45,6 +47,9 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
             evidence_origin = getattr(
                 pref, "evidence_origin", "legacy_unclassified"
             )
+            historical_preference_claim = (
+                evidence_origin == "retired_qa_claim_bridge_v1"
+            )
             view.update({
                 "confidence": pref.confidence,
                 "sample_count": getattr(
@@ -55,6 +60,21 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                 "contradicting_count": evidence_contradictions,
                 "evidence_origin": evidence_origin,
             })
+            if historical_preference_claim:
+                description = view.get("description", "")
+                for prefix in (
+                    "i know this about myself: ",
+                    "observational pattern: ",
+                    "from q&a: ",
+                ):
+                    if description.startswith(prefix):
+                        description = description.removeprefix(prefix)
+                view.update({
+                    "description": f"historical Q&A claim: {description}",
+                    "record_role": "historical_claim",
+                    "historical_as_of": pref.last_confirmed.isoformat(),
+                    "current_state_authority": "none",
+                })
             evidence_basis = {
                 "legacy_hourly_reconstruction": (
                     "conservative hourly reconstruction of legacy broker ticks"
@@ -69,7 +89,10 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                     "retired textual Q&A claim; preserved for historical audit only"
                 ),
             }.get(evidence_origin, evidence_basis)
-            if view["description"].startswith("i know this about myself: "):
+            if (
+                not historical_preference_claim
+                and view["description"].startswith("i know this about myself: ")
+            ):
                 view["description"] = view["description"].replace(
                     "i know this about myself: ", "observational pattern: ", 1
                 )
@@ -96,11 +119,44 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                 "contradicting_count": evidence_contradictions,
             })
         if insight_id == "belief_my_leds_affect_lux":
-            view["interpretation"] = (
-                "Narrative correlation belief only. The separately gated "
-                "light_attribution residual determines whether self-glow can "
-                "be estimated; raw lux remains physical telemetry, not room light."
+            stats_getter = getattr(
+                self_model, "get_light_attribution_model_stats", None
             )
+            stats = stats_getter() if callable(stats_getter) else None
+            if isinstance(stats, dict):
+                led_causal_model_ready = bool(stats.get("ready"))
+                try:
+                    causal_confidence = float(stats.get("confidence", 0.0))
+                except (TypeError, ValueError):
+                    causal_confidence = 0.0
+                view["causal_test"] = {
+                    "model_kind": stats.get("kind"),
+                    "identification_status": stats.get(
+                        "identification_status"
+                    ),
+                    "ready": led_causal_model_ready,
+                    "confidence": causal_confidence,
+                    "transition_count": stats.get("transition_count"),
+                    "latest_transition_at_unix": stats.get(
+                        "latest_transition_at_unix"
+                    ),
+                    "up_transitions": stats.get("up_transitions"),
+                    "down_transitions": stats.get("down_transitions"),
+                    "unknown_reasons": stats.get("unknown_reasons", []),
+                }
+                view["interpretation"] = (
+                    "The raw closed-loop correlation pathway is retired. "
+                    f"The causal breathing-pulse test is "
+                    f"{stats.get('identification_status', 'unknown')} at "
+                    f"{causal_confidence:.0%} confidence; "
+                    "only a ready model may reinforce this belief."
+                )
+            else:
+                view["interpretation"] = (
+                    "Narrative hypothesis only. The separately gated "
+                    "light_attribution residual determines whether self-glow can "
+                    "be estimated; raw lux remains physical telemetry, not room light."
+                )
         elif insight_id == "belief_light_warmth_correlation":
             view["interpretation"] = (
                 "Historical raw-lux evidence was cold-started because it mixed "
@@ -160,11 +216,26 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
         "long_term_trend": 3,
         "state_association": 10,
     }[source_kind]
-    if source_kind == "qa_claim":
+    if historical_preference_claim:
+        actionability = "historical_claim"
+        review_reason = (
+            "This textual Q&A row was retired from preference learning; it "
+            "has no current-state or behavioral authority"
+        )
+    elif source_kind == "qa_claim":
         actionability = "historical_claim"
         review_reason = (
             "Q&A re-derivations can strengthen a stored claim but do not "
             "revalidate it against Lumen's current wiring or telemetry"
+        )
+    elif (
+        insight_id == "belief_my_leds_affect_lux"
+        and led_causal_model_ready is False
+    ):
+        actionability = "review"
+        review_reason = (
+            "the causal breathing-pulse model has not established a stable "
+            "positive LED-to-lux response"
         )
     elif contested:
         actionability = "review"

@@ -202,6 +202,16 @@ class SelfModel:
         "morning_clarity": (0.3, 0.5),
     }
 
+    # The explanatory LED→lux belief was still learning from raw, closed-loop
+    # LED/room-light correlation after the quantitative residual moved to an
+    # instrumented breathing-pulse model. That lets activity-driven logical
+    # brightness changes reinforce the narrative belief without identifying a
+    # causal sensor response. V6 retires those counts; only a ready causal
+    # attribution model may now add evidence to this belief.
+    _LED_CAUSAL_EVIDENCE_RESET_V6 = {
+        "my_leds_affect_lux": (0.5, 0.5),
+    }
+
     def __init__(self, persistence_path: Optional[Path] = None,
                  read_only: bool = False):
         self.persistence_path = persistence_path or Path.home() / ".anima" / "self_model.json"
@@ -314,15 +324,15 @@ class SelfModel:
         self._correlation_data: Dict[str, deque] = {
             "temp_clarity": deque(maxlen=50),  # (temp, clarity) pairs
             "light_warmth": deque(maxlen=50),  # (light, warmth) pairs
-            "led_lux": deque(maxlen=50),  # (led_brightness, light_lux) pairs
+            # Retained only so legacy/private diagnostics fail closed and can
+            # clear stale samples. Runtime evidence no longer enters here.
+            "led_lux": deque(maxlen=50),
         }
         self._surprise_data: deque = deque(maxlen=50)  # (source, surprise_level)
-        self._prev_led_brightness: Optional[float] = None  # Track LED changes
         self._temperament_samples: deque = deque(maxlen=30)  # Recent temperament snapshots
         self.belief_update_bonus: float = 0.0  # From experiential marks
-        # Calibration is distinct from the explanatory belief above.  The
-        # belief can say "my LEDs affect lux" while this model still reports
-        # the size of that effect as unknown until transition evidence is warm.
+        # Calibration is the evidence authority for the explanatory belief.
+        # The belief remains a hypothesis until this causal model is ready.
         self._light_attribution_model = LearnedLedLuxResidual()
 
         # Load persisted model
@@ -380,6 +390,9 @@ class SelfModel:
         )
         self._clarity_semantics_audit = data.get(
             "_migrated_clarity_semantics_reset_v5", None
+        )
+        self._led_causal_evidence_audit = data.get(
+            "_migrated_led_causal_evidence_reset_v6", None
         )
 
     def _load(self):
@@ -492,6 +505,35 @@ class SelfModel:
                     self._clarity_semantics_audit = audit or True
                     migrated = True
 
+                if not self.read_only and not data.get(
+                    "_migrated_led_causal_evidence_reset_v6"
+                ):
+                    audit = {}
+                    for bid, (conf, value) in (
+                        self._LED_CAUSAL_EVIDENCE_RESET_V6.items()
+                    ):
+                        belief = self._beliefs.get(bid)
+                        if belief is None:
+                            continue
+                        audit[bid] = {
+                            "confidence": belief.confidence,
+                            "value": belief.value,
+                            "supporting_count": belief.supporting_count,
+                            "contradicting_count": belief.contradicting_count,
+                            "retired_evidence": "raw_closed_loop_led_lux_correlation",
+                        }
+                        belief.confidence = conf
+                        belief.value = value
+                        belief.supporting_count = 0
+                        belief.contradicting_count = 0
+                    self._correlation_data["led_lux"].clear()
+                    self._evidence_buckets.pop("led_lux:change", None)
+                    self._evidence_buckets.pop(
+                        "correlation:my_leds_affect_lux", None
+                    )
+                    self._led_causal_evidence_audit = audit or True
+                    migrated = True
+
                 if migrated:
                     self._save()
 
@@ -555,6 +597,8 @@ class SelfModel:
                     getattr(self, "_light_channel_audit", None) or True,
                 "_migrated_clarity_semantics_reset_v5":
                     getattr(self, "_clarity_semantics_audit", None) or True,
+                "_migrated_led_causal_evidence_reset_v6":
+                    getattr(self, "_led_causal_evidence_audit", None) or True,
             }
             atomic_json_write(self.persistence_path, data, indent=2)
             try:
@@ -740,12 +784,13 @@ class SelfModel:
         observed_at: Optional[float] = None,
         observation_id: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Track LED/lux correlation and update the gated residual model.
+        """Update the causal LED/lux residual and its explanatory belief.
 
         This is proprioceptive learning: discovering that one's own outputs
-        affect one's own sensor inputs.  The explanatory belief and the
-        quantitative residual have separate evidence gates: a correlation is
-        not enough to claim a calibrated self-glow value.
+        affect one's own sensor inputs. Raw LED/lux correlation is deliberately
+        not evidence here: activity can drive both channels. Only a ready
+        internally instrumented breathing-pulse model may reinforce the
+        explanatory belief.
         """
         if isinstance(led_proprioception, dict):
             led_state = dict(led_proprioception)
@@ -762,52 +807,55 @@ class SelfModel:
             learn=not self.read_only,
         )
 
-        if led_brightness is None or light_lux is None:
-            return attribution
-
-        now = datetime.now()
-
-        # Record the data point
-        self._correlation_data["led_lux"].append({
-            "led": led_brightness,
-            "lux": light_lux,
-            "timestamp": now,
-        })
-
-        # Check for LED brightness change
-        if self._prev_led_brightness is not None:
-            led_change = led_brightness - self._prev_led_brightness
-
-            if abs(led_change) > 0.05:
-                # Look at recent lux data to see if lux changed similarly
-                led_lux_data = list(self._correlation_data["led_lux"])
-                change_bucket = str(int(now.timestamp() // 300))
-                if (len(led_lux_data) >= 3
-                        and self._claim_evidence_bucket("led_lux:change", change_bucket)):
-                    # Compare lux before and after the LED change
-                    recent_lux = [d["lux"] for d in led_lux_data[-3:]]
-                    older_lux = [d["lux"] for d in led_lux_data[-6:-3]] if len(led_lux_data) >= 6 else recent_lux
-
-                    avg_recent = sum(recent_lux) / len(recent_lux)
-                    avg_older = sum(older_lux) / len(older_lux)
-                    lux_change = avg_recent - avg_older
-
-                    # Did lux change in the same direction as LEDs?
-                    same_direction = (led_change > 0 and lux_change > 0) or (led_change < 0 and lux_change < 0)
-
-                    # Update belief
-                    self._update_belief("my_leds_affect_lux",
-                        supports=same_direction,
-                        strength=min(1.0, abs(lux_change) / 10.0))
-                    self._maybe_save()
-
-        self._prev_led_brightness = led_brightness
-
-        # Also test via correlation approach periodically
-        if len(self._correlation_data["led_lux"]) >= 10:
-            self._test_correlation_belief("my_leds_affect_lux", "led_lux")
+        self._observe_ready_led_attribution_belief(
+            attribution,
+        )
 
         return attribution
+
+    def _observe_ready_led_attribution_belief(
+        self,
+        attribution: Dict[str, Any],
+    ) -> None:
+        """Credit one belief episode per hour containing fresh causal evidence."""
+        model = attribution.get("model", {}) if isinstance(attribution, dict) else {}
+        if not isinstance(model, dict) or not model.get("ready"):
+            return
+        slope = model.get("slope_lux_per_drive")
+        confidence = model.get("confidence")
+        try:
+            slope = float(slope)
+            confidence = float(confidence)
+        except (TypeError, ValueError):
+            return
+        if (
+            not math.isfinite(slope)
+            or slope <= 0.0
+            or not math.isfinite(confidence)
+        ):
+            return
+        timestamp = model.get("latest_transition_at_unix")
+        try:
+            timestamp = float(timestamp) if timestamp is not None else None
+        except (TypeError, ValueError):
+            timestamp = None
+        if timestamp is None or not math.isfinite(timestamp):
+            return
+        hour_bucket = datetime.fromtimestamp(timestamp).strftime("%Y-%m-%dT%H")
+        if not self._claim_evidence_bucket(
+            "led_lux:causal_ready_model", hour_bucket
+        ):
+            return
+        self._update_belief(
+            "my_leds_affect_lux",
+            supports=True,
+            strength=max(0.0, min(1.0, confidence)),
+        )
+        self._maybe_save()
+
+    def get_light_attribution_model_stats(self) -> Dict[str, Any]:
+        """Return the causal model state that governs LED/lux claims."""
+        return dict(self._light_attribution_model.model_stats())
 
     def get_light_attribution(
         self,
@@ -829,6 +877,14 @@ class SelfModel:
 
     def _test_correlation_belief(self, belief_id: str, data_key: str):
         """Test a correlation belief against accumulated data."""
+        if belief_id == "my_leds_affect_lux" or data_key == "led_lux":
+            # Fail closed if an old/private caller tries to reopen the retired
+            # closed-loop path. LED→lux evidence is owned exclusively by the
+            # instrumented breathing-pulse attribution model above.
+            data = self._correlation_data.get(data_key)
+            if data is not None:
+                data.clear()
+            return
         if len(self._correlation_data[data_key]) < 10:
             return  # Not enough data
 
