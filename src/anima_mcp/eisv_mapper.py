@@ -1,11 +1,12 @@
 """
-Map anima state (physical + neural) to EISV metrics for UNITARES governance.
+Project anima state (physical + neural) into EISV-shaped body telemetry.
 
 Creates bridge between anima-mcp creature and unitares-governance system.
 
-This module implements the mapping from anima proprioception (warmth, clarity,
-stability, presence) to EISV metrics (Energy, Integrity, Entropy, Valence) used
-by UNITARES governance framework.
+This module implements a lossy projection from anima proprioception (warmth,
+clarity, stability, presence) into EISV coordinates (Energy, Integrity,
+Entropy, Valence).  The result is an input measurement for UNITARES; it is not
+UNITARES's own behavioral/governance EISV estimate.
 
 V is Valence — the signed E-I imbalance shared with governance (positive =
 running hot, E>I; negative = running careful, I>E), NOT the older "Void"
@@ -20,9 +21,17 @@ from .anima import Anima
 from .sensors.base import SensorReadings
 
 
+BODY_EISV_PROJECTION_SCHEMA = "anima.body_eisv_projection.v1"
+
+
 @dataclass
-class EISVMetrics:
-    """EISV metrics compatible with UNITARES governance."""
+class BodyEISVProjection:
+    """Lumen body telemetry projected into EISV-shaped coordinates.
+
+    This type deliberately names the producer and epistemic role.  It is not
+    interchangeable with UNITARES's behavioral ``primary_eisv`` or with the
+    drawing engine's independent ``DrawingEISV`` state.
+    """
     
     energy: float      # E: 0-1, activation level
     integrity: float   # I: 0-1, information quality
@@ -30,7 +39,7 @@ class EISVMetrics:
     valence: float     # V: -1..1, signed E-I imbalance (+hot / -careful)
 
     def to_dict(self) -> dict:
-        """Convert to dictionary for MCP/JSON serialization."""
+        """Return the legacy-compatible bare E/I/S/V vector."""
         return {
             "E": self.energy,
             "I": self.integrity,
@@ -38,11 +47,29 @@ class EISVMetrics:
             "V": self.valence,
         }
 
+    def to_envelope(self) -> dict:
+        """Return a self-describing serialization for new API boundaries."""
+        return {
+            "schema": BODY_EISV_PROJECTION_SCHEMA,
+            "kind": "body_eisv_projection",
+            "source": "anima_sensor_projection",
+            "vector": self.to_dict(),
+            "role": "lossy_body_measurement_for_trajectory_and_governance_input",
+        }
+
     def __repr__(self) -> str:
-        return f"EISV(E={self.energy:.2f}, I={self.integrity:.2f}, S={self.entropy:.2f}, V={self.valence:+.2f})"
+        return (
+            "BodyEISVProjection("
+            f"E={self.energy:.2f}, I={self.integrity:.2f}, "
+            f"S={self.entropy:.2f}, V={self.valence:+.2f})"
+        )
 
 
-def anima_components_to_eisv(
+# Source-compatible name for clients written before the provenance split.
+EISVMetrics = BodyEISVProjection
+
+
+def anima_components_to_body_eisv_projection(
     warmth: float,
     clarity: float,
     stability: float,
@@ -50,8 +77,8 @@ def anima_components_to_eisv(
     neural_energy: Optional[float] = None,
     neural_weight: float = 0.3,
     physical_weight: float = 0.7,
-) -> EISVMetrics:
-    """Canonical EISV mapping shared by governance and trajectory awareness.
+) -> BodyEISVProjection:
+    """Canonical body projection shared by check-ins and trajectory awareness.
 
     Presence remains part of the signature because it is a first-class anima
     dimension, but it is not Valence.  Valence is the signed E-I imbalance.
@@ -93,7 +120,7 @@ def anima_components_to_eisv(
     entropy = max(0.0, min(1.0, 1.0 - stability))
     valence = max(-1.0, min(1.0, energy - integrity))
 
-    return EISVMetrics(
+    return BodyEISVProjection(
         energy=energy,
         integrity=integrity,
         entropy=entropy,
@@ -101,14 +128,35 @@ def anima_components_to_eisv(
     )
 
 
-def anima_to_eisv(
+def anima_components_to_eisv(
+    warmth: float,
+    clarity: float,
+    stability: float,
+    presence: float,
+    neural_energy: Optional[float] = None,
+    neural_weight: float = 0.3,
+    physical_weight: float = 0.7,
+) -> BodyEISVProjection:
+    """Compatibility alias for :func:`anima_components_to_body_eisv_projection`."""
+    return anima_components_to_body_eisv_projection(
+        warmth=warmth,
+        clarity=clarity,
+        stability=stability,
+        presence=presence,
+        neural_energy=neural_energy,
+        neural_weight=neural_weight,
+        physical_weight=physical_weight,
+    )
+
+
+def anima_to_body_eisv_projection(
     anima: Anima,
     readings: SensorReadings,
     neural_weight: float = 0.3,
     physical_weight: float = 0.7
-) -> EISVMetrics:
+) -> BodyEISVProjection:
     """
-    Map anima state to EISV metrics.
+    Project anima state into EISV-shaped body telemetry.
     
     Mapping strategy:
     - Energy (E): Warmth + Beta/Gamma power (activation)
@@ -124,7 +172,7 @@ def anima_to_eisv(
                       Should sum to 1.0 with neural_weight
     
     Returns:
-        EISVMetrics with E/I/S in [0, 1] and V in [-1, 1]
+        BodyEISVProjection with E/I/S in [0, 1] and V in [-1, 1]
     """
     # Integrity (I): Clarity only. Alpha is deliberately NOT mixed in:
     # alpha = 1 - beta by construction (computational_neural.py), so feeding
@@ -138,12 +186,27 @@ def anima_to_eisv(
     if beta is not None or gamma is not None:
         neural_energy = (beta or 0.0) * 0.6 + (gamma or 0.0) * 0.4
 
-    return anima_components_to_eisv(
+    return anima_components_to_body_eisv_projection(
         warmth=anima.warmth,
         clarity=anima.clarity,
         stability=anima.stability,
         presence=anima.presence,
         neural_energy=neural_energy,
+        neural_weight=neural_weight,
+        physical_weight=physical_weight,
+    )
+
+
+def anima_to_eisv(
+    anima: Anima,
+    readings: SensorReadings,
+    neural_weight: float = 0.3,
+    physical_weight: float = 0.7,
+) -> BodyEISVProjection:
+    """Compatibility alias for :func:`anima_to_body_eisv_projection`."""
+    return anima_to_body_eisv_projection(
+        anima,
+        readings,
         neural_weight=neural_weight,
         physical_weight=physical_weight,
     )
@@ -191,7 +254,7 @@ def estimate_complexity(
 def generate_status_text(
     anima: Anima,
     readings: Optional[SensorReadings] = None,
-    eisv: Optional[EISVMetrics] = None,
+    eisv: Optional[BodyEISVProjection] = None,
     experiential_summary: Optional[dict] = None,
 ) -> str:
     """
@@ -233,9 +296,13 @@ def generate_status_text(
                 neural_parts.append(f"Gamma={gamma:.2f}")
             status_parts.append(" ".join(neural_parts))
 
-    # Add EISV if provided
+    # Name the producer: this is Lumen's body projection, not UNITARES state.
     if eisv:
-        status_parts.append(f"EISV: E={eisv.energy:.2f}, I={eisv.integrity:.2f}, S={eisv.entropy:.2f}, V={eisv.valence:+.2f}")
+        status_parts.append(
+            "Body EISV projection: "
+            f"E={eisv.energy:.2f}, I={eisv.integrity:.2f}, "
+            f"S={eisv.entropy:.2f}, V={eisv.valence:+.2f}"
+        )
 
     # Add experiential accumulation summary
     if experiential_summary:
@@ -257,13 +324,13 @@ def generate_status_text(
 
 
 # Convenience function for common use case
-def compute_eisv_from_readings(
+def compute_body_eisv_projection_from_readings(
     readings: SensorReadings,
     neural_weight: float = 0.3,
     physical_weight: float = 0.7
-) -> EISVMetrics:
+) -> BodyEISVProjection:
     """
-    Compute EISV metrics directly from sensor readings.
+    Compute a body EISV projection directly from sensor readings.
     
     Convenience function that creates anima state and maps to EISV in one call.
     
@@ -273,12 +340,27 @@ def compute_eisv_from_readings(
         physical_weight: Weight for physical signals
     
     Returns:
-        EISVMetrics
+        BodyEISVProjection
     """
     from .anima import sense_self
     
     anima = sense_self(readings)
-    return anima_to_eisv(anima, readings, neural_weight, physical_weight)
+    return anima_to_body_eisv_projection(
+        anima, readings, neural_weight, physical_weight
+    )
+
+
+def compute_eisv_from_readings(
+    readings: SensorReadings,
+    neural_weight: float = 0.3,
+    physical_weight: float = 0.7,
+) -> BodyEISVProjection:
+    """Compatibility alias for ``compute_body_eisv_projection_from_readings``."""
+    return compute_body_eisv_projection_from_readings(
+        readings,
+        neural_weight=neural_weight,
+        physical_weight=physical_weight,
+    )
 
 
 def compute_ethical_drift(
@@ -297,8 +379,9 @@ def compute_ethical_drift(
     - Δη[1]: Epistemic drift — change in clarity (certainty/confusion)
     - Δη[2]: Behavioral drift — change in stability (order/chaos)
 
-    Without this signal, governance EISV stays at equilibrium and never moves.
-    This is the primary driver of governance dynamics.
+    UNITARES may use this as one check-in input. Its legacy ODE compatibility
+    dynamics consume drift, but the live behavioral EISV path is independently
+    estimated from work evidence; this vector is not its primary-state owner.
 
     Args:
         current_anima: Current anima state

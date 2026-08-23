@@ -27,6 +27,10 @@ from anima_mcp.display.screens import (  # noqa: E402
 )
 from anima_mcp.display.renderer import PilRenderer  # noqa: E402
 from anima_mcp.display.face import FaceState, EyeState, MouthState  # noqa: E402
+from anima_mcp.display.screen_info import (  # noqa: E402
+    _eisv_bar_fraction,
+    _select_eisv_for_display,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -58,6 +62,68 @@ def screen_renderer(mock_display, tmp_path):
             identity_store=None,
         )
     return sr
+
+
+class TestDiagnosticsEisvProvenance:
+    """Diagnostics distinguish UNITARES state from submitted body telemetry."""
+
+    def test_prefers_complete_governance_vector(self):
+        body = {"E": 0.2, "I": 0.3, "S": 0.4, "V": -0.1}
+        governance = {"E": 0.8, "I": 0.7, "S": 0.1, "V": 0.1}
+
+        vector, label = _select_eisv_for_display({
+            "body_eisv_projection": body,
+            "governance_eisv": governance,
+        })
+
+        assert vector == governance
+        assert label == "gov state"
+
+    def test_labels_body_fallback_and_rejects_partial_governance(self):
+        body = {"E": 0.2, "I": 0.3, "S": 0.4, "V": -0.1}
+
+        vector, label = _select_eisv_for_display({
+            "body_eisv_projection": body,
+            "governance_eisv": {"E": 0.8, "I": 0.7},
+        })
+
+        assert vector == body
+        assert label == "body input"
+
+    def test_rejects_out_of_range_vector(self):
+        vector, label = _select_eisv_for_display({
+            "governance_eisv": {"E": 0.8, "I": 0.7, "S": 1.1, "V": 0.1},
+        })
+
+        assert vector is None
+        assert label == ""
+
+    def test_deployed_ranges_fill_bars_without_legacy_half_scale(self):
+        assert _eisv_bar_fraction("S", 0.6) == 0.6
+        assert _eisv_bar_fraction("V", -0.8) == 0.8
+        assert _eisv_bar_fraction("E", 1.2) == 1.0
+
+    def test_cache_key_changes_with_displayed_vector(self, screen_renderer):
+        from conftest import make_anima
+
+        first = {
+            "action": "proceed",
+            "source": "unitares",
+            "governance_eisv": {"E": 0.8, "I": 0.7, "S": 0.1, "V": 0.1},
+        }
+        second = {
+            **first,
+            "governance_eisv": {"E": 0.6, "I": 0.7, "S": 0.1, "V": 0.1},
+        }
+        with patch.object(
+            screen_renderer, "_check_screen_cache", return_value=True
+        ) as cache_check:
+            screen_renderer._render_diagnostics(make_anima(), None, first)
+            screen_renderer._render_diagnostics(make_anima(), None, second)
+
+        first_key = cache_check.call_args_list[0].args[1]
+        second_key = cache_check.call_args_list[1].args[1]
+        assert first_key != second_key
 
 
 def test_set_auto_rotate_delegates_to_drawing_engine(screen_renderer):

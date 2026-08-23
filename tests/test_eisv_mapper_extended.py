@@ -60,7 +60,7 @@ class TestEISVMetricsRepr:
     def test_repr_format(self):
         m = EISVMetrics(energy=0.5, integrity=0.7, entropy=0.3, valence=0.1)
         r = repr(m)
-        assert "EISV(" in r
+        assert "BodyEISVProjection(" in r
         assert "E=0.50" in r
         assert "I=0.70" in r
         assert "S=0.30" in r
@@ -199,7 +199,7 @@ class TestGenerateStatusText:
     def test_with_eisv_adds_eisv_line(self):
         eisv = EISVMetrics(energy=0.5, integrity=0.7, entropy=0.3, valence=0.1)
         text = generate_status_text(_anima(), eisv=eisv)
-        assert "EISV:" in text
+        assert "Body EISV projection:" in text
         assert "E=0.50" in text
 
     def test_readings_without_neural_no_neural_line(self):

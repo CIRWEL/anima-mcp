@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .mapping import (
-    anima_to_eisv,
+    anima_to_body_eisv_projection,
     compute_derivatives,
     compute_trajectory_window,
     classify_trajectory,
@@ -159,19 +159,31 @@ class TrajectoryAwareness:
         clarity: float,
         stability: float,
         presence: float,
+        body_eisv_projection: Optional[Dict[str, float]] = None,
         eisv: Optional[Dict[str, float]] = None,
     ) -> None:
-        """Record an anima state snapshot into the trajectory buffer.
+        """Record a body-projection snapshot into the trajectory buffer.
 
         Only records if at least RECORD_INTERVAL seconds have elapsed
         since the last recording (subsampling to avoid overfilling buffer).
+        ``eisv`` is the deprecated keyword alias retained for callers written
+        before the state-space provenance split.
         """
         now = time.time()
         if now - self._last_record_time < self.RECORD_INTERVAL:
             return
 
-        snapshot = dict(eisv) if eisv is not None else anima_to_eisv(
-            warmth, clarity, stability, presence,
+        if body_eisv_projection is not None and eisv is not None:
+            raise ValueError(
+                "pass body_eisv_projection or legacy eisv, not both"
+            )
+        supplied = body_eisv_projection if body_eisv_projection is not None else eisv
+        snapshot = (
+            dict(supplied)
+            if supplied is not None
+            else anima_to_body_eisv_projection(
+                warmth, clarity, stability, presence
+            )
         )
         for dimension in ("E", "I", "S", "V"):
             value = snapshot.get(dimension)
@@ -210,14 +222,14 @@ class TrajectoryAwareness:
             except (ValueError, TypeError):
                 continue
 
-            eisv = anima_to_eisv(
+            body_projection = anima_to_body_eisv_projection(
                 warmth=rec.get("warmth", 0.5),
                 clarity=rec.get("clarity", 0.5),
                 stability=rec.get("stability", 0.5),
                 presence=rec.get("presence", 0.0),
             )
-            eisv["t"] = t
-            self._buffer.append(eisv)
+            body_projection["t"] = t
+            self._buffer.append(body_projection)
             added += 1
 
         if added > 0:

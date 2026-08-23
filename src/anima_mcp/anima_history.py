@@ -330,13 +330,14 @@ class AnimaHistory:
 
     def compute_void_integral(self, window: int = 100) -> Optional[Dict[str, Any]]:
         """
-        Compute the Anima Void Integral V_anima(t).
+        Compute the historical Anima Void Integral V_anima(t).
 
         From paper Section 4.1:
         V_anima(t) = ∫ ||a(τ) - μ_a|| dτ
 
-        This is the cumulative deviation from equilibrium - a governance
-        trigger for UNITARES to check on agent wellbeing.
+        This is a research diagnostic for cumulative deviation from the anima
+        center. It is not EISV V (Valence), and the live governance path does
+        not consume it as a trigger.
 
         Args:
             window: Number of recent observations to integrate over

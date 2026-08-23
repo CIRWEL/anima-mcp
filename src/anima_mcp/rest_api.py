@@ -8,6 +8,7 @@ Server globals are accessed via late imports from .server (same pattern as handl
 
 import ipaddress
 import json
+import math
 import os
 import sys
 from pathlib import Path
@@ -20,12 +21,103 @@ from starlette.responses import (
     Response,
 )
 
-from .eisv_mapper import anima_to_eisv
+from .eisv_mapper import (
+    BODY_EISV_PROJECTION_SCHEMA,
+    anima_to_body_eisv_projection,
+)
 from .server_state import extract_neural_bands
 from .tool_registry import HANDLERS
 
 # --- Project paths (for serving HTML pages) ---
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
+_EISV_KEYS = ("E", "I", "S", "V")
+
+
+def _validated_eisv_vector(candidate) -> dict | None:
+    """Return a complete finite EISV vector without inventing missing values."""
+    if not isinstance(candidate, dict):
+        return None
+    vector = {}
+    for key in _EISV_KEYS:
+        value = candidate.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        lower, upper = (-1.0, 1.0) if key == "V" else (0.0, 1.0)
+        if not lower <= numeric <= upper:
+            return None
+        vector[key] = numeric
+    return vector
+
+
+def _body_state_fields(anima, body_projection) -> dict:
+    """Canonical body fields plus compatibility aliases for REST clients."""
+    body_anima = {
+        "warmth": anima.warmth,
+        "clarity": anima.clarity,
+        "stability": anima.stability,
+        "presence": anima.presence,
+    }
+    vector = body_projection.to_dict()
+    return {
+        "body_anima": body_anima,
+        "anima": body_anima,
+        "body_eisv_projection": vector,
+        # Bare ``eisv`` predates the state-space split.
+        "eisv": vector,
+        "eisv_source": "body_eisv_projection_legacy_alias",
+        "state_space_provenance": {
+            "body_anima": {
+                "source": "broker_published_anima",
+                "role": "physical_self_sense",
+            },
+            "anima": {
+                "alias_of": "body_anima",
+                "deprecated": True,
+            },
+            "body_eisv_projection": {
+                "schema": BODY_EISV_PROJECTION_SCHEMA,
+                "source": "anima_sensor_projection",
+                "role": "lossy_body_measurement",
+            },
+            "eisv": {
+                "alias_of": "body_eisv_projection",
+                "deprecated": True,
+            },
+        },
+    }
+
+
+def _governance_state_fields(governance: dict) -> dict:
+    """Expose check-in input and UNITARES output as different state spaces."""
+    body_projection = _validated_eisv_vector(
+        governance.get("body_eisv_projection")
+    )
+    body_source = "explicit"
+    legacy_eisv = _validated_eisv_vector(governance.get("eisv"))
+    if body_projection is None and legacy_eisv is not None:
+        body_projection = legacy_eisv
+        body_source = "legacy_eisv_alias"
+
+    governance_eisv = _validated_eisv_vector(
+        governance.get("governance_eisv")
+    )
+
+    return {
+        "body_eisv_projection": body_projection,
+        "body_eisv_projection_source": body_source if body_projection else "missing",
+        "governance_eisv": governance_eisv,
+        "governance_eisv_source": governance.get(
+            "governance_eisv_source", "not_returned_by_unitares"
+        ),
+        # Compatibility field, never presented as UNITARES's estimate.
+        "eisv": legacy_eisv if legacy_eisv is not None else body_projection,
+        "eisv_source": governance.get(
+            "eisv_source", "body_eisv_projection_legacy_alias"
+        ),
+    }
 
 # --- Auth helpers ---
 
@@ -215,8 +307,10 @@ async def rest_state(request):
         # Build neural bands from raw sensor data
         neural = extract_neural_bands(readings)
 
-        # EISV
-        eisv = anima_to_eisv(anima, readings)
+        # Body telemetry projected into EISV coordinates. This is not the
+        # governance server's inferred EISV state.
+        body_projection = anima_to_body_eisv_projection(anima, readings)
+        body_fields = _body_state_fields(anima, body_projection)
 
         # Governance
         gov = _get_last_governance_decision() or {}
@@ -264,7 +358,6 @@ async def rest_state(request):
             "memory_percent": readings.memory_percent or 0,
             "disk_percent": readings.disk_percent or 0,
             "neural": neural,
-            "eisv": eisv.to_dict(),
             "governance": {
                 "decision": gov.get("action", "unknown").upper() if gov else "OFFLINE",
                 "margin": gov.get("margin", "") if gov else "",
@@ -274,7 +367,9 @@ async def rest_state(request):
                 "age_seconds": gov_age_seconds,
                 "fresh": gov_fresh,
                 "path": "broker_shm" if gov_timestamp else ("server_fallback" if gov else ""),
+                **_governance_state_fields(gov),
             },
+            **body_fields,
             "api_security": {
                 "mode": auth_mode,
                 "token_configured": token_configured,
@@ -716,9 +811,11 @@ async def rest_layers(request):
             "presence": round(anima.presence, 3),
         }
 
-        # EISV
-        eisv = anima_to_eisv(anima, readings)
-        eisv_data = eisv.to_dict()
+        # Body projection (not UNITARES's own behavioral EISV estimate).
+        body_projection = anima_to_body_eisv_projection(anima, readings)
+        body_fields = _body_state_fields(anima, body_projection)
+        body_fields["body_anima"] = anima_data
+        body_fields["anima"] = anima_data
 
         # Governance
         gov = _get_last_governance_decision() or {}
@@ -727,9 +824,8 @@ async def rest_layers(request):
             "margin": gov.get("margin", "unknown") if gov else "n/a",
             "source": gov.get("source", "") if gov else "",
             "connected": bool(gov),
+            **_governance_state_fields(gov),
         }
-        if gov and gov.get("eisv"):
-            governance_data["eisv"] = gov["eisv"]
 
         # System
         system = {
@@ -783,14 +879,13 @@ async def rest_layers(request):
         return JSONResponse({
             "physical": physical,
             "neural": neural,
-            "anima": anima_data,
             "feeling": feeling,
-            "eisv": eisv_data,
             "governance": governance_data,
             "system": system,
             "identity": identity_data,
             "schema_hub": schema_hub_data,
             "mood": feeling.get("mood", "unknown"),
+            **body_fields,
         })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)

@@ -9,24 +9,32 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Dict, List
 
-from ..eisv_mapper import anima_components_to_eisv
+from ..eisv_mapper import anima_components_to_body_eisv_projection
 
 
 # ---------------------------------------------------------------------------
 # EISV Mapping
 # ---------------------------------------------------------------------------
 
+def anima_to_body_eisv_projection(
+    warmth: float, clarity: float, stability: float, presence: float,
+) -> Dict[str, float]:
+    """Project Anima state scalars into EISV-shaped body coordinates.
+
+    Without neural readings, E = warmth. I = clarity, S = 1-stability,
+    and V = E-I (signed Valence). This is the same body measurement submitted
+    to governance; it is not governance's own inferred EISV state.
+    """
+    return anima_components_to_body_eisv_projection(
+        warmth, clarity, stability, presence,
+    ).to_dict()
+
+
 def anima_to_eisv(
     warmth: float, clarity: float, stability: float, presence: float,
 ) -> Dict[str, float]:
-    """Map Anima state scalars to EISV coordinates.
-
-    Without neural readings, E = warmth. I = clarity, S = 1-stability,
-    and V = E-I (signed Valence). This is the same mapping used by governance.
-    """
-    return anima_components_to_eisv(
-        warmth, clarity, stability, presence,
-    ).to_dict()
+    """Compatibility alias for :func:`anima_to_body_eisv_projection`."""
+    return anima_to_body_eisv_projection(warmth, clarity, stability, presence)
 
 
 # ---------------------------------------------------------------------------

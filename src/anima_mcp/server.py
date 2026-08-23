@@ -36,7 +36,7 @@ from .learning import get_learner
 from .activity_state import get_activity_manager
 from .primitive_language import get_language_system
 from .eisv import get_trajectory_awareness
-from .eisv_mapper import anima_to_eisv
+from .eisv_mapper import anima_to_body_eisv_projection
 from .tool_registry import get_fastmcp, create_server, HAS_FASTMCP
 from .server_context import ServerContext
 from .server_state import (
@@ -367,7 +367,9 @@ async def _update_display_loop():
                     clarity=anima.clarity,
                     stability=anima.stability,
                     presence=anima.presence,
-                    eisv=anima_to_eisv(anima, readings).to_dict(),
+                    body_eisv_projection=anima_to_body_eisv_projection(
+                        anima, readings
+                    ).to_dict(),
                 )
                 if _health:
                     _health.heartbeat("trajectory")

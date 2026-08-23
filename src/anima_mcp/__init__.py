@@ -55,15 +55,21 @@ _BASE_ALL = [
 # Governance integration (optional)
 try:
     from .eisv_mapper import (
+        BodyEISVProjection as BodyEISVProjection,
         EISVMetrics as EISVMetrics,
+        anima_to_body_eisv_projection as anima_to_body_eisv_projection,
         anima_to_eisv as anima_to_eisv,
+        compute_body_eisv_projection_from_readings as compute_body_eisv_projection_from_readings,
         compute_eisv_from_readings as compute_eisv_from_readings,
     )
     from .unitares_bridge import UnitaresBridge as UnitaresBridge, check_governance as check_governance
     from .next_steps_advocate import NextStepsAdvocate as NextStepsAdvocate, get_advocate as get_advocate
     __all__ = _BASE_ALL + [
+        "BodyEISVProjection",
         "EISVMetrics",
+        "anima_to_body_eisv_projection",
         "anima_to_eisv",
+        "compute_body_eisv_projection_from_readings",
         "compute_eisv_from_readings",
         "UnitaresBridge",
         "check_governance",

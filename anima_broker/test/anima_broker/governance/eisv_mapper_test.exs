@@ -6,11 +6,12 @@ defmodule AnimaBroker.Governance.EisvMapperTest do
   @anima %{"warmth" => 0.4, "clarity" => 0.8, "stability" => 0.7, "presence" => 0.6}
 
   test "eisv without neural bands mirrors the Python physical-only path" do
-    eisv = EisvMapper.anima_to_eisv(@anima, %{})
+    eisv = EisvMapper.anima_to_body_eisv_projection(@anima, %{})
     assert eisv["E"] == 0.4
     assert eisv["I"] == 0.8
     assert_in_delta eisv["S"], 0.3, 1.0e-9
     assert_in_delta eisv["V"], -0.4, 1.0e-9
+    assert EisvMapper.anima_to_eisv(@anima, %{}) == eisv
   end
 
   test "eisv with neural bands blends 0.7 physical / 0.3 neural into E only" do
@@ -120,6 +121,6 @@ defmodule AnimaBroker.Governance.EisvMapperTest do
     eisv = EisvMapper.anima_to_eisv(@anima, %{})
     text = EisvMapper.status_text(@anima, eisv)
     assert text =~ "Warmth: 0.40"
-    assert text =~ "EISV: E=0.40"
+    assert text =~ "Body EISV projection: E=0.40"
   end
 end

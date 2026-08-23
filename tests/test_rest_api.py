@@ -244,6 +244,28 @@ class TestRestGallery:
 
 @pytest.mark.asyncio
 class TestRestStateAndLayers:
+    async def test_governance_state_fields_reject_incomplete_or_nonfinite_vectors(self):
+        incomplete = rest_api._governance_state_fields({
+            "body_eisv_projection": {"E": 0.2, "I": 0.3},
+            "governance_eisv": {"E": 0.8, "I": 0.7, "S": 0.1},
+        })
+        nonfinite = rest_api._governance_state_fields({
+            "governance_eisv": {
+                "E": 0.8,
+                "I": 0.7,
+                "S": 0.1,
+                "V": float("nan"),
+            },
+        })
+        out_of_range = rest_api._governance_state_fields({
+            "governance_eisv": {"E": 0.8, "I": 0.7, "S": 1.1, "V": 0.1},
+        })
+
+        assert incomplete["body_eisv_projection"] is None
+        assert incomplete["governance_eisv"] is None
+        assert nonfinite["governance_eisv"] is None
+        assert out_of_range["governance_eisv"] is None
+
     async def test_rest_state_unauthorized(self, monkeypatch):
         monkeypatch.setattr(rest_api, "_check_rest_auth", lambda _req: False)
         response = await rest_api.rest_state(_make_request(path="/state"))
@@ -284,7 +306,9 @@ class TestRestStateAndLayers:
         store = SimpleNamespace(get_identity=lambda: identity, get_session_alive_seconds=lambda: 600)
         activity = MagicMock()
         activity.get_sleep_summary.return_value = {"sessions": 1}
-        eisv = SimpleNamespace(to_dict=lambda: {"E": 0.5})
+        eisv = SimpleNamespace(
+            to_dict=lambda: {"E": 0.5, "I": 0.6, "S": 0.4, "V": -0.1}
+        )
 
         with patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.accessors._get_store", return_value=store), \
@@ -298,13 +322,19 @@ class TestRestStateAndLayers:
                  },
              }), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"beta": 0.2}), \
-             patch("anima_mcp.rest_api.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.rest_api.anima_to_body_eisv_projection", return_value=eisv):
             response = await rest_api.rest_state(_make_request(path="/state"))
             data = json.loads(response.body)
 
         assert data["name"] == "Lumen"
         assert data["mood"] == "calm"
         assert data["eisv"]["E"] == 0.5
+        assert data["body_eisv_projection"] == data["eisv"]
+        assert data["eisv_source"] == "body_eisv_projection_legacy_alias"
+        assert data["body_anima"]["warmth"] == 0.4
+        assert data["anima"] == data["body_anima"]
+        assert data["state_space_provenance"]["anima"]["alias_of"] == "body_anima"
+        assert data["governance"]["governance_eisv"] is None
         assert data["governance"]["connected"] is True
         assert data["api_security"]["token_configured"] is True
         assert data["api_security"]["mode"] == "token"
@@ -326,7 +356,9 @@ class TestRestStateAndLayers:
         store = SimpleNamespace(get_identity=lambda: identity, get_session_alive_seconds=lambda: 120)
         traj = SimpleNamespace(observation_count=25, attractor={"center": [0.1, 0.2, 0.3, 0.4], "variance": [0.01, 0.02, 0.03, 0.04]})
         hub = SimpleNamespace(schema_history=[1, 2], history_size=100, last_trajectory=traj, last_gap_delta=None)
-        eisv = SimpleNamespace(to_dict=lambda: {"E": 0.4})
+        eisv = SimpleNamespace(
+            to_dict=lambda: {"E": 0.4, "I": 0.5, "S": 0.3, "V": -0.1}
+        )
 
         with patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.accessors._get_store", return_value=store), \
@@ -334,13 +366,15 @@ class TestRestStateAndLayers:
              patch("anima_mcp.accessors._get_activity", return_value=None), \
              patch("anima_mcp.accessors._get_schema_hub", return_value=hub), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"alpha": 0.3}), \
-             patch("anima_mcp.rest_api.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.rest_api.anima_to_body_eisv_projection", return_value=eisv):
             response = await rest_api.rest_layers(_make_request(path="/layers"))
             data = json.loads(response.body)
 
         assert data["schema_hub"]["history_size"] == 2
         assert data["schema_hub"]["trajectory"]["observation_count"] == 25
         assert data["eisv"]["E"] == 0.4
+        assert data["body_eisv_projection"] == data["eisv"]
+        assert data["body_anima"]["warmth"] == data["anima"]["warmth"]
 
     async def test_rest_layers_returns_500_when_sensors_missing(self):
         with patch("anima_mcp.accessors._get_readings_and_anima", return_value=(None, None)):
@@ -360,13 +394,15 @@ class TestRestStateAndLayers:
                                    alive_ratio=lambda: 0.5, age_seconds=lambda: 7200)
         store = SimpleNamespace(get_identity=lambda: identity, get_session_alive_seconds=lambda: 600)
         activity = SimpleNamespace(get_status=lambda: {"level": "active"}, get_sleep_summary=lambda: {"sessions": 1})
-        eisv = SimpleNamespace(to_dict=lambda: {"E": 0.5})
+        eisv = SimpleNamespace(
+            to_dict=lambda: {"E": 0.5, "I": 0.6, "S": 0.4, "V": -0.1}
+        )
         with patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_last_governance_decision", return_value={"action": "proceed", "source": "unitares"}), \
              patch("anima_mcp.accessors._get_activity", return_value=activity), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"beta": 0.2}), \
-             patch("anima_mcp.rest_api.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.rest_api.anima_to_body_eisv_projection", return_value=eisv):
             response = await rest_api.rest_state(_make_request(path="/state"))
             data = json.loads(response.body)
         assert data["pressure"] is None, "offline BMP280 must surface as null, not 0 hPa"
@@ -382,14 +418,16 @@ class TestRestStateAndLayers:
                                    alive_ratio=lambda: 0.5, age_seconds=lambda: 3600)
         store = SimpleNamespace(get_identity=lambda: identity, get_session_alive_seconds=lambda: 120)
         hub = SimpleNamespace(schema_history=[], history_size=0, last_trajectory=None, last_gap_delta=None)
-        eisv = SimpleNamespace(to_dict=lambda: {"E": 0.4})
+        eisv = SimpleNamespace(
+            to_dict=lambda: {"E": 0.4, "I": 0.5, "S": 0.3, "V": -0.1}
+        )
         with patch("anima_mcp.accessors._get_readings_and_anima", return_value=(readings, anima)), \
              patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_last_governance_decision", return_value={}), \
              patch("anima_mcp.accessors._get_activity", return_value=None), \
              patch("anima_mcp.accessors._get_schema_hub", return_value=hub), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"alpha": 0.3}), \
-             patch("anima_mcp.rest_api.anima_to_eisv", return_value=eisv):
+             patch("anima_mcp.rest_api.anima_to_body_eisv_projection", return_value=eisv):
             response = await rest_api.rest_layers(_make_request(path="/layers"))
             data = json.loads(response.body)
         assert data["physical"]["pressure_hpa"] is None, "offline BMP280 must surface as null, not 0 hPa"

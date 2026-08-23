@@ -3,7 +3,12 @@ defmodule AnimaBroker.Governance.LiveStateTest do
 
   alias AnimaBroker.Governance.LiveState
 
-  @anima %{"warmth" => 0.4, "clarity" => 0.8}
+  @anima %{
+    "warmth" => 0.4,
+    "clarity" => 0.8,
+    "stability" => 0.7,
+    "presence" => 0.6
+  }
   @readings %{"ambient_temp_c" => 24.5}
 
   # Same defect class as #167: these tests wrote fixed names ("anima_state.json",
@@ -25,25 +30,50 @@ defmodule AnimaBroker.Governance.LiveStateTest do
     {:ok, dir: dir}
   end
 
-  defp write_envelope(dir, updated_at) do
+  defp write_envelope(dir, updated_at, data \\ nil) do
     path = Path.join(dir, "anima_state.json")
+
+    data =
+      data ||
+        %{
+          "body_anima" => @anima,
+          "anima" => %{@anima | "warmth" => 0.1},
+          "readings" => @readings
+        }
 
     File.write!(
       path,
       Jason.encode!(%{
         "updated_at" => NaiveDateTime.to_iso8601(updated_at),
         "pid" => 1,
-        "data" => %{"anima" => @anima, "readings" => @readings}
+        "data" => data
       })
     )
 
     path
   end
 
-  test "fresh envelope yields anima and readings", %{dir: dir} do
+  test "fresh envelope prefers body_anima and normalizes the alias", %{dir: dir} do
     path = write_envelope(dir, NaiveDateTime.local_now())
 
-    assert {:ok, %{"anima" => @anima, "readings" => @readings}} = LiveState.read(path: path)
+    assert {:ok,
+            %{
+              "body_anima" => @anima,
+              "anima" => @anima,
+              "readings" => @readings
+            }} = LiveState.read(path: path)
+  end
+
+  test "legacy anima remains a compatibility fallback", %{dir: dir} do
+    path =
+      write_envelope(
+        dir,
+        NaiveDateTime.local_now(),
+        %{"anima" => @anima, "readings" => @readings}
+      )
+
+    assert {:ok, %{"body_anima" => @anima, "anima" => @anima}} =
+             LiveState.read(path: path)
   end
 
   test "stale envelope is rejected", %{dir: dir} do
@@ -58,5 +88,14 @@ defmodule AnimaBroker.Governance.LiveStateTest do
     bad = Path.join(dir, "bad_envelope.json")
     File.write!(bad, "{not json")
     assert {:error, :invalid} = LiveState.read(path: bad)
+
+    missing_body =
+      write_envelope(
+        dir,
+        NaiveDateTime.local_now(),
+        %{"readings" => @readings}
+      )
+
+    assert {:error, :invalid} = LiveState.read(path: missing_body)
   end
 end

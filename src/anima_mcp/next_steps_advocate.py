@@ -13,7 +13,7 @@ from enum import Enum
 
 from .anima import Anima
 from .sensors.base import SensorReadings
-from .eisv_mapper import EISVMetrics
+from .eisv_mapper import BodyEISVProjection
 
 
 def _format_duration(seconds: float) -> str:
@@ -93,7 +93,7 @@ class NextStepsAdvocate:
         self,
         anima: Optional[Anima] = None,
         readings: Optional[SensorReadings] = None,
-        eisv: Optional[EISVMetrics] = None,
+        eisv: Optional[BodyEISVProjection] = None,
         display_available: bool = False,
         brain_hat_available: bool = False,
         unitares_connected: bool = False,
@@ -107,7 +107,7 @@ class NextStepsAdvocate:
         Args:
             anima: Current anima state
             readings: Sensor readings
-            eisv: EISV metrics (if available)
+            eisv: Legacy parameter name for Lumen's body EISV projection
             display_available: Is display working?
             brain_hat_available: Is BrainCraft HAT hardware available?
             unitares_connected: Is UNITARES connected?

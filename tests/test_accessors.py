@@ -647,14 +647,14 @@ class TestGetReadingsAndAnima:
     @patch("anima_mcp.accessors._readings_from_dict")
     @patch("anima_mcp.accessors._get_shm_client")
     def test_uses_broker_anima_when_shm_data_fresh(self, mock_shm, mock_rfd, mock_sense):
-        """Fresh SHM returns the exact broker-owned anima, without re-sensing."""
+        """Fresh SHM returns canonical broker body_anima without re-sensing."""
         from anima_mcp.accessors import _get_readings_and_anima
         make_ctx()
 
         now = datetime.now().astimezone()
         shm_data = {
             "readings": {"cpu_temp_c": 55},
-            "anima": {
+            "body_anima": {
                 "warmth": 0.51,
                 "clarity": 0.62,
                 "stability": 0.73,
@@ -674,6 +674,34 @@ class TestGetReadingsAndAnima:
         assert anima.readings is readings
         mock_rfd.assert_called_once()
         mock_sense.assert_not_called()
+
+    @patch("anima_mcp.accessors._anima_from_dict", side_effect=ValueError("invalid"))
+    @patch("anima_mcp.accessors._readings_from_dict")
+    @patch("anima_mcp.accessors._get_shm_client")
+    def test_invalid_canonical_body_does_not_silently_use_legacy_alias(
+        self, mock_shm, mock_rfd, mock_anima_from_dict
+    ):
+        from anima_mcp.accessors import _get_readings_and_anima
+
+        make_ctx()
+        now = datetime.now().astimezone()
+        legacy = {
+            "warmth": 0.51,
+            "clarity": 0.62,
+            "stability": 0.73,
+            "presence": 0.84,
+        }
+        mock_shm.return_value.read.return_value = {
+            "readings": {"cpu_temp_c": 55},
+            "body_anima": {},
+            "anima": legacy,
+            "timestamp": now.isoformat(),
+        }
+        reconstructed_readings = MagicMock()
+        mock_rfd.return_value = reconstructed_readings
+
+        assert _get_readings_and_anima() == (None, None)
+        mock_anima_from_dict.assert_called_once_with({}, reconstructed_readings)
 
     def test_prediction_accuracy_comes_from_broker_snapshot(self):
         from anima_mcp.accessors import _prediction_accuracy_from_shm

@@ -271,7 +271,9 @@ def _get_readings_and_anima(fallback_to_sensors: bool = False) -> tuple[SensorRe
     if shm_data:
         try:
             # Check if we have the required fields
-            if "readings" in shm_data and "anima" in shm_data:
+            if "readings" in shm_data and (
+                "body_anima" in shm_data or "anima" in shm_data
+            ):
                 # Check timestamp in shared memory data (broker writes "timestamp" field)
                 timestamp_str = shm_data.get("timestamp")
                 if isinstance(timestamp_str, str) and timestamp_str:
@@ -297,7 +299,10 @@ def _get_readings_and_anima(fallback_to_sensors: bool = False) -> tuple[SensorRe
 
             # The broker owns sensing, calibration, anticipation, and mood
             # momentum.  Its published anima is therefore authoritative.
-            anima = _anima_from_dict(shm_data["anima"], readings)
+            body_anima = shm_data.get("body_anima")
+            if body_anima is None:
+                body_anima = shm_data["anima"]
+            anima = _anima_from_dict(body_anima, readings)
 
             return readings, anima
         except Exception as e:

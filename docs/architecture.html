@@ -314,6 +314,18 @@
     <script>
         let data = null;
 
+        function validatedEisv(value) {
+            if (!value || typeof value !== 'object') return null;
+            const vector = {};
+            for (const key of ['E', 'I', 'S', 'V']) {
+                if (!Number.isFinite(value[key])) return null;
+                const lower = key === 'V' ? -1 : 0;
+                if (value[key] < lower || value[key] > 1) return null;
+                vector[key] = value[key];
+            }
+            return vector;
+        }
+
         async function fetchLayers() {
             try {
                 const response = await fetch(`${API_BASE}/layers`);
@@ -344,16 +356,18 @@
             if (id.alive_hours) parts.push(`${id.alive_hours}h alive`);
             document.getElementById('statusText').textContent = parts.join(' \u00b7 ');
 
+            const bodyProjection = validatedEisv(d.body_eisv_projection)
+                || validatedEisv(d.eisv);
             document.getElementById('content').innerHTML = `
                 ${renderPhysical(d.physical)}
                 ${flowLine()}
                 ${renderNeural(d.neural)}
                 ${flowLine()}
-                ${renderAnima(d.anima, d.feeling)}
+                ${renderAnima(d.body_anima || d.anima, d.feeling)}
                 ${flowLine()}
                 ${renderSchemaHub(d.schema_hub, d.identity)}
                 ${flowLine()}
-                ${renderEISV(d.eisv)}
+                ${renderBodyEISVProjection(bodyProjection)}
                 ${flowLine()}
                 ${renderGovernance(d.governance)}
             `;
@@ -520,21 +534,21 @@
             return layerCard('\u222e', 'Schema Hub', 'circulation', c, circulation + nodesHtml);
         }
 
-        function renderEISV(e) {
+        function renderBodyEISVProjection(e) {
             if (!e) return '';
             const c = 'var(--accent-eisv)';
             const sColor = e.S > 0.4 ? '#e8a87c' : '#6bb87a';
-            const vColor = e.V > 0.1 ? '#e87c7c' : '#6bb87a';
+            const vColor = e.V > 0.05 ? '#e8a87c' : e.V < -0.05 ? '#8bcfa0' : '#8a8a8a';
             const sLabel = e.S < 0.3 ? 'low' : 'rising';
-            const vLabel = e.V < 0.05 ? 'clear' : 'gaps';
+            const vLabel = e.V > 0.05 ? 'running hot' : e.V < -0.05 ? 'running careful' : 'balanced';
 
             const content = `<div class="metrics-grid">
-                ${metricBar('Energy', e.E, 1, '#7ecf8b', `${e.E.toFixed(2)} \u00b7 capacity`)}
-                ${metricBar('Integrity', e.I, 1, '#8bcfa0', `${e.I.toFixed(2)} \u00b7 coherence`)}
-                ${metricBar('Entropy', e.S, 1, sColor, `${e.S.toFixed(2)} \u00b7 ${sLabel}`)}
-                ${metricBar('Void', e.V, 0.3, vColor, `${e.V.toFixed(2)} \u00b7 ${vLabel}`)}
+                ${metricBar('Energy proxy', e.E, 1, '#7ecf8b', `${e.E.toFixed(2)} \u00b7 body activation`)}
+                ${metricBar('Integrity proxy', e.I, 1, '#8bcfa0', `${e.I.toFixed(2)} \u00b7 clarity`)}
+                ${metricBar('Entropy proxy', e.S, 1, sColor, `${e.S.toFixed(2)} \u00b7 ${sLabel}`)}
+                ${metricBar('Valence', Math.abs(e.V), 1, vColor, `${e.V >= 0 ? '+' : ''}${e.V.toFixed(2)} \u00b7 ${vLabel}`)}
             </div>`;
-            return layerCard('\u0394', 'EISV Metrics', 'thermodynamics', c, content);
+            return layerCard('\u0394', 'Body EISV Projection', 'lossy sensor translation', c, content);
         }
 
         function renderGovernance(g) {
@@ -552,6 +566,17 @@
                     <div class="gov-meta-value">${escapeHtml(m.value)}</div>
                 </div>`).join('');
 
+            const governanceEisv = validatedEisv(g.governance_eisv);
+            const stateLine = governanceEisv
+                ? `<div class="gov-meta-item">
+                    <div class="gov-meta-label">UNITARES EISV · ${escapeHtml(g.governance_eisv_source || 'unknown source')}</div>
+                    <div class="gov-meta-value">E ${governanceEisv.E.toFixed(2)} · I ${governanceEisv.I.toFixed(2)} · S ${governanceEisv.S.toFixed(2)} · V ${governanceEisv.V >= 0 ? '+' : ''}${governanceEisv.V.toFixed(2)}</div>
+                  </div>`
+                : `<div class="gov-meta-item">
+                    <div class="gov-meta-label">UNITARES EISV</div>
+                    <div class="gov-meta-value">not returned by this check-in mode</div>
+                  </div>`;
+
             const content = `
                 <div class="gov-row">
                     <div class="gov-badge" style="background: ${bgc}; border: 1px solid ${dc}25;">
@@ -559,7 +584,8 @@
                         <span class="gov-badge-text" style="color: ${dc};">${g.decision}</span>
                     </div>
                     <div class="gov-meta">${meta}</div>
-                </div>`;
+                </div>
+                <div class="gov-meta" style="margin-top: 10px;">${stateLine}</div>`;
             return layerCard('\u2696', 'Governance', 'self-regulation', 'var(--accent-gov)', content);
         }
 

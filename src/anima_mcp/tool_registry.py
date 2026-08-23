@@ -164,7 +164,11 @@ TOOLS = [
     ),
     Tool(
         name="get_lumen_context",
-        description="Get Lumen's complete context: identity, anima state, sensors, mood, and self-iteration attention in one call",
+        description=(
+            "Get Lumen's complete context: identity, body anima, sensors, mood, "
+            "body EISV projection, and self-iteration attention in one call. "
+            "The legacy eisv field is a body projection, not UNITARES state."
+        ),
         inputSchema={
             "type": "object",
             "properties": {
@@ -174,14 +178,22 @@ TOOLS = [
                         "type": "string",
                         "enum": [
                             "identity",
+                            "body_anima",
                             "anima",
+                            "body_eisv_projection",
+                            "eisv",
                             "sensors",
                             "mood",
                             "attention",
                             "code",
                         ],
                     },
-                    "description": "What to include (default: identity, anima, sensors, mood, attention; code is opt-in)",
+                    "description": (
+                        "What to include (default: identity, anima/body_anima, "
+                        "sensors, mood, body_eisv_projection, attention; code "
+                        "is opt-in). eisv is a deprecated alias of "
+                        "body_eisv_projection."
+                    ),
                 }
             },
         },

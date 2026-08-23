@@ -1,5 +1,10 @@
 # Changelog
 
+## August 2026
+
+- **State-space provenance** — runtime payloads now distinguish Lumen's `body_anima` and lossy `body_eisv_projection` from independent `drawing_eisv` and UNITARES-produced `governance_eisv`. Legacy `anima`/`eisv` keys remain tagged aliases for compatible clients.
+- **Honest EISV screens** — browser and on-device diagnostics identify body input versus governance state, use signed Valence rather than the retired Void interpretation, and leave omitted UNITARES vectors explicitly unavailable.
+
 ## April 2026
 
 - **Resonance era** — fifth drawing era where marks interact with accumulated emotional history through a 48x48 memory field. Deposit, decay, diffuse cycle creates temporal depth. Unlocks after 50 completed drawings.

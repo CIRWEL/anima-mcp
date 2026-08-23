@@ -66,8 +66,15 @@ defmodule AnimaBroker.Governance.ClientTest do
         "updated_at" => NaiveDateTime.to_iso8601(NaiveDateTime.local_now()),
         "pid" => 1,
         "data" => %{
-          "anima" => %{
+          "body_anima" => %{
             "warmth" => 0.4,
+            "clarity" => 0.8,
+            "stability" => 0.7,
+            "presence" => 0.6
+          },
+          # Deliberately divergent: the client must prefer the canonical field.
+          "anima" => %{
+            "warmth" => 0.1,
             "clarity" => 0.8,
             "stability" => 0.7,
             "presence" => 0.6
@@ -138,7 +145,16 @@ defmodule AnimaBroker.Governance.ClientTest do
           ok_envelope(@onboard_result)
 
         "process_agent_update" ->
-          ok_envelope(%{"action" => "proceed", "margin" => "comfortable", "reason" => "ok"})
+          ok_envelope(%{
+            "action" => "proceed",
+            "margin" => "comfortable",
+            "reason" => "ok",
+            "_mode" => "minimal",
+            "E" => 0.2,
+            "I" => 0.8,
+            "S" => 0.1,
+            "V" => -0.6
+          })
 
         "identity" ->
           ok_envelope(@onboard_result)
@@ -161,6 +177,14 @@ defmodule AnimaBroker.Governance.ClientTest do
     assert is_number(args["complexity"]) and is_number(args["confidence"])
     assert [_, _, _] = args["ethical_drift"]
     assert %{"eisv" => %{"E" => _}} = args["sensor_data"]
+    assert args["sensor_data"]["body_eisv_projection"] == args["sensor_data"]["eisv"]
+    assert args["sensor_data"]["body_anima"] == args["sensor_data"]["anima"]
+    assert args["sensor_data"]["body_anima"]["warmth"] == 0.4
+
+    assert args["sensor_data"]["state_space_provenance"]["anima"] == %{
+             "alias_of" => "body_anima",
+             "deprecated" => true
+           }
 
     # Governance decision landed in the (shadow) Store slice.
     wait_until(fn -> get_in(Store.snapshot(), ["governance", "action"]) == "proceed" end)
@@ -169,6 +193,10 @@ defmodule AnimaBroker.Governance.ClientTest do
     assert gov["identity_mode"] == "scratch"
     assert gov["unitares_agent_id"] == "test-uuid-1234"
     assert is_binary(gov["governance_at"])
+    assert gov["body_eisv_projection"] == gov["eisv"]
+    assert gov["eisv_source"] == "body_eisv_projection_legacy_alias"
+    assert gov["governance_eisv"] == %{"E" => 0.2, "I" => 0.8, "S" => 0.1, "V" => -0.6}
+    assert gov["governance_eisv_source"] == "unitares_primary_response_source_omitted"
 
     # Recovery anchor persisted (parent chaining + both-store-loss rescue):
     # the continuity_token is harvested straight from the onboard response.

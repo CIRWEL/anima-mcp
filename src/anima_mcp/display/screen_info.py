@@ -4,6 +4,7 @@ Display Screens - Info screen mixin.
 Renders sensors, identity, diagnostics, and health screens.
 """
 
+import math
 import sys
 from typing import Optional, Dict, Any
 
@@ -11,6 +12,55 @@ from .design import COLORS
 from ..anima import Anima
 from ..sensors.base import SensorReadings
 from ..identity.store import CreatureIdentity
+
+
+_EISV_KEYS = ("E", "I", "S", "V")
+
+
+def _validated_eisv_vector(candidate: Any) -> Optional[Dict[str, float]]:
+    """Accept only complete finite vectors so absent values never render as zero."""
+    if not isinstance(candidate, dict):
+        return None
+    vector: Dict[str, float] = {}
+    for key in _EISV_KEYS:
+        value = candidate.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return None
+        lower, upper = (-1.0, 1.0) if key == "V" else (0.0, 1.0)
+        if not lower <= numeric <= upper:
+            return None
+        vector[key] = numeric
+    return vector
+
+
+def _select_eisv_for_display(
+    governance: Optional[Dict[str, Any]],
+) -> tuple[Optional[Dict[str, float]], str]:
+    """Prefer UNITARES state, then explicitly labeled body input telemetry."""
+    if not governance:
+        return None, ""
+    governance_eisv = _validated_eisv_vector(
+        governance.get("governance_eisv")
+    )
+    if governance_eisv is not None:
+        return governance_eisv, "gov state"
+    body_projection = _validated_eisv_vector(
+        governance.get("body_eisv_projection")
+    )
+    if body_projection is None:
+        body_projection = _validated_eisv_vector(governance.get("eisv"))
+    if body_projection is not None:
+        return body_projection, "body input"
+    return None, ""
+
+
+def _eisv_bar_fraction(key: str, value: float) -> float:
+    """Map deployed EISV ranges to a display bar without legacy /2 scaling."""
+    magnitude = abs(value) if key == "V" else value
+    return min(1.0, max(0.0, magnitude))
 
 
 class InfoMixin:
@@ -467,6 +517,21 @@ class InfoMixin:
             return
 
         gov_state = (governance.get("unitares_agent_id") or "")[:8] if governance else ""
+        displayed_eisv, eisv_label = _select_eisv_for_display(governance)
+        vector_display_key = (
+            tuple(f"{displayed_eisv[key]:.3f}" for key in _EISV_KEYS)
+            if displayed_eisv
+            else ()
+        )
+        gov_display_key = "|".join(
+            [
+                str(governance.get("action", "")) if governance else "",
+                str(governance.get("margin", "")) if governance else "",
+                str(governance.get("source", "")) if governance else "",
+                eisv_label,
+                *vector_display_key,
+            ]
+        )
         try:
             from ..eisv import get_trajectory_awareness
             _traj_shape = get_trajectory_awareness().current_shape or ""
@@ -474,7 +539,7 @@ class InfoMixin:
             _traj_shape = ""
         diag_key = (
             f"{anima.warmth:.2f}|{anima.clarity:.2f}|{anima.stability:.2f}|"
-            f"{anima.presence:.2f}|{gov_state}|{_traj_shape}"
+            f"{anima.presence:.2f}|{gov_state}|{gov_display_key}|{_traj_shape}"
         )
         if self._check_screen_cache("diagnostics", diag_key):
             return
@@ -578,8 +643,6 @@ class InfoMixin:
                 action = governance.get("action", "unknown")
                 margin = governance.get("margin", "")
                 source = governance.get("source", "")
-                eisv   = governance.get("eisv")
-
                 action_colors = {
                     "proceed": C_OK,
                     "guide":   C_WARN,
@@ -613,21 +676,24 @@ class InfoMixin:
                 draw.text((175, y + 2), src_label, fill=src_color, font=f_tiny)
                 y += LINE + 2
 
-                # EISV 2×2 grid — correct ranges, V with sign-based color
-                if eisv and y < 210:
-                    v_raw   = eisv.get("V", 0.0)
+                # Prefer UNITARES's inferred vector. If the minimal response
+                # omitted it, label the submitted body projection explicitly.
+                if displayed_eisv and y < 210:
+                    draw.text((LIST_X, y), eisv_label, fill=MUTED, font=f_tiny)
+                    y += 9
+                    v_raw   = displayed_eisv.get("V", 0.0)
                     v_color = C_WARM if v_raw > 0.05 else C_STAB if v_raw < -0.05 else MUTED
                     sign_ch = "+" if v_raw > 0.05 else "\u2212" if v_raw < -0.05 else "~"
 
                     # [label, bar_frac (0-1), color, val_str]
                     eisv_rows = [
-                        [("E", min(1.0, max(0.0, eisv.get("E", 0.0))), C_OK,
-                          f"{eisv.get('E', 0.0):.0%}"),
-                         ("I", min(1.0, max(0.0, eisv.get("I", 0.0))), C_STAB,
-                          f"{eisv.get('I', 0.0):.0%}")],
-                        [("S", min(1.0, max(0.0, eisv.get("S", 0.0) / 2.0)), C_WARN,
-                          f"{eisv.get('S', 0.0):.2f}"),
-                         ("V", min(1.0, abs(v_raw) / 2.0), v_color,
+                        [("E", _eisv_bar_fraction("E", displayed_eisv["E"]), C_OK,
+                          f"{displayed_eisv.get('E', 0.0):.0%}"),
+                         ("I", _eisv_bar_fraction("I", displayed_eisv["I"]), C_STAB,
+                          f"{displayed_eisv.get('I', 0.0):.0%}")],
+                        [("S", _eisv_bar_fraction("S", displayed_eisv["S"]), C_WARN,
+                          f"{displayed_eisv.get('S', 0.0):.2f}"),
+                         ("V", _eisv_bar_fraction("V", v_raw), v_color,
                           f"{sign_ch}{abs(v_raw):.2f}")],
                     ]
                     mb_w, mb_h = 52, 6
@@ -692,9 +758,17 @@ class InfoMixin:
                 lines.append(f"margin: {margin}")
             if source:
                 lines.append(f"source: {source}")
-            eisv = governance.get('eisv')
+            eisv, display_label = _select_eisv_for_display(governance)
+            if display_label == "gov state":
+                label = "gov EISV"
+            else:
+                label = "body projection"
             if eisv:
-                lines.append(f"EISV: E={eisv.get('E',0):.0%} I={eisv.get('I',0):.0%} S={eisv.get('S',0):.0%} V={eisv.get('V',0):.0%}")
+                lines.append(
+                    f"{label}: E={eisv.get('E', 0):.0%} "
+                    f"I={eisv.get('I', 0):.0%} S={eisv.get('S', 0):.0%} "
+                    f"V={eisv.get('V', 0):+.0%}"
+                )
         try:
             from ..eisv import get_trajectory_awareness
             _traj = get_trajectory_awareness()

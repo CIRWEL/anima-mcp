@@ -1,10 +1,10 @@
 defmodule AnimaBroker.Governance.EisvMapper do
   @moduledoc """
-  Anima → EISV mapping for governance check-ins.
+  Anima → body EISV projection for governance check-ins.
 
   Faithful port of `src/anima_mcp/eisv_mapper.py` (the Python bridge's
   formulas). Since the Phase-2 cutover this module is the SOLE producer of
-  Lumen's governance EISV -- the Python bridge runs in passthrough mode
+  Lumen's body measurement submitted to governance -- the Python bridge runs in passthrough mode
   (`ANIMA_GOVERNANCE_FROM_SHM`) and reads the verdict this client writes, so a
   formula that drifts here is not a shadow discrepancy, it is what governance
   records. Formula changes belong in BOTH files until the Python bridge
@@ -19,8 +19,8 @@ defmodule AnimaBroker.Governance.EisvMapper do
   @neural_weight 0.3
   @physical_weight 0.7
 
-  @doc "Map anima + readings to %{\"E\"|\"I\"|\"S\"|\"V\" => float}."
-  def anima_to_eisv(anima, readings) do
+  @doc "Project anima + readings to body %{\"E\"|\"I\"|\"S\"|\"V\" => float}."
+  def anima_to_body_eisv_projection(anima, readings) do
     warmth = Map.get(anima, "warmth", 0.5)
     clarity = Map.get(anima, "clarity", 0.5)
     stability = Map.get(anima, "stability", 0.5)
@@ -51,6 +51,10 @@ defmodule AnimaBroker.Governance.EisvMapper do
 
     %{"E" => e, "I" => i, "S" => s, "V" => v}
   end
+
+  @doc "Compatibility alias for anima_to_body_eisv_projection/2."
+  def anima_to_eisv(anima, readings),
+    do: anima_to_body_eisv_projection(anima, readings)
 
   @doc "Task-complexity estimate in [0, 1]."
   def estimate_complexity(anima, readings) do
@@ -131,7 +135,8 @@ defmodule AnimaBroker.Governance.EisvMapper do
     "Elixir broker shadow check-in. " <>
       "Warmth: #{fmt(Map.get(anima, "warmth"))}. Clarity: #{fmt(Map.get(anima, "clarity"))}. " <>
       "Stability: #{fmt(Map.get(anima, "stability"))}. Presence: #{fmt(Map.get(anima, "presence"))}. " <>
-      "EISV: E=#{fmt(eisv["E"])}, I=#{fmt(eisv["I"])}, S=#{fmt(eisv["S"])}, V=#{fmt(eisv["V"])}."
+      "Body EISV projection: E=#{fmt(eisv["E"])}, I=#{fmt(eisv["I"])}, " <>
+      "S=#{fmt(eisv["S"])}, V=#{fmt(eisv["V"])}."
   end
 
   defp clamp(x, lo, hi), do: max(lo, min(hi, x))
