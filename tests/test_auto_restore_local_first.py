@@ -6,7 +6,6 @@ recoverable DB) or silently swaps in the wrong one.
 """
 
 import json
-import shutil
 import sqlite3
 import subprocess
 from pathlib import Path
