@@ -20,6 +20,7 @@ import os
 import base64
 import urllib.request
 import urllib.error
+from urllib.parse import unquote, urlsplit
 
 # 8771, not 8768: the UNITARES gateway (`com.unitares.gateway-mcp`) is allocated
 # 8768 and binds 127.0.0.1 there. This server binds the wildcard, so both could
@@ -109,22 +110,107 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(json.dumps(data).encode())
 
+    def send_bytes(
+        self,
+        data: bytes,
+        *,
+        status: int = 200,
+        content_type: str = "application/octet-stream",
+        cache_control: str | None = None,
+    ):
+        """Relay an upstream response with the Control Center's CORS contract."""
+        self.send_response(status)
+        self.send_header("Content-type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        if cache_control:
+            self.send_header("Cache-Control", cache_control)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def proxy_http_request(
+        self,
+        *,
+        method: str = "GET",
+        body: bytes | None = None,
+        timeout: int = 10,
+        cache_control: str | None = None,
+    ) -> bool:
+        """Proxy this exact request path, including its query, to Lumen."""
+        if not LUMEN_HTTP_URL:
+            return False
+
+        headers = {}
+        if LUMEN_HTTP_AUTH:
+            auth = base64.b64encode(LUMEN_HTTP_AUTH.encode()).decode()
+            headers["Authorization"] = f"Basic {auth}"
+        if body is not None:
+            headers["Content-Type"] = self.headers.get(
+                "Content-Type", "application/json"
+            )
+        request = urllib.request.Request(
+            f"{LUMEN_HTTP_URL.rstrip('/')}{self.path}",
+            data=body,
+            headers=headers,
+            method=method,
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                response_body = response.read()
+                response_status = response.status
+                response_type = response.headers.get(
+                    "Content-Type", "application/octet-stream"
+                )
+        except urllib.error.HTTPError as error:
+            # An upstream application error is authoritative. Forward it
+            # instead of masking it with a different SSH fallback result.
+            response_body = error.read()
+            response_status = error.code
+            response_type = error.headers.get(
+                "Content-Type", "application/json"
+            )
+        except (urllib.error.URLError, TimeoutError, OSError):
+            return False
+
+        # Once the upstream answered, a client disconnect is not a reason to
+        # attempt a second, semantically different SSH response.
+        self.send_bytes(
+            response_body,
+            status=response_status,
+            content_type=response_type,
+            cache_control=cache_control,
+        )
+        return True
+
+    def proxy_http_get(
+        self, *, timeout: int = 10, cache_control: str | None = None
+    ) -> bool:
+        return self.proxy_http_request(
+            timeout=timeout, cache_control=cache_control
+        )
+
+    def proxy_http_post(self, body: bytes, *, timeout: int = 15) -> bool:
+        return self.proxy_http_request(method="POST", body=body, timeout=timeout)
+
     def do_GET(self):
-        if self.path == '/state':
+        route = urlsplit(self.path).path
+        if route == '/state':
             self.handle_get_state()
-        elif self.path == '/qa':
+        elif route == '/qa':
             self.handle_get_qa()
-        elif self.path == '/messages':
+        elif route == '/messages':
             self.handle_get_messages()
-        elif self.path == '/learning':
+        elif route == '/learning':
             self.handle_get_learning()
-        elif self.path == '/voice':
+        elif route == '/voice':
             self.handle_get_voice()
-        elif self.path == '/gallery':
+        elif route == '/gallery':
             self.handle_get_gallery()
-        elif self.path.startswith('/gallery/'):
-            self.handle_get_gallery_image()
-        elif self.path == '/health':
+        elif route.startswith('/gallery/'):
+            self.handle_get_gallery_image(route)
+        elif route in {'/health/detailed', '/self-knowledge', '/growth'}:
+            self.handle_get_upstream_json()
+        elif route == '/health':
             self.send_json({
                 "status": "ok",
                 "http_url": LUMEN_HTTP_URL or None,
@@ -136,9 +222,10 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
 
     def do_POST(self):
-        if self.path == '/message':
+        route = urlsplit(self.path).path
+        if route == '/message':
             self.handle_post_message()
-        elif self.path == '/answer':
+        elif route == '/answer':
             self.handle_post_answer()
         else:
             self.send_response(404)
@@ -153,16 +240,8 @@ class LumenControlHandler(http.server.SimpleHTTPRequestHandler):
 
     def handle_get_state(self):
         """Get Lumen's current state via REST endpoint."""
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/state"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.send_json(data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get():
+            return
 
         # SSH fallback - use the SAME get_state logic as the MCP server
         # This reads from shared memory and uses anima.feeling() for mood
@@ -219,6 +298,18 @@ try:
         store = IdentityStore()
         creature = store.get_identity()
 
+        neural = {
+            "delta": r.get("eeg_delta_power"),
+            "theta": r.get("eeg_theta_power"),
+            "alpha": r.get("eeg_alpha_power"),
+            "beta": r.get("eeg_beta_power"),
+            "gamma": r.get("eeg_gamma_power"),
+        }
+        if not any(value is not None for value in neural.values()):
+            neural = {}
+
+        body_projection = shm_data.get("body_eisv_projection") or shm_data.get("eisv")
+
         print(json.dumps({
             "name": (creature.name or "Lumen") if creature else "Lumen",
             "mood": feeling["mood"],
@@ -235,7 +326,23 @@ try:
             # raw lux remains the behavioral input on the Pi.
             "light_attribution": shm_data.get("light_attribution"),
             "humidity": readings.humidity_pct or 0,
+            "pressure": readings.pressure_hpa,
+            "cpu_percent": readings.cpu_percent or 0,
+            "memory_percent": readings.memory_percent or 0,
+            "disk_percent": readings.disk_percent or 0,
+            "neural": neural,
+            "body_anima": shm_data.get("body_anima") or a,
+            "body_eisv_projection": body_projection,
+            "eisv": body_projection,
+            "api_security": {
+                "mode": "ssh-fallback",
+                "token_configured": False,
+                "trusted_proxy_networks_configured": False,
+            },
             "awakenings": creature.total_awakenings if creature else 0,
+            "alive_hours": round(creature.total_alive_seconds / 3600, 1) if creature else 0,
+            "alive_ratio": round(creature.alive_ratio(), 2) if creature else 0,
+            "activity": shm_data.get("activity"),
             "timestamp": readings.timestamp,
             "source": "shared_memory"
         }))
@@ -254,16 +361,8 @@ except Exception as e:
 
     def handle_get_qa(self):
         """Get questions and answers from Lumen via REST endpoint."""
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/qa"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.send_json(data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get():
+            return
 
         # SSH fallback
         code = '''
@@ -300,16 +399,8 @@ print(json.dumps({"questions": qa_pairs[:10], "total": len(qa_pairs), "unanswere
 
     def handle_get_messages(self):
         """Get recent messages from Lumen's message board via REST endpoint."""
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/messages"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.send_json(data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get():
+            return
 
         # SSH fallback
         code = '''
@@ -330,17 +421,8 @@ print(json.dumps({"messages": result, "total": len(result)}))
 
     def handle_get_learning(self):
         """Get Lumen's learning stats via REST endpoint."""
-        # Try REST endpoint first
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/learning"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.send_json(data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get(timeout=15):
+            return
 
         # SSH fallback
         code = '''
@@ -422,17 +504,8 @@ else:
 
     def handle_get_voice(self):
         """Get Lumen's voice/audio status via REST endpoint."""
-        # Try REST endpoint first
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/voice"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.send_json(data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get():
+            return
 
         # SSH fallback
         code = '''
@@ -457,17 +530,8 @@ except Exception as e:
 
     def handle_get_gallery(self):
         """Get list of Lumen's drawings via REST endpoint."""
-        # Try REST endpoint first
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/gallery"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    data = json.loads(resp.read().decode())
-                    self.send_json(data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get():
+            return
 
         # SSH fallback
         code = '''
@@ -512,31 +576,18 @@ else:
         else:
             self.send_json({"error": output}, 503)
 
-    def handle_get_gallery_image(self):
+    def handle_get_gallery_image(self, route: str | None = None):
         """Serve a drawing image from the Pi via REST endpoint."""
-        filename = self.path.split('/gallery/')[-1]
+        gallery_route = route or urlsplit(self.path).path
+        filename = unquote(gallery_route.split('/gallery/')[-1])
         # Sanitize filename
         if '/' in filename or '..' in filename:
             self.send_response(400)
             self.end_headers()
             return
 
-        # Try REST endpoint first (proxy the image)
-        if LUMEN_HTTP_URL:
-            try:
-                url = f"{LUMEN_HTTP_URL.rstrip('/')}/gallery/{filename}"
-                req = urllib.request.Request(url)
-                with urllib.request.urlopen(req, timeout=15) as resp:
-                    img_data = resp.read()
-                    self.send_response(200)
-                    self.send_header('Content-type', 'image/png')
-                    self.send_header('Access-Control-Allow-Origin', '*')
-                    self.send_header('Cache-Control', 'max-age=3600')
-                    self.end_headers()
-                    self.wfile.write(img_data)
-                    return
-            except Exception:
-                pass  # Fall through to SSH
+        if self.proxy_http_get(timeout=15, cache_control="max-age=3600"):
+            return
 
         # SSH fallback
         code = f'''
@@ -566,10 +617,27 @@ else:
             self.send_response(404)
             self.end_headers()
 
+    def handle_get_upstream_json(self):
+        """Relay canonical REST-only Control Center cards."""
+        if self.proxy_http_get(timeout=15):
+            return
+        self.send_json(
+            {
+                "error": (
+                    f"{urlsplit(self.path).path} requires the configured "
+                    "Lumen HTTP bridge"
+                )
+            },
+            503,
+        )
+
     def handle_post_message(self):
         """Send a message to Lumen, optionally responding to a question."""
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
+
+        if self.proxy_http_post(post_data):
+            return
 
         try:
             data = json.loads(post_data)
@@ -619,6 +687,9 @@ print("ok")
         """Answer a question from Lumen."""
         content_length = int(self.headers['Content-Length'])
         post_data = self.rfile.read(content_length)
+
+        if self.proxy_http_post(post_data):
+            return
 
         try:
             data = json.loads(post_data)
