@@ -254,6 +254,9 @@ class LearnedLedLuxResidual:
     MIN_READY_PER_DIRECTION = 6
     MIN_READY_DRIVE_SPAN = 0.0025
     MIN_POSITIVE_FRACTION = 0.70
+    SIGN_WILSON_Z = 1.959963984540054
+    SIGN_ACTIVATE_LOWER_BOUND = 0.55
+    SIGN_DEACTIVATE_LOWER_BOUND = 0.50
     CONFIDENCE_GATE = 0.75
     DRIVE_FILTER_WARM_SAMPLES = 5
 
@@ -264,12 +267,14 @@ class LearnedLedLuxResidual:
         self._previous_sample: dict[str, Any] | None = None
         self._filtered_drive: float | None = None
         self._drive_filter_samples = 0
+        self._sign_consistency_ready = False
         if persisted:
             self.load_dict(persisted)
 
     def load_dict(self, data: dict[str, Any] | None) -> None:
         """Replace durable transition evidence with validated persisted data."""
         self._transitions.clear()
+        self._sign_consistency_ready = False
         if not isinstance(data, dict):
             return
         persisted_kind = data.get("model_kind")
@@ -313,6 +318,7 @@ class LearnedLedLuxResidual:
                     "alignment_error_seconds": alignment_error,
                 }
             )
+            self._update_sign_consistency_gate()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -370,6 +376,40 @@ class LearnedLedLuxResidual:
             <= self.TARGET_BRIGHTNESS_TOLERANCE
         )
 
+    @classmethod
+    def _positive_wilson_lower_bound(cls, positive: int, total: int) -> float | None:
+        """95% Wilson lower bound for the probability of a positive slope."""
+        if total <= 0:
+            return None
+        fraction = positive / total
+        z_squared = cls.SIGN_WILSON_Z**2
+        denominator = 1.0 + z_squared / total
+        center = fraction + z_squared / (2.0 * total)
+        margin = cls.SIGN_WILSON_Z * math.sqrt(
+            (fraction * (1.0 - fraction) + z_squared / (4.0 * total)) / total
+        )
+        return max(0.0, min(1.0, (center - margin) / denominator))
+
+    def _update_sign_consistency_gate(self) -> None:
+        """Latch strong sign evidence; withdraw only when significance is lost."""
+        count = len(self._transitions)
+        positive = sum(
+            float(item["slope_lux_per_drive"]) > 0.0
+            for item in self._transitions
+        )
+        fraction = positive / count if count else None
+        lower_bound = self._positive_wilson_lower_bound(positive, count)
+        if fraction is None or lower_bound is None:
+            self._sign_consistency_ready = False
+        elif not self._sign_consistency_ready:
+            self._sign_consistency_ready = (
+                count >= self.MIN_READY_TRANSITIONS
+                and fraction >= self.MIN_POSITIVE_FRACTION
+                and lower_bound >= self.SIGN_ACTIVATE_LOWER_BOUND
+            )
+        elif lower_bound < self.SIGN_DEACTIVATE_LOWER_BOUND:
+            self._sign_consistency_ready = False
+
     def _observe_instrument(
         self,
         raw_lux: float,
@@ -423,6 +463,7 @@ class LearnedLedLuxResidual:
                 ),
             }
         )
+        self._update_sign_consistency_gate()
 
     def model_stats(self) -> dict[str, Any]:
         transitions = list(self._transitions)
@@ -445,6 +486,10 @@ class LearnedLedLuxResidual:
         mad = median(abs(value - slope) for value in slopes) if slopes else None
         positive_fraction = (
             sum(value > 0.0 for value in slopes) / count if count else None
+        )
+        positive_count = sum(value > 0.0 for value in slopes)
+        positive_wilson_lower_bound = self._positive_wilson_lower_bound(
+            positive_count, count
         )
 
         count_score = min(1.0, count / self.MIN_READY_TRANSITIONS)
@@ -482,7 +527,7 @@ class LearnedLedLuxResidual:
             unknown_reasons.append("need_wider_led_drive_span")
         if slope is None or slope <= 0.0:
             unknown_reasons.append("positive_self_glow_response_not_established")
-        if positive_fraction is None or positive_fraction < self.MIN_POSITIVE_FRACTION:
+        if not self._sign_consistency_ready:
             unknown_reasons.append("breathing_response_is_inconsistent")
         if confidence < self.CONFIDENCE_GATE:
             unknown_reasons.append("confidence_below_gate")
@@ -505,6 +550,11 @@ class LearnedLedLuxResidual:
             "slope_lux_per_drive": slope,
             "median_absolute_deviation": mad,
             "positive_fraction": positive_fraction,
+            "positive_fraction_gate": self.MIN_POSITIVE_FRACTION,
+            "positive_wilson_lower_bound": positive_wilson_lower_bound,
+            "sign_activation_lower_bound_gate": self.SIGN_ACTIVATE_LOWER_BOUND,
+            "sign_deactivation_lower_bound_gate": self.SIGN_DEACTIVATE_LOWER_BOUND,
+            "sign_consistency_ready": self._sign_consistency_ready,
             "confidence": max(0.0, min(1.0, confidence)),
             "confidence_gate": self.CONFIDENCE_GATE,
             "ready": not unknown_reasons,

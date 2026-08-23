@@ -316,6 +316,74 @@ def test_kindless_legacy_evidence_is_invalidated():
     assert model.model_stats()["instrument_sample_count"] == 0
 
 
+def _persisted_sign_sequence(signs):
+    transitions = []
+    for i, positive in enumerate(signs):
+        before, after = ((0.02, 0.06) if i % 2 == 0 else (0.06, 0.02))
+        delta_drive = after - before
+        slope = 500.0 if positive else -500.0
+        transitions.append(
+            {
+                "before_drive": before,
+                "after_drive": after,
+                "delta_lux": slope * delta_drive,
+                "slope_lux_per_drive": slope,
+                "captured_at_unix": 100.0 + i,
+                "instrument": LearnedLedLuxResidual.INSTRUMENT,
+            }
+        )
+    return {
+        "model_kind": LearnedLedLuxResidual.MODEL_KIND,
+        "transitions": transitions,
+    }
+
+
+def test_sign_readiness_uses_confidence_bound_and_hysteresis():
+    # 26/37 clears the raw 70% point threshold, but the 95% Wilson lower
+    # bound is only ~0.542 and must not activate the shadow residual.
+    borderline = [True, True, False] * 8 + [False, False, False] + [True] * 10
+    model = LearnedLedLuxResidual(_persisted_sign_sequence(borderline))
+
+    stats = model.model_stats()
+    assert stats["positive_fraction"] == pytest.approx(26 / 37)
+    assert stats["positive_wilson_lower_bound"] == pytest.approx(0.542169, abs=1e-6)
+    assert stats["sign_consistency_ready"] is False
+    assert stats["ready"] is False
+
+    # Four more positive samples establish the confidence bound. One adjacent
+    # negative sample no longer chatters readiness back off.
+    established = borderline + [True] * 4 + [False]
+    model = LearnedLedLuxResidual(_persisted_sign_sequence(established))
+
+    stats = model.model_stats()
+    assert stats["positive_fraction"] == pytest.approx(30 / 42)
+    assert stats["positive_wilson_lower_bound"] == pytest.approx(0.564328, abs=1e-6)
+    assert stats["sign_consistency_ready"] is True
+    assert stats["ready"] is True
+
+    model = LearnedLedLuxResidual(
+        _persisted_sign_sequence(established + [False])
+    )
+    stats = model.model_stats()
+    assert stats["positive_fraction"] < stats["positive_fraction_gate"]
+    assert stats["positive_wilson_lower_bound"] > stats[
+        "sign_deactivation_lower_bound_gate"
+    ]
+    assert stats["sign_consistency_ready"] is True
+    assert stats["ready"] is True
+
+    # Sustained contrary evidence still withdraws the residual.
+    model = LearnedLedLuxResidual(
+        _persisted_sign_sequence(established + [False] * 8)
+    )
+    stats = model.model_stats()
+    assert stats["positive_wilson_lower_bound"] < stats[
+        "sign_deactivation_lower_bound_gate"
+    ]
+    assert stats["sign_consistency_ready"] is False
+    assert stats["ready"] is False
+
+
 def test_endogenous_logical_brightness_changes_are_not_training_evidence():
     model = LearnedLedLuxResidual()
     for i in range(40):
