@@ -27,6 +27,12 @@ from .atomic_write import atomic_json_write
 from .light_attribution import LearnedLedLuxResidual
 
 
+# The broker owns the live causal calibration while the MCP/server process is a
+# refreshing reader.  Checkpoint often enough to bound crash loss and reader
+# fallback staleness without writing the Pi's storage on every two-second tick.
+LIGHT_ATTRIBUTION_CHECKPOINT_SECONDS = 300.0
+
+
 def _learning_multiplier(update_bonus: float) -> float:
     """Return a finite, non-negative multiplier for experiential learning."""
     try:
@@ -809,6 +815,9 @@ class SelfModel:
 
         self._observe_ready_led_attribution_belief(
             attribution,
+        )
+        self._maybe_save(
+            min_interval_seconds=LIGHT_ATTRIBUTION_CHECKPOINT_SECONDS
         )
 
         return attribution
