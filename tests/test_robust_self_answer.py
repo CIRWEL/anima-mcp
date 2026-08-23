@@ -77,14 +77,26 @@ class TestSelfAnswerConfidence:
         effects = apply_insight(fresh_external)
         assert list(effects.keys()) == ["skipped"]
 
-        # Self-derived (0.7) clears the floor — the hierarchy has teeth in
-        # both directions.
+        # A higher-confidence claim is still only a claim. The old bridge
+        # converted prose into preference, belief, and agency updates; native
+        # observation paths must now test it instead.
         own = kb.add_insight(
             text="I enjoy calm dim evenings",
             source_question="What steadies you?",
             source_answer="(self)", source_author="lumen", category="self",
         )
         assert own.confidence >= APPLY_INSIGHT_CONFIDENCE_FLOOR
+        effects = apply_insight(own)
+        assert effects == {
+            "stored_claim": {
+                "status": "historical_hypothesis_only",
+                "behavioral_effects": False,
+                "reason": (
+                    "Q&A re-derivation is not independent substrate evidence; "
+                    "native observation paths must test this claim"
+                ),
+            }
+        }
 
     def test_external_insight_earns_application_via_rederivation(self, kb):
         """0.5 → 0.55 → 0.60: two independent re-derivations cross the floor.

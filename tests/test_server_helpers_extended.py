@@ -15,6 +15,15 @@ def _set_ctx(monkeypatch, ctx):
     monkeypatch.setattr(ctx_ref, "_ctx", ctx)
 
 
+def test_metacognition_prediction_uses_canonical_led_proprioception(monkeypatch):
+    metacog = SimpleNamespace(predict=lambda **kwargs: kwargs)
+    monkeypatch.setattr(server, "_get_led_brightness", lambda: 0.12)
+
+    result = server._predict_with_led_proprioception(metacog)
+
+    assert result == {"led_brightness": 0.12}
+
+
 class _Ctx:
     def __init__(self, is_dreaming=False, rest_duration_minutes=0, novelty_level=None):
         self.is_dreaming = is_dreaming

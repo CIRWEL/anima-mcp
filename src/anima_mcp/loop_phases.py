@@ -609,11 +609,11 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
 
 
 def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
-    """Answer a question using Lumen's own learned data — no LLM.
+    """Answer from current evidence, with historical claims named as history.
 
-    Searches insights, beliefs, and preferences for data relevant to
-    the question, then composes a short answer from what Lumen has
-    actually learned through experience.
+    Searches insights, beliefs, and preferences for relevant material. Q&A
+    claims remain available as autobiographical context, but never masquerade
+    as current sensor-validated self-knowledge.
     """
     question_lower = question_text.lower()
 
@@ -625,6 +625,11 @@ def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
         from .self_reflection import get_reflection_system
         reflector = get_reflection_system()
         for insight in reflector.get_insights():
+            if str(getattr(insight, "id", "")).startswith("qa_"):
+                # The knowledge-base pass below adds this once with explicit
+                # historical provenance; do not duplicate its reflection copy
+                # as if it were an independent observational insight.
+                continue
             desc = insight.description.lower()
             # Check keyword overlap between question and insight
             q_words = set(question_lower.split()) - {"i", "a", "the", "is", "do", "my", "me", "am", "what", "why", "how", "when", "does"}
@@ -655,7 +660,9 @@ def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
                 # Weight by conviction: re-derived beliefs surface first, but
                 # stay in a sane range so other evidence sources still compete.
                 weight = min(1.1, insight.confidence * 0.9 + 0.1 * min(insight.references, 3))
-                evidence.append((weight, insight.text))
+                evidence.append(
+                    (weight, f"A past Q&A claim suggested: {insight.text}")
+                )
     except Exception:
         pass
 

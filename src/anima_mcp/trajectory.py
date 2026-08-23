@@ -820,6 +820,21 @@ class TrajectorySignature:
             "stability_score": round(self.get_stability_score(), 3),
             "observation_count": self.observation_count,
             "preferences_learned": self.preferences.get("n_learned", 0),
+            "preferences_established": self.preferences.get(
+                "n_established", self.preferences.get("n_learned", 0)
+            ),
+            "preferences_tracked": self.preferences.get(
+                "n_tracked", self.preferences.get("n_learned", 0)
+            ),
+            "preferences_review": self.preferences.get("n_review", 0),
+            "preferences_cold_start": self.preferences.get("n_cold_start", 0),
+            "preferences_historical_claim": self.preferences.get(
+                "n_historical_claim", 0
+            ),
+            "preference_count_semantics": self.preferences.get(
+                "n_learned_semantics",
+                "legacy signature: learned count semantics unavailable",
+            ),
             "belief_confidence": self.beliefs.get("avg_confidence", 0),
             "attractor_defined": self.attractor is not None,
             "recovery_tau": self.recovery.get("tau_estimate"),

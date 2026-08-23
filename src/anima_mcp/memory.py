@@ -847,11 +847,10 @@ class AssociativeMemory:
 
     def enrich_with_knowledge(self, anticipation: Anticipation) -> Anticipation:
         """
-        Enrich anticipation with meaning from learned knowledge.
+        Enrich anticipation with explicitly historical Q&A context.
 
-        This is where philosophy meets code: learned insights give
-        semantic meaning to statistical predictions. "I expect warmth"
-        becomes "I expect the feeling of being safe that warmth brings."
+        These records can add narrative context to a statistical prediction,
+        but they are not current telemetry and do not validate the prediction.
         """
         if anticipation is None:
             return anticipation
@@ -887,7 +886,9 @@ class AssociativeMemory:
 
             if relevant:
                 # Extract insight texts
-                insight_texts = [i.text for i in relevant]
+                insight_texts = [
+                    f"Historical Q&A claim: {i.text}" for i in relevant
+                ]
                 anticipation.insights = insight_texts
 
                 # Generate meaning summary
@@ -905,7 +906,10 @@ class AssociativeMemory:
                         meaning_parts.append(f"something about {insight.category}")
 
                 if meaning_parts:
-                    anticipation.meaning = f"expecting {' and '.join(meaning_parts)}"
+                    anticipation.meaning = (
+                        "past Q&A context associated this with "
+                        f"{' and '.join(meaning_parts)}"
+                    )
 
         except ImportError:
             pass  # Knowledge module not available

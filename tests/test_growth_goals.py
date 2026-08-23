@@ -753,9 +753,9 @@ class TestDimensionPreferences:
             assert dims[dim_name]["confidence"] == 0.0
 
     def test_dimension_preferences_with_data(self, growth):
-        """Adding warm_temp preference maps to positive warmth valence."""
+        """Only evidence-established warm_temp affects the schema dimension."""
         from anima_mcp.growth import PreferenceCategory
-        # Build up confidence by calling _update_preference multiple times
+        # Ten rows are still under review under the Wilson-confidence gate.
         for _ in range(10):
             growth._update_preference(
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
@@ -763,5 +763,18 @@ class TestDimensionPreferences:
             )
 
         dims = growth.get_dimension_preferences()
+        assert dims["warmth"]["evidence_status"] == "review"
+        assert dims["warmth"]["valence"] == 0.0
+        assert dims["warmth"]["confidence"] == 0.0
+        assert dims["warmth"]["tracked_source_preferences"] == ["warm_temp"]
+
+        for _ in range(50):
+            growth._update_preference(
+                "warm_temp", PreferenceCategory.ENVIRONMENT,
+                "Warmth makes me feel content", 0.9
+            )
+
+        dims = growth.get_dimension_preferences()
+        assert dims["warmth"]["evidence_status"] == "established"
         assert dims["warmth"]["valence"] > 0
         assert dims["warmth"]["confidence"] > 0

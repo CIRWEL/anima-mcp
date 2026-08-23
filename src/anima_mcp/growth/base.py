@@ -17,11 +17,12 @@ from typing import Optional, Dict, Any, List
 from .models import (
     GrowthPreference, VisitorRecord, Goal, MemorableEvent,
     PreferenceCategory, GoalStatus, VisitorFrequency, VisitorType,
-    Relationship,
+    Relationship, preference_evidence_status,
 )
 from .migrations import (
     migrate_external_light_preferences_v2,
     migrate_preference_evidence_windows,
+    migrate_qa_claim_preferences,
     migrate_raw_lux_preferences,
     run_identity_migration,
 )
@@ -93,6 +94,7 @@ class GrowthSystem(
         migrate_raw_lux_preferences(self._connect(), self._preferences)
         migrate_preference_evidence_windows(self._connect(), self._preferences)
         migrate_external_light_preferences_v2(self._connect(), self._preferences)
+        migrate_qa_claim_preferences(self._connect(), self._preferences)
 
     def _connect(self) -> sqlite3.Connection:
         if self._conn is None:
@@ -461,11 +463,40 @@ class GrowthSystem(
             else:
                 agent_records.append(rec)
 
+        preference_statuses = {
+            name: preference_evidence_status(pref)
+            for name, pref in self._preferences.items()
+        }
+        established_preferences = [
+            pref
+            for name, pref in self._preferences.items()
+            if preference_statuses[name] == "established"
+        ]
+
         return {
             "preferences": {
                 "count": len(self._preferences),
-                "confident": sum(1 for p in self._preferences.values() if p.confidence > 0.7),
-                "examples": [p.description for p in list(self._preferences.values())[:3]],
+                "tracked": len(self._preferences),
+                "established": len(established_preferences),
+                "review": sum(
+                    status == "review" for status in preference_statuses.values()
+                ),
+                "cold_start": sum(
+                    status == "tracked" for status in preference_statuses.values()
+                ),
+                "historical_claims": sum(
+                    status == "historical_claim"
+                    for status in preference_statuses.values()
+                ),
+                # Compatibility alias with corrected semantics.
+                "confident": len(established_preferences),
+                "examples": [
+                    p.description for p in established_preferences[:3]
+                ],
+                "count_semantics": (
+                    "tracked rows are not learned; established requires >=10 "
+                    "independent evidence items and confidence >=0.8"
+                ),
             },
             "self_knowledge": {
                 "has_self_dialogue": self_record is not None,

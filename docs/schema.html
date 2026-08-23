@@ -1230,7 +1230,14 @@
         const preferenceVector = Array.isArray(preferenceDetail.vector)
             ? preferenceDetail.vector
             : null;
-        let pc = `<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px">${t.preferences_learned || 0} learned</div>`;
+        const establishedPreferences = t.preferences_established
+            ?? preferenceDetail.n_established
+            ?? t.preferences_learned
+            ?? 0;
+        const trackedPreferences = t.preferences_tracked
+            ?? preferenceDetail.n_tracked
+            ?? establishedPreferences;
+        let pc = `<div style="font-size:10px;color:rgba(255,255,255,0.4);margin-bottom:4px">${establishedPreferences} established · ${trackedPreferences} tracked</div>`;
         if (preferenceVector) {
             const preferenceLabels = Array.isArray(preferenceDetail.labels)
                 ? preferenceDetail.labels

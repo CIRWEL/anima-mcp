@@ -763,6 +763,35 @@ class TestGroundedSelfAnswer:
 
         assert result is None
 
+    def test_qa_claims_are_named_as_historical_not_current_evidence(self):
+        from anima_mcp.loop_phases import grounded_self_answer
+
+        reflected_copy = SimpleNamespace(
+            id="qa_abc123",
+            confidence=0.95,
+            description="Light affects clarity",
+        )
+        qa_claim = SimpleNamespace(
+            insight_id="abc123",
+            confidence=0.95,
+            references=4,
+            text="Light affects clarity",
+        )
+
+        with patch("anima_mcp.self_reflection.get_reflection_system") as mock_refl, \
+             patch("anima_mcp.knowledge.get_insights", return_value=[qa_claim]), \
+             patch("anima_mcp.knowledge.get_top_convictions", return_value=[qa_claim]), \
+             patch("anima_mcp.self_model.get_self_model") as mock_sm:
+            mock_refl.return_value.get_insights.return_value = [reflected_copy]
+            mock_sm.return_value.beliefs = {}
+            result = grounded_self_answer(
+                "how does light affect clarity?",
+                make_anima(),
+                make_readings(),
+            )
+
+        assert result == "A past Q&A claim suggested: Light affects clarity"
+
 
 # ---------------------------------------------------------------------------
 # lumen_self_answer

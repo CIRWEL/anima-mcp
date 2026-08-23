@@ -71,7 +71,7 @@ from .accessors import (
     _get_display as _get_display, _get_last_shm_data,
     _get_screen_renderer as _get_screen_renderer, _get_leds as _get_leds,
     _get_growth as _get_growth, _get_display_update_task as _get_display_update_task,
-    _get_activity as _get_activity,
+    _get_activity as _get_activity, _get_led_brightness as _get_led_brightness,
     _get_last_governance_decision as _get_last_governance_decision, _get_voice,
     VOICE_MODE as VOICE_MODE,
 )
@@ -85,6 +85,11 @@ _ctx: ServerContext | None = None
 SERVER_READY = False
 SERVER_STARTUP_TIME = None
 SERVER_SHUTTING_DOWN = False  # Set during graceful shutdown to reject new requests
+
+
+def _predict_with_led_proprioception(metacog):
+    """Predict with the context's canonical, nullable LED efference copy."""
+    return metacog.predict(led_brightness=_get_led_brightness())
 
 # Phase helper functions — delegated to loop_phases.py
 from .loop_phases import (  # noqa: E402,F401
@@ -569,13 +574,7 @@ async def _update_display_loop():
                     # Make prediction for NEXT iteration
                     # Pass LED brightness for proprioceptive light prediction:
                     # "knowing my own glow, I can predict what my light sensor will read"
-                    _led_brightness_for_pred = None
-                    _led_proprioception = None
-                    if _ctx and _ctx.last_led_state:
-                        _led_proprioception = _ctx.last_led_state.get("proprioception")
-                    if _led_proprioception is not None:
-                        _led_brightness_for_pred = _led_proprioception.get("brightness")
-                    metacog.predict(led_brightness=_led_brightness_for_pred)
+                    _predict_with_led_proprioception(metacog)
 
                 except Exception as e:
                     # Audible on purpose: this exact handler used logger.debug

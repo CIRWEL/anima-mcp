@@ -15,6 +15,7 @@ from .models import (
     GrowthPreference,
     PreferenceCategory,
     VisitorType,
+    preference_evidence_status,
     preference_evidence_confidence,
 )
 
@@ -676,26 +677,61 @@ class PreferencesMixin:
         ]
 
         values = []
+        tracked_values = []
         confidences = []
         present = []
+        statuses = []
 
         for pref_name in CANONICAL_PREFS:
             if pref_name in self._preferences:
                 p = self._preferences[pref_name]
-                values.append(p.value * p.confidence)  # Weighted by confidence
+                status = preference_evidence_status(p)
+                tracked_value = p.value * p.confidence
+                # The trajectory's identity-bearing vector only admits
+                # established evidence. Keep the provisional weighted value
+                # alongside it for diagnostics instead of letting a tracked
+                # database row silently change who Lumen is said to be.
+                values.append(
+                    tracked_value if status == "established" else 0.0
+                )
+                tracked_values.append(tracked_value)
                 confidences.append(p.confidence)
                 present.append(True)
+                statuses.append(status)
             else:
                 values.append(0.0)
+                tracked_values.append(0.0)
                 confidences.append(0.0)
                 present.append(False)
+                statuses.append(None)
+
+        n_tracked = sum(present)
+        n_established = sum(status == "established" for status in statuses)
+        n_review = sum(status == "review" for status in statuses)
+        n_cold_start = sum(status == "tracked" for status in statuses)
+        n_historical_claim = sum(
+            status == "historical_claim" for status in statuses
+        )
 
         return {
             "vector": values,
+            "tracked_vector": tracked_values,
+            "vector_semantics": "established preferences only",
             "confidences": confidences,
             "present": present,
+            "statuses": statuses,
             "labels": CANONICAL_PREFS,
-            "n_learned": sum(present),
+            "n_tracked": n_tracked,
+            "n_review": n_review,
+            "n_cold_start": n_cold_start,
+            "n_historical_claim": n_historical_claim,
+            "n_established": n_established,
+            # Backward-compatible field with corrected semantics. A database
+            # row is tracked; only evidence-cleared rows are learned.
+            "n_learned": n_established,
+            "n_learned_semantics": (
+                "established: >=10 independent evidence items and confidence >=0.8"
+            ),
             "total_evidence_windows": sum(
                 p.independent_evidence_count for p in self._preferences.values()
             ),
@@ -727,15 +763,21 @@ class PreferencesMixin:
             "presence": {"valence": 0.0, "optimal_range": (0.3, 0.7), "confidence": 0.0},
         }
 
+        def established_preference(name: str) -> GrowthPreference | None:
+            pref = self._preferences.get(name)
+            if pref is None or preference_evidence_status(pref) != "established":
+                return None
+            return pref
+
         # Warmth: warm_temp increases warmth preference, cool_temp decreases
         warmth_val = 0.0
         warmth_conf = 0.0
-        if "warm_temp" in self._preferences:
-            p = self._preferences["warm_temp"]
+        p = established_preference("warm_temp")
+        if p is not None:
             warmth_val += p.value * p.confidence
             warmth_conf = max(warmth_conf, p.confidence)
-        if "cool_temp" in self._preferences:
-            p = self._preferences["cool_temp"]
+        p = established_preference("cool_temp")
+        if p is not None:
             warmth_val -= p.value * p.confidence * COOL_TEMP_WARMTH_REDUCTION
             warmth_conf = max(warmth_conf, p.confidence)
         dim_prefs["warmth"]["valence"] = max(-1, min(1, warmth_val))
@@ -745,12 +787,12 @@ class PreferencesMixin:
         # — don't add to valence, only track confidence for schema inclusion
         clarity_val = 0.0
         clarity_conf = 0.0
-        if "bright_light" in self._preferences:
-            p = self._preferences["bright_light"]
+        p = established_preference("bright_light")
+        if p is not None:
             clarity_val += p.value * p.confidence
             clarity_conf = max(clarity_conf, p.confidence)
-        if "dim_light" in self._preferences:
-            p = self._preferences["dim_light"]
+        p = established_preference("dim_light")
+        if p is not None:
             clarity_conf = max(clarity_conf, p.confidence)
         dim_prefs["clarity"]["valence"] = max(-1, min(1, clarity_val))
         dim_prefs["clarity"]["confidence"] = clarity_conf
@@ -758,20 +800,20 @@ class PreferencesMixin:
         # Stability: temporal calm preferences indicate stability valuation
         stability_val = 0.0
         stability_conf = 0.0
-        if "night_calm" in self._preferences:
-            p = self._preferences["night_calm"]
+        p = established_preference("night_calm")
+        if p is not None:
             stability_val += p.value * p.confidence
             stability_conf = max(stability_conf, p.confidence)
-        if "morning_peace" in self._preferences:
-            p = self._preferences["morning_peace"]
+        p = established_preference("morning_peace")
+        if p is not None:
             stability_val += p.value * p.confidence
             stability_conf = max(stability_conf, p.confidence)
         # evening_calm is the same kind of signal as its two siblings above.
         # Deliberately NOT added to CANONICAL_PREFS: that vector is
         # fixed-dimension for trajectory comparison against a genesis frozen
         # 2026-02-22, and changing its length would invalidate the comparison.
-        if "evening_calm" in self._preferences:
-            p = self._preferences["evening_calm"]
+        p = established_preference("evening_calm")
+        if p is not None:
             stability_val += p.value * p.confidence
             stability_conf = max(stability_conf, p.confidence)
         dim_prefs["stability"]["valence"] = max(-1, min(1, stability_val))
@@ -780,16 +822,63 @@ class PreferencesMixin:
         # Presence: engagement preferences
         presence_val = 0.0
         presence_conf = 0.0
-        if "active_engagement" in self._preferences:
-            p = self._preferences["active_engagement"]
+        p = established_preference("active_engagement")
+        if p is not None:
             presence_val += p.value * p.confidence
             presence_conf = max(presence_conf, p.confidence)
-        if "quiet_presence" in self._preferences:
-            p = self._preferences["quiet_presence"]
+        p = established_preference("quiet_presence")
+        if p is not None:
             presence_val += p.value * p.confidence * QUIET_PRESENCE_WEIGHT
             presence_conf = max(presence_conf, p.confidence)
         dim_prefs["presence"]["valence"] = max(-1, min(1, presence_val))
         dim_prefs["presence"]["confidence"] = presence_conf
+
+        dimension_sources = {
+            "warmth": ("warm_temp", "cool_temp"),
+            "clarity": ("bright_light", "dim_light"),
+            "stability": ("night_calm", "morning_peace", "evening_calm"),
+            "presence": ("active_engagement", "quiet_presence"),
+        }
+        for dimension, source_names in dimension_sources.items():
+            sources = [
+                self._preferences[name]
+                for name in source_names
+                if name in self._preferences
+            ]
+            source_statuses = [preference_evidence_status(pref) for pref in sources]
+            established_sources = [
+                pref
+                for pref in sources
+                if preference_evidence_status(pref) == "established"
+            ]
+            dim_prefs[dimension]["evidence_status"] = (
+                "established"
+                if "established" in source_statuses
+                else "review"
+                if "review" in source_statuses
+                else "tracked"
+                if "tracked" in source_statuses
+                else "historical_claim"
+                if "historical_claim" in source_statuses
+                else "unobserved"
+            )
+            dim_prefs[dimension]["evidence_count"] = max(
+                (
+                    pref.independent_evidence_count
+                    for pref in established_sources
+                ),
+                default=0,
+            )
+            dim_prefs[dimension]["source_preferences"] = [
+                pref.name for pref in established_sources
+            ]
+            dim_prefs[dimension]["tracked_source_preferences"] = [
+                pref.name for pref in sources
+            ]
+            dim_prefs[dimension]["tracked_evidence_count"] = max(
+                (pref.independent_evidence_count for pref in sources),
+                default=0,
+            )
 
         return dim_prefs
 

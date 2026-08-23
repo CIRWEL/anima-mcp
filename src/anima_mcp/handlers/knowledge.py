@@ -4,6 +4,7 @@ Handlers: get_self_knowledge, get_growth, get_qa_insights, get_trajectory, get_e
 """
 
 import json
+from datetime import datetime, timezone
 
 from mcp.types import TextContent
 
@@ -64,6 +65,9 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
                 "reset_external_light_gate_v2": (
                     "cold-started after raw/self-glow contamination; awaiting gated residual"
                 ),
+                "retired_qa_claim_bridge_v1": (
+                    "retired textual Q&A claim; preserved for historical audit only"
+                ),
             }.get(evidence_origin, evidence_basis)
             if view["description"].startswith("i know this about myself: "):
                 view["description"] = view["description"].replace(
@@ -107,6 +111,11 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
         source_kind = "qa_claim"
         confidence_kind = "claim confidence with later validation/retraction"
         evidence_basis = "Q&A assertion plus independent re-derivations"
+        view.update({
+            "record_role": "historical_claim",
+            "historical_as_of": view.get("discovered_at"),
+            "current_state_authority": "none",
+        })
     elif insight_id.startswith("trend_"):
         source_kind = "long_term_trend"
         confidence_kind = "summary-window heuristic, not a probability"
@@ -151,7 +160,13 @@ def _insight_view(insight, growth=None, self_model=None) -> dict:
         "long_term_trend": 3,
         "state_association": 10,
     }[source_kind]
-    if contested:
+    if source_kind == "qa_claim":
+        actionability = "historical_claim"
+        review_reason = (
+            "Q&A re-derivations can strengthen a stored claim but do not "
+            "revalidate it against Lumen's current wiring or telemetry"
+        )
+    elif contested:
         actionability = "review"
         review_reason = (
             "both preference directions have material evidence"
@@ -253,11 +268,19 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
 
         summary = reflection_system.get_self_knowledge_summary()
         if isinstance(summary, dict):
-            # Preserve the reflection system's source-aware strength ordering,
-            # but never surface a review claim ahead of established evidence.
+            # Preserve source-aware ordering within each authority tier. A
+            # timestamped Q&A record never outranks live evidence merely
+            # because its own claim score is high.
+            actionability_order = {
+                "established": 0,
+                "review": 1,
+                "historical_claim": 2,
+            }
             ranked_pairs = sorted(
                 active_view_pairs,
-                key=lambda pair: pair[1].get("actionability") != "established",
+                key=lambda pair: actionability_order.get(
+                    pair[1].get("actionability"), 1
+                ),
             )
             by_category = {}
             for insight_category in InsightCategory:
@@ -276,8 +299,8 @@ async def handle_get_self_knowledge(arguments: dict) -> list[TextContent]:
                 "strongest": [view for _, view in ranked_pairs[:3]],
                 "by_category": by_category,
                 "ranking_note": (
-                    "Established claims precede review claims; confidence "
-                    "remains source-specific and is not directly comparable."
+                    "Established evidence precedes review items, and historical "
+                    "Q&A claims rank last. Confidence remains source-specific."
                 ),
             }
 
@@ -323,32 +346,79 @@ async def handle_get_growth(arguments: dict) -> list[TextContent]:
             result["autobiography"] = growth.get_autobiography_summary()
 
         if "preferences" in include:
+            from ..growth.models import preference_evidence_status
+
             prefs = []
             for p in growth._preferences.values():
-                if p.confidence >= 0.3:  # Only show preferences with some confidence
-                    prefs.append({
-                        "name": p.name,
-                        "description": p.description,
-                        "confidence": round(p.confidence, 2),
-                        "evidence_windows": getattr(
-                            p, "independent_evidence_count", p.observation_count
-                        ),
-                        "raw_observation_calls": p.observation_count,
-                        "supporting_windows": getattr(p, "supporting_count", None),
-                        "contradicting_windows": getattr(p, "contradicting_count", None),
-                        "positive_direction_windows": getattr(
-                            p, "supporting_count", None
-                        ),
-                        "negative_direction_windows": getattr(
-                            p, "contradicting_count", None
-                        ),
-                        "evidence_origin": getattr(p, "evidence_origin", "legacy_unclassified"),
+                evidence_status = preference_evidence_status(p)
+                pref_view = {
+                    "name": p.name,
+                    "description": p.description,
+                    "confidence": round(p.confidence, 2),
+                    "evidence_status": evidence_status,
+                    "evidence_windows": getattr(
+                        p, "independent_evidence_count", p.observation_count
+                    ),
+                    "raw_observation_calls": p.observation_count,
+                    "supporting_windows": getattr(p, "supporting_count", None),
+                    "contradicting_windows": getattr(p, "contradicting_count", None),
+                    "positive_direction_windows": getattr(
+                        p, "supporting_count", None
+                    ),
+                    "negative_direction_windows": getattr(
+                        p, "contradicting_count", None
+                    ),
+                    "evidence_origin": getattr(
+                        p, "evidence_origin", "legacy_unclassified"
+                    ),
+                }
+                if evidence_status == "historical_claim":
+                    pref_view.update({
+                        "record_role": "historical_claim",
+                        "historical_as_of": p.last_confirmed.isoformat(),
+                        "current_state_authority": "none",
                     })
+                prefs.append(pref_view)
+            established = [
+                pref for pref in prefs if pref["evidence_status"] == "established"
+            ]
+            cold_start = [
+                pref
+                for pref in prefs
+                if pref["evidence_status"] == "tracked"
+            ]
+            review = [
+                pref
+                for pref in prefs
+                if pref["evidence_status"] == "review"
+            ]
+            historical_claims = [
+                pref
+                for pref in prefs
+                if pref["evidence_status"] == "historical_claim"
+            ]
+
+            def preference_order(pref):
+                return -pref["confidence"], -pref["evidence_windows"]
+
             result["preferences"] = {
-                "count": len(growth._preferences),
-                "learned": sorted(
-                    prefs,
-                    key=lambda p: (-p["confidence"], -p["evidence_windows"]),
+                "tracked_count": len(prefs),
+                "established_count": len(established),
+                "review_count": len(review),
+                "cold_start_count": len(cold_start),
+                "historical_claim_count": len(historical_claims),
+                "established": sorted(established, key=preference_order),
+                "review": sorted(review, key=preference_order),
+                "cold_start": sorted(cold_start, key=preference_order),
+                "historical_claims": sorted(
+                    historical_claims, key=preference_order
+                ),
+                # Compatibility aliases now use the honest established meaning.
+                "count": len(prefs),
+                "learned": sorted(established, key=preference_order),
+                "count_semantics": (
+                    "tracked rows are not learned; established requires >=10 "
+                    "independent evidence items and confidence >=0.8"
                 ),
             }
 
@@ -495,9 +565,19 @@ async def handle_get_qa_insights(arguments: dict) -> list[TextContent]:
                     "contradicted_by": len(i.contradicted_by),
                     "age": _age_str(i.timestamp),
                     "timestamp": i.timestamp,
+                    "historical_as_of": datetime.fromtimestamp(
+                        i.timestamp, timezone.utc
+                    ).isoformat(),
+                    "record_role": "historical_claim",
+                    "current_state_authority": "none",
                 }
                 for i in insights
             ],
+            "epistemic_note": (
+                "These are timestamped Q&A claims, not current telemetry or "
+                "sensor-observed preferences. Re-derivation affects claim "
+                "ranking only and has no direct behavioral effect."
+            ),
         }
 
         if len(insights) == 0:
@@ -646,14 +726,27 @@ async def handle_query(arguments: dict) -> list[TextContent]:
 
     try:
         from ..knowledge import get_relevant_insights
-        from ..accessors import _get_store
+        from ..accessors import _get_growth, _get_store
 
         result = {"query": text, "type": query_type}
 
         # Always get relevant Q&A insights (keyword match)
         relevant = get_relevant_insights(text, limit=limit)
         result["qa_insights"] = [
-            {"text": i.text, "category": i.category, "source_question": i.source_question[:60] + "..." if len(i.source_question) > 60 else i.source_question}
+            {
+                "text": i.text,
+                "category": i.category,
+                "source_question": (
+                    i.source_question[:60] + "..."
+                    if len(i.source_question) > 60
+                    else i.source_question
+                ),
+                "historical_as_of": datetime.fromtimestamp(
+                    i.timestamp, timezone.utc
+                ).isoformat(),
+                "record_role": "historical_claim",
+                "current_state_authority": "none",
+            }
             for i in relevant
         ]
 
@@ -665,14 +758,26 @@ async def handle_query(arguments: dict) -> list[TextContent]:
                 if store:
                     reflection = get_reflection_system(db_path=str(store.db_path))
                     result["self_knowledge"] = reflection.get_self_knowledge_summary()
-                    result["reflection_insights"] = [i.to_dict() for i in reflection.get_insights()[:limit]]
+                    try:
+                        from ..self_model import get_self_model
+
+                        self_model = get_self_model()
+                    except Exception:
+                        self_model = None
+                    result["reflection_insights"] = [
+                        _insight_view(i, _get_growth(), self_model)
+                        for i in reflection.get_insights()[:limit]
+                    ]
+                    result["self_knowledge_epistemic_note"] = (
+                        "Q&A-derived reflection rows are historical claims, "
+                        "not current-state evidence."
+                    )
             except Exception:
                 result["self_knowledge"] = None
                 result["reflection_insights"] = []
 
         # Add growth summary when type is growth
         if query_type == "growth":
-            from ..accessors import _get_growth
             growth = _get_growth()
             if growth:
                 result["growth"] = growth.get_autobiography_summary()

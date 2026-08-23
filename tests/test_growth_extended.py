@@ -182,7 +182,7 @@ class TestGrowthPreferenceToDict:
             "raw_observation_count", "evidence_count",
             "supporting_count", "contradicting_count",
             "positive_direction_count", "negative_direction_count",
-            "evidence_origin", "confidence_basis",
+            "evidence_origin", "confidence_basis", "evidence_status",
         }
         assert expected_keys == set(d.keys())
 

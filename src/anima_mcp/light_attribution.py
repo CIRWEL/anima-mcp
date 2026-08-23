@@ -259,12 +259,16 @@ class LearnedLedLuxResidual:
     closed-loop correlation as self-glow.
     """
 
-    # v1 paired actions to the independent SHM flush timestamp, which can lag
-    # the VEML7700 read by almost one 2s cycle. A distinct kind intentionally
-    # rejects that contaminated durable evidence after capture timing is fixed.
-    MODEL_KIND = "capture_timed_stable_command_breathing_delta_median_v2"
+    # v1 paired actions to the independent SHM flush timestamp. v2 fixed that
+    # timing, but both the sensor and efference-copy EMAs still advanced on
+    # repeated consumer reads of one physical capture, and its pooled window
+    # let falling edges crowd out rising ones. Live v2 direction medians were
+    # both negative after that contamination. A distinct v3 kind deliberately
+    # cold-starts from capture-deduplicated, direction-balanced evidence.
+    MODEL_KIND = "capture_deduplicated_direction_balanced_breathing_delta_median_v3"
     INSTRUMENT = "internal_led_breathing_pulse"
     MAX_TRANSITIONS = 96
+    MAX_TRANSITIONS_PER_DIRECTION = MAX_TRANSITIONS // 2
     MAX_SAMPLE_INTERVAL_SECONDS = 8.0
     TARGET_BRIGHTNESS_TOLERANCE = 0.0005
     MIN_DRIVE_DELTA = 0.00075
@@ -275,19 +279,42 @@ class LearnedLedLuxResidual:
     SIGN_WILSON_Z = 1.959963984540054
     SIGN_ACTIVATE_LOWER_BOUND = 0.55
     SIGN_DEACTIVATE_LOWER_BOUND = 0.50
+    MIN_MAGNITUDE_CONSISTENCY = 0.35
     CONFIDENCE_GATE = 0.75
     DRIVE_FILTER_WARM_SAMPLES = 5
 
     def __init__(self, persisted: dict[str, Any] | None = None):
-        self._transitions: deque[dict[str, float | str]] = deque(
-            maxlen=self.MAX_TRANSITIONS
-        )
+        # Keep a balanced amount of rising and falling evidence. A single
+        # maxlen deque lets whichever breathing direction is sampled more often
+        # evict the other direction, even though both are required to identify
+        # a physical response. The live v2 window reached 82 decreases versus
+        # 14 increases and briefly passed a pooled sign gate despite increases
+        # showing the opposite response.
+        self._transitions: deque[dict[str, float | str]] = deque()
         self._previous_sample: dict[str, Any] | None = None
         self._filtered_drive: float | None = None
         self._drive_filter_samples = 0
+        self._last_filter_observation_id: str | None = None
         self._sign_consistency_ready = False
         if persisted:
             self.load_dict(persisted)
+
+    def _append_transition(self, transition: dict[str, float | str]) -> None:
+        """Retain recent evidence without allowing one direction to crowd out the other."""
+        self._transitions.append(transition)
+        direction = transition["direction"]
+        same_direction = [
+            index
+            for index, item in enumerate(self._transitions)
+            if item["direction"] == direction
+        ]
+        if len(same_direction) > self.MAX_TRANSITIONS_PER_DIRECTION:
+            del self._transitions[same_direction[0]]
+
+        # Defensive cap for malformed/future persisted data. With the per-
+        # direction caps this should not normally fire.
+        while len(self._transitions) > self.MAX_TRANSITIONS:
+            self._transitions.popleft()
 
     def load_dict(self, data: dict[str, Any] | None) -> None:
         """Replace durable transition evidence with validated persisted data."""
@@ -303,7 +330,11 @@ class LearnedLedLuxResidual:
         transitions = data.get("transitions")
         if not isinstance(transitions, list):
             return
-        for item in transitions[-self.MAX_TRANSITIONS :]:
+        # Feed every valid persisted transition through the direction-aware
+        # retention policy. Pre-slicing the combined list could discard a
+        # sparse direction before the per-direction caps had a chance to
+        # preserve it.
+        for item in transitions:
             if not isinstance(item, dict):
                 continue
             before = _bounded_float(item.get("before_drive"), 0.0, 1.0)
@@ -323,19 +354,17 @@ class LearnedLedLuxResidual:
             delta_drive = after - before
             if abs(delta_drive) < self.MIN_DRIVE_DELTA:
                 continue
-            self._transitions.append(
-                {
-                    "before_drive": before,
-                    "after_drive": after,
-                    "delta_drive": delta_drive,
-                    "delta_lux": delta_lux,
-                    "slope_lux_per_drive": slope,
-                    "direction": "up" if delta_drive > 0 else "down",
-                    "instrument": self.INSTRUMENT,
-                    "captured_at_unix": captured,
-                    "alignment_error_seconds": alignment_error,
-                }
-            )
+            self._append_transition({
+                "before_drive": before,
+                "after_drive": after,
+                "delta_drive": delta_drive,
+                "delta_lux": delta_lux,
+                "slope_lux_per_drive": slope,
+                "direction": "up" if delta_drive > 0 else "down",
+                "instrument": self.INSTRUMENT,
+                "captured_at_unix": captured,
+                "alignment_error_seconds": alignment_error,
+            })
             self._update_sign_consistency_gate()
 
     def to_dict(self) -> dict[str, Any]:
@@ -409,23 +438,44 @@ class LearnedLedLuxResidual:
         return max(0.0, min(1.0, (center - margin) / denominator))
 
     def _update_sign_consistency_gate(self) -> None:
-        """Latch strong sign evidence; withdraw only when significance is lost."""
-        count = len(self._transitions)
-        positive = sum(
-            float(item["slope_lux_per_drive"]) > 0.0
-            for item in self._transitions
+        """Require the physical sign independently in both pulse directions."""
+        direction_evidence = {}
+        for direction in ("up", "down"):
+            slopes = [
+                float(item["slope_lux_per_drive"])
+                for item in self._transitions
+                if item["direction"] == direction
+            ]
+            positive = sum(value > 0.0 for value in slopes)
+            direction_evidence[direction] = {
+                "count": len(slopes),
+                "fraction": positive / len(slopes) if slopes else None,
+                "lower_bound": self._positive_wilson_lower_bound(
+                    positive, len(slopes)
+                ),
+            }
+
+        covered = all(
+            evidence["count"] >= self.MIN_READY_PER_DIRECTION
+            and evidence["fraction"] is not None
+            and evidence["lower_bound"] is not None
+            for evidence in direction_evidence.values()
         )
-        fraction = positive / count if count else None
-        lower_bound = self._positive_wilson_lower_bound(positive, count)
-        if fraction is None or lower_bound is None:
+        if not covered:
             self._sign_consistency_ready = False
         elif not self._sign_consistency_ready:
             self._sign_consistency_ready = (
-                count >= self.MIN_READY_TRANSITIONS
-                and fraction >= self.MIN_POSITIVE_FRACTION
-                and lower_bound >= self.SIGN_ACTIVATE_LOWER_BOUND
+                all(
+                    evidence["fraction"] >= self.MIN_POSITIVE_FRACTION
+                    and evidence["lower_bound"]
+                    >= self.SIGN_ACTIVATE_LOWER_BOUND
+                    for evidence in direction_evidence.values()
+                )
             )
-        elif lower_bound < self.SIGN_DEACTIVATE_LOWER_BOUND:
+        elif any(
+            evidence["lower_bound"] < self.SIGN_DEACTIVATE_LOWER_BOUND
+            for evidence in direction_evidence.values()
+        ):
             self._sign_consistency_ready = False
 
     def _observe_instrument(
@@ -465,22 +515,20 @@ class LearnedLedLuxResidual:
         slope = delta_lux / delta_drive
         if not math.isfinite(slope):
             return
-        self._transitions.append(
-            {
-                "before_drive": before["drive"],
-                "after_drive": drive,
-                "delta_drive": delta_drive,
-                "delta_lux": delta_lux,
-                "slope_lux_per_drive": slope,
-                "direction": "up" if delta_drive > 0 else "down",
-                "instrument": self.INSTRUMENT,
-                "captured_at_unix": observed_at,
-                "alignment_error_seconds": max(
-                    before["alignment_error_seconds"] or 0.0,
-                    sample["alignment_error_seconds"] or 0.0,
-                ),
-            }
-        )
+        self._append_transition({
+            "before_drive": before["drive"],
+            "after_drive": drive,
+            "delta_drive": delta_drive,
+            "delta_lux": delta_lux,
+            "slope_lux_per_drive": slope,
+            "direction": "up" if delta_drive > 0 else "down",
+            "instrument": self.INSTRUMENT,
+            "captured_at_unix": observed_at,
+            "alignment_error_seconds": max(
+                before["alignment_error_seconds"] or 0.0,
+                sample["alignment_error_seconds"] or 0.0,
+            ),
+        })
         self._update_sign_consistency_gate()
 
     def model_stats(self) -> dict[str, Any]:
@@ -500,7 +548,36 @@ class LearnedLedLuxResidual:
             for item in transitions
         ]
 
-        slope = median(slopes) if slopes else None
+        direction_slopes = {
+            direction: [
+                float(item["slope_lux_per_drive"])
+                for item in transitions
+                if item["direction"] == direction
+            ]
+            for direction in ("up", "down")
+        }
+        direction_medians = {
+            direction: median(values) if values else None
+            for direction, values in direction_slopes.items()
+        }
+        direction_mads = {
+            direction: (
+                median(abs(value - direction_medians[direction]) for value in values)
+                if values and direction_medians[direction] is not None
+                else None
+            )
+            for direction, values in direction_slopes.items()
+        }
+        available_direction_medians = [
+            value for value in direction_medians.values() if value is not None
+        ]
+        # Equal direction weighting prevents a frequently sampled falling edge
+        # from deciding the estimate on behalf of a sparse rising edge.
+        slope = (
+            median(available_direction_medians)
+            if available_direction_medians
+            else None
+        )
         mad = median(abs(value - slope) for value in slopes) if slopes else None
         positive_fraction = (
             sum(value > 0.0 for value in slopes) / count if count else None
@@ -509,27 +586,89 @@ class LearnedLedLuxResidual:
         positive_wilson_lower_bound = self._positive_wilson_lower_bound(
             positive_count, count
         )
+        direction_positive_fractions = {
+            direction: (
+                sum(value > 0.0 for value in values) / len(values)
+                if values else None
+            )
+            for direction, values in direction_slopes.items()
+        }
+        direction_wilson_lower_bounds = {
+            direction: self._positive_wilson_lower_bound(
+                sum(value > 0.0 for value in values), len(values)
+            )
+            for direction, values in direction_slopes.items()
+        }
 
-        count_score = min(1.0, count / self.MIN_READY_TRANSITIONS)
+        balanced_count = 2 * min(up_count, down_count)
+        count_score = min(1.0, balanced_count / self.MIN_READY_TRANSITIONS)
         span_score = min(1.0, drive_span / self.MIN_READY_DRIVE_SPAN)
         direction_score = min(
             1.0,
             min(up_count, down_count) / self.MIN_READY_PER_DIRECTION,
         )
+        balanced_positive_fraction = (
+            min(
+                fraction
+                for fraction in direction_positive_fractions.values()
+                if fraction is not None
+            )
+            if all(
+                fraction is not None
+                for fraction in direction_positive_fractions.values()
+            )
+            else None
+        )
         sign_score = (
-            max(0.0, min(1.0, (positive_fraction - 0.5) / 0.5))
-            if positive_fraction is not None
+            max(0.0, min(1.0, (balanced_positive_fraction - 0.5) / 0.5))
+            if balanced_positive_fraction is not None
             else 0.0
         )
-        consistency_score = 0.0
-        if slope is not None and mad is not None and slope > 0.0:
-            consistency_score = 1.0 / (1.0 + mad / max(abs(slope), 1e-9))
+        direction_consistency_scores = {}
+        for direction in ("up", "down"):
+            direction_slope = direction_medians[direction]
+            direction_mad = direction_mads[direction]
+            score = 0.0
+            if (
+                direction_slope is not None
+                and direction_mad is not None
+                and direction_slope > 0.0
+            ):
+                score = 1.0 / (
+                    1.0 + direction_mad / max(abs(direction_slope), 1e-9)
+                )
+            direction_consistency_scores[direction] = score
+        up_median = direction_medians["up"]
+        down_median = direction_medians["down"]
+        direction_agreement_score = 0.0
+        if (
+            up_median is not None
+            and down_median is not None
+            and up_median > 0.0
+            and down_median > 0.0
+        ):
+            direction_agreement_score = min(up_median, down_median) / max(
+                up_median, down_median
+            )
+        magnitude_consistency_score = min(
+            *direction_consistency_scores.values(),
+            direction_agreement_score,
+        )
+        magnitude_consistency_ready = (
+            magnitude_consistency_score >= self.MIN_MAGNITUDE_CONSISTENCY
+        )
         confidence = (
             0.30 * count_score
             + 0.20 * span_score
             + 0.15 * direction_score
             + 0.15 * sign_score
-            + 0.20 * consistency_score
+            + 0.20 * magnitude_consistency_score
+        )
+        coverage_ready = (
+            count >= self.MIN_READY_TRANSITIONS
+            and up_count >= self.MIN_READY_PER_DIRECTION
+            and down_count >= self.MIN_READY_PER_DIRECTION
+            and drive_span >= self.MIN_READY_DRIVE_SPAN
         )
 
         unknown_reasons: list[str] = []
@@ -545,10 +684,33 @@ class LearnedLedLuxResidual:
             unknown_reasons.append("need_wider_led_drive_span")
         if slope is None or slope <= 0.0:
             unknown_reasons.append("positive_self_glow_response_not_established")
+        for direction in ("up", "down"):
+            direction_slope = direction_medians[direction]
+            if (
+                len(direction_slopes[direction]) >= self.MIN_READY_PER_DIRECTION
+                and (direction_slope is None or direction_slope <= 0.0)
+            ):
+                unknown_reasons.append(
+                    f"breathing_{direction}_response_not_positive"
+                )
         if not self._sign_consistency_ready:
             unknown_reasons.append("breathing_response_is_inconsistent")
+        if coverage_ready and not magnitude_consistency_ready:
+            unknown_reasons.append(
+                "breathing_response_magnitude_is_inconsistent"
+            )
         if confidence < self.CONFIDENCE_GATE:
             unknown_reasons.append("confidence_below_gate")
+        identification_status = (
+            "ready"
+            if not unknown_reasons
+            else "inconclusive" if coverage_ready else "collecting"
+        )
+        saturated_directions = [
+            direction
+            for direction, values in direction_slopes.items()
+            if len(values) >= self.MAX_TRANSITIONS_PER_DIRECTION
+        ]
 
         return {
             "kind": self.MODEL_KIND,
@@ -558,6 +720,10 @@ class LearnedLedLuxResidual:
             "instrument_sample_count": count,
             "up_transitions": up_count,
             "down_transitions": down_count,
+            "balanced_transition_count": balanced_count,
+            "max_transitions_per_direction": self.MAX_TRANSITIONS_PER_DIRECTION,
+            "saturated_directions": saturated_directions,
+            "retention_policy": "latest_equal_capacity_per_direction",
             "drive_span": drive_span,
             "median_alignment_error_seconds": (
                 median(alignment_errors) if alignment_errors else None
@@ -567,14 +733,26 @@ class LearnedLedLuxResidual:
             ),
             "slope_lux_per_drive": slope,
             "median_absolute_deviation": mad,
+            "direction_median_slopes": direction_medians,
+            "direction_median_absolute_deviations": direction_mads,
             "positive_fraction": positive_fraction,
+            "balanced_positive_fraction": balanced_positive_fraction,
+            "direction_positive_fractions": direction_positive_fractions,
             "positive_fraction_gate": self.MIN_POSITIVE_FRACTION,
             "positive_wilson_lower_bound": positive_wilson_lower_bound,
+            "direction_wilson_lower_bounds": direction_wilson_lower_bounds,
             "sign_activation_lower_bound_gate": self.SIGN_ACTIVATE_LOWER_BOUND,
             "sign_deactivation_lower_bound_gate": self.SIGN_DEACTIVATE_LOWER_BOUND,
             "sign_consistency_ready": self._sign_consistency_ready,
+            "direction_consistency_scores": direction_consistency_scores,
+            "direction_agreement_score": direction_agreement_score,
+            "magnitude_consistency_score": magnitude_consistency_score,
+            "magnitude_consistency_gate": self.MIN_MAGNITUDE_CONSISTENCY,
+            "magnitude_consistency_ready": magnitude_consistency_ready,
             "confidence": max(0.0, min(1.0, confidence)),
             "confidence_gate": self.CONFIDENCE_GATE,
+            "coverage_ready": coverage_ready,
+            "identification_status": identification_status,
             "ready": not unknown_reasons,
             "unknown_reasons": unknown_reasons,
         }
@@ -611,7 +789,11 @@ class LearnedLedLuxResidual:
         if model_drive is not None and slope is not None and slope > 0.0:
             candidate = slope * model_drive
 
-        status = "warming"
+        status = (
+            "inconclusive"
+            if stats["identification_status"] == "inconclusive"
+            else "warming"
+        )
         reasons = list(stats["unknown_reasons"])
         self_glow = None
         external = None
@@ -731,19 +913,23 @@ class LearnedLedLuxResidual:
             else (f"{timestamp:.6f}" if timestamp is not None else "unknown")
         )
         model_drive = None
+        is_new_capture = evidence_id != self._last_filter_observation_id
         if drive is not None and source == "led_hardware_controller":
-            if self._filtered_drive is None:
-                self._filtered_drive = drive
-            else:
-                alpha = LIGHT_SENSOR_EMA_ALPHA
-                self._filtered_drive = (
-                    (1.0 - alpha) * self._filtered_drive + alpha * drive
-                )
-            self._drive_filter_samples += 1
+            if is_new_capture:
+                if self._filtered_drive is None:
+                    self._filtered_drive = drive
+                else:
+                    alpha = LIGHT_SENSOR_EMA_ALPHA
+                    self._filtered_drive = (
+                        (1.0 - alpha) * self._filtered_drive + alpha * drive
+                    )
+                self._drive_filter_samples += 1
+                self._last_filter_observation_id = evidence_id
             model_drive = self._filtered_drive
         else:
             self._filtered_drive = None
             self._drive_filter_samples = 0
+            self._last_filter_observation_id = None
             self._previous_sample = None
         filter_ready = self._drive_filter_samples >= self.DRIVE_FILTER_WARM_SAMPLES
         if (
@@ -755,6 +941,7 @@ class LearnedLedLuxResidual:
             and source == "led_hardware_controller"
             and isinstance(led_state, dict)
             and filter_ready
+            and is_new_capture
         ):
             self._observe_instrument(
                 raw,

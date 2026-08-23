@@ -11,7 +11,11 @@ import sqlite3
 from datetime import datetime
 from typing import Dict
 
-from .models import GrowthPreference, preference_evidence_confidence
+from .models import (
+    GrowthPreference,
+    RETIRED_QA_PREFERENCE_ORIGIN,
+    preference_evidence_confidence,
+)
 
 
 # These preferences were historically sampled from the broker loop, nominally
@@ -32,6 +36,11 @@ _CORRELATED_STATE_PREFERENCES = {
     "warm_temp",
 }
 _LEGACY_STATE_CALLS_PER_HOUR = 60
+_RETIRED_QA_PREFERENCE_NAMES = {
+    "insight_light",
+    "insight_temp",
+    "insight_environment",
+}
 
 
 def run_identity_migration(conn: sqlite3.Connection):
@@ -347,3 +356,81 @@ def migrate_external_light_preferences_v2(
         (sentinel, now.isoformat()),
     )
     conn.commit()
+
+
+def migrate_qa_claim_preferences(
+    conn: sqlite3.Connection,
+    preferences: Dict[str, GrowthPreference],
+) -> None:
+    """Retire textual Q&A claims that were misfiled as observations.
+
+    The old bridge collapsed every answer mentioning light, temperature, or
+    weather into one of three preference rows. Absence of a small positive-word
+    list counted as negative evidence, so neutral explanations became hundreds
+    of supposedly independent personal dislikes. Preserve descriptions and raw
+    call counts for audit, but remove all decision-bearing evidence.
+    """
+    sentinel = "_migration_retire_qa_preference_bridge_v1"
+    if conn.execute(
+        "SELECT name FROM preferences WHERE name = ?", (sentinel,)
+    ).fetchone():
+        return
+
+    audit = []
+    for pref in preferences.values():
+        if (
+            pref.name not in _RETIRED_QA_PREFERENCE_NAMES
+            and not pref.description.lower().startswith("from q&a:")
+        ):
+            continue
+        audit.append({
+            "name": pref.name,
+            "value": pref.value,
+            "confidence": pref.confidence,
+            "observation_count": pref.observation_count,
+            "evidence_count": pref.evidence_count,
+            "supporting_count": pref.supporting_count,
+            "contradicting_count": pref.contradicting_count,
+            "previous_origin": pref.evidence_origin,
+        })
+        pref.value = 0.0
+        pref.confidence = 0.0
+        pref.evidence_count = 0
+        pref.supporting_count = 0
+        pref.contradicting_count = 0
+        pref.last_evidence_key = None
+        pref.evidence_origin = RETIRED_QA_PREFERENCE_ORIGIN
+        conn.execute(
+            """
+            UPDATE preferences
+               SET value=0.0, confidence=0.0, evidence_count=0,
+                   supporting_count=0, contradicting_count=0,
+                   last_evidence_key=NULL, evidence_origin=?
+             WHERE name=?
+            """,
+            (RETIRED_QA_PREFERENCE_ORIGIN, pref.name),
+        )
+
+    conn.execute(
+        """
+        INSERT OR REPLACE INTO preferences
+            (name, category, description, value, confidence,
+             observation_count, evidence_count, supporting_count,
+             contradicting_count, evidence_origin, last_confirmed)
+        VALUES (?, 'system', ?, 1.0, 1.0, 1, 1, 1, 0, 'system', ?)
+        """,
+        (
+            sentinel,
+            json.dumps({
+                "reason": "textual_qa_claims_were_not_preference_observations",
+                "rows": audit,
+            }, sort_keys=True),
+            datetime.now().isoformat(),
+        ),
+    )
+    conn.commit()
+    print(
+        f"[Growth] Retired Q&A preference bridge ({len(audit)} rows).",
+        file=sys.stderr,
+        flush=True,
+    )

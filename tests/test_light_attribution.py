@@ -272,7 +272,8 @@ def test_inconsistent_transition_directions_remain_unknown():
     )
 
     result = model.attribute(120.0, led_state(0.08))
-    assert result["status"] == "warming"
+    assert result["status"] == "inconclusive"
+    assert result["model"]["identification_status"] == "inconclusive"
     assert result["external_lux_residual"] is None
     assert (
         "breathing_response_is_inconsistent" in result["model"]["unknown_reasons"]
@@ -319,6 +320,26 @@ def test_pre_capture_timestamp_model_evidence_is_invalidated():
     assert model.model_stats()["instrument_sample_count"] == 0
 
 
+def test_v2_repeated_capture_evidence_is_invalidated():
+    model = LearnedLedLuxResidual(
+        {
+            "model_kind": "capture_timed_stable_command_breathing_delta_median_v2",
+            "transitions": [
+                {
+                    "before_drive": 0.02,
+                    "after_drive": 0.06,
+                    "delta_lux": 20.0,
+                    "slope_lux_per_drive": 500.0,
+                    "captured_at_unix": 100.0,
+                    "instrument": LearnedLedLuxResidual.INSTRUMENT,
+                }
+            ],
+        }
+    )
+
+    assert model.model_stats()["instrument_sample_count"] == 0
+
+
 def test_kindless_legacy_evidence_is_invalidated():
     model = LearnedLedLuxResidual(
         {
@@ -338,72 +359,112 @@ def test_kindless_legacy_evidence_is_invalidated():
     assert model.model_stats()["instrument_sample_count"] == 0
 
 
-def _persisted_sign_sequence(signs):
+def _persisted_direction_slopes(up_slopes, down_slopes):
     transitions = []
-    for i, positive in enumerate(signs):
-        before, after = ((0.02, 0.06) if i % 2 == 0 else (0.06, 0.02))
+    for direction, slopes in (("up", up_slopes), ("down", down_slopes)):
+        before, after = (
+            (0.02, 0.06) if direction == "up" else (0.06, 0.02)
+        )
         delta_drive = after - before
-        slope = 500.0 if positive else -500.0
-        transitions.append(
-            {
+        for slope in slopes:
+            transitions.append({
                 "before_drive": before,
                 "after_drive": after,
                 "delta_lux": slope * delta_drive,
                 "slope_lux_per_drive": slope,
-                "captured_at_unix": 100.0 + i,
+                "captured_at_unix": 100.0 + len(transitions),
                 "instrument": LearnedLedLuxResidual.INSTRUMENT,
-            }
-        )
+            })
     return {
         "model_kind": LearnedLedLuxResidual.MODEL_KIND,
         "transitions": transitions,
     }
 
 
-def test_sign_readiness_uses_confidence_bound_and_hysteresis():
-    # 26/37 clears the raw 70% point threshold, but the 95% Wilson lower
-    # bound is only ~0.542 and must not activate the gated residual.
-    borderline = [True, True, False] * 8 + [False, False, False] + [True] * 10
-    model = LearnedLedLuxResidual(_persisted_sign_sequence(borderline))
+def _persisted_direction_signs(up_signs, down_signs):
+    return _persisted_direction_slopes(
+        [500.0 if positive else -500.0 for positive in up_signs],
+        [500.0 if positive else -500.0 for positive in down_signs],
+    )
+
+
+def test_sign_readiness_is_required_independently_in_each_direction():
+    # The pooled 20/24 sign rate looks excellent, but rising pulses are only
+    # 8/12 positive. A dominant falling direction cannot vote that conflict
+    # away.
+    model = LearnedLedLuxResidual(
+        _persisted_direction_signs(
+            [True] * 8 + [False] * 4,
+            [True] * 12,
+        )
+    )
 
     stats = model.model_stats()
-    assert stats["positive_fraction"] == pytest.approx(26 / 37)
-    assert stats["positive_wilson_lower_bound"] == pytest.approx(0.542169, abs=1e-6)
+    assert stats["positive_fraction"] == pytest.approx(20 / 24)
+    assert stats["positive_fraction"] > stats["positive_fraction_gate"]
+    assert stats["direction_positive_fractions"]["up"] == pytest.approx(8 / 12)
     assert stats["sign_consistency_ready"] is False
     assert stats["ready"] is False
+    assert stats["identification_status"] == "inconclusive"
 
-    # Four more positive samples establish the confidence bound. One adjacent
-    # negative sample no longer chatters readiness back off.
-    established = borderline + [True] * 4 + [False]
-    model = LearnedLedLuxResidual(_persisted_sign_sequence(established))
+    # Both directions independently establish the bound. One adjacent
+    # negative sample in each direction does not chatter readiness back off.
+    model = LearnedLedLuxResidual(
+        _persisted_direction_signs([True] * 12, [True] * 12)
+    )
 
     stats = model.model_stats()
-    assert stats["positive_fraction"] == pytest.approx(30 / 42)
-    assert stats["positive_wilson_lower_bound"] == pytest.approx(0.564328, abs=1e-6)
     assert stats["sign_consistency_ready"] is True
     assert stats["ready"] is True
 
     model = LearnedLedLuxResidual(
-        _persisted_sign_sequence(established + [False])
+        _persisted_direction_signs(
+            [True] * 12 + [False],
+            [True] * 12 + [False],
+        )
     )
     stats = model.model_stats()
-    assert stats["positive_fraction"] < stats["positive_fraction_gate"]
-    assert stats["positive_wilson_lower_bound"] > stats[
-        "sign_deactivation_lower_bound_gate"
-    ]
     assert stats["sign_consistency_ready"] is True
     assert stats["ready"] is True
 
     # Sustained contrary evidence still withdraws the residual.
     model = LearnedLedLuxResidual(
-        _persisted_sign_sequence(established + [False] * 8)
+        _persisted_direction_signs(
+            [True] * 12 + [False] * 10,
+            [True] * 22,
+        )
     )
     stats = model.model_stats()
-    assert stats["positive_wilson_lower_bound"] < stats[
+    assert stats["direction_wilson_lower_bounds"]["up"] < stats[
         "sign_deactivation_lower_bound_gate"
     ]
     assert stats["sign_consistency_ready"] is False
     assert stats["ready"] is False
+
+
+def test_retention_preserves_sparse_direction_and_caps_each_direction():
+    model = LearnedLedLuxResidual(
+        _persisted_direction_signs([True] * 12, [True] * 80)
+    )
+
+    stats = model.model_stats()
+    assert stats["up_transitions"] == 12
+    assert stats["down_transitions"] == model.MAX_TRANSITIONS_PER_DIRECTION
+    assert stats["transition_count"] == 60
+    assert stats["saturated_directions"] == ["down"]
+
+
+def test_direction_magnitudes_must_be_compatible():
+    model = LearnedLedLuxResidual(
+        _persisted_direction_slopes([100.0] * 12, [1000.0] * 12)
+    )
+
+    stats = model.model_stats()
+    assert stats["sign_consistency_ready"] is True
+    assert stats["direction_agreement_score"] == pytest.approx(0.1)
+    assert stats["magnitude_consistency_ready"] is False
+    assert stats["ready"] is False
+    assert "breathing_response_magnitude_is_inconsistent" in stats["unknown_reasons"]
 
 
 def test_endogenous_logical_brightness_changes_are_not_training_evidence():
@@ -436,6 +497,7 @@ def test_repeated_reads_of_one_physical_light_capture_do_not_inflate_evidence():
         observation_id="same-capture",
     )
     before = model.model_stats()["instrument_sample_count"]
+    filter_samples_before = model._drive_filter_samples
     for i in range(10):
         model.observe(
             108.0,
@@ -445,6 +507,7 @@ def test_repeated_reads_of_one_physical_light_capture_do_not_inflate_evidence():
         )
 
     assert model.model_stats()["instrument_sample_count"] == before
+    assert model._drive_filter_samples == filter_samples_before
 
 
 def test_breathing_instrument_survives_slow_ambient_drift_and_sensor_noise():

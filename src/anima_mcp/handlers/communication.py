@@ -210,15 +210,26 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             if insight:
                 insight_result = {"text": insight.text, "category": insight.category}
                 print(f"[Q&A] Extracted insight: {insight.text[:80]}", file=sys.stderr, flush=True)
-                # Close the loop: apply insight to behavioral systems
+                # Classify the extracted record at the epistemic boundary.
+                # Q&A claims are retained as historical hypotheses; this path
+                # no longer mutates preferences, beliefs, or agency values.
                 try:
                     from ..knowledge import apply_insight
-                    behavior_effects = apply_insight(insight)
-                    if behavior_effects:
-                        insight_result["behavior_effects"] = behavior_effects
-                        print(f"[Q&A] Insight applied to behavior: {behavior_effects}", file=sys.stderr, flush=True)
+                    epistemic_handling = apply_insight(insight)
+                    if epistemic_handling:
+                        insight_result["epistemic_handling"] = epistemic_handling
+                        print(
+                            f"[Q&A] Insight recorded with epistemic handling: "
+                            f"{epistemic_handling}",
+                            file=sys.stderr,
+                            flush=True,
+                        )
                 except Exception as e:
-                    print(f"[Q&A] Insight behavior application failed (non-fatal): {e}", file=sys.stderr, flush=True)
+                    print(
+                        f"[Q&A] Insight epistemic handling failed (non-fatal): {e}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
             else:
                 insight_result = {"skipped": "no meaningful insight extracted"}
                 print("[Q&A] No insight extracted", file=sys.stderr, flush=True)
