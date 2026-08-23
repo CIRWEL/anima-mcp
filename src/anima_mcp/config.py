@@ -43,6 +43,11 @@ from .atomic_write import atomic_json_write
 LED_LUX_QUADRATIC: float = 1150.0       # retired diagnostics-only coefficient
 WORLD_LIGHT_SMOOTH_WINDOW: int = 4       # rolling average samples (~8s at 2s interval)
 LIGHT_SENSOR_EMA_ALPHA: float = 0.2      # Pi light channel smoothing per broker sample
+VEML7700_INTEGRATION_SECONDS: float = 0.2  # physical ALS integration window
+VEML7700_INTEGRATION_TOLERANCE: float = 0.30  # Vishay application note 84323
+VEML7700_CAPTURE_SUPPORT_SECONDS: float = (
+    2.0 * VEML7700_INTEGRATION_SECONDS * (1.0 + VEML7700_INTEGRATION_TOLERANCE)
+)
 
 
 def estimated_led_glow(brightness: float) -> float:

@@ -15,11 +15,11 @@ Neural signals derived from Pi's computational state (computational propriocepti
 import os
 import sys
 import psutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 from .base import SensorBackend, SensorReadings
-from ..config import LIGHT_SENSOR_EMA_ALPHA
+from ..config import LIGHT_SENSOR_EMA_ALPHA, VEML7700_CAPTURE_SUPPORT_SECONDS
 
 
 class PiSensors(SensorBackend):
@@ -51,8 +51,8 @@ class PiSensors(SensorBackend):
         self._bmp280 = None
         self._last_pressure = None
         self._smoothed_lux: Optional[float] = None  # EMA for light sensor
-        self._env_shadow_updated_at: Optional[datetime] = None
-        self._env_shadow_timestamp_precision_s: Optional[float] = None
+        self._shadow_light_observed_at: Optional[datetime] = None
+        self._shadow_light_precision_s: Optional[float] = None
 
         # Phase-1 Elixir broker cutover: when set, the three I2C environment
         # sensors (AHT20 / VEML7700 / BMP280) are NOT initialized here — the
@@ -376,21 +376,48 @@ class PiSensors(SensorBackend):
             updated_at = datetime.fromisoformat(updated_at_text)
             age = abs((datetime.now() - updated_at).total_seconds())
             if age > self._env_shadow_stale_s:
-                self._env_shadow_updated_at = None
-                self._env_shadow_timestamp_precision_s = None
+                self._shadow_light_observed_at = None
+                self._shadow_light_precision_s = None
                 return None
             readings = envelope.get("data", {}).get("readings", {})
-            self._env_shadow_updated_at = updated_at
-            # The current Elixir envelope uses whole seconds. Preserve that
-            # uncertainty so action-history pairing does not claim false
-            # sub-second precision if the writer later changes its format.
-            self._env_shadow_timestamp_precision_s = (
-                0.001 if "." in updated_at_text else 1.0
-            )
-            return readings if isinstance(readings, dict) else None
+            if not isinstance(readings, dict):
+                self._shadow_light_observed_at = None
+                self._shadow_light_precision_s = None
+                return None
+
+            # The envelope timestamp belongs to the independent SHM flush
+            # loop, not to the VEML7700 read. Only the sensor-owned integration
+            # window is valid evidence for action/capture alignment.
+            observed_at_text = readings.get("light_observed_at")
+            precision = readings.get("light_observed_precision_seconds")
+            if (
+                isinstance(observed_at_text, str)
+                and isinstance(precision, (int, float))
+                and not isinstance(precision, bool)
+                and 0.0 < float(precision) <= 2.0
+            ):
+                try:
+                    observed_at = datetime.fromisoformat(
+                        observed_at_text.replace("Z", "+00:00")
+                    )
+                    precision_s = float(precision)
+                    capture_end = observed_at + timedelta(seconds=precision_s)
+                    capture_now = datetime.now(tz=observed_at.tzinfo)
+                    capture_age = (capture_now - capture_end).total_seconds()
+                    if capture_age < -2.0 or capture_age > self._env_shadow_stale_s:
+                        raise ValueError("stale or future light capture provenance")
+                    self._shadow_light_observed_at = observed_at
+                    self._shadow_light_precision_s = precision_s
+                except ValueError:
+                    self._shadow_light_observed_at = None
+                    self._shadow_light_precision_s = None
+            else:
+                self._shadow_light_observed_at = None
+                self._shadow_light_precision_s = None
+            return readings
         except Exception:
-            self._env_shadow_updated_at = None
-            self._env_shadow_timestamp_precision_s = None
+            self._shadow_light_observed_at = None
+            self._shadow_light_precision_s = None
             return None
 
     def read(self) -> SensorReadings:
@@ -405,6 +432,8 @@ class PiSensors(SensorBackend):
         ambient_temp = None
         humidity = None
         light = None
+        light_observed_at = None
+        light_observed_precision_seconds = None
         pressure = None
         pressure_temp = None
 
@@ -414,6 +443,8 @@ class PiSensors(SensorBackend):
             humidity = shadow.get("humidity_pct")
             light = shadow.get("light_lux")
             if light is not None:
+                light_observed_at = self._shadow_light_observed_at
+                light_observed_precision_seconds = self._shadow_light_precision_s
                 # Same EMA as the I2C path — sensor is close to LEDs, raw
                 # values swing wildly; consumers expect the smoothed series.
                 if self._smoothed_lux is None:
@@ -463,6 +494,18 @@ class PiSensors(SensorBackend):
                     default=None
                 )
                 if light is not None:
+                    # Continuous mode exposes the latest completed conversion,
+                    # so its phase at an arbitrary I2C read is unknown by up to
+                    # one integration period. Bound that phase plus Vishay's
+                    # specified +/-30% integration tolerance; the action pairer
+                    # uses this support interval's midpoint.
+                    read_completed_at = datetime.now()
+                    light_observed_at = read_completed_at - timedelta(
+                        seconds=VEML7700_CAPTURE_SUPPORT_SECONDS
+                    )
+                    light_observed_precision_seconds = (
+                        VEML7700_CAPTURE_SUPPORT_SECONDS
+                    )
                     self._record_success("veml7700")
                     # EMA smoothing — sensor is close to LEDs, raw values swing wildly
                     if self._smoothed_lux is None:
@@ -543,15 +586,9 @@ class PiSensors(SensorBackend):
             ambient_temp_c=ambient_temp,
             humidity_pct=humidity,
             light_lux=light,
-            light_observed_at=(
-                self._env_shadow_updated_at
-                if self._env_shadow_path and light is not None
-                else (now if light is not None else None)
-            ),
+            light_observed_at=light_observed_at if light is not None else None,
             light_observed_precision_seconds=(
-                self._env_shadow_timestamp_precision_s
-                if self._env_shadow_path and light is not None
-                else (0.001 if light is not None else None)
+                light_observed_precision_seconds if light is not None else None
             ),
             cpu_percent=cpu_percent,
             memory_percent=memory.percent,

@@ -42,6 +42,14 @@ defmodule AnimaBroker.Sensors.VEML7700 do
 
   @gain 1.0
   @integration_ms 200.0
+  @integration_tolerance 0.30
+  # Continuous mode exposes the most recently completed conversion. At an
+  # arbitrary I2C read, its phase is unknown by up to one integration period;
+  # Vishay also specifies +/-30% integration-time tolerance. This interval
+  # conservatively bounds every possible photon-capture time represented by
+  # the returned register value.
+  @capture_support_ms round(2 * @integration_ms * (1 + @integration_tolerance))
+  @capture_support_seconds @capture_support_ms / 1000.0
 
   # ---- Pure conversion (unit-tested) ----
 
@@ -59,6 +67,17 @@ defmodule AnimaBroker.Sensors.VEML7700 do
 
   @doc "The 16-bit value written to ALS_CONF for the configured mode."
   def conf_word, do: @conf_gain_1x_200ms
+
+  @doc "Bound the capture-time support of a continuous-mode sensor read."
+  def capture_provenance(completed_at \\ NaiveDateTime.local_now()) do
+    window_start =
+      NaiveDateTime.add(completed_at, -@capture_support_ms, :millisecond)
+
+    %{
+      "light_observed_at" => NaiveDateTime.to_iso8601(window_start),
+      "light_observed_precision_seconds" => @capture_support_seconds
+    }
+  end
 
   # ---- API ----
 
@@ -106,7 +125,8 @@ defmodule AnimaBroker.Sensors.VEML7700 do
   def handle_info(:read, state) do
     case read_once(state.impl, state.bus, state.address) do
       {:ok, lux} ->
-        state.store.merge(%{"readings" => %{"light_lux" => lux}})
+        readings = Map.put(capture_provenance(), "light_lux", lux)
+        state.store.merge(%{"readings" => readings})
 
       {:error, reason} ->
         Logger.warning("[VEML7700] read failed: #{inspect(reason)}")
