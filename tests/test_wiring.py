@@ -445,3 +445,32 @@ class TestTokenVocabularyWiring:
         code_tokens = set(ALL_TOKENS)
         assert model_tokens == code_tokens, \
             f"Mismatch: model has {model_tokens - code_tokens}, code has {code_tokens - model_tokens}"
+
+    def test_student_model_uses_current_sampling_and_valence_contract(self):
+        """The deployed forest must not retain derivative or Void features."""
+        import json
+        import os
+
+        from anima_mcp.eisv.mapping import TrajectoryShape
+
+        model_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "data", "student_model",
+        )
+        with open(os.path.join(model_dir, "mappings.json")) as f:
+            mappings = json.load(f)
+        with open(os.path.join(model_dir, "scaler.json")) as f:
+            scaler = json.load(f)
+
+        assert mappings["feature_contract_version"] == 2
+        assert mappings["sampling_semantics"] == "window_state_means"
+        assert mappings["valence_semantics"] == "signed_e_minus_i"
+        assert mappings["numeric_features"] == [
+            "mean_E", "mean_I", "mean_S", "mean_V",
+        ]
+        assert set(mappings["shapes"]) == {shape.value for shape in TrajectoryShape}
+        assert "valence_rising" in mappings["shapes"]
+        assert "void_rising" not in mappings["shapes"]
+        assert scaler["mean"][3] == pytest.approx(
+            scaler["mean"][0] - scaler["mean"][1]
+        )

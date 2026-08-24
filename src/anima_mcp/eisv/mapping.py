@@ -6,6 +6,7 @@ Lumen's live system. Pure Python, no heavy dependencies.
 
 from __future__ import annotations
 
+import math
 from enum import Enum
 from typing import Any, Dict, List
 
@@ -101,8 +102,8 @@ def compute_trajectory_window(
 # Trajectory Shape Classifier
 # ---------------------------------------------------------------------------
 
-_HIGH_BASIN_E = 0.6
-_DERIV_THRESHOLD = 0.05
+_WINDOW_CHANGE_THRESHOLD = 0.05
+_STEP_CHANGE_THRESHOLD = 0.05
 _BASIN_JUMP = 0.2
 
 
@@ -119,15 +120,26 @@ class TrajectoryShape(str, Enum):
     CONVERGENCE = "convergence"
 
 
-def _mean(values: List[float]) -> float:
-    return sum(values) / len(values) if values else 0.0
+def _state_steps(states: List[Dict[str, float]]) -> List[Dict[str, float]]:
+    """Return dimensionless per-snapshot changes, independent of timestamps."""
+    return [
+        {
+            dim: states[index][dim] - states[index - 1][dim]
+            for dim in EISV_DIMS
+        }
+        for index in range(1, len(states))
+    ]
 
 
 def classify_trajectory(window: Dict[str, Any]) -> TrajectoryShape:
-    """Classify a trajectory window into one of 9 dynamical shape classes."""
+    """Classify a trajectory window into one of 9 dynamical shape classes.
+
+    Shape thresholds are state-space changes, not rates per second. This keeps
+    classification stable when the same trajectory is sampled at a different
+    cadence. The per-second derivatives in ``window`` remain available for
+    telemetry, but they do not determine a categorical shape.
+    """
     states = window["states"]
-    derivs = window["derivatives"]
-    second = window["second_derivatives"]
 
     e_vals = [s["E"] for s in states]
     s_vals = [s["S"] for s in states]
@@ -135,20 +147,17 @@ def classify_trajectory(window: Dict[str, Any]) -> TrajectoryShape:
     e_range = max(e_vals) - min(e_vals)
     s_range = max(s_vals) - min(s_vals)
 
-    de_vals = [d["dE"] for d in derivs] if derivs else [0.0]
-    ds_vals = [d["dS"] for d in derivs] if derivs else [0.0]
-    dv_vals = [d["dV"] for d in derivs] if derivs else [0.0]
-
-    mean_de = _mean(de_vals)
-    mean_ds = _mean(ds_vals)
-    mean_dv = _mean(dv_vals)
+    window_change = {
+        dim: states[-1][dim] - states[0][dim]
+        for dim in EISV_DIMS
+    }
 
     # 1. Basin transition down
-    if e_range >= _BASIN_JUMP and mean_de < 0 and e_vals[0] > e_vals[-1]:
+    if e_range >= _BASIN_JUMP and window_change["E"] < 0:
         return TrajectoryShape.BASIN_TRANSITION_DOWN
 
     # 2. Basin transition up
-    if e_range >= _BASIN_JUMP and mean_de > 0 and e_vals[-1] > e_vals[0]:
+    if e_range >= _BASIN_JUMP and window_change["E"] > 0:
         return TrajectoryShape.BASIN_TRANSITION_UP
 
     # 3. Entropy spike recovery
@@ -158,40 +167,51 @@ def classify_trajectory(window: Dict[str, Any]) -> TrajectoryShape:
             return TrajectoryShape.ENTROPY_SPIKE_RECOVERY
 
     # 4. Drift dissonance
-    drift_vals = [s.get("ethical_drift", 0.0) for s in states]
-    if max(drift_vals) > 0.3:
+    drift_vals = [
+        float(value)
+        for state in states
+        for value in [state.get("ethical_drift", 0.0)]
+        if (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(value)
+        )
+    ]
+    if drift_vals and max(drift_vals) > 0.3:
         return TrajectoryShape.DRIFT_DISSONANCE
 
     # 5. Valence rising (Energy gaining on Integrity)
-    if mean_dv > _DERIV_THRESHOLD:
+    if window_change["V"] > _WINDOW_CHANGE_THRESHOLD:
         return TrajectoryShape.VALENCE_RISING
 
     # 6. Rising entropy
-    if mean_ds > _DERIV_THRESHOLD:
+    if window_change["S"] > _WINDOW_CHANGE_THRESHOLD:
         return TrajectoryShape.RISING_ENTROPY
 
     # 7. Falling energy
-    if mean_de < -_DERIV_THRESHOLD:
+    if window_change["E"] < -_WINDOW_CHANGE_THRESHOLD:
         return TrajectoryShape.FALLING_ENERGY
 
     # 8. Convergence
-    if derivs and second:
-        all_derivs_small = all(
-            abs(d[k]) < _DERIV_THRESHOLD
-            for d in derivs
-            for k in ("dE", "dI", "dS", "dV")
+    steps = _state_steps(states)
+    second_steps = _state_steps(steps)
+    if steps and second_steps:
+        all_steps_small = all(
+            abs(step[dim]) < _STEP_CHANGE_THRESHOLD
+            for step in steps
+            for dim in EISV_DIMS
         )
-        all_second_small = all(
-            abs(d[k]) < _DERIV_THRESHOLD
-            for d in second
-            for k in ("d2E", "d2I", "d2S", "d2V")
+        all_second_steps_small = all(
+            abs(step[dim]) < _STEP_CHANGE_THRESHOLD
+            for step in second_steps
+            for dim in EISV_DIMS
         )
         has_dynamics = any(
-            abs(d[k]) > 1e-9
-            for d in derivs
-            for k in ("dE", "dI", "dS", "dV")
+            abs(step[dim]) > 1e-9
+            for step in steps
+            for dim in EISV_DIMS
         )
-        if all_derivs_small and all_second_small and has_dynamics:
+        if all_steps_small and all_second_steps_small and has_dynamics:
             return TrajectoryShape.CONVERGENCE
 
     # 9. Default

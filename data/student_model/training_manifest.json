@@ -1,0 +1,41 @@
+{
+  "feature_contract_version": 2,
+  "metrics": {
+    "cv_pattern_mean": 0.2951851851851852,
+    "cv_pattern_std": 0.10005211262164769,
+    "cv_token1_mean": 0.2670370370370371,
+    "cv_token1_std": 0.055908140414514376,
+    "n_test": 1080,
+    "n_train": 4320,
+    "pattern_accuracy": 0.4009259259259259,
+    "token1_accuracy": 0.3435185185185185,
+    "token2_accuracy": 0.5814814814814815
+  },
+  "numeric_features": [
+    "mean_E",
+    "mean_I",
+    "mean_S",
+    "mean_V"
+  ],
+  "source": {
+    "repository": "https://github.com/cirwel/eisv-lumen",
+    "revision": "07494045e01b44ef4ba72084a1c9cd10aef011b5",
+    "source_files_sha256": {
+      "eisv_lumen/distillation/export_student.py": "404f09dcbccf22a52bbb725c1c4c0ad5a4479a3972c1bed2bb6cf33b42f318a3",
+      "eisv_lumen/distillation/train_student.py": "daaa169ba6e13c7e87af9a67fbba0b442d176e8ec3090e2e9233886a12f3c327"
+    },
+    "teacher_outputs_sha256": "5ff53cd7767cbc5169537936eb143cb2d8ecd86c73058169fd7a5c0233fd4d54"
+  },
+  "training": {
+    "max_depth": 8,
+    "n_estimators": 20,
+    "numpy_version": "1.26.4",
+    "seed": 42,
+    "sklearn_version": "1.8.0"
+  },
+  "transforms": [
+    "shape:void_rising->valence_rising",
+    "mean_V=mean_E-mean_I",
+    "drop_per_second_derivative_features"
+  ]
+}

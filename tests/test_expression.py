@@ -1,5 +1,8 @@
 """Tests for eisv/expression.py — expression generator and Lumen bridge."""
 
+import json
+from pathlib import Path
+
 from anima_mcp.eisv.expression import (
     ExpressionGenerator,
     StudentExpressionGenerator,
@@ -193,6 +196,53 @@ class TestStudentExpressionGenerator:
         w = gen.get_weights("settled_presence")
         assert isinstance(w, dict)
         assert len(w) > 0
+
+    def test_rejects_legacy_feature_contract(self, tmp_path):
+        for name in ("pattern_forest", "token1_forest", "token2_forest"):
+            (tmp_path / f"{name}.json").write_text("[]")
+        (tmp_path / "scaler.json").write_text(json.dumps({
+            "mean": [0.0] * 12,
+            "scale": [1.0] * 12,
+        }))
+        (tmp_path / "mappings.json").write_text(json.dumps({
+            "numeric_features": ["mean_E", "mean_I", "mean_S", "mean_V"],
+            "shapes": ["void_rising"],
+        }))
+
+        gen = StudentExpressionGenerator(str(tmp_path), fallback_seed=42)
+
+        assert not gen.is_loaded
+
+    def test_deployed_model_runs_every_current_shape(self):
+        from anima_mcp.eisv.mapping import (
+            TrajectoryShape,
+            compute_trajectory_window,
+        )
+
+        model_dir = Path(__file__).parents[1] / "data" / "student_model"
+        gen = StudentExpressionGenerator(str(model_dir), fallback_seed=42)
+        states = [
+            {
+                "t": index * 2.0,
+                "E": 0.5,
+                "I": 0.65,
+                "S": 0.2,
+                "V": -0.15,
+            }
+            for index in range(30)
+        ]
+        window = compute_trajectory_window(states)
+
+        assert gen.is_loaded
+
+        def fail_on_fallback(*args, **kwargs):
+            raise AssertionError("deployed model fell back during inference")
+
+        gen._fallback.generate = fail_on_fallback
+        for shape in TrajectoryShape:
+            tokens = gen.generate(shape.value, window=window)
+            assert tokens
+            assert all(token in ALL_TOKENS for token in tokens)
 
 
 # ── translate_expression ──
