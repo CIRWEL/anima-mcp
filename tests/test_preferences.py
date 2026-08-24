@@ -4,7 +4,8 @@ preference learning, optimal range adaptation, and persistence.
 
 Covers:
   - Preference.current_satisfaction (optimal range, boundary behavior)
-  - Preference.update_from_experience (positive/negative valence, range expansion)
+  - Preference.update_from_experience (positive/negative event valence)
+  - Self-relative occupancy learning (p10/median/p90 and rolling adaptation)
   - PreferenceSystem.record_state and record_event
   - PreferenceSystem._learn_from_experience
   - get_overall_satisfaction (weighted average, empty state)
@@ -18,7 +19,10 @@ import pytest
 from datetime import datetime, timedelta
 
 from anima_mcp.preferences import (
-    PreferenceSystem, Preference,
+    OCCUPANCY_MIN_SAMPLES,
+    OCCUPANCY_WINDOW_SIZE,
+    PreferenceSystem,
+    Preference,
 )
 
 
@@ -119,20 +123,19 @@ class TestUpdateFromExperience:
         assert pref.valence <= 1.0
         assert pref.valence >= -1.0
 
-    def test_positive_experience_expands_optimal_range(self):
-        """Good outcome with value outside range expands the range."""
-        pref = Preference(dimension="warmth", optimal_low=0.3, optimal_high=0.7)
-        # Good outcome at 0.9 (above optimal_high)
-        pref.update_from_experience(state_value=0.9, outcome_valence=0.5)
-        assert pref.optimal_high > 0.7  # Range expanded upward
-
-    def test_negative_experience_contracts_range(self):
-        """Bad outcome contracts optimal range."""
+    @pytest.mark.parametrize("outcome_valence", [0.3, -0.2])
+    def test_live_event_valences_do_not_set_occupancy_band(self, outcome_valence):
+        """The broker's live events affect valence, not the occupancy band."""
         pref = Preference(dimension="warmth", optimal_low=0.2, optimal_high=0.8)
-        original_high = pref.optimal_high
-        # Bad outcome at high value
-        pref.update_from_experience(state_value=0.9, outcome_valence=-0.5)
-        assert pref.optimal_high <= original_high  # Range contracted
+
+        pref.update_from_experience(
+            state_value=0.9,
+            outcome_valence=outcome_valence,
+        )
+
+        assert (pref.optimal_low, pref.optimal_high) == (0.2, 0.8)
+        assert pref.optimal_center is None
+        assert pref.valence != 0.0
 
     def test_confidence_grows(self):
         """Confidence increases with experience count, capped at 1.0."""
@@ -177,6 +180,81 @@ class TestRecordStateAndEvent:
         warmth_before = ps._preferences["warmth"].valence
         ps.record_event("calm", valence=0.5, current_state=state)
         assert ps._preferences["warmth"].valence > warmth_before
+
+    def test_event_learns_from_environmental_dimensions_in_history(self, ps):
+        """Normalized light and temperature observations reach event learning."""
+        state = default_state(light=0.25, temperature=0.5)
+        ps.record_state(state)
+        ps._state_history[-1]["timestamp"] = datetime.now() - timedelta(seconds=10)
+
+        ps.record_event("calm", valence=0.3, current_state=state)
+
+        assert ps._preferences["light"].experience_count == 1
+        assert ps._preferences["temperature"].experience_count == 1
+
+
+# ==================== occupancy learning ====================
+
+class TestOccupancyLearning:
+    """Test self-relative range and peak learning from lived state occupancy."""
+
+    def test_recent_distribution_sets_p10_median_p90_band(self, ps):
+        """A dimension's own occupancy defines its range without an event."""
+        for index in range(100):
+            ps.record_state({"warmth": index / 99})
+
+        warmth = ps._preferences["warmth"]
+        assert warmth.optimal_low == pytest.approx(0.1)
+        assert warmth.optimal_center == pytest.approx(0.5)
+        assert warmth.optimal_high == pytest.approx(0.9)
+        assert warmth.occupancy_count == 100
+        assert warmth.experience_count == 0
+
+    def test_waits_for_enough_occupancy_before_replacing_defaults(self, ps):
+        for _ in range(OCCUPANCY_MIN_SAMPLES - 1):
+            ps.record_state({"warmth": 0.9})
+
+        warmth = ps._preferences["warmth"]
+        assert (warmth.optimal_low, warmth.optimal_high) == (0.3, 0.7)
+        assert warmth.optimal_center is None
+
+        ps.record_state({"warmth": 0.9})
+        assert warmth.optimal_low == pytest.approx(0.9)
+        assert warmth.optimal_center == pytest.approx(0.9)
+        assert warmth.optimal_high == pytest.approx(0.9)
+
+    def test_rolling_window_adapts_to_recent_occupancy(self, ps):
+        for index in range(OCCUPANCY_WINDOW_SIZE):
+            ps.record_state({"warmth": 0.2 + 0.1 * (index % 10) / 9})
+        earlier_band = (
+            ps._preferences["warmth"].optimal_low,
+            ps._preferences["warmth"].optimal_center,
+            ps._preferences["warmth"].optimal_high,
+        )
+
+        for index in range(OCCUPANCY_WINDOW_SIZE):
+            ps.record_state({"warmth": 0.7 + 0.1 * (index % 10) / 9})
+
+        warmth = ps._preferences["warmth"]
+        assert earlier_band == pytest.approx((0.21, 0.25, 0.29), abs=0.002)
+        assert warmth.optimal_low == pytest.approx(0.71, abs=0.002)
+        assert warmth.optimal_center == pytest.approx(0.75)
+        assert warmth.optimal_high == pytest.approx(0.79, abs=0.002)
+
+    def test_nonfinite_values_are_ignored_and_finite_values_are_bounded(self, ps):
+        ps.record_state({
+            "warmth": float("nan"),
+            "clarity": float("inf"),
+            "stability": 1.2,
+            "presence": -0.2,
+            "unknown": 0.5,
+        })
+
+        assert ps._last_state == {"stability": 1.0, "presence": 0.0}
+        assert ps._preferences["warmth"].occupancy_count == 0
+        assert ps._preferences["clarity"].occupancy_count == 0
+        assert ps._preferences["stability"].occupancy_count == 1
+        assert ps._preferences["presence"].occupancy_count == 1
 
 
 # ==================== get_overall_satisfaction ====================
@@ -311,6 +389,8 @@ class TestPersistence:
         ps1._preferences["warmth"].optimal_low = 0.4
         ps1._preferences["warmth"].optimal_high = 0.8
         ps1._preferences["warmth"].experience_count = 15
+        ps1._preferences["warmth"].occupancy_count = 120
+        ps1._preferences["warmth"].optimal_center = 0.55
         ps1._save()
 
         ps2 = PreferenceSystem(persistence_path=path)
@@ -318,6 +398,8 @@ class TestPersistence:
         assert ps2._preferences["warmth"].confidence == pytest.approx(0.8)
         assert ps2._preferences["warmth"].optimal_low == pytest.approx(0.4)
         assert ps2._preferences["warmth"].experience_count == 15
+        assert ps2._preferences["warmth"].occupancy_count == 120
+        assert ps2._preferences["warmth"].optimal_center == pytest.approx(0.55)
 
     def test_load_missing_file_no_crash(self, tmp_path):
         """Loading from nonexistent file doesn't crash."""
@@ -370,3 +452,5 @@ class TestDescribePreferences:
         assert "warmth" in summary
         assert "valence" in summary["warmth"]
         assert "confidence" in summary["warmth"]
+        assert "optimal_center" in summary["warmth"]
+        assert "occupancy_count" in summary["warmth"]
