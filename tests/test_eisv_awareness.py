@@ -3,6 +3,9 @@
 import os
 import sqlite3
 import tempfile
+
+import pytest
+
 from anima_mcp.eisv.mapping import (
     anima_to_eisv, compute_trajectory_window, classify_trajectory,
     TrajectoryShape, compute_derivatives,
@@ -78,6 +81,55 @@ class TestShapeClassifier:
         states = [{"t": float(i), "E": 0.5, "I": 0.5, "S": 0.2 + i * 0.08, "V": 0.1} for i in range(10)]
         window = compute_trajectory_window(states)
         assert classify_trajectory(window) == TrajectoryShape.RISING_ENTROPY
+
+    @pytest.mark.parametrize("sample_interval", [0.5, 2.0, 10.0])
+    def test_rising_entropy_uses_whole_window_change(self, sample_interval):
+        """The same lived trajectory has one shape at every sample cadence."""
+        states = []
+        for index in range(30):
+            progress = index / 29
+            states.append({
+                "t": index * sample_interval,
+                "E": 0.5,
+                "I": 0.5,
+                "S": 0.2 + 0.12 * progress,
+                "V": 0.0,
+            })
+
+        window = compute_trajectory_window(states)
+        assert classify_trajectory(window) == TrajectoryShape.RISING_ENTROPY
+
+    def test_falling_energy_uses_whole_window_change_at_live_cadence(self):
+        states = []
+        for index in range(30):
+            progress = index / 29
+            energy = 0.6 - 0.12 * progress
+            states.append({
+                "t": index * 2.0,
+                "E": energy,
+                "I": 0.6,
+                "S": 0.2,
+                "V": energy - 0.6,
+            })
+
+        window = compute_trajectory_window(states)
+        assert classify_trajectory(window) == TrajectoryShape.FALLING_ENERGY
+
+    def test_valence_rising_uses_signed_window_change_at_live_cadence(self):
+        states = []
+        for index in range(30):
+            progress = index / 29
+            integrity = 0.7 - 0.12 * progress
+            states.append({
+                "t": index * 2.0,
+                "E": 0.5,
+                "I": integrity,
+                "S": 0.2,
+                "V": 0.5 - integrity,
+            })
+
+        window = compute_trajectory_window(states)
+        assert classify_trajectory(window) == TrajectoryShape.VALENCE_RISING
 
     def test_basin_transition_down(self):
         states = [{"t": float(i), "E": 0.8 - i * 0.04, "I": 0.5, "S": 0.2, "V": 0.1} for i in range(10)]
@@ -180,6 +232,18 @@ class TestTrajectoryAwareness:
 
         assert {k: ta._buffer[0][k] for k in operational} == operational
 
+    def test_record_state_produces_governance_scaled_ethical_drift(self):
+        ta = TrajectoryAwareness(buffer_size=30)
+        ta._last_record_time = 0
+        ta.record_state(0.5, 0.5, 0.7, 0.5)
+        ta._last_record_time = 0
+        ta.record_state(0.62, 0.5, 0.7, 0.5)
+
+        assert ta._buffer[0]["ethical_drift"] == 0.0
+        assert ta._buffer[1]["ethical_drift"] == pytest.approx(0.36)
+        window = compute_trajectory_window(list(ta._buffer))
+        assert classify_trajectory(window) == TrajectoryShape.DRIFT_DISSONANCE
+
     def test_caching(self):
         ta = TrajectoryAwareness(buffer_size=30, cache_seconds=60.0, seed=42)
         for i in range(10):
@@ -215,6 +279,28 @@ class TestTrajectoryAwareness:
         added = ta.bootstrap_from_history(records)
         assert added == 5
         assert ta.buffer_size == 5
+
+    def test_bootstrap_reconstructs_ethical_drift(self):
+        ta = TrajectoryAwareness(buffer_size=30)
+        records = [
+            {
+                "timestamp": "2026-01-01T00:00:00",
+                "warmth": 0.5,
+                "clarity": 0.5,
+                "stability": 0.7,
+                "presence": 0.5,
+            },
+            {
+                "timestamp": "2026-01-01T00:00:02",
+                "warmth": 0.5,
+                "clarity": 0.38,
+                "stability": 0.7,
+                "presence": 0.5,
+            },
+        ]
+
+        assert ta.bootstrap_from_history(records) == 2
+        assert ta._buffer[-1]["ethical_drift"] == pytest.approx(0.36)
 
     def test_graceful_failure(self):
         ta = TrajectoryAwareness(buffer_size=30)

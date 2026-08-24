@@ -29,6 +29,42 @@ from .expression import (
 )
 
 
+_DRIFT_DIMS = ("warmth", "clarity", "stability")
+
+
+def _anima_state(
+    warmth: float,
+    clarity: float,
+    stability: float,
+) -> Dict[str, float]:
+    """Normalize the raw anima dimensions that governance uses for drift."""
+    state = {
+        "warmth": float(warmth),
+        "clarity": float(clarity),
+        "stability": float(stability),
+    }
+    if any(not math.isfinite(value) for value in state.values()):
+        raise ValueError("anima drift dimensions must be finite")
+    return {
+        dimension: max(0.0, min(1.0, value))
+        for dimension, value in state.items()
+    }
+
+
+def _ethical_drift_magnitude(
+    current: Dict[str, float],
+    previous: Optional[Dict[str, float]],
+) -> float:
+    """Collapse governance's clamped 3x drift vector to max magnitude."""
+    if previous is None:
+        return 0.0
+    components = [
+        max(-0.5, min(0.5, 3.0 * (current[dim] - previous[dim])))
+        for dim in _DRIFT_DIMS
+    ]
+    return max(abs(component) for component in components)
+
+
 class TrajectoryAwareness:
     """EISV trajectory awareness for primitive language.
 
@@ -71,6 +107,7 @@ class TrajectoryAwareness:
         # Tracking
         self._last_record_time: float = 0.0
         self._current_shape: Optional[str] = None
+        self._last_anima_state: Optional[Dict[str, float]] = None
 
         # Observability counters
         self._total_generations: int = 0
@@ -194,8 +231,14 @@ class TrajectoryAwareness:
             if not math.isfinite(value) or not lower <= value <= 1.0:
                 raise ValueError(f"EISV {dimension} outside valid range")
             snapshot[dimension] = value
+        current_anima = _anima_state(warmth, clarity, stability)
+        snapshot["ethical_drift"] = _ethical_drift_magnitude(
+            current_anima,
+            self._last_anima_state,
+        )
         snapshot["t"] = now
         self._buffer.append(snapshot)
+        self._last_anima_state = current_anima
         self._last_record_time = now
 
     def bootstrap_from_history(self, state_records: List[Dict]) -> int:
@@ -222,14 +265,23 @@ class TrajectoryAwareness:
             except (ValueError, TypeError):
                 continue
 
+            warmth = rec.get("warmth", 0.5)
+            clarity = rec.get("clarity", 0.5)
+            stability = rec.get("stability", 0.5)
+            current_anima = _anima_state(warmth, clarity, stability)
             body_projection = anima_to_body_eisv_projection(
-                warmth=rec.get("warmth", 0.5),
-                clarity=rec.get("clarity", 0.5),
-                stability=rec.get("stability", 0.5),
+                warmth=warmth,
+                clarity=clarity,
+                stability=stability,
                 presence=rec.get("presence", 0.0),
+            )
+            body_projection["ethical_drift"] = _ethical_drift_magnitude(
+                current_anima,
+                self._last_anima_state,
             )
             body_projection["t"] = t
             self._buffer.append(body_projection)
+            self._last_anima_state = current_anima
             added += 1
 
         if added > 0:

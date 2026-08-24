@@ -1,4 +1,19 @@
 {
+  "feature_contract_version": 2,
+  "numeric_features": [
+    "mean_E",
+    "mean_I",
+    "mean_S",
+    "mean_V"
+  ],
+  "patterns": [
+    "PAIR",
+    "QUESTION",
+    "REPETITION",
+    "SINGLE",
+    "TRIPLE"
+  ],
+  "sampling_semantics": "window_state_means",
   "shapes": [
     "basin_transition_down",
     "basin_transition_up",
@@ -8,14 +23,7 @@
     "falling_energy",
     "rising_entropy",
     "settled_presence",
-    "void_rising"
-  ],
-  "patterns": [
-    "PAIR",
-    "QUESTION",
-    "REPETITION",
-    "SINGLE",
-    "TRIPLE"
+    "valence_rising"
   ],
   "tokens": [
     "~boundary~",
@@ -52,18 +60,5 @@
     "~threshold~",
     "~warmth~"
   ],
-  "numeric_features": [
-    "mean_E",
-    "mean_I",
-    "mean_S",
-    "mean_V",
-    "dE",
-    "dI",
-    "dS",
-    "dV",
-    "d2E",
-    "d2I",
-    "d2S",
-    "d2V"
-  ]
+  "valence_semantics": "signed_e_minus_i"
 }

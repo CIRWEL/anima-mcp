@@ -6,11 +6,17 @@ and translates them to Lumen's token vocabulary.
 
 from __future__ import annotations
 
+import math
 import random
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from .mapping import TrajectoryShape
+
+STUDENT_FEATURE_CONTRACT_VERSION = 2
+STUDENT_NUMERIC_FEATURES = ["mean_E", "mean_I", "mean_S", "mean_V"]
+STUDENT_SAMPLING_SEMANTICS = "window_state_means"
+STUDENT_VALENCE_SEMANTICS = "signed_e_minus_i"
 
 # ---------------------------------------------------------------------------
 # Affinity data (from eisv_lumen/eval/metrics.py)
@@ -182,9 +188,69 @@ class StudentExpressionGenerator:
             self._token2_forest = _load("token2_forest.json")
             self._scaler = _load("scaler.json")
             self._mappings = _load("mappings.json")
+            self._validate_model_contract()
             self._loaded = True
-        except (FileNotFoundError, KeyError, ValueError):
+        except (OSError, KeyError, TypeError, ValueError):
             self._loaded = False
+
+    def _validate_model_contract(self) -> None:
+        """Reject artifacts trained against retired units or shape labels."""
+        if not isinstance(self._mappings, dict):
+            raise ValueError("student mappings must be an object")
+        if not isinstance(self._scaler, dict):
+            raise ValueError("student scaler must be an object")
+        if (
+            self._mappings.get("feature_contract_version")
+            != STUDENT_FEATURE_CONTRACT_VERSION
+        ):
+            raise ValueError("unsupported student feature contract")
+        if self._mappings.get("numeric_features") != STUDENT_NUMERIC_FEATURES:
+            raise ValueError("student numeric features do not match live inference")
+        if (
+            self._mappings.get("sampling_semantics")
+            != STUDENT_SAMPLING_SEMANTICS
+        ):
+            raise ValueError("student sampling semantics do not match live inference")
+        if (
+            self._mappings.get("valence_semantics")
+            != STUDENT_VALENCE_SEMANTICS
+        ):
+            raise ValueError("student Valence semantics do not match live inference")
+
+        shapes = self._mappings.get("shapes")
+        expected_shapes = {shape.value for shape in TrajectoryShape}
+        if (
+            not isinstance(shapes, list)
+            or len(shapes) != len(expected_shapes)
+            or set(shapes) != expected_shapes
+        ):
+            raise ValueError("student shape labels do not match live classifier")
+
+        mean = self._scaler.get("mean")
+        scale = self._scaler.get("scale")
+        expected_numeric = len(STUDENT_NUMERIC_FEATURES)
+        if (
+            not isinstance(mean, list)
+            or not isinstance(scale, list)
+            or len(mean) != expected_numeric
+            or len(scale) != expected_numeric
+            or any(
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                for value in mean + scale
+            )
+            or any(value == 0.0 for value in scale)
+        ):
+            raise ValueError("student scaler does not match numeric features")
+
+        for forest in (
+            self._pattern_forest,
+            self._token1_forest,
+            self._token2_forest,
+        ):
+            if not isinstance(forest, list) or not forest:
+                raise ValueError("student forest must contain at least one tree")
 
     @property
     def is_loaded(self) -> bool:
@@ -197,8 +263,6 @@ class StudentExpressionGenerator:
 
     def _build_features(self, shape: str, window: Dict[str, Any]) -> List[float]:
         states = window["states"]
-        derivs = window.get("derivatives", [])
-        second = window.get("second_derivatives", [])
 
         def _mean(vals: List[float]) -> float:
             return sum(vals) / len(vals) if vals else 0.0
@@ -209,14 +273,6 @@ class StudentExpressionGenerator:
             "mean_I": _mean([s["I"] for s in states]),
             "mean_S": _mean([s["S"] for s in states]),
             "mean_V": _mean([s["V"] for s in states]),
-            "dE": _mean([d["dE"] for d in derivs]) if derivs else 0.0,
-            "dI": _mean([d["dI"] for d in derivs]) if derivs else 0.0,
-            "dS": _mean([d["dS"] for d in derivs]) if derivs else 0.0,
-            "dV": _mean([d["dV"] for d in derivs]) if derivs else 0.0,
-            "d2E": _mean([d["d2E"] for d in second]) if second else 0.0,
-            "d2I": _mean([d["d2I"] for d in second]) if second else 0.0,
-            "d2S": _mean([d["d2S"] for d in second]) if second else 0.0,
-            "d2V": _mean([d["d2V"] for d in second]) if second else 0.0,
         }
         numeric = [raw.get(f, 0.0) for f in numeric_features]
         scaled = self._scale_features(numeric)
