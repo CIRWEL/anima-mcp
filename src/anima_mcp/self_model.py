@@ -22,6 +22,7 @@ from collections import deque
 import json
 from pathlib import Path
 import math
+from statistics import NormalDist
 
 from .atomic_write import atomic_json_write
 from .light_attribution import LearnedLedLuxResidual
@@ -31,6 +32,37 @@ from .light_attribution import LearnedLedLuxResidual
 # refreshing reader.  Checkpoint often enough to bound crash loss and reader
 # fallback staleness without writing the Pi's storage on every two-second tick.
 LIGHT_ATTRIBUTION_CHECKPOINT_SECONDS = 300.0
+
+# Correlation beliefs are observational and sampled on the creature's fast
+# loop, so a ten-sample window is both noisy and badly overconfident. Build a
+# full, non-overlapping observation window, tolerate some missing pairs, and
+# require a conservative two-sided Fisher-z result before treating an effect
+# as present. The effect-size floor keeps statistically detectable trivia from
+# becoming self-knowledge as sample sizes grow.
+CORRELATION_WINDOW_SIZE = 50
+CORRELATION_MIN_COMPLETE_PAIRS = 30
+CORRELATION_MIN_CV = 0.05
+CORRELATION_SIGNIFICANCE_ALPHA = 0.01
+CORRELATION_MIN_EFFECT = 0.3
+_CORRELATION_Z_CRITICAL = NormalDist().inv_cdf(
+    1.0 - CORRELATION_SIGNIFICANCE_ALPHA / 2.0
+)
+
+
+def _correlation_support_threshold(sample_count: int) -> float:
+    """Return the minimum |r| that is meaningful and significant for ``n``.
+
+    Fisher's z transform gives an accurate dependency-free approximation for
+    the configured sample range (30-50 pairs). A perfect correlation remains
+    admissible for the degenerate small-n branch, though runtime callers gate
+    those windows before reaching this helper.
+    """
+    if sample_count <= 3:
+        return 1.0
+    significance_threshold = math.tanh(
+        _CORRELATION_Z_CRITICAL / math.sqrt(sample_count - 3)
+    )
+    return max(CORRELATION_MIN_EFFECT, significance_threshold)
 
 
 def _learning_multiplier(update_bonus: float) -> float:
@@ -93,38 +125,54 @@ class SelfBelief:
             self.confidence = max(0.0, self.confidence - adjustment)
             self.value = self.value + (0.5 - self.value) * adjustment
 
-    def update_correlation(self, correlation: float, update_bonus: float = 0.0) -> None:
-        """Aggregate one signed correlation window without overwriting history.
+    def update_correlation(
+        self,
+        correlation: float,
+        sample_count: int,
+        update_bonus: float = 0.0,
+    ) -> None:
+        """Aggregate one signed, sample-sized window without overwriting history.
 
         Correlation magnitude is evidence that an effect exists; its sign is
         represented by ``value`` (0.5 neutral, 0 negative, 1 positive). A new
         window therefore updates confidence and moves value toward its signed
-        target with an evidence-weighted EMA.
+        target with an evidence-weighted EMA. Effect support is gated by an
+        n-aware significance threshold rather than a fixed |r| cutoff.
         """
         correlation = float(correlation)
-        if not math.isfinite(correlation):
+        if not math.isfinite(correlation) or sample_count <= 3:
             return
         correlation = max(-1.0, min(1.0, correlation))
         magnitude = abs(correlation)
         self.last_tested = datetime.now()
         bonus_multiplier = _learning_multiplier(update_bonus)
+        sample_weight = min(1.0, sample_count / CORRELATION_WINDOW_SIZE)
 
-        if magnitude > 0.3:
+        if magnitude >= _correlation_support_threshold(sample_count):
             self.supporting_count += 1
-            confidence_lr = min(1.0, 0.1 * bonus_multiplier * magnitude)
+            confidence_lr = min(
+                1.0,
+                0.1 * bonus_multiplier * magnitude * sample_weight,
+            )
             self.confidence = min(
                 1.0, self.confidence + confidence_lr * (1.0 - self.confidence)
             )
             target = 0.5 + correlation * 0.5
-            value_lr = min(0.5, 0.25 * bonus_multiplier * magnitude)
+            value_lr = min(
+                0.5,
+                0.25 * bonus_multiplier * magnitude * sample_weight,
+            )
             self.value += value_lr * (target - self.value)
         else:
             self.contradicting_count += 1
-            confidence_lr = min(1.0, 0.03 * bonus_multiplier)
+            confidence_lr = min(1.0, 0.03 * bonus_multiplier * sample_weight)
             self.confidence = max(
                 0.0, self.confidence - confidence_lr * self.confidence
             )
-            neutral_lr = min(0.5, 0.1 * bonus_multiplier * (1.0 - magnitude))
+            neutral_lr = min(
+                0.5,
+                0.1 * bonus_multiplier * (1.0 - magnitude) * sample_weight,
+            )
             self.value += neutral_lr * (0.5 - self.value)
 
         self.value = max(0.0, min(1.0, self.value))
@@ -328,11 +376,11 @@ class SelfModel:
         self._stability_episodes: deque = deque(maxlen=20)  # (drop_time, recovery_time)
         self._warmth_episodes: deque = deque(maxlen=20)  # (drop_time, recovery_time)
         self._correlation_data: Dict[str, deque] = {
-            "temp_clarity": deque(maxlen=50),  # (temp, clarity) pairs
-            "light_warmth": deque(maxlen=50),  # (light, warmth) pairs
+            "temp_clarity": deque(maxlen=CORRELATION_WINDOW_SIZE),
+            "light_warmth": deque(maxlen=CORRELATION_WINDOW_SIZE),
             # Retained only so legacy/private diagnostics fail closed and can
             # clear stale samples. Runtime evidence no longer enters here.
-            "led_lux": deque(maxlen=50),
+            "led_lux": deque(maxlen=CORRELATION_WINDOW_SIZE),
         }
         self._surprise_data: deque = deque(maxlen=50)  # (source, surprise_level)
         self._temperament_samples: deque = deque(maxlen=30)  # Recent temperament snapshots
@@ -894,8 +942,8 @@ class SelfModel:
             if data is not None:
                 data.clear()
             return
-        if len(self._correlation_data[data_key]) < 10:
-            return  # Not enough data
+        if len(self._correlation_data[data_key]) < CORRELATION_WINDOW_SIZE:
+            return  # Build one full, non-overlapping observation window.
 
         data = list(self._correlation_data[data_key])
         keys = list(data[0].keys())
@@ -919,7 +967,7 @@ class SelfModel:
         pairs = [(d[x_key], d[y_key]) for d in data
                  if d[x_key] is not None and d[y_key] is not None]
 
-        if len(pairs) < 10:
+        if len(pairs) < CORRELATION_MIN_COMPLETE_PAIRS:
             return
 
         # Calculate correlation
@@ -938,23 +986,20 @@ class SelfModel:
         sum_sq_y = sum((yi - mean_y) ** 2 for yi in y)
 
         if sum_sq_x < EPSILON or sum_sq_y < EPSILON:
-            return  # Values are constant or near-constant, no meaningful correlation
+            # Constant channels carry no evidence. Discard the completed
+            # window so the fast loop does not retest an overlapping buffer on
+            # every subsequent sample.
+            self._correlation_data[data_key].clear()
+            return
 
-        # Only run full correlation test when there's real variance in input (CV > 5%).
-        # In stable environments, most windows show noise not signal.
+        # Only run a correlation test when both channels vary meaningfully.
+        # Quantization noise in either series can otherwise look perfectly
+        # correlated despite carrying no useful evidence.
         cv_x = math.sqrt(sum_sq_x / n) / (abs(mean_x) + EPSILON)
-        if cv_x < 0.05:
-            # Stable input: no information. We used to log a weak disconfirm
-            # here (supports=False, strength=0.05) on the theory that "if X
-            # truly affected Y, we'd see co-variation even at small scales."
-            # But in stable environments (HVAC-controlled rooms, resident
-            # agents) this fires thousands of times with noise as the only
-            # input, driving confidence to zero permanently even on beliefs
-            # that might be true — there's just no data to test them.
-            # Observed on Lumen: temp_clarity_correlation at 0 supporting /
-            # 31,854 contradicting over weeks of indoor operation. Treat
-            # "no variance" as "no evidence" and leave the belief at its
-            # prior; clear the window so fresh data can accumulate.
+        cv_y = math.sqrt(sum_sq_y / n) / (abs(mean_y) + EPSILON)
+        if min(cv_x, cv_y) < CORRELATION_MIN_CV:
+            # Stable channels are no evidence either way. Clear the window so
+            # fresh variation can accumulate without eroding the prior.
             self._correlation_data[data_key].clear()
             return
 
@@ -973,6 +1018,7 @@ class SelfModel:
 
         self._beliefs[belief_id].update_correlation(
             correlation,
+            sample_count=n,
             update_bonus=self.belief_update_bonus,
         )
         self._correlation_data[data_key].clear()
