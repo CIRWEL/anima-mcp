@@ -8,8 +8,9 @@ import pytest
 from datetime import datetime, timedelta
 from unittest.mock import patch
 from anima_mcp.anima import (
+    CLARITY_ATTRIBUTION_SCHEMA,
     sense_self, _sense_warmth, _sense_clarity,
-    _sense_stability, _sense_presence
+    _sense_stability, _sense_presence, _reset_extreme_diagnostics,
 )
 from anima_mcp.sensors.base import SensorReadings
 from anima_mcp.config import NervousSystemCalibration
@@ -200,6 +201,91 @@ class TestAnimaNotExtreme:
             external_light_lux=1000.0,
         )
         assert external_bright > external_dim
+
+    def test_clarity_attribution_exposes_components_and_separates_attention(
+        self, normal_readings, default_calibration
+    ):
+        anima = sense_self(
+            normal_readings,
+            default_calibration,
+            prediction_accuracy=0.8,
+            external_light_lux=100.0,
+            salience_weights={"light": 1.9},
+        )
+
+        attribution = anima.clarity_attribution
+        assert attribution is not None
+        assert attribution["schema"] == CLARITY_ATTRIBUTION_SCHEMA
+        assert attribution["status"] == "ready"
+        assert attribution["raw_value"] == anima.clarity
+        assert attribution["published_value"] == anima.clarity
+        assert attribution["attention"] == {
+            "light_salience": 1.9,
+            "source": "experiential_filter",
+            "role": "attention_priority",
+            "used_in_measurement": False,
+        }
+        assert set(attribution["components"]) == {
+            "prediction_accuracy",
+            "sensor_coverage",
+            "external_light",
+            "computational_alpha",
+        }
+        contribution_sum = sum(
+            component["contribution"]
+            for component in attribution["components"].values()
+        )
+        assert contribution_sum == pytest.approx(anima.clarity, abs=0.002)
+
+    def test_light_attention_cannot_raise_clarity(
+        self, normal_readings, default_calibration
+    ):
+        neutral = _sense_clarity(
+            normal_readings,
+            default_calibration,
+            prediction_accuracy=0.8,
+            frozen_channel_count=0,
+            external_light_lux=100.0,
+            salience_weights={"light": 1.0},
+        )
+        saturated_attention = _sense_clarity(
+            normal_readings,
+            default_calibration,
+            prediction_accuracy=0.8,
+            frozen_channel_count=0,
+            external_light_lux=100.0,
+            salience_weights={"light": 2.0},
+        )
+
+        assert saturated_attention == neutral
+
+    def test_extreme_diagnostic_is_edge_triggered(
+        self, normal_readings, default_calibration, capsys
+    ):
+        _reset_extreme_diagnostics()
+        kwargs = {
+            "prediction_accuracy": 1.0,
+            "external_light_lux": 1000.0,
+        }
+
+        sense_self(normal_readings, default_calibration, **kwargs)
+        sense_self(normal_readings, default_calibration, **kwargs)
+
+        first = capsys.readouterr().err
+        assert first.count("NOTICE: clarity=") == 1
+        assert "possible bug" not in first
+
+        sense_self(
+            normal_readings,
+            default_calibration,
+            prediction_accuracy=0.0,
+            external_light_lux=1.0,
+        )
+        capsys.readouterr()
+        sense_self(normal_readings, default_calibration, **kwargs)
+
+        reentered = capsys.readouterr().err
+        assert reentered.count("NOTICE: clarity=") == 1
 
 
 class TestAnimaMath:

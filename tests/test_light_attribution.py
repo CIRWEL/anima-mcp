@@ -673,6 +673,7 @@ def test_operator_surfaces_name_gated_efference_semantics():
     context_tool = next(tool for tool in TOOLS if tool.name == "get_lumen_context")
     include_values = context_tool.inputSchema["properties"]["include"]["items"]["enum"]
     assert "light_attribution" in include_values
+    assert "clarity_attribution" in include_values
 
     dashboard = (Path(__file__).parents[1] / "docs" / "control_center.html").read_text(
         encoding="utf-8"
@@ -680,3 +681,5 @@ def test_operator_surfaces_name_gated_efference_semantics():
     assert "LED efference copy" in dashboard
     assert "clarity uses gated residual" in dashboard
     assert "clarity light contribution paused" in dashboard
+    assert "Clarity provenance" in dashboard
+    assert "attention reported, not measurement gain" in dashboard

@@ -12,7 +12,7 @@ The creature knows "I feel warm" not "E=0.4"
 """
 
 import math
-from copy import copy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, TYPE_CHECKING
 from .sensors.base import SensorReadings
@@ -25,6 +25,34 @@ if TYPE_CHECKING:
 
 _PREDICTION_ACCURACY_UNSET = object()
 _EXTERNAL_LIGHT_UNSET = object()
+CLARITY_ATTRIBUTION_SCHEMA = "anima.clarity_attribution.v1"
+
+# Emit an extreme-state diagnostic only when a dimension crosses a band.  The
+# old per-sample print turned a persistent, inspectable state into hundreds of
+# identical log lines and obscured actual failures.
+_extreme_diagnostic_bands: Dict[str, str] = {}
+
+
+def _emit_extreme_diagnostic(name: str, value: float) -> None:
+    band = "high" if value > 0.95 else "low" if value < 0.05 else None
+    previous = _extreme_diagnostic_bands.get(name)
+    if band is None:
+        _extreme_diagnostic_bands.pop(name, None)
+        return
+    if band == previous:
+        return
+    _extreme_diagnostic_bands[name] = band
+    import sys
+    print(
+        f"[Anima] NOTICE: {name}={value:.2f} entered the {band} diagnostic band",
+        file=sys.stderr,
+        flush=True,
+    )
+
+
+def _reset_extreme_diagnostics() -> None:
+    """Clear process-local diagnostic edge state (tests and deliberate reset)."""
+    _extreme_diagnostic_bands.clear()
 
 
 def _get_prediction_accuracy() -> Optional[float]:
@@ -81,9 +109,10 @@ class Anima:
     # Anticipation from memory (optional)
     anticipation: Optional[dict] = None  # Contains anticipated values and confidence
     is_anticipating: bool = False  # True if current state was influenced by memory
+    clarity_attribution: Optional[dict] = None
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "warmth": self.warmth,
             "clarity": self.clarity,
             "stability": self.stability,
@@ -91,6 +120,9 @@ class Anima:
             "feeling": self.feeling(),
             "readings": self.readings.to_dict(),
         }
+        if self.clarity_attribution is not None:
+            data["clarity_attribution"] = deepcopy(self.clarity_attribution)
+        return data
 
     def feeling(self) -> dict:
         """How the creature feels right now."""
@@ -145,14 +177,34 @@ class MoodMomentum:
             smoothed[dim] = alpha * raw + (1 - alpha) * self._prev[dim]
             self._prev[dim] = smoothed[dim]
 
+        published = {
+            dimension: round(value, 3)
+            for dimension, value in smoothed.items()
+        }
+        clarity_attribution = deepcopy(anima.clarity_attribution)
+        if clarity_attribution is not None:
+            clarity_attribution["raw_value"] = anima.clarity
+            clarity_attribution["published_value"] = published["clarity"]
+            clarity_attribution["temporal_filter"] = {
+                "kind": "elapsed_time_ema",
+                "reference_interval_seconds": 2.0,
+                "base_alpha": self.ALPHA["clarity"],
+                "elapsed_seconds": round(elapsed_seconds, 6),
+                "effective_alpha": round(
+                    1.0 - (1.0 - self.ALPHA["clarity"]) ** tick_scale,
+                    6,
+                ),
+            }
+
         return Anima(
-            warmth=round(smoothed["warmth"], 3),
-            clarity=round(smoothed["clarity"], 3),
-            stability=round(smoothed["stability"], 3),
-            presence=round(smoothed["presence"], 3),
+            warmth=published["warmth"],
+            clarity=published["clarity"],
+            stability=published["stability"],
+            presence=published["presence"],
             readings=anima.readings,
             anticipation=anima.anticipation,
             is_anticipating=anima.is_anticipating,
+            clarity_attribution=clarity_attribution,
         )
 
 
@@ -221,6 +273,7 @@ def sense_self(
 
     frozen_channel_count = _frozen_channel_count(readings)
     warmth = _sense_warmth(readings, calibration, salience_weights=salience_weights)
+    clarity_attribution: Dict[str, Any] = {}
     clarity = _sense_clarity(
         readings,
         calibration,
@@ -228,6 +281,7 @@ def sense_self(
         salience_weights=salience_weights,
         frozen_channel_count=frozen_channel_count,
         external_light_lux=external_light_lux,
+        attribution=clarity_attribution,
     )
     stability = _sense_stability(
         readings,
@@ -243,20 +297,23 @@ def sense_self(
     stability = max(0.0, min(1.0, stability))
     presence = max(0.0, min(1.0, presence))
 
-    # Sanity check: flag suspiciously extreme values (likely bugs)
+    clarity_attribution["raw_value"] = clarity
+    clarity_attribution["published_value"] = clarity
+    clarity_attribution["temporal_filter"] = {"kind": "none"}
+
+    # Sanity diagnostics are edge-triggered. Persistent values remain visible
+    # through state telemetry without flooding the journal.
     for name, value in [("warmth", warmth), ("clarity", clarity),
                         ("stability", stability), ("presence", presence)]:
-        if value > 0.95 or value < 0.05:
-            import sys
-            print(f"[Anima] WARNING: {name}={value:.2f} is extreme - possible bug?",
-                  file=sys.stderr, flush=True)
+        _emit_extreme_diagnostic(name, value)
 
     return Anima(
         warmth=warmth,
         clarity=clarity,
         stability=stability,
         presence=presence,
-        readings=readings
+        readings=readings,
+        clarity_attribution=clarity_attribution,
     )
 
 
@@ -313,6 +370,7 @@ def sense_self_with_memory(
     # liveness once for this physical sample, not once per derived dimension.
     frozen_channel_count = _frozen_channel_count(readings)
     raw_warmth = _sense_warmth(readings, calibration, salience_weights=salience_weights)
+    clarity_attribution: Dict[str, Any] = {}
     raw_clarity = _sense_clarity(
         readings,
         calibration,
@@ -320,6 +378,7 @@ def sense_self_with_memory(
         salience_weights=salience_weights,
         frozen_channel_count=frozen_channel_count,
         external_light_lux=external_light_lux,
+        attribution=clarity_attribution,
     )
     raw_stability = _sense_stability(
         readings,
@@ -389,6 +448,16 @@ def sense_self_with_memory(
                 anticipation_dict["exploring"] = True
                 anticipation_dict["exploration_rate"] = memory._exploration_rate
 
+    clarity_attribution["raw_value"] = raw_clarity
+    clarity_attribution["published_value"] = clarity
+    clarity_attribution["perceptual_modulation"] = {
+        "anticipation_applied": is_anticipating,
+        "exploration_applied": is_exploring,
+        "anticipation_blend_factor": (
+            actual_blend_factor if is_anticipating else None
+        ),
+    }
+
     return Anima(
         warmth=warmth,
         clarity=clarity,
@@ -396,7 +465,8 @@ def sense_self_with_memory(
         presence=presence,
         readings=readings,
         anticipation=anticipation_dict,
-        is_anticipating=is_anticipating or is_exploring
+        is_anticipating=is_anticipating or is_exploring,
+        clarity_attribution=clarity_attribution,
     )
 
 
@@ -532,6 +602,7 @@ def _sense_clarity(
     salience_weights: Optional[Dict[str, float]] = None,
     frozen_channel_count: Optional[int] = None,
     external_light_lux: Any = _EXTERNAL_LIGHT_UNSET,
+    attribution: Optional[Dict[str, Any]] = None,
 ) -> float:
     """
     How clearly can the creature perceive its own internal state?
@@ -552,20 +623,48 @@ def _sense_clarity(
     that fallback.
     """
     salience = salience_weights or {}
-    components = []
-    weights = []
+    components: list[float] = []
+    weights: list[float] = []
+    details: Dict[str, Dict[str, Any]] = {}
+
+    def add_component(
+        name: str,
+        value: float,
+        weight: float,
+        **metadata: Any,
+    ) -> None:
+        numeric_value = max(0.0, min(1.0, float(value)))
+        numeric_weight = max(0.0, float(weight))
+        components.append(numeric_value)
+        weights.append(numeric_weight)
+        details[name] = {
+            "available": True,
+            "value": round(numeric_value, 6),
+            "configured_weight": round(numeric_weight, 6),
+            **metadata,
+        }
 
     # Prediction accuracy: How well I understand my own state changes
     # This is the core of "internal seeing" - accurate self-prediction = clarity
     if prediction_accuracy is not None:
         # prediction_accuracy should be 0-1 (1 - normalized_mean_error)
-        components.append(max(0, min(1, prediction_accuracy)))
-        weights.append(cal.clarity_weights.get("prediction_accuracy", 0.5))
+        add_component(
+            "prediction_accuracy",
+            prediction_accuracy,
+            cal.clarity_weights.get("prediction_accuracy", 0.5),
+            source="adaptive_prediction_error",
+            fallback=False,
+        )
     else:
         # Fallback: use a neutral value when no prediction data available yet
         # This happens during early startup before enough observations accumulate
-        components.append(0.5)
-        weights.append(cal.clarity_weights.get("prediction_accuracy", 0.5))
+        add_component(
+            "prediction_accuracy",
+            0.5,
+            cal.clarity_weights.get("prediction_accuracy", 0.5),
+            source="neutral_fallback",
+            fallback=True,
+        )
 
     # Sensor coverage: Data richness (meta-clarity about available information)
     #
@@ -575,18 +674,28 @@ def _sense_clarity(
     # The BMP280 has returned 682.5015433175248 unchanged since the moment Lumen
     # woke from the July blackout, and nothing anywhere in the stack could see
     # it: coverage held at exactly 1.0 for 30 days with sd 0.00000.
-    sensor_count = sum(
+    present_sensor_count = sum(
         1 for v in [
             r.cpu_temp_c, r.ambient_temp_c, r.humidity_pct,
             r.light_lux, r.pressure_hpa,
         ] if v is not None
-    ) - (
+    )
+    frozen_count = (
         _frozen_channel_count(r)
         if frozen_channel_count is None else frozen_channel_count
     )
+    sensor_count = present_sensor_count - frozen_count
     coverage = max(0.0, sensor_count) / 5
-    components.append(coverage)
-    weights.append(cal.clarity_weights.get("sensor_coverage", 0.15))
+    add_component(
+        "sensor_coverage",
+        coverage,
+        cal.clarity_weights.get("sensor_coverage", 0.15),
+        source="informing_physical_channels",
+        present_channels=present_sensor_count,
+        frozen_channels=frozen_count,
+        informing_channels=max(0, sensor_count),
+        total_channels=5,
+    )
 
     # Light: gated external residual. Legacy callers that omit attribution keep
     # their former raw behavior; the live broker passes either a residual or
@@ -608,14 +717,39 @@ def _sense_clarity(
             light_clarity = min(1.0, math.log10(clarity_light) / log_max)
         else:
             light_clarity = 0.0
-        light_clarity *= salience.get("light", 1.0)
-        light_clarity = max(0.0, min(1.0, light_clarity))
-        components.append(light_clarity)
-        weights.append(cal.clarity_weights.get("world_light", 0.15))
+        # Salience is an attention priority, not sensor gain. Multiplying this
+        # positive-only component by attention created a feedback loop: high
+        # clarity caused dissatisfaction, dissatisfaction raised light
+        # salience, and salience made clarity still higher. Preserve the
+        # physical/log-scaled measurement and report attention independently.
+        add_component(
+            "external_light",
+            light_clarity,
+            cal.clarity_weights.get("world_light", 0.15),
+            source=(
+                "raw_lux_legacy_compatibility"
+                if external_light_lux is _EXTERNAL_LIGHT_UNSET
+                else "gated_external_lux_residual"
+            ),
+            input_lux=round(clarity_light, 6),
+            light_max_lux=round(float(cal.light_max_lux), 6),
+        )
+    else:
+        details["external_light"] = {
+            "available": False,
+            "value": None,
+            "configured_weight": round(
+                max(0.0, float(cal.clarity_weights.get("world_light", 0.15))),
+                6,
+            ),
+            "source": "gated_external_lux_residual_unavailable",
+            "input_lux": None,
+        }
 
     # Alpha computational view in a legacy EEG-named field.
     if r.eeg_alpha_power is not None:
         neural_clarity = r.eeg_alpha_power
+        neural_source = "sensor_readings.eeg_alpha_power"
     else:
         # Fall back to computational neural (derives bands from system state)
         neural = get_computational_neural_state(
@@ -624,18 +758,65 @@ def _sense_clarity(
             cpu_temp=r.cpu_temp_c
         )
         neural_clarity = neural.alpha
-    components.append(neural_clarity)
+        neural_source = "computational_alpha_fallback"
     # Fallback 0.0, not the historical 0.3 — same reasoning as warmth's.
-    weights.append(cal.clarity_weights.get("neural", 0.0))
-
-    if not components:
-        return 0.5
+    add_component(
+        "computational_alpha",
+        neural_clarity,
+        cal.clarity_weights.get("neural", 0.0),
+        source=neural_source,
+    )
 
     total_weight = sum(weights)
-    if total_weight == 0:
-        return 0.5
+    value = (
+        0.5
+        if not components or total_weight == 0
+        else sum(c * w for c, w in zip(components, weights)) / total_weight
+    )
 
-    return round(sum(c * w for c, w in zip(components, weights)) / total_weight, 3)
+    if attribution is not None:
+        for detail in details.values():
+            configured_weight = detail.get("configured_weight", 0.0)
+            if detail.get("available") and total_weight > 0:
+                normalized_weight = configured_weight / total_weight
+                detail["normalized_weight"] = round(normalized_weight, 6)
+                detail["contribution"] = round(
+                    float(detail["value"]) * normalized_weight,
+                    6,
+                )
+            else:
+                detail["normalized_weight"] = 0.0
+                detail["contribution"] = 0.0
+
+        try:
+            light_attention = float(salience.get("light", 1.0))
+        except (TypeError, ValueError):
+            light_attention = 1.0
+        if not math.isfinite(light_attention):
+            light_attention = 1.0
+        attribution.update({
+            "schema": CLARITY_ATTRIBUTION_SCHEMA,
+            "status": "ready",
+            "authority": "sense_self_sensor_fusion",
+            "aggregation": "weighted_mean_of_available_components",
+            "measurement_policy": "attention_reported_not_applied_as_sensor_gain",
+            "raw_value": round(value, 3),
+            "published_value": round(value, 3),
+            "total_available_weight": round(total_weight, 6),
+            "components": details,
+            "attention": {
+                "light_salience": round(light_attention, 6),
+                "source": (
+                    "experiential_filter"
+                    if salience_weights is not None
+                    else "neutral_default"
+                ),
+                "role": "attention_priority",
+                "used_in_measurement": False,
+            },
+        })
+
+    return round(value, 3)
 
 
 def _sense_stability(

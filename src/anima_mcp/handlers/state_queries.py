@@ -95,6 +95,15 @@ async def handle_get_state(arguments: dict) -> list[TextContent]:
         light_attribution = shm.get("light_attribution") if shm else None
         if isinstance(light_attribution, dict):
             result["light_attribution"] = light_attribution
+        clarity_attribution = (
+            shm.get("clarity_attribution") if shm else None
+        )
+        if not isinstance(clarity_attribution, dict):
+            clarity_attribution = getattr(
+                anima, "clarity_attribution", None
+            )
+        if isinstance(clarity_attribution, dict):
+            result["clarity_attribution"] = clarity_attribution
     except Exception as e:
         note_suppressed("state_queries.inner_life", e)
 

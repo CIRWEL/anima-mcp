@@ -488,6 +488,36 @@ class TestMoodMomentumIntegration:
 
         assert long_result.warmth == pytest.approx(reference_result.warmth, abs=0.003)
 
+    def test_clarity_attribution_reports_temporal_filter(self):
+        mm = MoodMomentum()
+        attribution = {
+            "schema": "anima.clarity_attribution.v1",
+            "raw_value": 0.9,
+            "published_value": 0.9,
+            "components": {},
+        }
+        mm.smooth(_make_anima(clarity=0.9, clarity_attribution=attribution))
+
+        result = mm.smooth(
+            _make_anima(clarity=0.5, clarity_attribution={
+                **attribution,
+                "raw_value": 0.5,
+                "published_value": 0.5,
+            }),
+            elapsed_seconds=2.0,
+        )
+
+        assert result.clarity == pytest.approx(0.84)
+        assert result.clarity_attribution["raw_value"] == 0.5
+        assert result.clarity_attribution["published_value"] == result.clarity
+        assert result.clarity_attribution["temporal_filter"] == {
+            "kind": "elapsed_time_ema",
+            "reference_interval_seconds": 2.0,
+            "base_alpha": 0.15,
+            "elapsed_seconds": 2.0,
+            "effective_alpha": 0.15,
+        }
+
 
 # =====================================================================
 # InnerLife integration

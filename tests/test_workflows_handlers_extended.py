@@ -195,11 +195,20 @@ class TestLumenContextExtended:
             "external_lux_residual": None,
             "used_by_clarity": False,
         }
+        clarity_attribution = {
+            "schema": "anima.clarity_attribution.v1",
+            "status": "ready",
+            "raw_value": 0.6,
+            "published_value": 0.6,
+        }
 
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
-             patch("anima_mcp.accessors._get_last_shm_data", return_value={"light_attribution": light_attribution}), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value={
+                 "light_attribution": light_attribution,
+                 "clarity_attribution": clarity_attribution,
+             }), \
              patch("anima_mcp.accessors._get_growth", return_value=growth), \
              patch("anima_mcp.eisv_mapper.anima_to_body_eisv_projection", return_value=eisv):
             data = parse_result(await handle_get_lumen_context({"include": ["identity", "anima", "sensors", "mood", "eisv"]}))
@@ -211,6 +220,7 @@ class TestLumenContextExtended:
         assert data["state_space_provenance"]["anima"]["alias_of"] == "body_anima"
         assert data["light_attribution"] == light_attribution
         assert data["light_attribution"]["used_by_clarity"] is False
+        assert data["clarity_attribution"] == clarity_attribution
         assert "mood" in data
         store.record_state.assert_called_once()
         recorded_sensor_data = store.record_state.call_args[0][4]

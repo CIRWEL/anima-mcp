@@ -9,6 +9,7 @@ Helper functions are stateless utilities for data transformation.
 import os
 import math
 import subprocess
+from copy import deepcopy
 from datetime import datetime
 
 from .sensors import SensorReadings
@@ -224,4 +225,14 @@ def anima_from_dict(data: dict, readings: SensorReadings):
             raise ValueError(f"shared anima {dimension} must be finite and in [0, 1]")
         values[dimension] = value
 
-    return Anima(readings=readings, **values)
+    clarity_attribution = data.get("clarity_attribution")
+    if clarity_attribution is not None and not isinstance(
+        clarity_attribution, dict
+    ):
+        raise ValueError("shared anima clarity_attribution must be an object")
+
+    return Anima(
+        readings=readings,
+        clarity_attribution=deepcopy(clarity_attribution),
+        **values,
+    )

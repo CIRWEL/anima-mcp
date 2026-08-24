@@ -326,6 +326,17 @@ class TestRestStateAndLayers:
                      "external_lux_residual": None,
                      "used_by_clarity": False,
                  },
+                 "clarity_attribution": {
+                     "schema": "anima.clarity_attribution.v1",
+                     "status": "ready",
+                     "raw_value": 0.5,
+                     "published_value": 0.5,
+                     "components": {},
+                     "attention": {
+                         "light_salience": 1.3,
+                         "used_in_measurement": False,
+                     },
+                 },
              }), \
              patch("anima_mcp.rest_api.extract_neural_bands", return_value={"beta": 0.2}), \
              patch("anima_mcp.rest_api.anima_to_body_eisv_projection", return_value=eisv):
@@ -349,6 +360,11 @@ class TestRestStateAndLayers:
         assert data["light_attribution"]["status"] == "warming"
         assert data["light_attribution"]["external_lux_residual"] is None
         assert data["light_attribution"]["used_by_clarity"] is False
+        assert data["clarity_attribution"]["status"] == "ready"
+        assert (
+            data["clarity_attribution"]["attention"]["used_in_measurement"]
+            is False
+        )
         assert data["raw_light_lux"] == data["light"]
         assert data["light_composition"] == "room_light_plus_dotstar_glow"
         assert data["neural_provenance"]["physical_eeg"] is False
