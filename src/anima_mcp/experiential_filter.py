@@ -10,6 +10,8 @@ nervous system learns which signals matter most.
 """
 
 import json
+import math
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -56,6 +58,11 @@ PREF_TO_SENSOR: Dict[str, str] = {
 # Bounds
 SALIENCE_MAX = 2.0
 SALIENCE_MIN = 0.5
+DISSATISFACTION_RESPONSE_ALPHA = 0.002
+
+EXPERIENTIAL_FILTER_SCHEMA = "anima.experiential_filter.v2"
+EXPERIENTIAL_FILTER_SCHEMA_VERSION = 2
+LIGHT_MEASUREMENT_SEPARATION_MIGRATION = "light_measurement_separation_v2"
 
 # Save interval (seconds)
 SAVE_INTERVAL = 120
@@ -75,11 +82,32 @@ class SalienceWeight:
         self.weight += 0.02 * surprise
         self.weight = min(SALIENCE_MAX, self.weight)
 
-    def amplify_from_dissatisfaction(self) -> None:
-        """Slight salience increase from ongoing dissatisfaction."""
+    def amplify_from_dissatisfaction(
+        self,
+        satisfaction: Optional[float] = None,
+    ) -> None:
+        """Move attention toward an evidence-proportional urgency target.
+
+        The old ``+0.001`` integrator reached the hard maximum for any need
+        that remained least-satisfied long enough, regardless of severity.
+        A bounded target preserves accumulation while keeping the result tied
+        to the current evidence. ``None`` retains the historical neutral
+        urgency for compatibility callers.
+        """
         self.dissatisfaction_ticks += 1
-        self.weight += 0.001
-        self.weight = min(SALIENCE_MAX, self.weight)
+        try:
+            numeric_satisfaction = (
+                0.5 if satisfaction is None else float(satisfaction)
+            )
+        except (TypeError, ValueError):
+            numeric_satisfaction = 0.5
+        if not math.isfinite(numeric_satisfaction):
+            numeric_satisfaction = 0.5
+        numeric_satisfaction = max(0.0, min(1.0, numeric_satisfaction))
+        urgency = 1.0 - numeric_satisfaction
+        target = 1.0 + urgency
+        self.weight += DISSATISFACTION_RESPONSE_ALPHA * (target - self.weight)
+        self.weight = max(SALIENCE_MIN, min(SALIENCE_MAX, self.weight))
 
     def decay_toward_neutral(self) -> None:
         """Decay weight toward 1.0 (neutral)."""
@@ -116,8 +144,9 @@ class ExperientialFilter:
     """
     Pre-attentional salience filter for sensor dimensions.
 
-    Dimensions that consistently surprise or dissatisfy the creature
-    gain salience — their signals are amplified in anima computation.
+    Dimensions that consistently surprise or dissatisfy the creature gain
+    salience. Salience is attention priority. In particular, light salience is
+    reported independently and never used as positive-only clarity sensor gain.
     Over time, salience decays back to neutral.
     """
 
@@ -129,6 +158,7 @@ class ExperientialFilter:
 
         self._weights: Dict[str, SalienceWeight] = {}
         self._last_save_time: float = time.time()
+        self._needs_migration_save = False
 
         # Try to load from disk
         self._load()
@@ -137,6 +167,19 @@ class ExperientialFilter:
         for dim in DIMENSIONS:
             if dim not in self._weights:
                 self._weights[dim] = SalienceWeight(dimension=dim)
+
+        if self._needs_migration_save:
+            try:
+                self.save()
+            except OSError as exc:
+                # A read-only or temporarily unavailable state directory must
+                # not prevent the creature from starting with safe in-memory
+                # defaults. The migration remains pending for the next save.
+                print(
+                    "[ExperientialFilter] migration persistence deferred: "
+                    f"{exc}",
+                    file=sys.stderr,
+                )
 
     def _load(self) -> None:
         """Load salience weights from disk."""
@@ -147,6 +190,21 @@ class ExperientialFilter:
                 for item in data.get("weights", []):
                     sw = SalienceWeight.from_dict(item)
                     self._weights[sw.dimension] = sw
+                try:
+                    schema_version = int(data.get("schema_version", 1))
+                except (TypeError, ValueError):
+                    schema_version = 1
+                if schema_version < EXPERIENTIAL_FILTER_SCHEMA_VERSION:
+                    # v1 light salience directly multiplied a positive-only
+                    # clarity component and accumulated to 1.9995 under
+                    # chronic dissatisfaction. That state has no valid meaning
+                    # after attention and measurement are separated.
+                    light = self._weights.get("light")
+                    if light is not None:
+                        light.weight = 1.0
+                        light.surprise_accumulator = 0.0
+                        light.dissatisfaction_ticks = 0
+                    self._needs_migration_save = True
         except (json.JSONDecodeError, OSError, KeyError):
             # Corrupt or missing file — start fresh
             pass
@@ -154,11 +212,17 @@ class ExperientialFilter:
     def save(self) -> None:
         """Explicitly save to disk."""
         data = {
+            "schema": EXPERIENTIAL_FILTER_SCHEMA,
+            "schema_version": EXPERIENTIAL_FILTER_SCHEMA_VERSION,
+            "migrations": {
+                LIGHT_MEASUREMENT_SEPARATION_MIGRATION: True,
+            },
             "weights": [w.to_dict() for w in self._weights.values()],
             "saved_at": time.time(),
         }
         atomic_json_write(self._path, data, indent=2)
         self._last_save_time = time.time()
+        self._needs_migration_save = False
 
     def _maybe_save(self) -> None:
         """Save if enough time has passed since last save."""
@@ -198,16 +262,22 @@ class ExperientialFilter:
                     effective *= (1.0 - temp_dampening)
                 self._weights[dim].amplify_from_surprise(effective)
 
-    def update_from_dissatisfaction(self, most_unsatisfied: str) -> None:
+    def update_from_dissatisfaction(
+        self,
+        most_unsatisfied: str,
+        satisfaction: Optional[float] = None,
+    ) -> None:
         """
         Amplify salience for the sensor dimension linked to dissatisfaction.
 
         Args:
             most_unsatisfied: Preference dimension name (e.g. "warmth", "clarity")
+            satisfaction: Current preference satisfaction in [0, 1]. Lower
+                satisfaction produces a higher attention target.
         """
         dim = PREF_TO_SENSOR.get(most_unsatisfied)
         if dim and dim in self._weights:
-            self._weights[dim].amplify_from_dissatisfaction()
+            self._weights[dim].amplify_from_dissatisfaction(satisfaction)
 
     def tick(self) -> None:
         """Decay all weights toward neutral and maybe save."""
@@ -224,6 +294,10 @@ class ExperientialFilter:
             if abs(weight - 1.0) > 0.01
         }
         return {
+            "schema": EXPERIENTIAL_FILTER_SCHEMA,
+            "measurement_policy": {
+                "light": "attention_only_not_clarity_sensor_gain",
+            },
             "dimensions": len(self._weights),
             "biased_count": len(biased),
             "biased_dimensions": biased,

@@ -1859,6 +1859,43 @@
                 </div>`;
             }
 
+            // Clarity is a weighted measurement with attention reported as a
+            // separate control signal. Showing the terms prevents a rounded
+            // headline value from hiding saturation or a missing component.
+            const clarityAttribution = data.clarity_attribution || {};
+            let clarityAttributionHtml = '';
+            if (clarityAttribution.schema) {
+                const components = clarityAttribution.components || {};
+                const clarityParts = [];
+                const addComponent = (label, component) => {
+                    if (!component || !Number.isFinite(component.value)) return;
+                    const weight = Number.isFinite(component.normalized_weight)
+                        ? ` @ ${(component.normalized_weight * 100).toFixed(1)}%`
+                        : '';
+                    clarityParts.push(`${label} ${component.value.toFixed(3)}${weight}`);
+                };
+                addComponent('prediction', components.prediction_accuracy);
+                addComponent('coverage', components.sensor_coverage);
+                addComponent('external light', components.external_light);
+                if (Number.isFinite(clarityAttribution.raw_value)) {
+                    clarityParts.push(`raw ${clarityAttribution.raw_value.toFixed(3)}`);
+                }
+                if (
+                    Number.isFinite(clarityAttribution.published_value)
+                    && clarityAttribution.published_value !== clarityAttribution.raw_value
+                ) {
+                    clarityParts.push(`smoothed ${clarityAttribution.published_value.toFixed(3)}`);
+                }
+                const attention = clarityAttribution.attention || {};
+                if (Number.isFinite(attention.light_salience)) {
+                    clarityParts.push(`light attention ${attention.light_salience.toFixed(3)}`);
+                }
+                clarityParts.push('attention reported, not measurement gain');
+                clarityAttributionHtml = `<div style="font-size: 0.72rem; color: var(--text-faint); padding: 0 0 6px 0;">
+                    Clarity provenance: ${clarityParts.join(' \u00b7 ')}
+                </div>`;
+            }
+
             const stateEl = document.getElementById('stateContent');
             stateEl.innerHTML = `
                 <div class="mood-display">
@@ -1872,6 +1909,7 @@
                     ${renderStateItem('Stability', data.stability, '#45b7d1', f.stability, trends.stability)}
                     ${renderStateItem('Presence', data.presence, '#96ceb4', f.presence, trends.presence)}
                 </div>
+                ${clarityAttributionHtml}
                 <div class="layer-header">Environment <span>\u2014 raw sensor inputs</span></div>
                 <div style="font-size: 0.8rem; color: var(--text-secondary); padding: 6px 0;">
                     ${data.ambient_temp != null ? `\u{1F321}\uFE0F ${data.ambient_temp.toFixed(1)}\u00B0C` : ''}

@@ -2,7 +2,7 @@
 Tests for ExperientialFilter — Layer 2 of Experiential Accumulation.
 
 Salience weights per sensor dimension drift based on surprise and
-dissatisfaction, amplifying signals the creature should pay attention to.
+dissatisfaction, recording which signals deserve attention.
 """
 
 import json
@@ -17,6 +17,9 @@ from anima_mcp.experiential_filter import (
     DIMENSIONS,
     SALIENCE_MAX,
     SALIENCE_MIN,
+    EXPERIENTIAL_FILTER_SCHEMA,
+    EXPERIENTIAL_FILTER_SCHEMA_VERSION,
+    LIGHT_MEASUREMENT_SEPARATION_MIGRATION,
     PREF_TO_SENSOR,
     get_experiential_filter,
 )
@@ -158,6 +161,25 @@ class TestDissatisfactionAmplification:
         saliences_after = ef.get_all_saliences()
         assert saliences_before == saliences_after
 
+    def test_dissatisfaction_response_is_proportional_to_current_need(self):
+        low_satisfaction = SalienceWeight(dimension="light")
+        high_satisfaction = SalienceWeight(dimension="light")
+
+        low_satisfaction.amplify_from_dissatisfaction(0.1)
+        high_satisfaction.amplify_from_dissatisfaction(0.9)
+
+        assert low_satisfaction.weight > high_satisfaction.weight
+
+    def test_persistent_dissatisfaction_converges_below_hard_max(self):
+        salience = SalienceWeight(dimension="light")
+
+        for _ in range(10_000):
+            salience.amplify_from_dissatisfaction(0.25)
+            salience.decay_toward_neutral()
+
+        assert 1.5 < salience.weight < 1.7
+        assert salience.weight < SALIENCE_MAX
+
 
 class TestDecay:
     def test_decay_toward_neutral(self, ef):
@@ -291,6 +313,79 @@ class TestPersistence:
         for dim in DIMENSIONS:
             assert ef.get_salience(dim) == 1.0
 
+    def test_legacy_light_gain_state_is_reset_once(self, tmp_path):
+        path = tmp_path / "experiential_filter.json"
+        path.write_text(json.dumps({
+            "weights": [
+                {
+                    "dimension": "light",
+                    "weight": 1.9995,
+                    "surprise_accumulator": 0.4,
+                    "dissatisfaction_ticks": 453_412,
+                },
+                {
+                    "dimension": "humidity",
+                    "weight": 1.2,
+                    "surprise_accumulator": 0.1,
+                    "dissatisfaction_ticks": 12,
+                },
+            ],
+        }))
+
+        migrated = ExperientialFilter(persistence_path=str(path))
+
+        assert migrated.get_salience("light") == 1.0
+        assert migrated._weights["light"].dissatisfaction_ticks == 0
+        assert migrated.get_salience("humidity") == pytest.approx(1.2)
+        saved = json.loads(path.read_text())
+        assert saved["schema"] == EXPERIENTIAL_FILTER_SCHEMA
+        assert saved["schema_version"] == EXPERIENTIAL_FILTER_SCHEMA_VERSION
+        assert saved["migrations"][LIGHT_MEASUREMENT_SEPARATION_MIGRATION]
+
+    def test_current_schema_preserves_attention_state(self, tmp_path):
+        path = tmp_path / "experiential_filter.json"
+        path.write_text(json.dumps({
+            "schema": EXPERIENTIAL_FILTER_SCHEMA,
+            "schema_version": EXPERIENTIAL_FILTER_SCHEMA_VERSION,
+            "weights": [{
+                "dimension": "light",
+                "weight": 1.4,
+                "surprise_accumulator": 0.0,
+                "dissatisfaction_ticks": 9,
+            }],
+        }))
+
+        current = ExperientialFilter(persistence_path=str(path))
+
+        assert current.get_salience("light") == pytest.approx(1.4)
+        assert current._weights["light"].dissatisfaction_ticks == 9
+
+    def test_migration_write_failure_does_not_prevent_startup(
+        self,
+        tmp_path,
+        monkeypatch,
+        capsys,
+    ):
+        path = tmp_path / "experiential_filter.json"
+        path.write_text(json.dumps({
+            "weights": [{
+                "dimension": "light",
+                "weight": 1.9995,
+                "dissatisfaction_ticks": 453_412,
+            }],
+        }))
+
+        def fail_save(_filter):
+            raise OSError("temporarily read-only")
+
+        monkeypatch.setattr(ExperientialFilter, "save", fail_save)
+
+        migrated = ExperientialFilter(persistence_path=str(path))
+
+        assert migrated.get_salience("light") == 1.0
+        assert migrated._needs_migration_save is True
+        assert "migration persistence deferred" in capsys.readouterr().err
+
 
 class TestGetStats:
     def test_get_stats(self, ef):
@@ -301,6 +396,11 @@ class TestGetStats:
         assert stats["biased_count"] == 0
         assert stats["biased_dimensions"] == {}
         assert abs(stats["mean_salience"] - 1.0) < 0.001
+        assert stats["schema"] == EXPERIENTIAL_FILTER_SCHEMA
+        assert (
+            stats["measurement_policy"]["light"]
+            == "attention_only_not_clarity_sensor_gain"
+        )
 
         # After surprise, light becomes biased
         ef.update_from_surprise(["light"], 1.0)
@@ -344,17 +444,31 @@ class TestIntegrationSenseSelf:
         assert anima_amplified.warmth != anima_neutral.warmth
 
     def test_integration_clarity_with_salience(self, normal_readings):
-        """Light salience changes clarity."""
+        """Light salience is reported but does not become sensor gain."""
         cal = NervousSystemCalibration()
 
-        anima_neutral = sense_self(normal_readings, cal)
+        anima_neutral = sense_self(
+            normal_readings,
+            cal,
+            prediction_accuracy=0.8,
+            external_light_lux=300.0,
+        )
 
         # Amplify light salience
         salience = {"light": 1.8}
-        anima_amplified = sense_self(normal_readings, cal, salience_weights=salience)
+        anima_amplified = sense_self(
+            normal_readings,
+            cal,
+            salience_weights=salience,
+            prediction_accuracy=0.8,
+            external_light_lux=300.0,
+        )
 
-        # Clarity should differ
-        assert anima_amplified.clarity != anima_neutral.clarity
+        assert anima_amplified.clarity == anima_neutral.clarity
+        attribution = anima_amplified.clarity_attribution
+        assert attribution is not None
+        assert attribution["attention"]["light_salience"] == 1.8
+        assert attribution["attention"]["used_in_measurement"] is False
 
     def test_integration_stability_with_salience(self, normal_readings):
         """Humidity/pressure salience changes stability."""

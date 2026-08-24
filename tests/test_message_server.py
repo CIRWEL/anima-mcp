@@ -28,10 +28,20 @@ def test_ssh_state_fallback_relays_shadow_light_attribution(monkeypatch):
         "external_lux_residual": None,
         "used_by_clarity": False,
     }
+    clarity_expected = {
+        "schema": "anima.clarity_attribution.v1",
+        "status": "ready",
+        "raw_value": 0.72,
+        "published_value": 0.74,
+    }
 
     def fake_ssh_command(code, timeout=10):
         captured["code"] = code
-        return True, json.dumps({"name": "Lumen", "light_attribution": expected})
+        return True, json.dumps({
+            "name": "Lumen",
+            "light_attribution": expected,
+            "clarity_attribution": clarity_expected,
+        })
 
     monkeypatch.setattr(module, "ssh_command", fake_ssh_command)
     handler = module.LumenControlHandler.__new__(module.LumenControlHandler)
@@ -42,11 +52,13 @@ def test_ssh_state_fallback_relays_shadow_light_attribution(monkeypatch):
     handler.handle_get_state()
 
     assert '"light_attribution": shm_data.get("light_attribution")' in captured["code"]
+    assert '"clarity_attribution": shm_data.get("clarity_attribution")' in captured["code"]
     assert '"neural": neural' in captured["code"]
     assert '"body_eisv_projection": body_projection' in captured["code"]
     assert '"memory_percent": readings.memory_percent or 0' in captured["code"]
     assert '"disk_percent": readings.disk_percent or 0' in captured["code"]
     assert captured["response"]["light_attribution"] == expected
+    assert captured["response"]["clarity_attribution"] == clarity_expected
     assert captured["status"] == 200
 
 

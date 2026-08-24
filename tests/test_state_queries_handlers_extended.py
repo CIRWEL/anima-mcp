@@ -55,12 +55,26 @@ class TestGetStateExtended:
             "status": "warming",
             "external_lux_residual": None,
         }
+        clarity_attribution = {
+            "schema": "anima.clarity_attribution.v1",
+            "status": "ready",
+            "raw_value": 0.5,
+            "published_value": 0.5,
+        }
 
         with patch("anima_mcp.accessors._get_store", return_value=store), \
              patch("anima_mcp.accessors._get_sensors", return_value=sensors), \
              patch("anima_mcp.accessors._get_readings_and_anima", return_value=(FakeReadings(), anima)), \
              patch("anima_mcp.handlers.state_queries.extract_neural_bands", return_value={"alpha": 0.2}), \
-             patch("anima_mcp.accessors._get_last_shm_data", return_value={"inner_life": {"temperament": "gentle", "drives": {"curiosity": 0.8}, "strongest_drive": "curiosity"}, "light_attribution": light_attribution}), \
+             patch("anima_mcp.accessors._get_last_shm_data", return_value={
+                 "inner_life": {
+                     "temperament": "gentle",
+                     "drives": {"curiosity": 0.8},
+                     "strongest_drive": "curiosity",
+                 },
+                 "light_attribution": light_attribution,
+                 "clarity_attribution": clarity_attribution,
+             }), \
              patch("anima_mcp.accessors._get_growth", return_value=growth):
             data = parse_result(await handle_get_state({}))
 
@@ -68,6 +82,7 @@ class TestGetStateExtended:
         assert data["identity"]["name"] == "Lumen"
         assert data["inner_life"]["temperament"] == "gentle"
         assert data["light_attribution"] == light_attribution
+        assert data["clarity_attribution"] == clarity_attribution
         store.record_state.assert_called_once()
         assert store.record_state.call_args[0][4]["interaction_level"] == 0.75
 

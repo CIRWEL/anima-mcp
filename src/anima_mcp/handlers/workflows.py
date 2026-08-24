@@ -462,6 +462,11 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
                 "stability": anima.stability,
                 "presence": anima.presence,
             }
+            anima_clarity_attribution = getattr(
+                anima, "clarity_attribution", None
+            )
+            if isinstance(anima_clarity_attribution, dict):
+                body_anima["clarity_attribution"] = anima_clarity_attribution
             result["body_anima"] = body_anima
             if "anima" in include:
                 result["anima"] = body_anima
@@ -477,14 +482,29 @@ async def handle_get_lumen_context(arguments: dict) -> list[TextContent]:
         else:
             result["sensors"] = {"error": "Unable to read sensor data"}
 
-    if "sensors" in include or "light_attribution" in include:
-        light_attribution = (_get_last_shm_data() or {}).get("light_attribution")
+    if (
+        "sensors" in include
+        or "light_attribution" in include
+        or "clarity_attribution" in include
+    ):
+        shm_data = _get_last_shm_data() or {}
+        light_attribution = shm_data.get("light_attribution")
         if isinstance(light_attribution, dict):
             result["light_attribution"] = light_attribution
         elif "light_attribution" in include:
             result["light_attribution"] = {
                 "status": "unavailable",
                 "reason": "broker_has_not_published_light_attribution",
+            }
+        clarity_attribution = shm_data.get("clarity_attribution")
+        if not isinstance(clarity_attribution, dict) and anima is not None:
+            clarity_attribution = getattr(anima, "clarity_attribution", None)
+        if isinstance(clarity_attribution, dict):
+            result["clarity_attribution"] = clarity_attribution
+        elif "clarity_attribution" in include:
+            result["clarity_attribution"] = {
+                "status": "unavailable",
+                "reason": "broker_has_not_published_clarity_attribution",
             }
 
     if "mood" in include:

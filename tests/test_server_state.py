@@ -3,7 +3,13 @@
 from datetime import datetime
 from unittest.mock import patch
 
-from anima_mcp.server_state import is_broker_running, readings_from_dict
+import pytest
+
+from anima_mcp.server_state import (
+    anima_from_dict,
+    is_broker_running,
+    readings_from_dict,
+)
 
 
 def test_broker_probe_matches_installed_console_entrypoint():
@@ -58,3 +64,41 @@ def test_readings_round_trip_preserves_hearing_and_power_diagnostics():
     assert readings.throttled_now is False
     assert readings.freq_capped_now is True
     assert readings.undervoltage_occurred is True
+
+
+def test_anima_round_trip_preserves_clarity_attribution():
+    readings = readings_from_dict({"timestamp": "2026-08-24T00:00:00"})
+    attribution = {
+        "schema": "anima.clarity_attribution.v1",
+        "components": {"sensor_coverage": {"value": 1.0}},
+    }
+
+    anima = anima_from_dict(
+        {
+            "warmth": 0.4,
+            "clarity": 0.5,
+            "stability": 0.6,
+            "presence": 0.7,
+            "clarity_attribution": attribution,
+        },
+        readings,
+    )
+
+    assert anima.clarity_attribution == attribution
+    assert anima.clarity_attribution is not attribution
+
+
+def test_anima_rejects_non_object_clarity_attribution():
+    readings = readings_from_dict({"timestamp": "2026-08-24T00:00:00"})
+
+    with pytest.raises(ValueError, match="clarity_attribution"):
+        anima_from_dict(
+            {
+                "warmth": 0.4,
+                "clarity": 0.5,
+                "stability": 0.6,
+                "presence": 0.7,
+                "clarity_attribution": "opaque",
+            },
+            readings,
+        )

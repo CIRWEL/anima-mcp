@@ -769,7 +769,8 @@ def run_creature():
                     )
 
             # 2. Update Anima State with provenance-gated environmental light.
-            # Layer 2: Apply experiential filter — perception colored by accumulated experience
+            # Layer 2 salience remains visible as attention provenance. Light
+            # salience does not amplify the clarity measurement.
             _body_now = time.monotonic()
             _body_elapsed = max(0.0, _body_now - last_body_update_at)
             last_body_update_at = _body_now
@@ -779,6 +780,10 @@ def run_creature():
                 salience_weights=_salience,
                 external_light_lux=_external_light_for_environment,
             )
+            if raw_anima.clarity_attribution is not None:
+                raw_anima.clarity_attribution["authority"] = (
+                    "broker_sensor_fusion"
+                )
             anima = _mood_momentum.smooth(
                 raw_anima, elapsed_seconds=_body_elapsed,
             )
@@ -888,8 +893,16 @@ def run_creature():
                             "stability": anima.stability, "presence": anima.presence,
                         })
                         _unsat_dim = _most_unsat[0] if isinstance(_most_unsat, tuple) else _most_unsat
+                        _unsat_satisfaction = (
+                            _most_unsat[1]
+                            if isinstance(_most_unsat, tuple) and len(_most_unsat) > 1
+                            else None
+                        )
                         if _unsat_dim and _unsat_dim != "none":
-                            exp_filter.update_from_dissatisfaction(_unsat_dim)
+                            exp_filter.update_from_dissatisfaction(
+                                _unsat_dim,
+                                _unsat_satisfaction,
+                            )
                     except Exception:
                         pass
                 exp_filter.tick()
@@ -1395,6 +1408,8 @@ def run_creature():
             }
             if light_attribution is not None:
                 shm_data["light_attribution"] = light_attribution
+            if anima.clarity_attribution is not None:
+                shm_data["clarity_attribution"] = anima.clarity_attribution
             if _last_reflection_event:
                 shm_data["metacognition"]["last_reflection"] = _last_reflection_event
             if gov_shadow_path is not None:

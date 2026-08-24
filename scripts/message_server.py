@@ -393,9 +393,12 @@ try:
             "ambient_temp": readings.ambient_temp_c or 0,
             "light": readings.light_lux or 0,
             # Preserve the broker's provenance-rich decomposition. This is a
-            # telemetry slice only: the Control Center labels it as shadow and
-            # raw lux remains the behavioral input on the Pi.
+            # telemetry slice only: raw lux stays visible while the gated
+            # residual is the environmental input when attribution is ready.
             "light_attribution": shm_data.get("light_attribution"),
+            # Component-level clarity provenance keeps attention priority,
+            # physical inputs, and temporal smoothing independently visible.
+            "clarity_attribution": shm_data.get("clarity_attribution"),
             "humidity": readings.humidity_pct or 0,
             "pressure": readings.pressure_hpa,
             "cpu_percent": readings.cpu_percent or 0,

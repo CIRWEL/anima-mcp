@@ -61,6 +61,9 @@ def _body_state_fields(anima, body_projection) -> dict:
         "stability": anima.stability,
         "presence": anima.presence,
     }
+    clarity_attribution = getattr(anima, "clarity_attribution", None)
+    if isinstance(clarity_attribution, dict):
+        body_anima["clarity_attribution"] = clarity_attribution
     vector = body_projection.to_dict()
     return {
         "body_anima": body_anima,
@@ -347,6 +350,14 @@ async def rest_state(request):
                 "status": "unavailable",
                 "reason": "broker_has_not_published_light_attribution",
             }
+        clarity_attribution = shm_data.get("clarity_attribution")
+        if not isinstance(clarity_attribution, dict):
+            clarity_attribution = getattr(anima, "clarity_attribution", None)
+        if not isinstance(clarity_attribution, dict):
+            clarity_attribution = {
+                "status": "unavailable",
+                "reason": "broker_has_not_published_clarity_attribution",
+            }
 
         return JSONResponse({
             "name": identity.name if identity else "Lumen",
@@ -366,6 +377,7 @@ async def rest_state(request):
             "raw_light_lux": readings.light_lux or 0,
             "light_composition": "room_light_plus_dotstar_glow",
             "light_attribution": light_attribution,
+            "clarity_attribution": clarity_attribution,
             "humidity": readings.humidity_pct or 0,
             "pressure": readings.pressure_hpa,
             "cpu_percent": readings.cpu_percent or 0,
