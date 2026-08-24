@@ -2000,7 +2000,13 @@
             const metrics = [];
             if (data.cpu_temp) metrics.push({ label: 'CPU Temp', value: `${data.cpu_temp.toFixed(0)}\u00B0C`, color: data.cpu_temp > 70 ? 'var(--accent-orange)' : 'var(--text-primary)' });
             if (data.memory_percent) metrics.push({ label: 'RAM', value: `${data.memory_percent.toFixed(0)}%`, color: data.memory_percent > 80 ? 'var(--accent-orange)' : 'var(--text-primary)' });
-            if (data.disk_percent) metrics.push({ label: 'Disk', value: `${data.disk_percent.toFixed(0)}%`, color: data.disk_percent > 80 ? 'var(--accent-orange)' : 'var(--text-primary)' });
+            if (data.disk_percent) {
+                const disk = data.disk_percent;
+                const pressure = disk >= 85 ? 'urgent' : disk >= 80 ? 'action' : disk >= 75 ? 'warning' : '';
+                const color = disk >= 80 ? 'var(--accent-orange)' : disk >= 75 ? 'var(--accent-yellow)' : 'var(--text-primary)';
+                const label = pressure ? `Disk · ${pressure}` : 'Disk';
+                metrics.push({ label, value: `${disk.toFixed(0)}%`, color });
+            }
 
             if (metrics.length === 0) {
                 document.getElementById('systemContent').innerHTML = '';

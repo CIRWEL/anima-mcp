@@ -27,7 +27,7 @@ fi
 
 # Step 1: Copy service files
 echo "1. Installing systemd services..."
-for svc in anima-restore.service anima.service anima-broker.service wifi-pm-disable.service wifi-watchdog.service wifi-watchdog.timer; do
+for svc in anima-restore.service anima.service anima-broker.service anima-storage-maintenance.service anima-storage-maintenance.timer wifi-pm-disable.service wifi-watchdog.service wifi-watchdog.timer; do
     if [ -f "$PROJECT_DIR/systemd/$svc" ]; then
         cp "$PROJECT_DIR/systemd/$svc" "/etc/systemd/system/$svc"
         echo "  Copied $svc"
@@ -113,6 +113,7 @@ echo "5. Enabling services (auto-start on boot)..."
 systemctl enable anima-restore anima-broker anima
 systemctl enable wifi-pm-disable
 systemctl enable wifi-watchdog.timer
+systemctl enable --now anima-storage-maintenance.timer
 echo "  Services enabled"
 
 # Step 6: Summary
@@ -122,6 +123,7 @@ echo ""
 echo "Services: anima.service (MCP server), anima-broker.service (hardware broker)"
 echo "WiFi:     wifi-pm-disable.service (power save off), wifi-watchdog.timer (2min checks)"
 echo "Watchdog: system hardware watchdog via /etc/systemd/system.conf.d/99-watchdog.conf"
+echo "Storage:  anima-storage-maintenance.timer (hourly pressure-aware retention)"
 echo "Health monitor: $HEALTH_SCRIPT"
 echo ""
 echo "Next steps:"

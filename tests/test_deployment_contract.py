@@ -34,6 +34,9 @@ def test_deploy_syncs_core_units_before_restart():
     assert "sudo install -m 0644" in script
     assert "sudo systemctl daemon-reload" in script
     assert "sudo systemctl enable anima-restore.service" in script
+    assert "anima-storage-maintenance.service" in script
+    assert "anima-storage-maintenance.timer" in script
+    assert "enable --now anima-storage-maintenance.timer" in script
     assert "scripts/deploy_elixir_broker.sh" in script
     assert "anima-broker-ex" in script
     assert "--exclude='anima_broker/_build'" in script
@@ -142,6 +145,31 @@ def test_nightly_backup_publishes_learned_state_only_from_staging():
     assert "recent Pi snapshot failed integrity_check" in script
     assert "~/.anima/oauth.db" in script
     assert "--exclude='./oauth.db'" in script
+    assert "anima.offdevice-recovery.v1" in script
+    assert "restore_bundle_verified" in script
+    assert "Forensic archives mirrored off-device" in script
+    assert "ANIMA_DB_RETAIN" in script
+
+
+def test_storage_maintenance_is_pressure_aware_and_restorable():
+    maintenance = (ROOT / "scripts" / "storage_maintenance.py").read_text()
+    service = (ROOT / "systemd" / "anima-storage-maintenance.service").read_text()
+    timer = (ROOT / "systemd" / "anima-storage-maintenance.timer").read_text()
+    restore = (ROOT / "scripts" / "restore_lumen.sh").read_text()
+    state_backup = (ROOT / "scripts" / "backup_state.sh").read_text()
+
+    assert 'PressurePolicy("warning", 75.0' in maintenance
+    assert 'PressurePolicy("action", 80.0' in maintenance
+    assert 'PressurePolicy("urgent", 85.0' in maintenance
+    assert "newest incident always remains unpacked" in maintenance
+    assert "offdevice-recovery-receipt.json" in maintenance
+    assert "verify_forensic_archive" in maintenance
+    assert "--apply" in service
+    assert "User=unitares-anima" in service
+    assert "OnCalendar=*-*-* *:45:00" in timer
+    assert "backup_db.sh" in restore
+    assert "anima-storage-maintenance.timer" in restore
+    assert "anima_config.json" in state_backup
 
 
 def test_predeploy_snapshot_uses_sqlite_backup_and_separate_bundle():
@@ -185,6 +213,7 @@ def test_bootstrap_restarts_both_services_after_unit_install():
     assert install_at < restart_at
     assert "deploy_elixir_broker.sh" in script
     assert '["sudo", "systemctl", "restart", "anima-broker", "anima"]' in script
+    assert "anima-storage-maintenance.timer" in script
 
 
 def test_elixir_deploy_is_change_aware_and_verifies_shadow_state():

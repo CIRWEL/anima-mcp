@@ -62,7 +62,13 @@ def main():
     shutil.rmtree(ext_path, ignore_errors=True)
 
     print("Synchronizing core systemd units...")
-    for unit in ("anima-restore.service", "anima-broker.service", "anima.service"):
+    for unit in (
+        "anima-restore.service",
+        "anima-broker.service",
+        "anima.service",
+        "anima-storage-maintenance.service",
+        "anima-storage-maintenance.timer",
+    ):
         subprocess.run(
             ["sudo", "install", "-m", "0644", str(REPO_ROOT / "systemd" / unit),
              str(Path("/etc/systemd/system") / unit)],
@@ -71,6 +77,17 @@ def main():
         )
     subprocess.run(
         ["sudo", "systemctl", "daemon-reload"], timeout=15, check=True
+    )
+    subprocess.run(
+        [
+            "sudo",
+            "systemctl",
+            "enable",
+            "--now",
+            "anima-storage-maintenance.timer",
+        ],
+        timeout=15,
+        check=True,
     )
 
     # The Elixir sensor owner executes a compiled OTP release, not the synced
