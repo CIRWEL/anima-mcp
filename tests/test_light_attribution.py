@@ -4,7 +4,9 @@ from pathlib import Path
 import pytest
 
 from anima_mcp.light_attribution import (
+    LED_OPTICAL_DRIVE_MAPPING,
     LED_PROPRIOCEPTION_SCHEMA,
+    LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE,
     LearnedLedLuxResidual,
     gated_external_light_lux,
     led_optical_drive,
@@ -107,11 +109,49 @@ def test_optical_drive_is_color_aware():
     assert led_optical_drive(scaled) == pytest.approx(0.12 * 64 / 255)
 
 
+def test_optical_drive_respects_lumens_measured_position_and_spectrum():
+    def isolated(position: int, channel: int) -> float:
+        colors = [[0, 0, 0] for _ in range(3)]
+        colors[position][channel] = 255
+        drive = led_optical_drive({
+            "brightness": 0.18,
+            "colors": [[0, 0, 0]] * 3,
+            "applied_colors": colors,
+        })
+        assert drive is not None
+        return drive
+
+    position_0_red = isolated(0, 0)
+    position_0_green = isolated(0, 1)
+    position_2_green = isolated(2, 1)
+
+    assert position_0_green / position_0_red == pytest.approx(
+        LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[0][1]
+        / LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[0][0]
+    )
+    assert position_2_green / position_0_green == pytest.approx(
+        LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[2][1]
+        / LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[0][1]
+    )
+
+
+def test_wire_colors_are_not_brightness_scaled_twice():
+    state = {
+        "brightness": 0.2,
+        "colors": [[255, 255, 255]] * 3,
+        "applied_colors": [[255, 255, 255]] * 3,
+        "wire_colors": [[51, 51, 51]] * 3,
+    }
+
+    assert led_optical_drive(state) == pytest.approx(51 / 255)
+
+
 def test_action_copy_round_trip_and_staleness(tmp_path):
     path = tmp_path / "led.json"
     state = {
         "brightness": 0.08,
         "colors": [(255, 128, 0), (0, 64, 255), (10, 20, 30)],
+        "wire_colors": [(20, 10, 0), (0, 5, 20), (1, 2, 3)],
         "expression_mode": "balanced",
     }
 
@@ -123,6 +163,7 @@ def test_action_copy_round_trip_and_staleness(tmp_path):
     assert fresh["source"] == "led_hardware_controller"
     assert fresh["brightness"] == pytest.approx(0.08)
     assert fresh["target_brightness"] == pytest.approx(0.08)
+    assert fresh["wire_colors"] == [[20, 10, 0], [0, 5, 20], [1, 2, 3]]
     assert fresh["fresh"] is True
     assert fresh["age_seconds"] == pytest.approx(5.0)
     assert read_led_proprioception(path=path, now=111.0, max_age_seconds=10.0) is None
@@ -338,6 +379,29 @@ def test_v2_repeated_capture_evidence_is_invalidated():
     )
 
     assert model.model_stats()["instrument_sample_count"] == 0
+
+
+def test_v3_flat_rgb_evidence_is_invalidated():
+    model = LearnedLedLuxResidual(
+        {
+            "model_kind": (
+                "capture_deduplicated_direction_balanced_breathing_delta_median_v3"
+            ),
+            "transitions": [
+                {
+                    "before_drive": 0.02,
+                    "after_drive": 0.06,
+                    "delta_lux": 20.0,
+                    "slope_lux_per_drive": 500.0,
+                    "captured_at_unix": 100.0,
+                    "instrument": LearnedLedLuxResidual.INSTRUMENT,
+                }
+            ],
+        }
+    )
+
+    assert model.model_stats()["instrument_sample_count"] == 0
+    assert model.to_dict()["optical_drive_mapping"] == LED_OPTICAL_DRIVE_MAPPING
 
 
 def test_kindless_legacy_evidence_is_invalidated():
@@ -566,6 +630,7 @@ def test_led_display_proprioception_includes_post_scaling_colors():
     display = LEDDisplay.__new__(LEDDisplay)
     display._last_applied_brightness = 0.04
     display._cached_pipeline_brightness = 0.04
+    display._target_brightness = 0.04
     display._expression_mode = "balanced"
     display._current_dance = None
     display._manual_brightness_factor = 1.0
@@ -577,12 +642,29 @@ def test_led_display_proprioception_includes_post_scaling_colors():
         brightness=0.04,
     )
     display._last_applied_colors = [(64, 0, 0), (0, 64, 0), (0, 0, 64)]
+    display._last_wire_colors = [(3, 0, 0), (0, 3, 0), (0, 0, 3)]
 
     state = display.get_proprioceptive_state()
     assert state["colors"] == [(255, 0, 0), (0, 255, 0), (0, 0, 255)]
     assert state["applied_colors"] == display._last_applied_colors
+    assert state["wire_colors"] == display._last_wire_colors
     assert state["target_brightness"] == 0.04
-    assert led_optical_drive(state) == pytest.approx(0.04 * 64 / (3 * 255))
+    expected = (
+        3
+        * (
+            LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[0][0]
+            + LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[1][1]
+            + LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[2][2]
+        )
+        / (
+            255
+            * sum(
+                sum(position)
+                for position in LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE
+            )
+        )
+    )
+    assert led_optical_drive(state) == pytest.approx(expected)
 
 
 def test_operator_surfaces_name_gated_efference_semantics():
