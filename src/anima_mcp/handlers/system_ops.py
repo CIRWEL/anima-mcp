@@ -7,6 +7,7 @@ They manage deployment, service control, networking, and power.
 import asyncio
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -177,6 +178,43 @@ def _sync_systemd_services(repo_root: Path) -> list[str]:
     return synced
 
 
+def _overlay_github_archive(archive_root: Path, repo_root: Path) -> None:
+    """Copy a GitHub archive over the checkout without deleting live builds.
+
+    Most top-level directories retain the existing replace semantics so files
+    removed upstream do not linger. ``anima_broker`` is merge-copied because
+    its untracked ``_build/prod/rel/anima_broker`` tree is the executable used
+    by ``anima-broker-ex.service``. A GitHub archive contains only tracked
+    source, so replacing that directory would delete the runnable release and
+    could not restore it.
+
+    Merge-copying can retain a source file deleted upstream until the explicit
+    broker rebuild. That recovery-path tradeoff is preferable to deleting the
+    only compiled release before a replacement exists.
+    """
+    skip = {".venv", ".git", "__pycache__", ".env"}
+    ignore = shutil.ignore_patterns(
+        ".venv", ".git", "__pycache__", "*.db", ".env"
+    )
+
+    for item in archive_root.iterdir():
+        if item.name in skip or item.name.endswith(".db"):
+            continue
+
+        dst = repo_root / item.name
+        if not item.is_dir():
+            shutil.copy2(item, dst)
+            continue
+
+        if item.name == "anima_broker" and dst.is_dir() and not dst.is_symlink():
+            shutil.copytree(item, dst, dirs_exist_ok=True, ignore=ignore)
+            continue
+
+        if dst.exists():
+            shutil.rmtree(dst, ignore_errors=True)
+        shutil.copytree(item, dst, ignore=ignore)
+
+
 async def handle_git_pull(arguments: dict) -> list[TextContent]:
     """
     Pull latest code from git and optionally restart.
@@ -218,7 +256,6 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
         try:
             import urllib.request
             import zipfile
-            import shutil
 
             url = "https://github.com/CIRWEL/anima-mcp/archive/refs/heads/main.zip"
             zip_path = Path("/tmp") / "anima-mcp-main.zip"
@@ -229,18 +266,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
                 z.extractall(ext_path.parent)
             zip_path.unlink(missing_ok=True)
 
-            src = ext_path
-            skip = {".venv", ".git", "__pycache__", ".env"}
-            for item in src.iterdir():
-                if item.name in skip or item.name.endswith(".db"):
-                    continue
-                dst = repo_root / item.name
-                if item.is_dir():
-                    if dst.exists():
-                        shutil.rmtree(dst, ignore_errors=True)
-                    shutil.copytree(item, dst, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db", ".env"))
-                else:
-                    shutil.copy2(item, dst)
+            _overlay_github_archive(ext_path, repo_root)
             shutil.rmtree(ext_path, ignore_errors=True)
 
             # Sync systemd service files if changed
@@ -554,7 +580,6 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
         return err
     import urllib.request
     import zipfile
-    import shutil
 
     restart = arguments.get("restart", True)
     skip_backup = arguments.get("skip_backup", False)
@@ -588,18 +613,7 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
             z.extractall(ext_path.parent)
         zip_path.unlink(missing_ok=True)
 
-        src = ext_path
-        skip = {".venv", ".git", "__pycache__", ".env"}
-        for item in src.iterdir():
-            if item.name in skip or item.name.endswith(".db"):
-                continue
-            dst = repo_root / item.name
-            if item.is_dir():
-                if dst.exists():
-                    shutil.rmtree(dst, ignore_errors=True)
-                shutil.copytree(item, dst, ignore=shutil.ignore_patterns(".venv", ".git", "__pycache__", "*.db", ".env"))
-            else:
-                shutil.copy2(item, dst)
+        _overlay_github_archive(ext_path, repo_root)
         shutil.rmtree(ext_path, ignore_errors=True)
 
         synced_services = _sync_systemd_services(repo_root)

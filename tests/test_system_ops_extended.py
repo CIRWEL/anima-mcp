@@ -530,3 +530,45 @@ class TestDeployFromGithubExtended:
 
         assert data["success"] is False
         assert "network down" in data["error"]
+
+
+class TestGithubArchiveOverlay:
+    def test_preserves_compiled_broker_release_while_updating_sources(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _overlay_github_archive
+
+        archive_root = tmp_path / "archive"
+        repo_root = tmp_path / "repo"
+
+        archived_broker_source = archive_root / "anima_broker" / "lib" / "broker.ex"
+        archived_broker_source.parent.mkdir(parents=True)
+        archived_broker_source.write_text("new source", encoding="utf-8")
+
+        live_broker_source = repo_root / "anima_broker" / "lib" / "broker.ex"
+        live_broker_source.parent.mkdir(parents=True)
+        live_broker_source.write_text("old source", encoding="utf-8")
+        compiled_release = (
+            repo_root
+            / "anima_broker"
+            / "_build"
+            / "prod"
+            / "rel"
+            / "anima_broker"
+            / "bin"
+            / "anima_broker"
+        )
+        compiled_release.parent.mkdir(parents=True)
+        compiled_release.write_text("compiled release", encoding="utf-8")
+
+        archived_docs = archive_root / "docs"
+        archived_docs.mkdir()
+        (archived_docs / "current.md").write_text("current", encoding="utf-8")
+        live_docs = repo_root / "docs"
+        live_docs.mkdir()
+        (live_docs / "stale.md").write_text("stale", encoding="utf-8")
+
+        _overlay_github_archive(archive_root, repo_root)
+
+        assert live_broker_source.read_text(encoding="utf-8") == "new source"
+        assert compiled_release.read_text(encoding="utf-8") == "compiled release"
+        assert (live_docs / "current.md").read_text(encoding="utf-8") == "current"
+        assert not (live_docs / "stale.md").exists()
