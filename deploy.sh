@@ -256,7 +256,7 @@ fi
 echo ""
 echo -e "${BLUE}[2/4] Syncing core systemd units and runtime releases...${NC}"
 if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "$PI_USER@$PI_HOST" \
-    "set -e; changed=0; for unit in anima-restore.service anima-broker.service anima.service; do src=$PI_PATH/systemd/\$unit; dst=/etc/systemd/system/\$unit; if ! cmp -s \"\$src\" \"\$dst\"; then sudo install -m 0644 \"\$src\" \"\$dst\"; changed=1; fi; done; if [ \"\$changed\" -eq 1 ]; then sudo systemctl daemon-reload; fi; sudo systemctl enable anima-restore.service >/dev/null"; then
+    "set -e; changed=0; for unit in anima-restore.service anima-broker.service anima.service anima-storage-maintenance.service anima-storage-maintenance.timer; do src=$PI_PATH/systemd/\$unit; dst=/etc/systemd/system/\$unit; if ! cmp -s \"\$src\" \"\$dst\"; then sudo install -m 0644 \"\$src\" \"\$dst\"; changed=1; fi; done; if [ \"\$changed\" -eq 1 ]; then sudo systemctl daemon-reload; fi; sudo systemctl enable anima-restore.service >/dev/null; sudo systemctl enable --now anima-storage-maintenance.timer >/dev/null"; then
     echo -e "${GREEN}✓ Core service definitions synchronized${NC}"
 else
     echo -e "${RED}✗ Could not synchronize core service definitions${NC}"

@@ -506,7 +506,7 @@ PI_SCRIPTS="/home/${PI_USER}/anima-mcp/scripts"
 PI_LOGS="/home/${PI_USER}/.anima"
 
 # Make scripts executable first
-ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ${PI_SCRIPTS}/wifi_watchdog.sh ${PI_SCRIPTS}/db_maintenance.sh ${PI_SCRIPTS}/backup_state.sh 2>/dev/null; true"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ${PI_SCRIPTS}/wifi_watchdog.sh ${PI_SCRIPTS}/db_maintenance.sh ${PI_SCRIPTS}/backup_db.sh ${PI_SCRIPTS}/backup_state.sh ${PI_SCRIPTS}/storage_maintenance.py 2>/dev/null; true"
 
 # Build and install crontab: strip old entries, add current ones
 # Uses heredoc on remote side to handle multi-line reliably
@@ -515,7 +515,7 @@ SCRIPTS="/home/unitares-anima/anima-mcp/scripts"
 LOGS="/home/unitares-anima/.anima"
 
 # Start with existing crontab minus our managed entries
-EXISTING=$(crontab -l 2>/dev/null | grep -v 'wifi_watchdog\|db_maintenance\|backup_state' || true)
+EXISTING=$(crontab -l 2>/dev/null | grep -v 'wifi_watchdog\|db_maintenance\|backup_db\|backup_state' || true)
 
 # Build new crontab
 {
@@ -523,6 +523,8 @@ EXISTING=$(crontab -l 2>/dev/null | grep -v 'wifi_watchdog\|db_maintenance\|back
     echo "*/2 * * * * ${SCRIPTS}/wifi_watchdog.sh >> ${LOGS}/wifi_watchdog.log 2>&1"
     [ -f "${SCRIPTS}/db_maintenance.sh" ] && \
         echo "0 * * * * ${SCRIPTS}/db_maintenance.sh >> ${LOGS}/db_maintenance.log 2>&1"
+    [ -f "${SCRIPTS}/backup_db.sh" ] && \
+        echo "15 * * * * ${SCRIPTS}/backup_db.sh >> ${LOGS}/backup_db.log 2>&1"
     [ -f "${SCRIPTS}/backup_state.sh" ] && \
         echo "30 * * * * ${SCRIPTS}/backup_state.sh >> ${LOGS}/backup_state.log 2>&1"
 } | crontab -
@@ -554,6 +556,7 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" \
     }
 log "  configured sensor owner + broker + mind active; fresh shared state verified"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-watchdog.timer" 2>/dev/null && log "  watchdog timer active" || log "  watchdog timer not running"
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "systemctl is-active anima-storage-maintenance.timer" 2>/dev/null && log "  storage maintenance timer active" || log "  storage maintenance timer not running"
 ssh $SSH_OPTS "$PI_USER@$PI_HOST" "crontab -l 2>/dev/null | grep -c 'anima-mcp/scripts'" | xargs -I{} log "  {} cron jobs installed"
 
 # 8. Tailscale (always installed — required for remote access)

@@ -21,6 +21,7 @@ FILES=(
     anima_history.json
     display_brightness.json
     metacognition_baselines.json
+    anima_config.json
     trajectory_genesis.json
     day_summaries.json
 )

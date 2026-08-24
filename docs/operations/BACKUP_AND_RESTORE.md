@@ -123,6 +123,49 @@ tar -xzf "$STATE_ARCHIVE" -C ~/backups/lumen/anima_data
 - **Launchd plist:** `~/Library/LaunchAgents/com.unitares.lumen-backup.plist`
 - **Log:** `/Users/cirwel/backups/lumen_backup.log`
 - **Pi local backup:** `backup_state.sh` runs hourly via crontab, saves JSON state to `~/.anima/backups/state/` (24 snapshots)
+- **Pi storage maintenance:** `anima-storage-maintenance.timer` runs hourly at
+  `:45`, after the database (`:15`) and learned-state (`:30`) snapshots.
+
+## Storage pressure policy
+
+Lumen prepares before the filesystem becomes urgent. The hourly maintenance
+job writes its last report to
+`~/.anima/backups/storage_maintenance_status.json` and uses these policies:
+
+| Filesystem use | State | Self-schema render retention | Operator response |
+|---|---|---:|---|
+| below 75% | healthy | 14 days, max 512 MiB / 6,000 generations | routine |
+| 75–79.9% | warning | 7 days, max 256 MiB / 3,000 generations | investigate growth |
+| 80–84.9% | action | 3 days, max 128 MiB / 1,500 generations | reclaim or add capacity |
+| 85%+ | urgent | 1 day, max 64 MiB / 500 generations | recover headroom immediately |
+
+Only recognized `schema_YYYYMMDD_HHMMSS.{png,json}` generations are pruned,
+oldest first and as whole PNG/JSON generations. Unknown files are never
+touched. The 24-hour SQLite rotation, learned JSON snapshots, drawings, live
+databases, and ordinary state are outside this cleanup policy.
+
+Exceptional `anima.db.corrupted.*` and `anima.db.pre-restore-*` incidents are
+handled separately. The newest remains unpacked. Older incidents may be
+losslessly archived only after all of these gates pass:
+
+1. a recent Mac-side recovery run published a verified database + learned-state
+   bundle receipt;
+2. the latest Pi hourly SQLite backup is recent and passes `quick_check`; and
+3. the latest Pi learned-state snapshot is recent, complete, and valid JSON.
+
+Each archive embeds sizes and SHA-256 hashes and is reread before source files
+are removed. Local archive count tightens with pressure, but an archive is not
+eligible for expiration until a later Mac backup receipt says forensic archives
+were mirrored off-device. A missing or stale receipt fails closed: database
+artifacts remain untouched.
+
+Readiness drill without changing files:
+
+```bash
+python3 scripts/storage_maintenance.py --usage-percent 85
+```
+
+The pressure override is deliberately rejected with `--apply`.
 
 ---
 

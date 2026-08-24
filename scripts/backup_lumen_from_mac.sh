@@ -41,6 +41,10 @@ HF_BIN="/Library/Frameworks/Python.framework/Versions/3.14/bin/hf"
 HF_REPO="hikewa/lumen-db-backups"
 HF_BACKUP="${HF_BACKUP:-1}"   # set HF_BACKUP=0 to skip the off-site push
 PI_BACKUP_MAX_AGE_MINUTES="${PI_BACKUP_MAX_AGE_MINUTES:-180}"
+# Retention is in snapshots, not hours. This launchd job is daily plus
+# RunAtLoad; 21 snapshots is roughly three weeks. The old hard-coded 48 was
+# written for an hourly cadence and could silently consume ~12 GB on the Mac.
+ANIMA_DB_RETAIN="${ANIMA_DB_RETAIN:-21}"
 case "$PI_BACKUP_MAX_AGE_MINUTES" in
     ''|*[!0-9]*) PI_BACKUP_MAX_AGE_MINUTES=180 ;;
 esac
@@ -52,6 +56,7 @@ mkdir -p "$BACKUP_DIR"
 # the script exits non-zero, so the launchd outcome wrapper records a failure
 # instead of a false "ok". See exit at end of script.
 FAILED=0
+FORENSICS_MIRRORED=0
 
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> "$LOG"
@@ -272,6 +277,30 @@ if [ $MIRROR_CAPTURED -eq 1 ]; then
     fi
 fi
 
+# Preserve Lumen's lossless forensic archives off-device. Never use --delete:
+# the Pi is allowed to expire a locally archived incident only after a receipt
+# proves an earlier Mac run had already seen it.
+FORENSICS_REMOTE_STATE=$(ssh $SSH_OPTS unitares-anima@$PI_HOST \
+    "if [ -d ~/.anima/backups/forensics ]; then echo present; else echo absent; fi" \
+    2>/dev/null)
+if [ "$FORENSICS_REMOTE_STATE" = "absent" ]; then
+    FORENSICS_MIRRORED=1
+elif [ "$FORENSICS_REMOTE_STATE" = "present" ]; then
+    mkdir -p "$BACKUP_DIR/forensics"
+    rsync -az --timeout=120 -e "ssh $SSH_OPTS" \
+        "unitares-anima@$PI_HOST:~/.anima/backups/forensics/" \
+        "$BACKUP_DIR/forensics/"
+    FORENSICS_STATUS=$?
+    if [ $FORENSICS_STATUS -eq 0 ] || [ $FORENSICS_STATUS -eq 24 ]; then
+        FORENSICS_MIRRORED=1
+        log "Forensic archives mirrored off-device"
+    else
+        log "WARNING: forensic archive mirror failed (status $FORENSICS_STATUS)"
+    fi
+else
+    log "WARNING: could not determine forensic archive state on Pi"
+fi
+
 # Capture a consistent DB snapshot. anima.db holds identity, state_history,
 # drawing_history, system_metrics — the heavy irreplaceable core. (The learned
 # self-model lives in the JSON mirrored above, NOT here.) Pulled as a consistent
@@ -427,8 +456,53 @@ else
     FAILED=1
 fi
 
-# Keep only last 48 hourly DB snapshots (~2 days)
-ls -t "$BACKUP_DIR"/anima_*.db 2>/dev/null | tail -n +49 | xargs rm -f 2>/dev/null
+# Publish a machine-readable receipt back to the Pi only after this run has a
+# verified database, learned-state mirror, and complete restore bundle. Storage
+# maintenance treats a missing/stale receipt as a hard stop for DB artifacts.
+if [ $FAILED -eq 0 ] && [ $DB_CAPTURED -eq 1 ] && \
+   [ $MIRROR_CAPTURED -eq 1 ] && [ -n "${RECOVERY_BUNDLE:-}" ] && \
+   [ -s "$RECOVERY_BUNDLE" ]; then
+    RECEIPT_LOCAL=$(mktemp "$BACKUP_DIR/.offdevice-recovery-receipt.XXXXXX")
+    RECEIPT_REMOTE="/home/unitares-anima/.anima/backups/.offdevice-recovery-receipt.tmp"
+    python3 - "$RECEIPT_LOCAL" "$DATE" "$FORENSICS_MIRRORED" \
+        "$(basename "$RECOVERY_BUNDLE")" <<'PY'
+import json
+import sys
+import time
+
+path, generation, mirrored, bundle = sys.argv[1:]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(
+        {
+            "schema": "anima.offdevice-recovery.v1",
+            "captured_at_epoch": time.time(),
+            "generation": generation,
+            "database_integrity": "ok",
+            "learned_state_valid": True,
+            "restore_bundle_verified": True,
+            "forensics_mirrored": mirrored == "1",
+            "bundle": bundle,
+        },
+        handle,
+        sort_keys=True,
+    )
+PY
+    if scp $SSH_OPTS "$RECEIPT_LOCAL" \
+        "unitares-anima@$PI_HOST:$RECEIPT_REMOTE" >/dev/null 2>&1 && \
+       ssh $SSH_OPTS unitares-anima@$PI_HOST \
+        "chmod 600 '$RECEIPT_REMOTE' && mv '$RECEIPT_REMOTE' ~/.anima/backups/offdevice-recovery-receipt.json" \
+        >/dev/null 2>&1; then
+        log "Off-device recovery receipt published to Pi"
+    else
+        log "WARNING: recovery receipt publish failed; Pi forensic pruning remains gated"
+    fi
+    rm -f "$RECEIPT_LOCAL"
+fi
+
+# Keep a bounded number of Mac database snapshots. HF independently keeps the
+# seven weekday recovery bundles.
+ls -t "$BACKUP_DIR"/anima_*.db 2>/dev/null | \
+    tail -n +$((ANIMA_DB_RETAIN + 1)) | xargs rm -f 2>/dev/null
 
 # Keep log from growing too large
 if [ -f "$LOG" ]; then

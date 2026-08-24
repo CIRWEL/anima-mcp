@@ -1,0 +1,12 @@
+[Unit]
+Description=Run Anima storage maintenance hourly after recovery snapshots
+
+[Timer]
+OnBootSec=10min
+OnCalendar=*-*-* *:45:00
+Persistent=true
+RandomizedDelaySec=2min
+Unit=anima-storage-maintenance.service
+
+[Install]
+WantedBy=timers.target
