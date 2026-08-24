@@ -341,7 +341,7 @@ class TestLumenQaExtended:
         q2 = SimpleNamespace(
             message_id="q2",
             msg_type="question",
-            text="Why am I calm at night?",
+            text="Why am I confident that my own LEDs affect my light sensor?",
             context=None,
             answered=True,  # auto-expired but still unanswered
             state_snapshot=None,
@@ -367,6 +367,13 @@ class TestLumenQaExtended:
         ids = [q["id"] for q in data["questions"]]
         assert "q3" not in ids
         assert "q2" in ids
+        by_id = {q["id"]: q for q in data["questions"]}
+        assert by_id["q1"]["epistemic_status"] == "open_question"
+        assert (
+            by_id["q2"]["premise_status"]
+            == "superseded_confidence_basis"
+        )
+        assert data["record_semantics"]["current_state_authority"] == "none"
 
     async def test_answer_mode_prefix_match_and_insight_enrichment(self):
         from anima_mcp.handlers.communication import handle_lumen_qa

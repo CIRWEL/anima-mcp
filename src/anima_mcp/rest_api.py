@@ -411,6 +411,11 @@ async def rest_qa(request):
         return auth_error
     try:
         from .messages import get_board, MESSAGE_TYPE_QUESTION
+        from .qa_provenance import (
+            qa_answer_provenance,
+            qa_ledger_provenance,
+            qa_record_provenance,
+        )
 
         board = get_board()
         board._load(force=True)
@@ -425,14 +430,26 @@ async def rest_qa(request):
             answer = None
             for m in board._messages:
                 if getattr(m, "responds_to", None) == q.message_id:
-                    answer = {"text": m.text, "author": m.author, "timestamp": m.timestamp}
+                    answer = {
+                        "text": m.text,
+                        "author": m.author,
+                        "timestamp": m.timestamp,
+                        **qa_answer_provenance(),
+                    }
                     break
             qa_pairs.append({
                 "id": q.message_id,
                 "question": q.text,
-                "answered": q.answered,
+                # Message.answered is also used for time-based expiry.
+                # Public Q&A semantics instead follow the durable answer link.
+                "answered": answer is not None,
+                "expired_unanswered": bool(q.answered and answer is None),
                 "timestamp": q.timestamp,
-                "answer": answer
+                "answer": answer,
+                **qa_record_provenance(
+                    q.text,
+                    has_answer=answer is not None,
+                ),
             })
 
         # Count truly unanswered (no actual answer message) from ALL questions
@@ -444,7 +461,12 @@ async def rest_qa(request):
         qa_pairs.reverse()
         qa_pairs = qa_pairs[:limit]
 
-        return JSONResponse({"questions": qa_pairs, "total": len(questions), "unanswered": truly_unanswered})
+        return JSONResponse({
+            "questions": qa_pairs,
+            "total": len(questions),
+            "unanswered": truly_unanswered,
+            "record_semantics": qa_ledger_provenance(),
+        })
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 

@@ -534,6 +534,36 @@ class TestRestQaAndMessages:
         assert data["unanswered"] == 1
         assert len(data["questions"]) == 2
         assert data["questions"][0]["id"] == "q2"  # newest first after reverse
+        assert data["record_semantics"]["current_state_authority"] == "none"
+        assert data["questions"][0]["epistemic_status"] == "answered_record"
+        assert (
+            data["questions"][0]["answer"]["record_role"]
+            == "historical_utterance"
+        )
+        assert data["questions"][1]["epistemic_status"] == "open_question"
+
+    async def test_rest_qa_distinguishes_expiry_from_an_actual_answer(self):
+        expired = SimpleNamespace(
+            message_id="expired",
+            msg_type="question",
+            text="Is anyone there?",
+            answered=True,
+            timestamp=1,
+        )
+        board = SimpleNamespace(_messages=[expired], _load=MagicMock())
+
+        with patch("anima_mcp.messages.get_board", return_value=board), patch(
+            "anima_mcp.messages.MESSAGE_TYPE_QUESTION",
+            "question",
+        ):
+            response = await rest_api.rest_qa(_make_request(path="/qa"))
+            data = json.loads(response.body)
+
+        record = data["questions"][0]
+        assert data["unanswered"] == 1
+        assert record["answered"] is False
+        assert record["expired_unanswered"] is True
+        assert record["epistemic_status"] == "open_question"
 
     async def test_rest_messages_returns_serialized_messages(self):
         m1 = SimpleNamespace(message_id="m1", text="hello", msg_type="user", author="u", timestamp=1, responds_to=None)
