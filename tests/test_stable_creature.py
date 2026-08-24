@@ -115,6 +115,43 @@ class TestModuleConstants:
         assert RETRY_DELAY == 0.5
 
 
+class TestPreferenceState:
+    """Preference occupancy receives normalized, provenance-safe state."""
+
+    def test_includes_normalized_environmental_dimensions(self):
+        from anima_mcp.stable_creature import _build_preference_state
+
+        anima = _make_anima(warmth=0.6, clarity=0.7, stability=0.8, presence=0.9)
+        readings = _make_readings(ambient_temp_c=27.5)
+
+        state = _build_preference_state(
+            anima,
+            readings,
+            external_light_lux=250.0,
+        )
+
+        assert state == {
+            "warmth": 0.6,
+            "clarity": 0.7,
+            "stability": 0.8,
+            "presence": 0.9,
+            "light": 0.25,
+            "temperature": 0.5,
+        }
+
+    def test_omits_light_without_gated_external_observation(self):
+        from anima_mcp.stable_creature import _build_preference_state
+
+        state = _build_preference_state(
+            _make_anima(),
+            _make_readings(ambient_temp_c=22.0, light_lux=900.0),
+            external_light_lux=None,
+        )
+
+        assert "light" not in state
+        assert state["temperature"] == pytest.approx(0.28)
+
+
 class TestBrokerAgencyFlag:
     """The duplicate broker TD learner stays retired unless explicitly restored."""
 

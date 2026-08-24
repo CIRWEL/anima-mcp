@@ -7,6 +7,7 @@ Without preferences, there's no basis for action beyond reaction.
 This module lets Lumen develop preferences through experience:
 - States that preceded positive outcomes become preferred
 - States that preceded negative outcomes become avoided
+- Recent lived-state occupancy defines each dimension's familiar band
 - Preferences guide attention, action, and self-regulation
 
 What counts as "positive" or "negative"?
@@ -27,11 +28,33 @@ from pathlib import Path
 from .atomic_write import atomic_json_write
 
 
+# At the broker's normal two-second cadence this retains about 30 minutes of
+# lived state. The shorter warm-up lets a new dimension become usable within
+# two minutes while avoiding a band inferred from only a handful of samples.
+OCCUPANCY_WINDOW_SIZE = 900
+OCCUPANCY_MIN_SAMPLES = 60
+OCCUPANCY_UPDATE_INTERVAL = 20
+
+
+def _linear_quantile(ordered_values: list[float], quantile: float) -> float:
+    """Return an interpolated quantile from a non-empty sorted sample."""
+    position = (len(ordered_values) - 1) * quantile
+    lower_index = math.floor(position)
+    upper_index = math.ceil(position)
+    if lower_index == upper_index:
+        return ordered_values[lower_index]
+    fraction = position - lower_index
+    return (
+        ordered_values[lower_index] * (1.0 - fraction)
+        + ordered_values[upper_index] * fraction
+    )
+
+
 @dataclass
 class Experience:
     """A single experience that can shape preferences."""
     timestamp: datetime
-    state_before: Dict[str, float]  # warmth, clarity, stability, presence
+    state_before: Dict[str, float]  # felt state plus available environment
     state_after: Dict[str, float]
     event_type: str  # "disruption", "calm" (fired from stable_creature.py)
     valence: float  # -1 to 1, how "good" this experience was
@@ -45,7 +68,7 @@ class Preference:
     # Learned valence: positive means this dimension is valued
     valence: float = 0.0  # -1 to 1
 
-    # Optimal range learned from experience
+    # Familiar range learned from recent lived-state occupancy
     optimal_low: float = 0.3
     optimal_high: float = 0.7
 
@@ -55,12 +78,13 @@ class Preference:
     # Number of experiences that shaped this
     experience_count: int = 0
 
+    # Number of valid state observations used for self-relative occupancy
+    occupancy_count: int = 0
+
     # Meta-learning: how much satisfying this preference predicts flourishing
     influence_weight: float = 1.0
 
-    # Learned satisfaction peak within the optimal range.
-    # Shifts toward values associated with good outcomes instead of
-    # always assuming the geometric center is best.
+    # Median of recent occupancy, used as the satisfaction peak.
     optimal_center: Optional[float] = None
 
     def current_satisfaction(self, value: float) -> float:
@@ -94,7 +118,12 @@ class Preference:
             )
 
     def update_from_experience(self, state_value: float, outcome_valence: float, learning_rate: float = 0.1):
-        """Update preference based on an experience."""
+        """Update event valence and confidence based on an experience.
+
+        The optimal band has a separate authority: recent lived-state
+        occupancy. Keeping event outcomes out of the band prevents sparse
+        event constants from silently enabling or disabling peak learning.
+        """
         self.experience_count += 1
 
         # Update overall valence for this dimension
@@ -108,24 +137,6 @@ class Preference:
             self.valence = self.valence - learning_rate * contribution
 
         self.valence = max(-1, min(1, self.valence))
-
-        # Update optimal range based on good experiences
-        if outcome_valence > 0.3:
-            # This state led to good outcome - expand optimal range toward it
-            if state_value < self.optimal_low:
-                self.optimal_low = self.optimal_low - learning_rate * (self.optimal_low - state_value)
-            elif state_value > self.optimal_high:
-                self.optimal_high = self.optimal_high + learning_rate * (state_value - self.optimal_high)
-            # Shift satisfaction peak toward good-outcome values
-            center = self.optimal_center if self.optimal_center is not None else (self.optimal_low + self.optimal_high) / 2
-            self.optimal_center = center + learning_rate * (state_value - center) * outcome_valence
-        elif outcome_valence < -0.3:
-            # This state led to bad outcome - contract optimal range away from it
-            center = (self.optimal_low + self.optimal_high) / 2
-            if state_value < center:
-                self.optimal_low = min(center, self.optimal_low + learning_rate * 0.1)
-            else:
-                self.optimal_high = max(center, self.optimal_high - learning_rate * 0.1)
 
         # Update confidence
         self.confidence = min(1.0, self.experience_count / 20)
@@ -143,6 +154,7 @@ class Preference:
             "optimal_high": self.optimal_high,
             "confidence": self.confidence,
             "experience_count": self.experience_count,
+            "occupancy_count": self.occupancy_count,
             "influence_weight": self.influence_weight,
             "optimal_center": self.optimal_center,
         }
@@ -157,6 +169,7 @@ class Preference:
             optimal_high=data.get("optimal_high", 0.7),
             confidence=data.get("confidence", 0.0),
             experience_count=data.get("experience_count", 0),
+            occupancy_count=data.get("occupancy_count", 0),
             influence_weight=data.get("influence_weight", 1.0),
             optimal_center=data.get("optimal_center"),
         )
@@ -198,6 +211,17 @@ class PreferenceSystem:
         self._last_state: Optional[Dict[str, float]] = None
         self._last_state_time: Optional[datetime] = None
 
+        # Recent per-dimension occupancy is the sole authority for learned
+        # optimal bands and peaks. Histories deliberately stay process-local;
+        # the resulting band and lifetime observation count are persisted.
+        self._occupancy_history: Dict[str, deque[float]] = {
+            dim: deque(maxlen=OCCUPANCY_WINDOW_SIZE)
+            for dim in self._preferences
+        }
+        self._occupancy_since_update: Dict[str, int] = {
+            dim: 0 for dim in self._preferences
+        }
+
         # Load persisted preferences
         self._load()
 
@@ -214,6 +238,7 @@ class PreferenceSystem:
                 p.optimal_high = pdata.get("optimal_high", 0.7)
                 p.confidence = pdata.get("confidence", 0.0)
                 p.experience_count = pdata.get("experience_count", 0)
+                p.occupancy_count = pdata.get("occupancy_count", 0)
                 p.influence_weight = pdata.get("influence_weight", 1.0)
                 p.optimal_center = pdata.get("optimal_center")
         event_ids = data.get("applied_event_ids", [])
@@ -259,6 +284,7 @@ class PreferenceSystem:
                         "optimal_high": p.optimal_high,
                         "confidence": p.confidence,
                         "experience_count": p.experience_count,
+                        "occupancy_count": p.occupancy_count,
                         "influence_weight": p.influence_weight,
                         "optimal_center": p.optimal_center,
                     }
@@ -295,11 +321,48 @@ class PreferenceSystem:
             self._applied_event_ids.remove(event_id)
 
     def record_state(self, state: Dict[str, float]):
-        """Record current state for experience tracking."""
+        """Record a bounded, finite state and learn its recent occupancy."""
+        observed_state = {}
+        for dim, raw_value in state.items():
+            if dim not in self._preferences:
+                continue
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(value):
+                continue
+            observed_state[dim] = max(0.0, min(1.0, value))
+
         now = datetime.now()
-        self._state_history.append({"state": state, "timestamp": now})
-        self._last_state = state
+        self._state_history.append({"state": observed_state, "timestamp": now})
+        self._last_state = observed_state
         self._last_state_time = now
+        if not self.read_only:
+            self._learn_from_occupancy(observed_state)
+
+    def _learn_from_occupancy(self, state: Dict[str, float]) -> None:
+        """Derive each preferred band from its own recent state distribution."""
+        for dim, value in state.items():
+            preference = self._preferences[dim]
+            samples = self._occupancy_history[dim]
+            samples.append(value)
+            preference.occupancy_count += 1
+            self._occupancy_since_update[dim] += 1
+
+            if len(samples) < OCCUPANCY_MIN_SAMPLES:
+                continue
+            if (
+                len(samples) != OCCUPANCY_MIN_SAMPLES
+                and self._occupancy_since_update[dim] < OCCUPANCY_UPDATE_INTERVAL
+            ):
+                continue
+
+            ordered = sorted(samples)
+            preference.optimal_low = _linear_quantile(ordered, 0.1)
+            preference.optimal_center = _linear_quantile(ordered, 0.5)
+            preference.optimal_high = _linear_quantile(ordered, 0.9)
+            self._occupancy_since_update[dim] = 0
 
     def record_event(self, event_type: str, valence: float, current_state: Optional[Dict[str, float]] = None):
         """
@@ -453,6 +516,12 @@ class PreferenceSystem:
                 "optimal_range": (round(p.optimal_low, 2), round(p.optimal_high, 2)),
                 "confidence": round(p.confidence, 3),
                 "experience_count": p.experience_count,
+                "occupancy_count": p.occupancy_count,
+                "optimal_center": (
+                    round(p.optimal_center, 2)
+                    if p.optimal_center is not None
+                    else None
+                ),
             }
             for dim, p in self._preferences.items()
         }

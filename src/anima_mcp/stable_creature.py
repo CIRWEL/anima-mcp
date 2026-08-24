@@ -36,6 +36,7 @@ See docs/operations/BROKER_ARCHITECTURE.md for details.
 """
 
 import json
+import math
 import time
 import os
 import signal
@@ -87,6 +88,42 @@ _LEARNING_MODULES: dict = {}
 
 def _has_module(name: str) -> bool:
     return _LEARNING_MODULES.get(name, False)
+
+
+def _build_preference_state(anima, readings, *, external_light_lux) -> dict:
+    """Build normalized preference occupancy from felt and environmental state."""
+    state = {
+        "warmth": anima.warmth,
+        "clarity": anima.clarity,
+        "stability": anima.stability,
+        "presence": anima.presence,
+    }
+
+    # Raw VEML7700 lux includes DotStar self-glow. Only the attribution-gated
+    # external residual is allowed to teach an environmental preference.
+    if external_light_lux is not None:
+        try:
+            light = float(external_light_lux)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if math.isfinite(light):
+                state["light"] = max(0.0, min(1.0, light / 1000.0))
+
+    ambient_temp_c = getattr(readings, "ambient_temp_c", None)
+    if ambient_temp_c is not None:
+        try:
+            temperature = float(ambient_temp_c)
+        except (TypeError, ValueError):
+            pass
+        else:
+            if math.isfinite(temperature):
+                state["temperature"] = max(
+                    0.0,
+                    min(1.0, (temperature - 15.0) / 25.0),
+                )
+
+    return state
 
 
 def _run_coroutine_with_timeout(coro, loop, timeout: float = 10.0):
@@ -1052,12 +1089,11 @@ def run_creature():
             # 2b-iii. Update Preferences from experience
             if preferences:
                 try:
-                    current_state = {
-                        "warmth": anima.warmth,
-                        "clarity": anima.clarity,
-                        "stability": anima.stability,
-                        "presence": anima.presence,
-                    }
+                    current_state = _build_preference_state(
+                        anima,
+                        readings,
+                        external_light_lux=_external_light_for_environment,
+                    )
                     preferences.record_state(current_state)
 
                     # Record events that shape preferences
