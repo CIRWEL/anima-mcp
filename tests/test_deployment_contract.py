@@ -52,6 +52,10 @@ def test_deploy_records_the_exact_clean_commit_after_rsync():
     assert clean_at < sync_at < align_at < restart_at
     assert 'DEPLOYED_REF="$(git rev-parse --verify HEAD^{commit}' in script
     assert "git status --porcelain --untracked-files=all" in script
+    tracking_fetch = 'fetch --quiet --no-tags origin;'
+    exact_fetch = "fetch --quiet --no-tags origin '$DEPLOYED_REF'"
+    assert tracking_fetch in script
+    assert script.index(tracking_fetch) < script.index(exact_fetch)
     assert "fetch --quiet --no-tags origin '$DEPLOYED_REF'" in script
     assert "reset --mixed '$DEPLOYED_REF'" in script
     assert "diff-index --quiet '$DEPLOYED_REF' --" in script
