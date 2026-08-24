@@ -563,7 +563,8 @@ class TestRestQaAndMessages:
             message_id="expired",
             msg_type="question",
             text="Is anyone there?",
-            answered=True,
+            answered=False,
+            expired_at=2,
             timestamp=1,
         )
         board = SimpleNamespace(_messages=[expired], _load=MagicMock())
@@ -578,6 +579,7 @@ class TestRestQaAndMessages:
         record = data["questions"][0]
         assert data["unanswered"] == 1
         assert record["answered"] is False
+        assert record["status"] == "expired"
         assert record["expired_unanswered"] is True
         assert record["epistemic_status"] == "open_question"
 

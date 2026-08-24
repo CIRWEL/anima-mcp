@@ -25,7 +25,9 @@ MESSAGE_TYPE_SYSTEM = "system"            # System events
 # Question posting — agency + learned templates (reduce board churn)
 MIN_QUESTION_INTERVAL_SECONDS = 600  # 10 minutes between queued questions
 MAX_UNANSWERED_QUESTIONS_SOFT_CAP = 6  # hold new questions until backlog shrinks
+MAX_QUESTIONS_PER_ROLLING_DAY = 3  # hard curiosity budget, independent of replies
 QUESTION_EXPIRY_SECONDS = 14_400  # 4 hours before stale unanswered questions expire
+QUESTION_BUDGET_WINDOW_SECONDS = 86_400
 
 _QUESTION_BOILERPLATE_PREFIXES = (
     "why is it that i now know that ",
@@ -155,7 +157,8 @@ class Message:
     timestamp: float
     author: Optional[str] = None  # "user", "lumen", "agent_name", etc.
     responds_to: Optional[str] = None  # message_id this responds to (for answers)
-    answered: bool = False  # For questions: has this been answered?
+    answered: bool = False  # For questions: has a real linked answer been stored?
+    expired_at: Optional[float] = None  # Stale without an answer; not an answer itself
     context: Optional[str] = None  # For questions: what triggered this question
     state_snapshot: Optional[Dict[str, Any]] = None  # Anima state when question was asked
 
@@ -174,6 +177,8 @@ class Message:
             d["responds_to"] = None
         if "answered" not in d:
             d["answered"] = False
+        if "expired_at" not in d:
+            d["expired_at"] = None
         if "context" not in d:
             d["context"] = None
         if "state_snapshot" not in d:
@@ -449,8 +454,10 @@ class MessageBoard:
                 except Exception as e:
                     print(f"[Self-knowledge] Topic recording failed: {e}", file=sys.stderr, flush=True)
 
-            # Extract insight from Q&A — learn from the answer
-            if question_text:
+            # External answers can contribute historical hypotheses. Lumen's
+            # own deterministic answer is derived from existing evidence, so
+            # extracting it back into knowledge would create a circular claim.
+            if question_text and agent_name.lower() != "lumen":
                 try:
                     from .knowledge import add_insight, _extract_simple_insight, _categorize_text
 
@@ -525,7 +532,7 @@ class MessageBoard:
         }
 
     def _expire_old_questions(self, now: Optional[float] = None) -> bool:
-        """Mark stale unanswered questions answered so they do not block new ones."""
+        """Mark stale unanswered questions expired without calling them answered."""
         current = time.time() if now is None else now
         cutoff = current - QUESTION_EXPIRY_SECONDS
         expired_any = False
@@ -533,9 +540,10 @@ class MessageBoard:
             if (
                 m.msg_type == MESSAGE_TYPE_QUESTION
                 and not m.answered
+                and m.expired_at is None
                 and m.timestamp < cutoff
             ):
-                m.answered = True
+                m.expired_at = current
                 expired_any = True
                 print(f"[Questions] Expired old question: {m.text[:50]}...", file=sys.stderr, flush=True)
         if expired_any:
@@ -557,7 +565,17 @@ class MessageBoard:
 
         recent_questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
 
-        unanswered_ct = sum(1 for m in recent_questions if not m.answered)
+        questions_in_budget_window = sum(
+            1 for m in recent_questions
+            if m.timestamp > now - QUESTION_BUDGET_WINDOW_SECONDS
+        )
+        if questions_in_budget_window >= MAX_QUESTIONS_PER_ROLLING_DAY:
+            return None
+
+        unanswered_ct = sum(
+            1 for m in recent_questions
+            if not m.answered and m.expired_at is None
+        )
         if unanswered_ct >= MAX_UNANSWERED_QUESTIONS_SOFT_CAP:
             return None
 
@@ -612,7 +630,7 @@ class MessageBoard:
 
         Args:
             limit: Max questions to return
-            auto_expire: If True, mark questions older than 4 hours as expired (answered=True)
+            auto_expire: If True, mark questions older than 4 hours expired.
         """
         self._load()
 
@@ -620,15 +638,21 @@ class MessageBoard:
         if auto_expire:
             self._expire_old_questions()
 
-        questions = [m for m in self._messages if m.msg_type == MESSAGE_TYPE_QUESTION and not m.answered]
+        questions = [
+            m for m in self._messages
+            if m.msg_type == MESSAGE_TYPE_QUESTION
+            and not m.answered
+            and m.expired_at is None
+        ]
         return questions[-limit:]
 
     def repair_orphaned_answered(self) -> int:
-        """Fix questions marked 'answered' but with no actual answer message.
+        """Fix questions marked ``answered`` but with no actual answer message.
 
-        This can happen when answer messages are trimmed but the question's
-        answered flag remains True. Resets answered=False for questions
-        that have no responds_to link pointing to them (except truly expired ones).
+        Older files used ``answered=True`` for both replies and time-based
+        expiry. Migrate those stale rows to ``expired_at`` while repairing
+        recent orphaned flags. After this method, ``answered`` means a linked
+        answer exists.
 
         Returns: Number of questions repaired.
         """
@@ -640,15 +664,17 @@ class MessageBoard:
             if m.msg_type == MESSAGE_TYPE_AGENT and m.responds_to
         }
 
-        # Find orphaned questions (answered=True but no actual answer, and not expired by age)
+        # Find orphaned questions. Old rows beyond the expiry cutoff are legacy
+        # expirations; recent rows are simply repaired answer flags.
         expiry_cutoff = time.time() - QUESTION_EXPIRY_SECONDS
         repaired = 0
         for m in self._messages:
             if (m.msg_type == MESSAGE_TYPE_QUESTION and
                 m.answered and
-                m.message_id not in answered_ids and
-                m.timestamp >= expiry_cutoff):  # Not old enough to be legitimately expired
+                m.message_id not in answered_ids):
                 m.answered = False
+                if m.timestamp < expiry_cutoff and m.expired_at is None:
+                    m.expired_at = m.timestamp + QUESTION_EXPIRY_SECONDS
                 repaired += 1
                 print(f"[MessageBoard] Repaired orphaned question: {m.text[:50]}...", file=sys.stderr, flush=True)
 
@@ -673,11 +699,8 @@ class MessageBoard:
     def get_answered_question_texts(self, hours: int = 168) -> set:
         """Texts of questions that received a REAL answer, not just an expiry.
 
-        ``Message.answered`` conflates the two: ``_expire_old_questions`` sets
-        it on anything stale, so a question nobody looked at is flagged the
-        same as one that got a considered reply. Callers deciding whether a
-        question is FINISHED need the linked-answer test instead — the same
-        ``responds_to`` check ``lumen_self_answer`` uses.
+        The linked-answer check remains authoritative even though current rows
+        now track expiry separately; it also handles legacy data safely.
         """
         self._load()
         cutoff = time.time() - (hours * 3600)
@@ -779,7 +802,15 @@ def get_recent_questions(hours: int = 24, limit: int = 100) -> List[dict]:
     Returns list of dicts with 'text' field for easy comparison.
     """
     questions = get_board().get_recent_questions(hours, limit)
-    return [{"text": q.text, "timestamp": q.timestamp, "answered": q.answered} for q in questions]
+    return [
+        {
+            "text": q.text,
+            "timestamp": q.timestamp,
+            "answered": q.answered,
+            "expired": q.expired_at is not None,
+        }
+        for q in questions
+    ]
 
 
 def get_answered_question_texts(hours: int = 168) -> set:

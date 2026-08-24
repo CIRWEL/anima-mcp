@@ -431,6 +431,12 @@ async def rest_qa(request):
 
         board = get_board()
         board._load(force=True)
+        repair_legacy_status = getattr(board, "repair_orphaned_answered", None)
+        if callable(repair_legacy_status):
+            repair_legacy_status()
+        expire_old_questions = getattr(board, "_expire_old_questions", None)
+        if callable(expire_old_questions):
+            expire_old_questions()
 
         # Get all questions
         questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
@@ -452,10 +458,15 @@ async def rest_qa(request):
             qa_pairs.append({
                 "id": q.message_id,
                 "question": q.text,
-                # Message.answered is also used for time-based expiry.
-                # Public Q&A semantics instead follow the durable answer link.
                 "answered": answer is not None,
-                "expired_unanswered": bool(q.answered and answer is None),
+                "status": (
+                    "answered" if answer is not None
+                    else "expired" if getattr(q, "expired_at", None)
+                    else "waiting"
+                ),
+                "expired_unanswered": bool(
+                    getattr(q, "expired_at", None) and answer is None
+                ),
                 "timestamp": q.timestamp,
                 "answer": answer,
                 **qa_record_provenance(

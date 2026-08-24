@@ -738,6 +738,61 @@ class TestGroundedSelfAnswer:
         assert "warm" in result.lower()
         assert "foggy" in result.lower()
 
+    def test_timestamped_state_wins_over_current_state(self):
+        """Delayed self-answers describe the state at ask time, not six hours later."""
+        from anima_mcp.loop_phases import grounded_self_answer
+
+        with patch("anima_mcp.self_reflection.get_reflection_system") as mock_refl, \
+             patch("anima_mcp.knowledge.get_insights", return_value=[]), \
+             patch("anima_mcp.knowledge.get_top_convictions", return_value=[]), \
+             patch("anima_mcp.self_model.get_self_model") as mock_sm:
+            mock_refl.return_value.get_insights.return_value = []
+            mock_sm.return_value.beliefs = {}
+            result = grounded_self_answer(
+                "how do I feel right now?",
+                make_anima(warmth=0.9, clarity=0.9),
+                make_readings(),
+                state_when_asked={
+                    "warmth": 0.2,
+                    "clarity": 0.3,
+                    "stability": 0.4,
+                    "presence": 0.5,
+                },
+            )
+
+        assert result.startswith("When I asked")
+        assert "warmth 0.200" in result
+        assert "clarity 0.300" in result
+
+
+class TestLocalEvidencePhrasing:
+    def test_default_off_returns_evidence_without_network(self, monkeypatch):
+        from anima_mcp.loop_phases import phrase_evidence_with_ollama
+
+        monkeypatch.delenv("LUMEN_SELF_ANSWER_OLLAMA_URL", raising=False)
+        with patch("urllib.request.urlopen") as mock_open:
+            result = phrase_evidence_with_ollama("How warm?", "Warmth averaged 0.420")
+
+        assert result == "Warmth averaged 0.420"
+        mock_open.assert_not_called()
+
+    def test_rejects_local_phrase_that_adds_a_measurement(self, monkeypatch):
+        import json
+        from anima_mcp.loop_phases import phrase_evidence_with_ollama
+
+        monkeypatch.setenv("LUMEN_SELF_ANSWER_OLLAMA_URL", "http://localhost:11434")
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = json.dumps({
+            "response": "Across 12 observations, warmth averaged 0.420 and clarity was 0.900."
+        }).encode()
+        with patch("urllib.request.urlopen", return_value=response):
+            result = phrase_evidence_with_ollama(
+                "How warm?",
+                "Across 12 observations, warmth averaged 0.420.",
+            )
+
+        assert result == "Across 12 observations, warmth averaged 0.420."
+
     def test_combines_multiple_evidence_sources(self):
         """Joins top evidence naturally with periods."""
         from anima_mcp.loop_phases import grounded_self_answer
@@ -878,6 +933,31 @@ class TestLumenSelfAnswer:
         mock_add.assert_called_once()
         call_args = mock_add.call_args
         assert call_args.kwargs.get("text") or call_args[0][0] == "I feel warm"
+
+    @pytest.mark.asyncio
+    async def test_prefers_fresh_data_analysis_to_stored_beliefs(self):
+        """Runtime analysis is wired as the first self-answer evidence source."""
+        from anima_mcp.loop_phases import lumen_self_answer
+        from anima_mcp.server_state import SELF_ANSWER_MIN_QUESTION_AGE_SECONDS
+
+        old_q = SimpleNamespace(
+            text="does drawing affect my warmth?",
+            timestamp=_time.time() - (SELF_ANSWER_MIN_QUESTION_AGE_SECONDS + 1),
+            message_id="data-q",
+            msg_type="question",
+            state_snapshot=None,
+        )
+        board = SimpleNamespace(_messages=[old_q], _load=MagicMock(), repair_orphaned_answered=lambda: 0)
+        evidence = "Across 12 observations, warmth averaged 0.420."
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.data_analysis.analyze_for_question", return_value=evidence), \
+             patch("anima_mcp.loop_phases.grounded_self_answer") as mock_grounded, \
+             patch("anima_mcp.loop_phases.phrase_evidence_with_ollama", side_effect=lambda _q, e: e), \
+             patch("anima_mcp.messages.add_agent_message", return_value=MagicMock()) as mock_add:
+            await lumen_self_answer(make_anima(), make_readings(), make_identity())
+
+        mock_grounded.assert_not_called()
+        assert mock_add.call_args.kwargs["text"] == evidence
 
     @pytest.mark.asyncio
     async def test_skips_when_no_answer(self):

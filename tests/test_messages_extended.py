@@ -391,15 +391,18 @@ class TestRepairOrphanedAnswered:
         assert repaired == 0
         assert board.get_by_id(q.message_id).answered is True
 
-    def test_does_not_repair_expired_old_questions(self, board):
-        """Old questions (>4h) are legitimately expired, not repaired."""
+    def test_migrates_legacy_expired_old_questions(self, board):
+        """Old overloaded answer flags migrate to explicit expiry state."""
         q = board.add_message("old q?", MESSAGE_TYPE_QUESTION, author="lumen")
         q.answered = True
         q.timestamp = time.time() - 20000  # Well over 4 hours ago
         board._save()
 
         repaired = board.repair_orphaned_answered()
-        assert repaired == 0
+        assert repaired == 1
+        migrated = board.get_by_id(q.message_id)
+        assert migrated.answered is False
+        assert migrated.expired_at is not None
 
     def test_returns_zero_when_nothing_to_repair(self, board):
         board.add_message("just an obs", MESSAGE_TYPE_OBSERVATION)

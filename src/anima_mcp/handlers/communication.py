@@ -295,8 +295,11 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         return [TextContent(type="text", text=json.dumps(response))]
 
     # Otherwise -> list mode
-    # Auto-repair orphaned answered questions (answered=True but no actual answer)
+    # Migrate legacy expiry flags and repair orphaned answer markers.
     board.repair_orphaned_answered()
+    expire_old_questions = getattr(board, "_expire_old_questions", None)
+    if callable(expire_old_questions):
+        expire_old_questions()
 
     # Find questions that have NO actual answer (responds_to link), even if auto-expired
     all_questions = [m for m in board._messages if m.msg_type == MESSAGE_TYPE_QUESTION]
@@ -316,7 +319,8 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             "text": q.text,
             "context": q.context,
             "age": q.age_str(),
-            "expired": q.answered,  # True if auto-expired but never answered
+            "status": "expired" if getattr(q, "expired_at", None) else "waiting",
+            "expired": bool(getattr(q, "expired_at", None)),
         }
         if q.state_snapshot:
             entry["state_when_asked"] = q.state_snapshot
@@ -330,7 +334,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         "total_questions": len(all_questions),
         "record_semantics": qa_ledger_provenance(),
         "usage": "To answer: lumen_qa(question_id='<id>', answer='your answer')",
-        "note": "Q&A is a timestamped conversation ledger with no current-state authority. Questions marked 'expired: true' auto-expired but were never answered - you can still answer them! state_when_asked shows Lumen's feelings at the time of asking — answer in that context, not the current state. Check premise_status before answering; superseded confidence bases defer to live self-knowledge."
+        "note": "Q&A is a timestamped conversation ledger with no current-state authority. Questions with status 'expired' exceeded the response window but were never answered — you can still answer them. state_when_asked shows Lumen's feelings at the time of asking; answer in that context, not the current state. Check premise_status before answering; superseded confidence bases defer to live self-knowledge."
     }))]
 
 
