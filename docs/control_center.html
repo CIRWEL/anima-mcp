@@ -670,6 +670,49 @@
             margin-top: 6px;
         }
 
+        .qa-ledger-note {
+            color: var(--text-secondary);
+            background: rgba(0, 255, 255, 0.05);
+            border: 1px solid rgba(0, 255, 255, 0.16);
+            border-radius: 7px;
+            font-size: 0.75rem;
+            line-height: 1.45;
+            margin-bottom: 12px;
+            padding: 8px 10px;
+        }
+
+        .qa-badges {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 7px;
+        }
+
+        .qa-badge {
+            border: 1px solid #333;
+            border-radius: 999px;
+            color: var(--text-secondary);
+            font-size: 0.63rem;
+            letter-spacing: 0.04em;
+            padding: 2px 7px;
+            text-transform: uppercase;
+        }
+
+        .qa-badge.premise-retired {
+            border-color: rgba(255, 193, 7, 0.55);
+            color: var(--accent-yellow);
+        }
+
+        .qa-premise-note {
+            background: rgba(255, 193, 7, 0.06);
+            border-left: 2px solid var(--accent-yellow);
+            color: var(--text-secondary);
+            font-size: 0.76rem;
+            line-height: 1.45;
+            margin: 8px 0;
+            padding: 6px 9px;
+        }
+
         .qa-answer-form { margin-top: 10px; }
 
         .qa-answer-input {
@@ -1963,14 +2006,28 @@
                 document.getElementById('qaContent').innerHTML = `<div class="error-state">No questions yet</div>`;
                 return;
             }
-            const unanswered = questions.filter(q => !q.answered || !q.answer);
-            const answered = questions.filter(q => q.answered && q.answer);
+            const unanswered = questions.filter(q => !q.answer);
+            const answered = questions.filter(q => q.answer);
             const renderItem = (q) => {
                 const age = formatAge(q.timestamp);
                 const idBadge = q.id ? `<span class="msg-id" onclick="copyId('${q.id}', this)" title="Click to copy ID">${q.id}</span>` : '';
+                const isRetiredPremise = q.premise_status === 'superseded_confidence_basis';
+                const statusLabel = q.answer ? 'historical answer' : 'open question';
+                const premiseBadge = isRetiredPremise
+                    ? `<span class="qa-badge premise-retired">confidence basis retired</span>`
+                    : '';
+                const premiseNote = isRetiredPremise
+                    ? `<div class="qa-premise-note"><strong>Premise changed:</strong> ${escapeHtml(q.premise_reason || 'Its earlier evidence basis was retired.')} The hypothesis itself remains open; this retires the old certainty, not the hypothesis.</div>`
+                    : '';
                 return `
-                <div class="qa-item ${q.answered ? '' : 'unanswered'}">
+                <div class="qa-item ${q.answer ? '' : 'unanswered'}">
+                    <div class="qa-badges">
+                        <span class="qa-badge">${statusLabel}</span>
+                        <span class="qa-badge">no current-state authority</span>
+                        ${premiseBadge}
+                    </div>
                     <div class="qa-question">${idBadge} ? ${escapeHtml(q.question)}</div>
+                    ${premiseNote}
                     ${q.answer ? `
                         <div class="qa-answer">${escapeHtml(q.answer.text)}</div>
                         <div class="qa-meta">Answered by ${escapeHtml(q.answer.author)} \u00b7 ${formatAge(q.answer.timestamp)}</div>
@@ -1987,7 +2044,7 @@
                     `}
                 </div>`;
             };
-            let html = '';
+            let html = `<div class="qa-ledger-note"><strong>Conversation record:</strong> these entries preserve what was asked and answered at the time. They do not override current telemetry or Lumen's live self-model.</div>`;
             html += `<div class="qa-section-title">Needs Response (${unanswered.length})</div>`;
             html += unanswered.length
                 ? unanswered.map(renderItem).join('')

@@ -78,7 +78,7 @@ TOOLS = [
     ),
     Tool(
         name="lumen_qa",
-        description="Unified Q&A: list Lumen's unanswered questions OR answer one. Call with no args to list, call with question_id+answer to respond.",
+        description="Unified Q&A: list Lumen's unanswered questions OR answer one. Call with no args to list, call with question_id+answer to respond. Results label the timestamped transcript and any superseded premise; Q&A has no authority over live telemetry.",
         inputSchema={
             "type": "object",
             "properties": {

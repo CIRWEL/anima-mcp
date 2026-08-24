@@ -119,6 +119,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
     - lumen_qa(question_id="x", answer="...") -> answer question x
     """
     from ..messages import get_board, MESSAGE_TYPE_QUESTION, add_agent_message
+    from ..qa_provenance import qa_ledger_provenance, qa_record_provenance
 
     question_id = arguments.get("question_id")
     if isinstance(question_id, int):
@@ -283,6 +284,10 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
             "message_id": result.message_id if result else None,
             "matched_partial_id": question_id if question_id != validated_question_id else None,
             "insight": insight_result,
+            "record_provenance": qa_record_provenance(
+                question.text,
+                has_answer=True,
+            ),
         }
         if visitor_context:
             response["visitor_context"] = visitor_context
@@ -315,6 +320,7 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         }
         if q.state_snapshot:
             entry["state_when_asked"] = q.state_snapshot
+        entry.update(qa_record_provenance(q.text, has_answer=False))
         question_list.append(entry)
 
     return [TextContent(type="text", text=json.dumps({
@@ -322,8 +328,9 @@ async def handle_lumen_qa(arguments: dict) -> list[TextContent]:
         "questions": question_list,
         "unanswered_count": len(truly_unanswered),
         "total_questions": len(all_questions),
+        "record_semantics": qa_ledger_provenance(),
         "usage": "To answer: lumen_qa(question_id='<id>', answer='your answer')",
-        "note": "Questions marked 'expired: true' auto-expired but were never answered - you can still answer them! state_when_asked shows Lumen's feelings at the time of asking — answer in that context, not the current state."
+        "note": "Q&A is a timestamped conversation ledger with no current-state authority. Questions marked 'expired: true' auto-expired but were never answered - you can still answer them! state_when_asked shows Lumen's feelings at the time of asking — answer in that context, not the current state. Check premise_status before answering; superseded confidence bases defer to live self-knowledge."
     }))]
 
 
