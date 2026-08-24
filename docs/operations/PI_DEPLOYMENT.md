@@ -211,10 +211,12 @@ sudo systemctl restart anima-broker anima
 ```
 
 `deploy.sh` accepts only a clean, committed source checkout. After rsync it
-fetches that exact commit on the Pi, performs a mixed reset (index/ref only,
-never working-tree files), and verifies the deployed files are clean before a
-service restart. This keeps `HEAD`, the index, and the running source truthful
-even though rsync excludes `.git`.
+refreshes the Pi's configured remote-tracking refs, fetches that exact commit,
+performs a mixed reset (index/ref only, never working-tree files), and verifies
+the deployed files are clean before a service restart. This keeps `HEAD`, the
+index, `origin/main` for normal main deployments, and the running source
+truthful even though rsync excludes `.git`. An intentional non-main deployment
+still reports its real divergence from `origin/main`.
 
 ---
 

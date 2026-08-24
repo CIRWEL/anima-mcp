@@ -232,14 +232,17 @@ else
 fi
 
 # rsync deliberately excludes .git, so update the checkout's ref and index
-# separately.  Mixed reset writes no working-tree files: it makes Git describe
-# the files that were just copied, then the clean check proves they really do
-# match the named commit.  Do this before any service restart so a successful
-# deploy cannot leave code and repository bookkeeping on different revisions.
+# separately. Refresh the configured remote-tracking refs before fetching the
+# exact SHA; otherwise a normal main deployment can look locally "ahead" only
+# because origin/main is a stale cache. Mixed reset writes no working-tree
+# files: it makes Git describe the files that were just copied, then the clean
+# check proves they really do match the named commit. Do this before any service
+# restart so a successful deploy cannot leave code and repository bookkeeping
+# on different revisions.
 echo -e "${BLUE}[1b/4] Aligning deployed Git revision...${NC}"
 if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
     "$PI_USER@$PI_HOST" \
-    "set -e; repo=\$(cd $PI_PATH && pwd -P); git -C \"\$repo\" fetch --quiet --no-tags origin '$DEPLOYED_REF'; git -C \"\$repo\" reset --mixed '$DEPLOYED_REF' >/dev/null; test \"\$(git -C \"\$repo\" rev-parse HEAD)\" = '$DEPLOYED_REF'; git -C \"\$repo\" diff-index --quiet '$DEPLOYED_REF' --; test -z \"\$(git -C \"\$repo\" status --porcelain --untracked-files=all)\""; then
+    "set -e; repo=\$(cd $PI_PATH && pwd -P); git -C \"\$repo\" fetch --quiet --no-tags origin; git -C \"\$repo\" fetch --quiet --no-tags origin '$DEPLOYED_REF'; git -C \"\$repo\" reset --mixed '$DEPLOYED_REF' >/dev/null; test \"\$(git -C \"\$repo\" rev-parse HEAD)\" = '$DEPLOYED_REF'; git -C \"\$repo\" diff-index --quiet '$DEPLOYED_REF' --; test -z \"\$(git -C \"\$repo\" status --porcelain --untracked-files=all)\""; then
     echo -e "${GREEN}✓ Git HEAD, index, and deployed files agree${NC}"
 else
     echo -e "${RED}✗ Deployed files do not match commit $DEPLOYED_REF${NC}"
