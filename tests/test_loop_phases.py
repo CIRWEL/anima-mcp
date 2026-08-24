@@ -304,8 +304,7 @@ class TestGenerateLearnedQuestion:
             mock_sm.return_value.beliefs = {}
             result = generate_learned_question()
 
-        assert result is not None
-        assert "affect me" in result
+        assert result == "what changes in me when it is dark?"
 
     @patch("anima_mcp.messages.get_recent_questions", return_value=[])
     @patch("anima_mcp.self_reflection.get_reflection_system")
@@ -354,6 +353,37 @@ class TestGenerateLearnedQuestion:
         assert result is not None
         assert "light affects my warmth" in result.lower()
 
+    @patch("anima_mcp.messages.get_recent_questions", return_value=[])
+    @patch("anima_mcp.self_reflection.get_reflection_system")
+    def test_removes_repeated_subject_from_uncertain_belief(self, mock_refl, mock_recent):
+        from anima_mcp.loop_phases import generate_learned_question
+
+        mock_refl.return_value.get_insights.return_value = []
+        belief = SimpleNamespace(
+            confidence=0.4,
+            description="I am sensitive to temperature changes",
+        )
+
+        with patch("anima_mcp.self_model.get_self_model") as mock_sm:
+            mock_sm.return_value.beliefs = {"b1": belief}
+            result = generate_learned_question()
+
+        assert result == "am I really sensitive to temperature changes?"
+
+    @patch("anima_mcp.messages.get_recent_questions", return_value=[])
+    @patch("anima_mcp.self_reflection.get_reflection_system")
+    def test_formats_non_first_person_belief_as_clause(self, mock_refl, mock_recent):
+        from anima_mcp.loop_phases import generate_learned_question
+
+        mock_refl.return_value.get_insights.return_value = []
+        belief = SimpleNamespace(confidence=0.4, description="Temperature affects my clarity")
+
+        with patch("anima_mcp.self_model.get_self_model") as mock_sm:
+            mock_sm.return_value.beliefs = {"b1": belief}
+            result = generate_learned_question()
+
+        assert result == "is it really true that temperature affects my clarity?"
+
     @patch("anima_mcp.messages.get_recent_questions")
     @patch("anima_mcp.self_reflection.get_reflection_system")
     def test_deduplicates_against_recent(self, mock_refl, mock_recent):
@@ -363,7 +393,7 @@ class TestGenerateLearnedQuestion:
         insight = SimpleNamespace(confidence=0.8, description="I feel calm when it is dark")
         mock_refl.return_value.get_insights.return_value = [insight]
         # The exact question text that would be generated
-        mock_recent.return_value = [{"text": "why does it is dark affect me?"}]
+        mock_recent.return_value = [{"text": "what changes in me when it is dark?"}]
 
         with patch("anima_mcp.self_model.get_self_model") as mock_sm:
             mock_sm.return_value.beliefs = {}
@@ -409,7 +439,7 @@ class TestGenerateLearnedQuestion:
             mock_sm.return_value.beliefs = {}
             result = generate_learned_question()
 
-        assert result == "why does it is dark affect me?"
+        assert result == "what changes in me when it is dark?"
 
     @patch("anima_mcp.messages.get_recent_questions", return_value=[])
     @patch("anima_mcp.self_reflection.get_reflection_system")

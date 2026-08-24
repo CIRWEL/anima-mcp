@@ -169,6 +169,54 @@ def _format_tendency_question(desc: str) -> Optional[str]:
     return f"what matters about {phrase}?"
 
 
+def _format_when_question(desc: str) -> Optional[str]:
+    """Ask about a condition without turning its clause into a noun phrase."""
+    import re
+
+    match = re.search(r"\bwhen\b\s+(?P<condition>.+)$", desc)
+    if not match:
+        return None
+    condition = match.group("condition").strip().rstrip(".?!").strip()
+    if not condition:
+        return None
+    return f"what changes in me when {condition}?"
+
+
+def _belief_clause(description: str) -> str:
+    """Normalize a belief for use inside a question while preserving ``I``."""
+    claim = description.strip().rstrip(".?!").strip().lower()
+    if claim == "i":
+        return "I"
+    if claim.startswith("i "):
+        return f"I {claim[2:]}"
+    if claim.startswith("i'm"):
+        return f"I'm{claim[3:]}"
+    return claim
+
+
+def _format_uncertain_belief_question(description: str) -> Optional[str]:
+    """Turn a declarative belief into a grammatical falsification question."""
+    claim = _belief_clause(description)
+    if not claim:
+        return None
+    lowered = claim.lower()
+    if lowered.startswith("i am "):
+        return f"am I really {claim[5:]}?"
+    if lowered.startswith("i'm "):
+        return f"am I really {claim[4:]}?"
+    if lowered.startswith("i "):
+        return f"do I really {claim[2:]}?"
+    return f"is it really true that {claim}?"
+
+
+def _format_established_belief_question(description: str) -> Optional[str]:
+    """Ask why a stronger belief matters without mangling its declaration."""
+    claim = _belief_clause(description)
+    if not claim:
+        return None
+    return f"what matters most about whether {claim}?"
+
+
 def generate_learned_question() -> Optional[str]:
     """Generate a question from Lumen's learned insights, beliefs, and preferences.
 
@@ -215,8 +263,8 @@ def generate_learned_question() -> Optional[str]:
             tendency_question = _format_tendency_question(core)
             if tendency_question:
                 q = tendency_question
-            elif "when" in core:
-                q = f"why does {core.split('when')[-1].strip()} affect me?"
+            elif when_question := _format_when_question(core):
+                q = when_question
             else:
                 q = random.choice([
                     f"what does it mean that {core}?",
@@ -240,13 +288,15 @@ def generate_learned_question() -> Optional[str]:
             if added >= 4:
                 break
             if 0.3 <= belief.confidence <= 0.5:
-                q = f"am I really {belief.description.lower().rstrip('.')}?"
-                candidates.append(q)
-                added += 1
+                q = _format_uncertain_belief_question(belief.description)
+                if q:
+                    candidates.append(q)
+                    added += 1
             elif belief.confidence > 0.7:
-                q = f"what about {belief.description.lower().rstrip('.')} matters most?"
-                candidates.append(q)
-                added += 1
+                q = _format_established_belief_question(belief.description)
+                if q:
+                    candidates.append(q)
+                    added += 1
     except Exception:
         pass
 

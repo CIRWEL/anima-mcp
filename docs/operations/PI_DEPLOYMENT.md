@@ -1,6 +1,6 @@
 # Raspberry Pi Deployment Guide
 
-**Last Updated:** March 14, 2026
+**Last Updated:** August 23, 2026
 
 ---
 
@@ -13,7 +13,8 @@
 ssh -i ~/.ssh/id_ed25519_pi unitares-anima@lumen.local \
   "cd ~ && git clone <repo-url> anima-mcp && cd anima-mcp"
 
-# Or via rsync
+# Or via rsync for initial setup only. For updates, use ./deploy.sh so the
+# checkout's Git revision stays aligned with the copied files.
 cd ~/projects/anima-mcp
 rsync -avz --exclude='.venv' --exclude='*.db' --exclude='__pycache__' --exclude='.git' \
   -e "ssh -i ~/.ssh/id_ed25519_pi" \
@@ -208,6 +209,12 @@ sudo systemctl restart anima-broker anima
 ./deploy.sh --no-restart    # Deploy without restart
 ./deploy.sh --host IP       # Override Pi IP
 ```
+
+`deploy.sh` accepts only a clean, committed source checkout. After rsync it
+fetches that exact commit on the Pi, performs a mixed reset (index/ref only,
+never working-tree files), and verifies the deployed files are clean before a
+service restart. This keeps `HEAD`, the index, and the running source truthful
+even though rsync excludes `.git`.
 
 ---
 

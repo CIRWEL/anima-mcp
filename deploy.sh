@@ -76,7 +76,22 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# File-sync deploys must still name the exact commit they are deploying.  A
+# dirty source tree has no commit whose contents can truthfully describe the
+# files rsync will copy, so fail before taking a backup or touching the Pi.
+if ! DEPLOYED_REF="$(git rev-parse --verify HEAD^{commit} 2>/dev/null)"; then
+    echo -e "${RED}Error: deploy source is not a Git commit${NC}" >&2
+    exit 1
+fi
+SOURCE_STATUS="$(git status --porcelain --untracked-files=all)"
+if [ -n "$SOURCE_STATUS" ]; then
+    echo -e "${RED}Error: refusing deploy from a dirty source checkout${NC}" >&2
+    echo "$SOURCE_STATUS" >&2
+    exit 1
+fi
+
 echo -e "${BLUE}Target:${NC} $PI_USER@$PI_HOST:$PI_PATH"
+echo -e "${BLUE}Commit:${NC} $DEPLOYED_REF"
 echo ""
 
 SSH_EXTRA=""
@@ -213,6 +228,22 @@ if [ $? -eq 0 ]; then
 else
     echo -e "${RED}✗ Sync failed (connection timeout?)${NC}"
     echo -e "${BLUE}  Lumen continues operating autonomously - deploy when WiFi returns${NC}"
+    exit 1
+fi
+
+# rsync deliberately excludes .git, so update the checkout's ref and index
+# separately.  Mixed reset writes no working-tree files: it makes Git describe
+# the files that were just copied, then the clean check proves they really do
+# match the named commit.  Do this before any service restart so a successful
+# deploy cannot leave code and repository bookkeeping on different revisions.
+echo -e "${BLUE}[1b/4] Aligning deployed Git revision...${NC}"
+if ssh -p $PI_PORT $SSH_EXTRA -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new \
+    "$PI_USER@$PI_HOST" \
+    "set -e; repo=\$(cd $PI_PATH && pwd -P); git -C \"\$repo\" fetch --quiet --no-tags origin '$DEPLOYED_REF'; git -C \"\$repo\" reset --mixed '$DEPLOYED_REF' >/dev/null; test \"\$(git -C \"\$repo\" rev-parse HEAD)\" = '$DEPLOYED_REF'; git -C \"\$repo\" diff-index --quiet '$DEPLOYED_REF' --; test -z \"\$(git -C \"\$repo\" status --porcelain --untracked-files=all)\""; then
+    echo -e "${GREEN}✓ Git HEAD, index, and deployed files agree${NC}"
+else
+    echo -e "${RED}✗ Deployed files do not match commit $DEPLOYED_REF${NC}"
+    echo -e "${YELLOW}  Services were not restarted; inspect the Pi checkout before retrying${NC}"
     exit 1
 fi
 

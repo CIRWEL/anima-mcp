@@ -249,7 +249,7 @@ def test_generate_learned_question_prefers_insight_candidates(monkeypatch):
     monkeypatch.setattr("random.choice", lambda seq: seq[0])
 
     out = server._generate_learned_question()
-    assert out == "why does it is dim affect me?"
+    assert out == "what changes in me when it is dim?"
 
 
 def test_generate_learned_question_uses_beliefs_and_filters_recent(monkeypatch):
@@ -266,13 +266,13 @@ def test_generate_learned_question_uses_beliefs_and_filters_recent(monkeypatch):
     monkeypatch.setattr("random.choice", lambda seq: seq[0])
 
     out = server._generate_learned_question()
-    assert out == "what about calmer in quiet matters most?"
+    assert out == "what matters most about whether calmer in quiet?"
 
 
 def test_generate_learned_question_returns_none_when_all_candidates_recent(monkeypatch):
     insight = SimpleNamespace(confidence=0.9, description="When darkness comes")
     reflection_system = SimpleNamespace(get_insights=lambda: [insight])
-    expected = "why does darkness comes affect me?"
+    expected = "what changes in me when darkness comes?"
 
     monkeypatch.setattr("anima_mcp.messages.get_recent_questions", lambda hours=24: [{"text": expected}])
     monkeypatch.setattr("anima_mcp.self_reflection.get_reflection_system", lambda: reflection_system)

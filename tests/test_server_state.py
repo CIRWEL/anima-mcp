@@ -35,3 +35,26 @@ def test_readings_round_trip_preserves_light_capture_provenance():
     assert readings.light_observed_at == observed_at
     assert readings.light_observed_precision_seconds == 1.0
     assert readings.led_brightness == 0.08
+
+
+def test_readings_round_trip_preserves_hearing_and_power_diagnostics():
+    readings = readings_from_dict(
+        {
+            "timestamp": "2026-08-23T19:43:07",
+            "hearing_available": True,
+            "sound_level": 0.17,
+            "throttle_bits": 0x50005,
+            "undervoltage_now": True,
+            "throttled_now": False,
+            "freq_capped_now": True,
+            "undervoltage_occurred": True,
+        }
+    )
+
+    assert readings.hearing_available is True
+    assert readings.sound_level == 0.17
+    assert readings.throttle_bits == 0x50005
+    assert readings.undervoltage_now is True
+    assert readings.throttled_now is False
+    assert readings.freq_capped_now is True
+    assert readings.undervoltage_occurred is True
