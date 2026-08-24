@@ -11,7 +11,12 @@ import math
 import pytest
 from datetime import datetime
 
-from anima_mcp.self_model import SelfBelief, SelfModel
+from anima_mcp.self_model import (
+    CORRELATION_MIN_COMPLETE_PAIRS,
+    CORRELATION_WINDOW_SIZE,
+    SelfBelief,
+    SelfModel,
+)
 
 
 @pytest.fixture
@@ -24,11 +29,33 @@ def model(tmp_path):
 class TestCorrelationCalculation:
     """Test _test_correlation_belief math."""
 
+    @staticmethod
+    def _feed_exact_correlation(model, pair_count, correlation):
+        """Fill one raw window whose complete pairs have the requested r."""
+        orthogonal_weight = math.sqrt(1.0 - correlation ** 2)
+        for i in range(pair_count):
+            phase = 2.0 * math.pi * i / pair_count
+            signal = math.sin(phase)
+            orthogonal = math.cos(phase)
+            model._correlation_data["temp_clarity"].append({
+                "timestamp": datetime.now().isoformat(),
+                "temp": 10.0 + 5.0 * signal,
+                "clarity": 1.0 + 0.5 * (
+                    correlation * signal + orthogonal_weight * orthogonal
+                ),
+            })
+        for i in range(CORRELATION_WINDOW_SIZE - pair_count):
+            model._correlation_data["temp_clarity"].append({
+                "timestamp": datetime.now().isoformat(),
+                "temp": 10.0 + i,
+                "clarity": None,
+            })
+
     def test_perfect_positive_correlation(self, model):
         """Perfectly correlated data should support belief."""
         belief_id = "temp_clarity_correlation"
         # Feed perfectly correlated data
-        for i in range(15):
+        for i in range(CORRELATION_WINDOW_SIZE):
             model._correlation_data["temp_clarity"].append({
                 "timestamp": datetime.now().isoformat(),
                 "temp": i * 0.01,
@@ -37,30 +64,35 @@ class TestCorrelationCalculation:
 
         initial_confidence = model._beliefs[belief_id].confidence
         model._test_correlation_belief(belief_id, "temp_clarity")
-        # Should have increased confidence (positive correlation)
-        assert model._beliefs[belief_id].confidence >= initial_confidence
+        belief = model._beliefs[belief_id]
+        assert belief.confidence > initial_confidence
+        assert belief.supporting_count == 1
+        assert belief.value > 0.5
 
     def test_no_correlation_weakens_belief(self, model):
         """Uncorrelated data should weaken belief."""
         belief_id = "temp_clarity_correlation"
         import random
         random.seed(42)
-        for i in range(15):
+        for i in range(CORRELATION_WINDOW_SIZE):
             model._correlation_data["temp_clarity"].append({
                 "timestamp": datetime.now().isoformat(),
                 "temp": random.random(),
                 "clarity": random.random() * 1000,
             })
 
+        initial_confidence = model._beliefs[belief_id].confidence
         model._test_correlation_belief(belief_id, "temp_clarity")
-        # Random data may or may not correlate, but shouldn't crash
-        # Just verify it ran without error
-        assert model._beliefs[belief_id].confidence is not None
+
+        belief = model._beliefs[belief_id]
+        assert belief.confidence < initial_confidence
+        assert belief.supporting_count == 0
+        assert belief.contradicting_count == 1
 
     def test_constant_values_handled(self, model):
         """Constant x or y values should not crash (epsilon guard)."""
         belief_id = "temp_clarity_correlation"
-        for i in range(15):
+        for i in range(CORRELATION_WINDOW_SIZE):
             model._correlation_data["temp_clarity"].append({
                 "timestamp": datetime.now().isoformat(),
                 "temp": 0.12,  # Constant
@@ -69,11 +101,12 @@ class TestCorrelationCalculation:
 
         # Should not crash — epsilon guard returns early
         model._test_correlation_belief(belief_id, "temp_clarity")
+        assert len(model._correlation_data["temp_clarity"]) == 0
 
     def test_near_constant_values_handled(self, model):
         """Near-constant values (tiny variance) should not crash or produce NaN."""
         belief_id = "temp_clarity_correlation"
-        for i in range(15):
+        for i in range(CORRELATION_WINDOW_SIZE):
             model._correlation_data["temp_clarity"].append({
                 "timestamp": datetime.now().isoformat(),
                 "temp": 0.12 + i * 1e-12,  # Barely varies
@@ -84,11 +117,12 @@ class TestCorrelationCalculation:
         conf = model._beliefs[belief_id].confidence
         assert not math.isnan(conf)
         assert not math.isinf(conf)
+        assert len(model._correlation_data["temp_clarity"]) == 0
 
     def test_insufficient_data_skipped(self, model):
-        """Less than 10 data points should skip calculation."""
+        """A partial observation window should skip calculation."""
         belief_id = "temp_clarity_correlation"
-        for i in range(5):
+        for i in range(CORRELATION_WINDOW_SIZE - 1):
             model._correlation_data["temp_clarity"].append({
                 "timestamp": datetime.now().isoformat(),
                 "temp": i * 0.01,
@@ -99,6 +133,65 @@ class TestCorrelationCalculation:
         model._test_correlation_belief(belief_id, "temp_clarity")
         # Should be unchanged — not enough data
         assert model._beliefs[belief_id].confidence == initial
+
+    def test_minimum_pair_window_uses_stricter_significance_threshold(self, model):
+        """r=.4 is not enough evidence at n=30 under the 1% gate."""
+        belief_id = "temp_clarity_correlation"
+        self._feed_exact_correlation(
+            model,
+            pair_count=CORRELATION_MIN_COMPLETE_PAIRS,
+            correlation=0.4,
+        )
+
+        model._test_correlation_belief(belief_id, "temp_clarity")
+
+        belief = model._beliefs[belief_id]
+        assert belief.supporting_count == 0
+        assert belief.contradicting_count == 1
+        assert len(model._correlation_data["temp_clarity"]) == 0
+
+    def test_full_window_can_support_same_effect_size(self, model):
+        """The n-aware gate credits r=.4 once all 50 pairs support it."""
+        belief_id = "temp_clarity_correlation"
+        self._feed_exact_correlation(
+            model,
+            pair_count=CORRELATION_WINDOW_SIZE,
+            correlation=0.4,
+        )
+
+        model._test_correlation_belief(belief_id, "temp_clarity")
+
+        belief = model._beliefs[belief_id]
+        assert belief.supporting_count == 1
+        assert belief.contradicting_count == 0
+        assert belief.value > 0.5
+
+    def test_stable_output_is_no_evidence_even_with_perfect_r(self, model):
+        """Tiny y-channel quantization changes must not create a belief."""
+        belief_id = "temp_clarity_correlation"
+        belief = model._beliefs[belief_id]
+        prior = (
+            belief.confidence,
+            belief.value,
+            belief.supporting_count,
+            belief.contradicting_count,
+        )
+        for i in range(CORRELATION_WINDOW_SIZE):
+            model._correlation_data["temp_clarity"].append({
+                "timestamp": datetime.now().isoformat(),
+                "temp": float(i),
+                "clarity": 100.0 + i * 0.001,
+            })
+
+        model._test_correlation_belief(belief_id, "temp_clarity")
+
+        assert (
+            belief.confidence,
+            belief.value,
+            belief.supporting_count,
+            belief.contradicting_count,
+        ) == prior
+        assert len(model._correlation_data["temp_clarity"]) == 0
 
     def test_stable_input_leaves_belief_at_prior(self, model):
         """When input variance is below CV=5% (stable HVAC-like environment),
@@ -115,7 +208,7 @@ class TestCorrelationCalculation:
         model._beliefs[belief_id].contradicting_count = 5
 
         # CV far below 5%: brightness hovering around 0.12 with sub-percent jitter.
-        for i in range(15):
+        for i in range(CORRELATION_WINDOW_SIZE):
             model._correlation_data["temp_clarity"].append({
                 "timestamp": datetime.now().isoformat(),
                 "temp": 0.1200 + (i % 3) * 0.00005,
@@ -145,7 +238,7 @@ class TestCorrelationCalculation:
 
         for cycle in range(500):
             model._correlation_data["temp_clarity"].clear()
-            for i in range(12):
+            for i in range(CORRELATION_WINDOW_SIZE):
                 model._correlation_data["temp_clarity"].append({
                     "timestamp": datetime.now().isoformat(),
                     "temp": 0.10,
@@ -163,9 +256,9 @@ class TestCorrelationCalculation:
             value=0.5,
         )
 
-        belief.update_correlation(1.0)
+        belief.update_correlation(1.0, sample_count=CORRELATION_WINDOW_SIZE)
         after_positive = belief.value
-        belief.update_correlation(-1.0)
+        belief.update_correlation(-1.0, sample_count=CORRELATION_WINDOW_SIZE)
 
         assert after_positive > 0.6
         assert 0.4 < belief.value < 0.6
@@ -179,7 +272,11 @@ class TestCorrelationCalculation:
             value=0.7,
         )
 
-        belief.update_correlation(0.8, update_bonus=-2.0)
+        belief.update_correlation(
+            0.8,
+            sample_count=CORRELATION_WINDOW_SIZE,
+            update_bonus=-2.0,
+        )
 
         assert belief.confidence == pytest.approx(0.6)
         assert belief.value == pytest.approx(0.7)
@@ -448,7 +545,7 @@ class TestCorrelationPairing:
         zip toward zero, while correct pairing stays perfectly collinear.
         """
         rows = []
-        for i in range(36):
+        for i in range(CORRELATION_WINDOW_SIZE):
             wave = math.sin(2 * math.pi * i / 12)
             temp = 20.0 + 5.0 * wave   # CV ~0.18, clears the 5% variance gate
             clarity = 0.5 + 0.2 * wave  # y is an exact function of x
@@ -476,7 +573,7 @@ class TestCorrelationPairing:
         before the fix and passing after.
         """
         rows = []
-        for i in range(48):
+        for i in range(CORRELATION_WINDOW_SIZE):
             wave = math.sin(2 * math.pi * i / 12)
             temp = 20.0 + 5.0 * wave   # CV ~0.18, clears the 5% variance gate
             clarity = 0.5 + 0.2 * wave
@@ -484,18 +581,23 @@ class TestCorrelationPairing:
                          None if i % 8 == 0 else clarity))
         self._feed(model, rows)
         model._test_correlation_belief("temp_clarity_correlation", "temp_clarity")
-        assert model.beliefs["temp_clarity_correlation"].value > 0.6
+        assert model.beliefs["temp_clarity_correlation"].value > 0.55
 
     def test_too_few_complete_pairs_is_a_no_op(self, model):
-        """<10 COMPLETE pairs must bail, even when each series alone has 10+.
+        """Too few COMPLETE pairs must bail despite a full raw window.
 
-        The old min(len(x), len(y)) test passed here — 15 x-values and 15
-        y-values — while only 5 rows actually had both.
+        Each series alone has enough values, but fewer than the minimum rows
+        have both. This protects the pair-alignment gate as window sizes grow.
         """
         before = model.beliefs["temp_clarity_correlation"].value
         rows = [(20.0 + i, None) for i in range(15)]
         rows += [(None, 0.5 + i * 0.01) for i in range(15)]
-        rows += [(25.0 + i, 0.4 + i * 0.03) for i in range(5)]
+        complete_count = CORRELATION_MIN_COMPLETE_PAIRS - 10
+        rows += [
+            (25.0 + i, 0.4 + i * 0.03)
+            for i in range(complete_count)
+        ]
+        assert len(rows) == CORRELATION_WINDOW_SIZE
         self._feed(model, rows)
         model._test_correlation_belief("temp_clarity_correlation", "temp_clarity")
         assert model.beliefs["temp_clarity_correlation"].value == before
