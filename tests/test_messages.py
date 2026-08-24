@@ -1,6 +1,8 @@
 """Tests for messages module — MessageBoard storage, dedup, trimming, Q&A."""
 
 import time
+from unittest.mock import patch
+
 import pytest
 
 import anima_mcp.messages as msg_module
@@ -8,6 +10,7 @@ from anima_mcp.messages import (
     MessageBoard, Message,
     MESSAGE_TYPE_OBSERVATION, MESSAGE_TYPE_QUESTION,
     MESSAGE_TYPE_USER,
+    MAX_QUESTIONS_PER_ROLLING_DAY,
     MAX_UNANSWERED_QUESTIONS_SOFT_CAP,
     questions_similar,
 )
@@ -121,7 +124,7 @@ class TestQuestions:
 
     def test_question_backlog_soft_cap_ignores_expired_questions(self, board):
         """Expired questions should not keep the soft cap stuck forever."""
-        base_t = time.time() - 25_000
+        base_t = time.time() - msg_module.QUESTION_BUDGET_WINDOW_SECONDS - 6_000
         stale_question_ids = []
         for i in range(MAX_UNANSWERED_QUESTIONS_SOFT_CAP):
             qid = f"stale{i}"
@@ -144,7 +147,25 @@ class TestQuestions:
         assert q.text == "Can the board recover after stale backlog?"
         stale = [m for m in board._messages if m.message_id in stale_question_ids]
         assert stale
-        assert all(m.answered for m in stale)
+        assert all(not m.answered and m.expired_at is not None for m in stale)
+
+    def test_rolling_daily_budget_does_not_reopen_when_questions_are_answered(self, board):
+        """Answers clear backlog pressure, but they do not buy more questions."""
+        base_t = time.time() - 3600
+        for i in range(MAX_QUESTIONS_PER_ROLLING_DAY):
+            board._messages.append(
+                Message(
+                    message_id=f"answered{i}",
+                    text=f"Answered {i}?",
+                    msg_type=MESSAGE_TYPE_QUESTION,
+                    timestamp=base_t + i,
+                    author="lumen",
+                    answered=True,
+                )
+            )
+        board._save()
+
+        assert board.add_question("Would an answer reopen the budget?") is None
 
     def test_questions_similar_public_helper_matches_board_behavior(self, board):
         """Question similarity is available without reaching into MessageBoard internals."""
@@ -164,6 +185,18 @@ class TestQuestions:
         board.add_agent_message("Yes!", agent_name="helper", responds_to=q.message_id)
         unanswered = board.get_unanswered_questions(auto_expire=False)
         assert not any(m.message_id == q.message_id for m in unanswered)
+
+    def test_lumen_self_answer_is_not_extracted_back_into_knowledge(self, board):
+        """A deterministic self-answer must not become a new circular claim."""
+        q = board.add_question("What pattern do I notice?")
+        with patch("anima_mcp.knowledge._extract_simple_insight") as mock_extract:
+            board.add_agent_message(
+                "The stored observations show a pattern.",
+                agent_name="lumen",
+                responds_to=q.message_id,
+            )
+
+        mock_extract.assert_not_called()
 
     def test_answering_marks_growth_curiosity_explored(self, board, monkeypatch):
         """When a question Lumen asked gets answered, the matching growth
@@ -326,10 +359,8 @@ class TestQAProvenanceAndTruncation:
 class TestAnsweredQuestionTexts:
     """``get_answered_question_texts`` must mean REALLY answered.
 
-    ``Message.answered`` is set both by a genuine reply and by
-    ``_expire_old_questions``, so it cannot distinguish "someone engaged with
-    this" from "nobody looked at it for four hours". Callers deciding whether
-    a question is finished need the linked-answer test.
+    Expiry and answers now have separate durable fields. The answer link remains
+    the authoritative compatibility check.
     """
 
     def test_real_answer_counts(self, board):
@@ -344,8 +375,9 @@ class TestAnsweredQuestionTexts:
         q = board.add_question("what am I not noticing yet?")
         q.timestamp = time.time() - (msg_module.QUESTION_EXPIRY_SECONDS + 60)
         board._expire_old_questions(time.time())
-        assert q.answered is True          # flagged...
-        assert board.get_answered_question_texts() == set()  # ...but never answered
+        assert q.answered is False
+        assert q.expired_at is not None
+        assert board.get_answered_question_texts() == set()
 
     def test_unanswered_question_absent(self, board):
         board.add_question("is anyone there?")

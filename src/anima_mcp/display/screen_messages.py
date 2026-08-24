@@ -581,10 +581,15 @@ class MessagesMixin:
 
             y_offset = 6
 
-            # Title with count - separate waiting (active) from expired
-            # q.answered=True means expired, a is None means no actual response
-            waiting = sum(1 for q, a in qa_pairs if a is None and not q.answered)
-            expired = sum(1 for q, a in qa_pairs if a is None and q.answered)
+            # Title with count - separate waiting (active) from expired.
+            waiting = sum(
+                1 for q, a in qa_pairs
+                if a is None and not getattr(q, "expired_at", None)
+            )
+            expired = sum(
+                1 for q, a in qa_pairs
+                if a is None and bool(getattr(q, "expired_at", None))
+            )
             if waiting and expired:
                 title = f"questions ({waiting} waiting, {expired} expired)"
             elif waiting:

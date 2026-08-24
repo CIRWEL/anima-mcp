@@ -343,7 +343,8 @@ class TestLumenQaExtended:
             msg_type="question",
             text="Why am I confident that my own LEDs affect my light sensor?",
             context=None,
-            answered=True,  # auto-expired but still unanswered
+            answered=False,
+            expired_at=1.0,
             state_snapshot=None,
             age_str=lambda: "15m",
         )
@@ -368,6 +369,8 @@ class TestLumenQaExtended:
         assert "q3" not in ids
         assert "q2" in ids
         by_id = {q["id"]: q for q in data["questions"]}
+        assert by_id["q2"]["status"] == "expired"
+        assert by_id["q2"]["expired"] is True
         assert by_id["q1"]["epistemic_status"] == "open_question"
         assert (
             by_id["q2"]["premise_status"]

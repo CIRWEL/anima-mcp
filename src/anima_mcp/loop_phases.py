@@ -658,7 +658,12 @@ async def lumen_unified_reflect(anima, readings, identity, prediction_error):
                 logger.debug("[Lumen/Unified] Insight share error: %s", e)
 
 
-def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
+def grounded_self_answer(
+    question_text: str,
+    anima,
+    readings,
+    state_when_asked: Optional[dict] = None,
+) -> Optional[str]:
     """Answer from current evidence, with historical claims named as history.
 
     Searches insights, beliefs, and preferences for relevant material. Q&A
@@ -739,10 +744,23 @@ def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
     except Exception:
         pass
 
-    # 4. Current state as context (if question is about feelings/state)
+    # 4. State as context (if question is about feelings/state). Prefer the
+    # timestamped snapshot: these questions wait before self-answering, so the
+    # current state is not evidence about how Lumen felt when it asked.
     feeling_words = {"feel", "feeling", "now", "right", "am", "doing", "state"}
     if feeling_words & set(question_lower.split()):
-        if anima:
+        snapshot_parts = []
+        if isinstance(state_when_asked, dict):
+            for dim in ("warmth", "clarity", "stability", "presence"):
+                try:
+                    snapshot_parts.append(f"{dim} {float(state_when_asked[dim]):.3f}")
+                except (KeyError, TypeError, ValueError):
+                    continue
+        if snapshot_parts:
+            evidence.append(
+                (1.0, f"When I asked, my recorded state was {', '.join(snapshot_parts)}")
+            )
+        elif anima:
             dims = []
             if anima.warmth > 0.6:
                 dims.append("warm")
@@ -772,6 +790,93 @@ def grounded_self_answer(question_text: str, anima, readings) -> Optional[str]:
         return parts[0]
     # Join naturally
     return ". ".join(p.rstrip(".") for p in parts) + "."
+
+
+def _valid_grounded_phrase(candidate: str, evidence: str) -> bool:
+    """Reject local-model prose that adds facts or drops numeric evidence."""
+    import re
+
+    candidate = (candidate or "").strip()
+    if not 20 <= len(candidate) <= 1200:
+        return False
+
+    number_pattern = r"(?<![\w.])-?\d+(?:\.\d+)?%?"
+    if set(re.findall(number_pattern, candidate)) != set(re.findall(number_pattern, evidence)):
+        return False
+
+    evidence_lower = evidence.lower()
+    candidate_lower = candidate.lower()
+    unsupported_markers = {
+        "biological", "brain", "conscious", "nervous system", "sentient", "soul",
+    }
+    if any(m in candidate_lower and m not in evidence_lower for m in unsupported_markers):
+        return False
+
+    stopwords = {
+        "about", "after", "again", "also", "been", "being", "from", "have",
+        "into", "that", "their", "there", "these", "this", "those", "when",
+        "where", "which", "with", "would", "your",
+    }
+    evidence_words = {
+        w for w in re.findall(r"[a-z]{4,}", evidence_lower) if w not in stopwords
+    }
+    candidate_words = {
+        w for w in re.findall(r"[a-z]{4,}", candidate_lower) if w not in stopwords
+    }
+    if not evidence_words or not candidate_words:
+        return False
+    return len(candidate_words & evidence_words) / len(candidate_words) >= 0.5
+
+
+def phrase_evidence_with_ollama(question_text: str, evidence: str) -> str:
+    """Optionally phrase established evidence with a local Ollama model.
+
+    This path is default-off. It makes one bounded request only when
+    ``LUMEN_SELF_ANSWER_OLLAMA_URL`` is configured, and falls back verbatim to
+    the deterministic evidence on timeout, error, or validator rejection.
+    """
+    import json
+    import os
+    import urllib.request
+
+    base_url = os.getenv("LUMEN_SELF_ANSWER_OLLAMA_URL", "").strip().rstrip("/")
+    if not base_url:
+        return evidence
+
+    model = os.getenv("LUMEN_SELF_ANSWER_OLLAMA_MODEL", "gemma4:latest").strip()
+    try:
+        timeout = max(1.0, min(float(os.getenv("LUMEN_SELF_ANSWER_OLLAMA_TIMEOUT", "8")), 15.0))
+    except ValueError:
+        timeout = 8.0
+
+    payload = {
+        "model": model,
+        "stream": False,
+        "system": (
+            "Rewrite only the supplied evidence as a concise first-person answer. "
+            "Preserve every number exactly. Add no facts, causes, feelings, sensors, "
+            "or claims of consciousness. Return only the answer."
+        ),
+        "prompt": f"Question:\n{question_text[:1000]}\n\nEvidence:\n{evidence[:6000]}",
+        "options": {"temperature": 0.1, "num_predict": 192},
+    }
+    request = urllib.request.Request(
+        f"{base_url}/api/generate",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            candidate = json.loads(response.read().decode("utf-8")).get("response", "")
+    except Exception as exc:
+        logger.debug("[Lumen/SelfAnswer] Ollama phrasing unavailable: %s", exc)
+        return evidence
+
+    if not _valid_grounded_phrase(candidate, evidence):
+        logger.warning("[Lumen/SelfAnswer] Rejected ungrounded Ollama phrasing")
+        return evidence
+    return candidate.strip()
 
 
 async def lumen_self_answer(anima, readings, identity):
@@ -822,8 +927,24 @@ async def lumen_self_answer(anima, readings, identity):
     # Answer 1 question per cycle
     question = old_enough[0]
 
-    answer = grounded_self_answer(question.text, anima, readings)
+    # Longitudinal analysis is the strongest available source because it
+    # re-computes an answer from observations rather than replaying a belief.
+    try:
+        from .data_analysis import analyze_for_question
+        answer = analyze_for_question(question.text)
+    except Exception as exc:
+        logger.debug("[Lumen/SelfAnswer] Data analysis unavailable: %s", exc)
+        answer = None
+
+    if not answer:
+        answer = grounded_self_answer(
+            question.text,
+            anima,
+            readings,
+            state_when_asked=getattr(question, "state_snapshot", None),
+        )
     if answer:
+        answer = phrase_evidence_with_ollama(question.text, answer)
         result = add_agent_message(
             text=answer,
             agent_name="lumen",
@@ -832,16 +953,6 @@ async def lumen_self_answer(anima, readings, identity):
         if result:
             logger.debug("[Lumen/SelfAnswer] Q: %s", question.text[:60])
             logger.debug("[Lumen/SelfAnswer] A: %s", answer[:80])
-            # Feed self-answer into learning systems (same path as external answers)
-            try:
-                from .knowledge import extract_insight_from_answer
-                await extract_insight_from_answer(
-                    question=question.text,
-                    answer=answer,
-                    author="lumen"
-                )
-            except Exception:
-                pass
 
 
 async def extract_and_validate_schema(anima, readings, identity):
