@@ -92,12 +92,26 @@ class TestSHMSensorsRead:
             "pressure_hpa": 820.2,
             "pressure_temp_c": 26.0,
             "eeg_delta_power": 0.95,
+            "hearing_available": True,
+            "sound_level": 0.12,
+            "throttle_bits": 0,
+            "undervoltage_now": False,
+            "throttled_now": False,
+            "freq_capped_now": False,
+            "undervoltage_occurred": False,
         })
         readings = sensors.read()
         assert readings is not None
         assert readings.pressure_hpa == 820.2
         assert readings.cpu_temp_c == 65.2
         assert readings.eeg_delta_power == 0.95
+        assert readings.hearing_available is True
+        assert readings.sound_level == 0.12
+        assert readings.throttle_bits == 0
+        assert readings.undervoltage_now is False
+        assert readings.throttled_now is False
+        assert readings.freq_capped_now is False
+        assert readings.undervoltage_occurred is False
 
     def test_read_handles_empty_shm(self):
         """When SHM is empty (broker not running yet), read() returns None

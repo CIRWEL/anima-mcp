@@ -41,6 +41,24 @@ def test_deploy_syncs_core_units_before_restart():
     assert "--exclude='.ruff_cache'" in script
 
 
+def test_deploy_records_the_exact_clean_commit_after_rsync():
+    script = (ROOT / "deploy.sh").read_text()
+
+    clean_at = script.index("refusing deploy from a dirty source checkout")
+    sync_at = script.index("Syncing code")
+    align_at = script.index("Aligning deployed Git revision")
+    restart_at = script.index("Restarting anima service")
+
+    assert clean_at < sync_at < align_at < restart_at
+    assert 'DEPLOYED_REF="$(git rev-parse --verify HEAD^{commit}' in script
+    assert "git status --porcelain --untracked-files=all" in script
+    assert "fetch --quiet --no-tags origin '$DEPLOYED_REF'" in script
+    assert "reset --mixed '$DEPLOYED_REF'" in script
+    assert "diff-index --quiet '$DEPLOYED_REF' --" in script
+    assert "Git HEAD, index, and deployed files agree" in script
+    assert "Services were not restarted" in script
+
+
 def test_deploy_fails_closed_on_permissive_rest_and_hardens_state_modes():
     script = (ROOT / "deploy.sh").read_text()
 
