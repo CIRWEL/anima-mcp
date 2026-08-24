@@ -70,6 +70,7 @@ class LEDDisplay:
         self._update_count = 0
         self._last_state: Optional[LEDState] = None
         self._last_applied_colors = [(0, 0, 0)] * self.NUM_LEDS
+        self._last_wire_colors = [(0, 0, 0)] * self.NUM_LEDS
         self._last_colors = [None, None, None]
         self._last_light_level: Optional[float] = None
         self._last_state_values: Optional[Tuple[float, float, float, float]] = None
@@ -81,14 +82,18 @@ class LEDDisplay:
         self._cached_anima_state = None
         self._cached_light_level = None
         self._cached_manual_brightness = None
+        self._cached_activity_brightness = None
         self._cached_pipeline_brightness = None
         self._cached_state_change_threshold = 0.05
         self._current_dance: Optional[Dance] = None
         self._dance_cooldown_until = 0.0
         self._last_dance_trigger: Optional[str] = None
         self._spontaneous_dance_chance = 0.005
+        # Legacy name: the renderer supplies an absolute LED brightness preset
+        # here (Full=.28, Medium=.12, Dim=.06, Night=.008), not a multiplier.
         self._manual_brightness_factor = 1.0
         self._current_brightness = 0.1
+        self._target_brightness = self._base_brightness
         self._brightness_transition_speed = 0.08
         self._pulse_cycle = 12.0
         self._pulse_amount = 0.05
@@ -108,12 +113,19 @@ class LEDDisplay:
         try:
             self._dots = adafruit_dotstar.DotStar(
                 board.D6, board.D5, self.NUM_LEDS,
-                brightness=self._brightness, auto_write=False
+                # Keep PixelBuf's DotStar header invariant.  Its dynamic
+                # ``brightness`` setter scales the per-pixel start byte rather
+                # than RGB bytes on this library version, producing malformed
+                # frames.  Smooth brightness is applied explicitly to RGB in
+                # _write_frame instead.
+                brightness=1.0, auto_write=False
             )
             try:
                 for i in range(3):
-                    self._dots[i] = (10, 10, 10)
-                self._dots.brightness = self._base_brightness
+                    self._dots[i] = tuple(
+                        int(channel * self._base_brightness)
+                        for channel in (10, 10, 10)
+                    )
                 self._dots.show()
             except Exception:
                 pass
@@ -158,11 +170,11 @@ class LEDDisplay:
                             applied_color = tuple(
                                 max(0, min(255, int(c * mod))) for c in color
                             )
-                            self._dots[i] = applied_color
                             applied_colors.append(applied_color)
                         final_brightness = max(self._hardware_brightness_floor, perceptual)
-                        self._dots.brightness = final_brightness
-                        self._dots.show()
+                        self._last_wire_colors = self._write_frame(
+                            applied_colors, final_brightness, lock_held=True
+                        )
                     self._last_applied_colors = applied_colors
                     self._last_applied_brightness = final_brightness
                     # Publish close to the 200ms VEML integration window. The
@@ -184,15 +196,69 @@ class LEDDisplay:
                 pass
             time.sleep(0.25)
 
+    def _write_frame(
+        self,
+        applied_colors: list[Tuple[int, int, int]],
+        brightness: float,
+        *,
+        lock_held: bool = False,
+    ) -> list[Tuple[int, int, int]]:
+        """Write one valid DotStar frame with brightness encoded in RGB bytes.
+
+        ``adafruit_pixelbuf`` treats DotStar's fourth byte as a per-pixel start
+        byte.  Changing ``PixelBuf.brightness`` dynamically rewrites that byte
+        on the deployed library version, so it cannot be used as a smooth
+        dimmer.  The controller instead keeps the header at full/valid and
+        scales the actual channel bytes here.  The returned colors are exactly
+        the bytes sent on the wire.
+        """
+        level = max(0.0, min(1.0, float(brightness)))
+        wire_colors = [
+            tuple(max(0, min(255, int(channel * level))) for channel in color)
+            for color in applied_colors
+        ]
+
+        def write() -> None:
+            for index, color in enumerate(wire_colors):
+                self._dots[index] = color
+            self._dots.show()
+
+        if lock_held:
+            write()
+        else:
+            with self._spi_lock:
+                write()
+        return wire_colors
+
+    def _advance_current_brightness(self, *, immediate: bool = False) -> None:
+        """Move the applied brightness toward the durable requested target."""
+        target = max(
+            self._hardware_brightness_floor,
+            min(0.5, float(self._target_brightness)),
+        )
+        if immediate:
+            self._current_brightness = target
+        else:
+            delta = target - self._current_brightness
+            if abs(delta) <= 0.001:
+                self._current_brightness = target
+            else:
+                speed = self._brightness_transition_speed
+                if abs(delta) > 0.05:
+                    speed = min(0.2, speed * 2)
+                elif abs(delta) < 0.02:
+                    speed *= 0.5
+                self._current_brightness += delta * speed
+        self._cached_pipeline_brightness = self._current_brightness
+        self._known_brightness = self._current_brightness
+
     def is_available(self) -> bool:
         return self._dots is not None
 
     def set_brightness(self, brightness: float):
         self._base_brightness = max(0, min(0.12, brightness))
         self._brightness = self._base_brightness
-        if self._dots:
-            self._dots.brightness = self._brightness
-            self._dots.show()
+        self._target_brightness = self._base_brightness
 
     def clear(self):
         if self._dots:
@@ -249,7 +315,7 @@ class LEDDisplay:
     def get_proprioceptive_state(self) -> dict:
         return {
             "brightness": self._last_applied_brightness,
-            "target_brightness": self._cached_pipeline_brightness,
+            "target_brightness": self._target_brightness,
             "expression_mode": self._expression_mode,
             "is_dancing": self._current_dance is not None and not self._current_dance.is_complete,
             "is_flashing": time.time() < self._flash_until,
@@ -264,6 +330,7 @@ class LEDDisplay:
             # per-LED breathing phase before writing.  These are the actual
             # channel values paired with ``brightness`` for optical drive.
             "applied_colors": list(self._last_applied_colors),
+            "wire_colors": list(self._last_wire_colors),
         }
 
     def get_diagnostics(self) -> dict:
@@ -279,7 +346,10 @@ class LEDDisplay:
             "has_dotstar": HAS_DOTSTAR,
             "update_count": self._update_count,
             "base_brightness": self._base_brightness,
-            "current_brightness": self._base_brightness + _brightness.get_pulse(self._pulse_cycle) * self._pulse_amount,
+            "current_brightness": self._current_brightness,
+            "target_brightness": self._target_brightness,
+            "last_applied_brightness": self._last_applied_brightness,
+            "last_wire_colors": list(self._last_wire_colors),
             "pulse_cycle": self._pulse_cycle,
             "pulse_amount": self._pulse_amount,
             "known_brightness": self._known_brightness,
@@ -320,14 +390,25 @@ class LEDDisplay:
             max_delta = max(abs(warmth - lw), abs(clarity - lc), abs(stability - ls), abs(presence - lp))
             light_changed = light_level is not None and self._cached_light_level is not None and abs(light_level - self._cached_light_level) > 50
             manual_changed = self._cached_manual_brightness is not None and abs(self._manual_brightness_factor - self._cached_manual_brightness) > 0.01
-            if max_delta < self._cached_state_change_threshold and not light_changed and not manual_changed:
+            activity_changed = (
+                self._cached_activity_brightness is not None
+                and abs(activity_brightness - self._cached_activity_brightness) > 0.01
+            )
+            if (
+                max_delta < self._cached_state_change_threshold
+                and not light_changed
+                and not manual_changed
+                and not activity_changed
+            ):
                 state_changed = False
                 if self._last_state and self._cached_pipeline_brightness is not None:
-                    target = self._cached_pipeline_brightness
-                    delta_b = target - self._current_brightness
-                    if abs(delta_b) > 0.001:
-                        self._current_brightness += delta_b * self._brightness_transition_speed
-                    return self._last_state
+                    self._advance_current_brightness()
+                    return LEDState(
+                        led0=self._last_state.led0,
+                        led1=self._last_state.led1,
+                        led2=self._last_state.led2,
+                        brightness=self._current_brightness,
+                    )
 
         _manual_just_changed = (
             self._cached_manual_brightness is not None
@@ -336,6 +417,7 @@ class LEDDisplay:
         self._cached_anima_state = (warmth, clarity, stability, presence)
         self._cached_light_level = light_level
         self._cached_manual_brightness = self._manual_brightness_factor
+        self._cached_activity_brightness = activity_brightness
 
         self._last_state_values, pattern_trigger = _patterns.detect_state_change(
             warmth, clarity, stability, presence, self._last_state_values
@@ -388,34 +470,25 @@ class LEDDisplay:
             )
         self._last_colors = [state.led0, state.led1, state.led2]
 
-        # Manual brightness control only — no auto-brightness, no pulsing-brightness
+        # The renderer value is an absolute preset.  A value of 1.0 is the
+        # legacy sentinel meaning "use the configured base".  Activity is an
+        # independent multiplier and must apply to every preset.
         if self._manual_brightness_factor < 1.0:
-            state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._manual_brightness_factor)
+            requested_brightness = self._manual_brightness_factor
         else:
-            state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=self._base_brightness)
-
-        if self._manual_brightness_factor >= 1.0 and activity_brightness < 1.0:
-            state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=state.brightness * activity_brightness)
-
-        state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=max(self._hardware_brightness_floor, state.brightness))
-
-        target_b = state.brightness
-        if _manual_just_changed:
-            self._current_brightness = target_b
-        else:
-            delta = target_b - self._current_brightness
-            if abs(delta) > 0.001:
-                speed = self._brightness_transition_speed
-                if abs(delta) > 0.05:
-                    speed = min(0.2, speed * 2)
-                elif abs(delta) < 0.02:
-                    speed *= 0.5
-                self._current_brightness += delta * speed
-            else:
-                self._current_brightness = target_b
-        state = LEDState(led0=state.led0, led1=state.led1, led2=state.led2, brightness=max(self._hardware_brightness_floor, self._current_brightness))
-        self._cached_pipeline_brightness = state.brightness
-        self._known_brightness = self._current_brightness
+            requested_brightness = self._base_brightness
+        activity_scale = max(0.0, min(1.0, float(activity_brightness)))
+        self._target_brightness = max(
+            self._hardware_brightness_floor,
+            min(0.5, requested_brightness * activity_scale),
+        )
+        self._advance_current_brightness(immediate=_manual_just_changed)
+        state = LEDState(
+            led0=state.led0,
+            led1=state.led1,
+            led2=state.led2,
+            brightness=self._current_brightness,
+        )
 
         if is_anticipating and anticipation_confidence > 0.1:
             memory_color = (255, 200, 100)

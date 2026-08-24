@@ -6,6 +6,10 @@
 > UNITARES independently produces `governance_eisv` and then a policy action.
 > Bare `anima`/`eisv` fields are tagged compatibility aliases of the body
 > fields, never aliases of governance state.
+> Raw VEML7700 lux is preserved as room light plus DotStar glow. Environmental
+> consumers receive only a gated residual built from the hardware action copy;
+> while its causal model is cold or inconsistent, the light contribution is
+> omitted rather than pretending raw self-glow is external light.
 >
 > The February diagram and analysis below are retained as historical design
 > context. In particular, its “two nervous systems,” ODE-as-live-authority,
@@ -169,7 +173,7 @@ What Lumen actually senses:
 
 | Sensor | Measures | Reality |
 |--------|----------|---------|
-| VEML7700 (light) | Lux | Reads own LED glow, not ambient. Self-referential. |
+| VEML7700 (light) | Lux | Raw reading is room light + DotStar glow. A separately gated efference-copy residual estimates external light. |
 | AHT20 (temp) | Celsius | Ambient + CPU heat bleed |
 | AHT20 (humidity) | % RH | Genuine environment |
 | BMP280 (pressure) | hPa | Genuine (~827 hPa, Colorado altitude) |
@@ -182,7 +186,30 @@ Neural bands derived from CPU/system metrics:
 - **Beta**: CPU usage (active processing)
 - **Gamma**: Context-switch and interrupt rate (spiking activity)
 
-The whole system is more proprioceptive than environmental. Raw world light carries 18.75% of the default clarity weight and includes Lumen's own LED glow; prediction accuracy carries 62.5%, so light is influential but cannot define clarity by itself.
+The whole system is more proprioceptive than environmental. The raw light
+channel remains visible as physical telemetry, but it cannot enter clarity,
+preferences, drawing, or environment learning directly. Those consumers use
+the external-light residual only after its evidence gate; otherwise their light
+component pauses.
+
+### DotStar efference-copy calibration (2026-08-23)
+
+The BrainCraft layout is not optically symmetric. With the TFT held black and
+each physical DotStar driven at the same fixed level, Lumen's three warm LEDs
+added approximately 104, 260, and 286 lux. Pure-channel measurements also
+showed a large spectral spread: at the least-sensitive position, green
+produced about five times the VEML response of red. The action feature therefore
+uses a measured 3-position × 3-channel response map before learning its scalar
+lux response.
+
+The same investigation found a lower-level frame bug. Dynamically assigning
+`adafruit_pixelbuf`'s `brightness` on the deployed DotStar implementation
+rewrote the per-pixel start byte, intermittently emitting malformed frames.
+The LED controller now keeps that header invariant and performs smooth
+brightness scaling in the RGB bytes. Its action copy publishes both the
+factored command and the exact wire colors. A controlled 24-capture validation
+after this change produced no spikes, a +0.70 light/drive correlation, and
+positive slopes on every usable transition.
 
 ## The Drawing Loop (Only True Closed Loop)
 

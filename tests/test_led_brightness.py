@@ -1,7 +1,9 @@
 """Tests for brightness simplification (Lighthouse LED plan Task 2)."""
 
+import threading
 
 from anima_mcp.display.leds import brightness as brightness_mod
+from anima_mcp.display.leds.display import LEDDisplay
 from anima_mcp.display.leds.types import LEDState
 
 
@@ -72,6 +74,54 @@ class TestDefaultBrightnessInTypes:
     def test_default_is_004(self):
         state = LEDState(led0=(0, 0, 0), led1=(0, 0, 0), led2=(0, 0, 0))
         assert state.brightness == 0.04, f"Expected 0.04, got {state.brightness}"
+
+
+class _FakeDots:
+    def __init__(self):
+        self.brightness = 1.0
+        self.colors = {}
+        self.show_count = 0
+
+    def __setitem__(self, index, color):
+        self.colors[index] = color
+
+    def show(self):
+        self.show_count += 1
+
+
+class TestDotStarWireBrightness:
+    """Software brightness must not mutate DotStar's per-pixel header."""
+
+    def test_frame_scales_rgb_and_leaves_library_brightness_invariant(self):
+        display = LEDDisplay.__new__(LEDDisplay)
+        display._dots = _FakeDots()
+        display._spi_lock = threading.Lock()
+
+        wire = display._write_frame(
+            [(200, 100, 50), (255, 128, 0), (10, 20, 30)],
+            0.18,
+        )
+
+        assert wire == [(36, 18, 9), (45, 23, 0), (1, 3, 5)]
+        assert display._dots.colors == dict(enumerate(wire))
+        assert display._dots.brightness == 1.0
+        assert display._dots.show_count == 1
+
+    def test_cached_updates_keep_converging_to_absolute_preset(self):
+        display = LEDDisplay.__new__(LEDDisplay)
+        display._hardware_brightness_floor = 0.008
+        display._brightness_transition_speed = 0.08
+        display._current_brightness = 0.18
+        display._target_brightness = 0.28
+        display._cached_pipeline_brightness = 0.18
+        display._known_brightness = 0.18
+
+        for _ in range(200):
+            display._advance_current_brightness()
+
+        assert display._current_brightness == 0.28
+        assert display._cached_pipeline_brightness == 0.28
+        assert display._known_brightness == 0.28
 
 
 class TestNoLuxImport:

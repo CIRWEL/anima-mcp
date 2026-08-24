@@ -36,6 +36,28 @@ _LED_ACTION_HISTORIES: dict[str, deque[dict[str, Any]]] = {}
 _LED_ACTION_HISTORY_LOCK = threading.Lock()
 _LED_ACTION_HISTORY_LENGTH = 24
 
+# Relative VEML7700 response to each physical DotStar channel on Lumen's
+# BrainCraft HAT.  Rows are the physical write order used by LEDDisplay
+# (state.led2, state.led1, state.led0); columns are R, G, B.  Values are the
+# median lux above a 1.152-lux LEDs-off baseline at a fixed 0.18 software
+# brightness, measured on 2026-08-23 with the TFT held black.  Only their
+# ratios are used: the learned model still owns the lux-per-drive magnitude.
+#
+# A flat RGB sum is physically false for this layout.  At the same command,
+# the three warm LEDs produced about 104, 260, and 286 lux respectively, and
+# pure green produced about five times pure red at the least-sensitive
+# position.  Keeping the measured geometry here makes the breathing action
+# feature covary with the photons that actually reach the adjacent VEML7700.
+LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE = (
+    (29.4336, 156.3552, 97.0848),
+    (109.44, 318.4992, 318.2112),
+    (160.272, 400.3488, 390.9312),
+)
+LUMEN_VEML_DOTSTAR_RESPONSE_TOTAL = sum(
+    sum(position) for position in LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE
+)
+LED_OPTICAL_DRIVE_MAPPING = "lumen_veml7700_spatial_spectral_calibration_v1"
+
 
 def _finite_float(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -93,23 +115,35 @@ def led_proprioception_path() -> Path:
 
 
 def led_optical_drive(state: dict[str, Any] | None) -> float | None:
-    """Reduce applied brightness and RGB energy to a measured action feature.
+    """Reduce the applied DotStar frame to Lumen's measured action feature.
 
     This is not a lux model.  It is a dimensionless description of the emitted
     command in [0, 1], leaving the lux-per-drive response to be learned from
-    transitions.  Including RGB energy avoids treating black and white at the
-    same DotStar brightness as the same optical action.
+    transitions.  The feature uses Lumen's measured per-position/per-channel
+    VEML7700 response rather than an equal RGB sum.  Full white at every
+    position remains equal to ``brightness`` by normalization.
     """
     if not isinstance(state, dict):
         return None
     brightness = _bounded_float(state.get("brightness"), 0.0, 1.0)
-    colors = _normalize_colors(state.get("applied_colors"))
+    wire_colors = _normalize_colors(state.get("wire_colors"))
+    colors = wire_colors
+    if colors is None:
+        colors = _normalize_colors(state.get("applied_colors"))
     if colors is None:
         colors = _normalize_colors(state.get("colors"))
     if brightness is None or colors is None:
         return None
-    rgb_energy = sum(channel for color in colors for channel in color) / (9.0 * 255.0)
-    return brightness * rgb_energy
+    sensor_weighted_energy = sum(
+        channel
+        * LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE[position_index][channel_index]
+        for position_index, color in enumerate(colors)
+        for channel_index, channel in enumerate(color)
+    ) / (255.0 * LUMEN_VEML_DOTSTAR_RESPONSE_TOTAL)
+    # Wire colors already include the software brightness multiplier.  Older
+    # or synthetic envelopes carry pre-brightness colors, so retain the
+    # factored representation as a backwards-compatible fallback.
+    return sensor_weighted_energy if wire_colors is not None else brightness * sensor_weighted_energy
 
 
 def publish_led_proprioception(
@@ -126,6 +160,7 @@ def publish_led_proprioception(
             "LED proprioception requires finite brightness and three RGB colors"
         )
     applied_colors = _normalize_colors(state.get("applied_colors"))
+    wire_colors = _normalize_colors(state.get("wire_colors"))
     target_brightness = _bounded_float(state.get("target_brightness"), 0.0, 1.0)
     if target_brightness is None:
         target_brightness = brightness
@@ -143,6 +178,7 @@ def publish_led_proprioception(
         "target_brightness": target_brightness,
         "colors": colors,
         "applied_colors": applied_colors or colors,
+        "wire_colors": wire_colors,
         "expression_mode": state.get("expression_mode"),
         "is_dancing": bool(state.get("is_dancing", False)),
         "is_flashing": bool(state.get("is_flashing", False)),
@@ -173,6 +209,7 @@ def _normalize_published_action(data: Any) -> dict[str, Any] | None:
     applied_colors = _normalize_colors(data.get("applied_colors"))
     if applied_colors is None:
         applied_colors = colors
+    wire_colors = _normalize_colors(data.get("wire_colors"))
     captured = _finite_float(data.get("captured_at_unix"))
     if (
         brightness is None
@@ -188,6 +225,7 @@ def _normalize_published_action(data: Any) -> dict[str, Any] | None:
     result["target_brightness"] = target_brightness
     result["colors"] = colors
     result["applied_colors"] = applied_colors
+    result["wire_colors"] = wire_colors
     result["captured_at_unix"] = captured
     result["optical_drive"] = led_optical_drive(result)
     return result
@@ -263,9 +301,12 @@ class LearnedLedLuxResidual:
     # timing, but both the sensor and efference-copy EMAs still advanced on
     # repeated consumer reads of one physical capture, and its pooled window
     # let falling edges crowd out rising ones. Live v2 direction medians were
-    # both negative after that contamination. A distinct v3 kind deliberately
-    # cold-starts from capture-deduplicated, direction-balanced evidence.
-    MODEL_KIND = "capture_deduplicated_direction_balanced_breathing_delta_median_v3"
+    # both negative after that contamination. v3 fixed evidence retention but
+    # reduced three phase-shifted, unequally coupled LEDs to a flat RGB sum.
+    # Live measurements then exposed malformed DotStar brightness frames and a
+    # 4-6x spatial/spectral response spread. v4 deliberately cold-starts with
+    # the calibrated action feature and corrected hardware frame semantics.
+    MODEL_KIND = "veml_calibrated_breathing_delta_median_v4"
     INSTRUMENT = "internal_led_breathing_pulse"
     MAX_TRANSITIONS = 96
     MAX_TRANSITIONS_PER_DIRECTION = MAX_TRANSITIONS // 2
@@ -371,6 +412,7 @@ class LearnedLedLuxResidual:
         return {
             "schema": LIGHT_ATTRIBUTION_SCHEMA,
             "model_kind": self.MODEL_KIND,
+            "optical_drive_mapping": LED_OPTICAL_DRIVE_MAPPING,
             "drive_filter_alpha": LIGHT_SENSOR_EMA_ALPHA,
             "transitions": [dict(item) for item in self._transitions],
         }
@@ -722,6 +764,7 @@ class LearnedLedLuxResidual:
         return {
             "kind": self.MODEL_KIND,
             "instrument": self.INSTRUMENT,
+            "optical_drive_mapping": LED_OPTICAL_DRIVE_MAPPING,
             "drive_filter_alpha": LIGHT_SENSOR_EMA_ALPHA,
             "transition_count": count,
             "instrument_sample_count": count,
@@ -836,7 +879,8 @@ class LearnedLedLuxResidual:
         model["unknown_reasons"] = reasons
         model["limitations"] = [
             "ambient light is assumed stable across each <=8s breathing difference",
-            "RGB output is reduced to scalar channel energy; spectral response is not independently fitted",
+            "spatial/spectral channel ratios are calibrated to Lumen's current BrainCraft HAT geometry",
+            "mixed-channel LED response is reduced to one calibrated scalar before the learned lux slope",
             "self-glow is anchored to zero at zero optical drive",
         ]
 
@@ -888,6 +932,7 @@ class LearnedLedLuxResidual:
                         led_state.get("schema") if isinstance(led_state, dict) else None
                     ),
                     "role": "efference_copy",
+                    "optical_drive_mapping": LED_OPTICAL_DRIVE_MAPPING,
                     "paired_to_light_observed_at_unix": (
                         led_state.get("paired_to_light_observed_at_unix")
                         if isinstance(led_state, dict)
@@ -970,8 +1015,10 @@ class LearnedLedLuxResidual:
 
 __all__ = [
     "DEFAULT_LED_PROPRIOCEPTION_PATH",
+    "LED_OPTICAL_DRIVE_MAPPING",
     "LED_PROPRIOCEPTION_SCHEMA",
     "LIGHT_ATTRIBUTION_SCHEMA",
+    "LUMEN_VEML_DOTSTAR_CHANNEL_RESPONSE",
     "LearnedLedLuxResidual",
     "led_optical_drive",
     "led_proprioception_path",
