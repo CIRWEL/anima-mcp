@@ -721,3 +721,160 @@ class TestRestMessageAnswerVoice:
             response = await rest_api.rest_voice(_make_request(path="/voice"))
             data = json.loads(response.body)
         assert data["mode"] == "text"
+
+
+class TestExternalHostGate:
+    """The tunnel path must never qualify as a trusted network.
+
+    Regression lock for the 2026-08-25 lockout/bypass pair: uvicorn ran with
+    ``forwarded_allow_ips="*"``, so ``request.client.host`` came from
+    ``X-Forwarded-For[0]`` -- a value the caller writes. Anyone could send
+    ``X-Forwarded-For: 127.0.0.1`` and read Lumen's whole REST surface,
+    ``/v1/tools/call`` included, while the operator's browser (carrying its
+    real address) was refused. Host is checked instead of IP because
+    cloudflared routes by hostname.
+    """
+
+    def test_external_host_is_never_trusted(self):
+        request = _make_request(
+            client_host="127.0.0.1",
+            headers={"host": "lumen.cirwel.org"},
+        )
+        assert rest_api._is_trusted_network(request) is False
+
+    def test_external_host_ignores_spoofed_forwarded_for(self, monkeypatch):
+        monkeypatch.setattr(
+            rest_api, "_TRUSTED_PROXY_NETWORKS", rest_api._parse_networks("127.0.0.1/32")
+        )
+        request = _make_request(
+            client_host="127.0.0.1",
+            headers={"host": "lumen.cirwel.org", "x-forwarded-for": "127.0.0.1"},
+        )
+        assert rest_api._is_trusted_network(request) is False
+
+    def test_external_host_with_port_still_gated(self):
+        request = _make_request(
+            client_host="127.0.0.1",
+            headers={"host": "LUMEN.CIRWEL.ORG:443"},
+        )
+        assert rest_api._is_trusted_network(request) is False
+
+    def test_local_host_still_trusted(self):
+        """Tailscale and loopback callers must keep working without a token."""
+        request = _make_request(
+            client_host="100.84.100.128",
+            headers={"host": "100.84.100.128:8766"},
+        )
+        assert rest_api._is_trusted_network(request) is True
+
+    def test_external_host_with_valid_token_allowed(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        request = _make_request(
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org", "authorization": "Bearer s3cret"},
+        )
+        assert rest_api._check_rest_auth(request) is True
+
+    def test_external_host_without_token_refused_even_in_legacy_mode(self, monkeypatch):
+        """Legacy permissive mode is about *missing config*, not about the
+        public internet. With no token configured the tunnel stays shut."""
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN", True)
+        request = _make_request(
+            client_host="203.0.113.7", headers={"host": "lumen.cirwel.org"}
+        )
+        assert rest_api._check_rest_auth(request) is False
+
+
+class TestTokenPresentation:
+    def test_cookie_token_accepted(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        request = _make_request(
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org", "cookie": "anima_token=s3cret"},
+        )
+        assert rest_api._check_rest_auth(request) is True
+
+    def test_query_token_accepted(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        request = _make_request(
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org"},
+            query="token=s3cret",
+        )
+        assert rest_api._check_rest_auth(request) is True
+
+    def test_wrong_token_refused(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        for headers, query in (
+            ({"host": "lumen.cirwel.org", "authorization": "Bearer nope"}, ""),
+            ({"host": "lumen.cirwel.org", "cookie": "anima_token=nope"}, ""),
+            ({"host": "lumen.cirwel.org"}, "token=nope"),
+        ):
+            request = _make_request(client_host="203.0.113.7", headers=headers, query=query)
+            assert rest_api._check_rest_auth(request) is False
+
+
+@pytest.mark.asyncio
+class TestGuardedPages:
+    async def test_dashboard_refused_without_token(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        request = _make_request(
+            path="/dashboard",
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org"},
+        )
+        response = await rest_api.dashboard(request)
+        assert response.status_code == 401
+
+    async def test_dashboard_query_token_sets_cookie_and_redirects(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        request = _make_request(
+            path="/dashboard",
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org"},
+            query="token=s3cret",
+        )
+        response = await rest_api.dashboard(request)
+        assert response.status_code == 303
+        assert response.headers["location"] == "/dashboard"
+        set_cookie = response.headers["set-cookie"]
+        assert "anima_token=s3cret" in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "Path=/" in set_cookie
+
+    async def test_dashboard_cookie_serves_page(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        monkeypatch.setattr(
+            rest_api, "_serve_html_page", lambda *_a, **_k: rest_api.HTMLResponse("page")
+        )
+        request = _make_request(
+            path="/dashboard",
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org", "cookie": "anima_token=s3cret"},
+        )
+        response = await rest_api.dashboard(request)
+        assert response.status_code == 200
+
+    async def test_local_dashboard_needs_no_token(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        monkeypatch.setattr(
+            rest_api, "_serve_html_page", lambda *_a, **_k: rest_api.HTMLResponse("page")
+        )
+        request = _make_request(
+            path="/dashboard",
+            client_host="100.84.100.128",
+            headers={"host": "100.84.100.128:8766"},
+        )
+        response = await rest_api.dashboard(request)
+        assert response.status_code == 200
+
+
+class TestForwardedAllowIpsNotWildcard:
+    """``forwarded_allow_ips="*"`` is what made X-Forwarded-For authoritative
+    for any caller. Lock the wildcard out of the source."""
+
+    def test_uvicorn_config_does_not_trust_every_proxy(self):
+        source = (Path(rest_api.__file__).parent / "server.py").read_text()
+        assert 'forwarded_allow_ips="*"' not in source
+        assert "ANIMA_FORWARDED_ALLOW_IPS" in source

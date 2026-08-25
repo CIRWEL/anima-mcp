@@ -6,6 +6,7 @@ Each function takes a Starlette Request and returns a Starlette Response.
 Server globals are accessed via late imports from .server (same pattern as handlers/).
 """
 
+import hmac
 import ipaddress
 import json
 import math
@@ -18,6 +19,7 @@ from starlette.responses import (
     HTMLResponse,
     JSONResponse,
     PlainTextResponse,
+    RedirectResponse,
     Response,
 )
 
@@ -162,9 +164,39 @@ def _parse_networks(raw: str) -> list[ipaddress.IPv4Network | ipaddress.IPv6Netw
 # Example: ANIMA_TRUSTED_PROXY_NETWORKS="127.0.0.1/32,::1/128"
 _TRUSTED_PROXY_NETWORKS = _parse_networks(os.environ.get("ANIMA_TRUSTED_PROXY_NETWORKS", ""))
 
+# Hosts served over the public Cloudflare tunnel. A request carrying one of
+# these Host headers is NEVER trusted-network, whatever IP it appears to come
+# from. On that path the apparent client IP is derived from X-Forwarded-For,
+# which the caller controls: Cloudflare appends the real address but preserves
+# any value the caller sent first, so "trusted" was a header away. Host is the
+# authority instead, because cloudflared routes by hostname -- it is the reason
+# the request reached us at all. Same shape as the Host-keyed OAuth gate the
+# MCP mount already uses (server.py::mcp_endpoint).
+_EXTERNAL_HOSTS = {
+    host.strip().lower()
+    for host in os.environ.get("ANIMA_EXTERNAL_HOSTS", "lumen.cirwel.org").split(",")
+    if host.strip()
+}
+
+# Cookie the browser carries after a successful ?token= handshake.
+_ANIMA_TOKEN_COOKIE = "anima_token"
+_ANIMA_TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
+
+
+def _request_host(request) -> str:
+    """Hostname the request was addressed to, port and case stripped."""
+    return (request.headers.get("host") or "").split(":")[0].strip().lower()
+
+
+def _is_external_request(request) -> bool:
+    """True when this request arrived over a publicly-reachable hostname."""
+    return _request_host(request) in _EXTERNAL_HOSTS
+
 
 def _is_trusted_network(request) -> bool:
     """Check if request originates from a trusted network."""
+    if _is_external_request(request):
+        return False
     peer_ip = request.client.host if request.client else None
     if not peer_ip:
         return False
@@ -187,20 +219,37 @@ def _is_trusted_network(request) -> bool:
         return False
 
 
+def _presented_token(request) -> str | None:
+    """Token the caller offered, from any of the three places one can arrive.
+
+    Bearer header is the API form. The cookie is what a browser carries after
+    the handshake below. The query parameter is the handshake itself -- the
+    only way to hand a token to a browser that has none yet.
+    """
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    if isinstance(auth, str) and auth.lower().startswith("bearer "):
+        token = auth.split(" ", 1)[1].strip()
+        if token:
+            return token
+    cookie_token = request.cookies.get(_ANIMA_TOKEN_COOKIE)
+    if cookie_token:
+        return cookie_token
+    query_token = request.query_params.get("token")
+    if query_token:
+        return query_token
+    return None
+
+
 def _check_rest_auth(request) -> bool:
     """Bearer token auth for REST endpoints. Trusted networks bypass auth."""
     if _is_trusted_network(request):
         return True
     if not _ANIMA_HTTP_API_TOKEN:
         return _ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN
-    # Allow requests with valid bearer token
-    auth = request.headers.get("authorization") or request.headers.get("Authorization")
-    if not auth or not isinstance(auth, str):
+    presented = _presented_token(request)
+    if not presented:
         return False
-    if not auth.lower().startswith("bearer "):
-        return False
-    token = auth.split(" ", 1)[1].strip()
-    return token == _ANIMA_HTTP_API_TOKEN
+    return hmac.compare_digest(presented, _ANIMA_HTTP_API_TOKEN)
 
 
 def _require_rest_auth(request, *, success_shape: bool = False):
@@ -213,6 +262,42 @@ def _require_rest_auth(request, *, success_shape: bool = False):
 
 
 # --- HTML page helpers ---
+
+def _set_token_cookie(request, response, token: str) -> None:
+    """Persist a verified token so the browser stops needing it in the URL."""
+    response.set_cookie(
+        _ANIMA_TOKEN_COOKIE,
+        token,
+        max_age=_ANIMA_TOKEN_COOKIE_MAX_AGE,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="lax",
+        path="/",
+    )
+
+
+def _serve_guarded_page(request, filename: str, label: str):
+    """Serve an HTML page behind the same gate as the data it displays.
+
+    These pages hold no secrets themselves, which is why they were public. But
+    a dashboard whose every fetch 401s is not a public page, it is a broken
+    one -- that mismatch is exactly what an operator experiences as being
+    locked out. Gating the shell makes the failure legible at the front door.
+
+    A valid ``?token=`` is exchanged for a cookie and redirected away, so the
+    secret stops riding in the URL bar, browser history, and proxy logs after
+    first use.
+    """
+    if not _check_rest_auth(request):
+        return PlainTextResponse("Unauthorized\n", status_code=401)
+
+    if request.query_params.get("token"):
+        response = RedirectResponse(url=request.url.path, status_code=303)
+        _set_token_cookie(request, response, request.query_params["token"])
+        return response
+
+    return _serve_html_page(filename, label)
+
 
 def _serve_html_page(filename: str, label: str):
     """Serve an HTML file from docs/ or return 404."""
@@ -280,7 +365,7 @@ async def rest_tool_call(request):
 
 async def dashboard(request):
     """Serve the Lumen Control Center dashboard."""
-    return _serve_html_page("control_center.html", "Dashboard")
+    return _serve_guarded_page(request, "control_center.html", "Dashboard")
 
 
 async def rest_state(request):
@@ -830,7 +915,7 @@ async def rest_growth(request):
 
 async def rest_gallery_page(request):
     """Serve the Lumen Drawing Gallery page."""
-    return _serve_html_page("gallery.html", "Gallery")
+    return _serve_guarded_page(request, "gallery.html", "Gallery")
 
 
 async def rest_layers(request):
@@ -956,7 +1041,7 @@ async def rest_layers(request):
 
 async def rest_architecture_page(request):
     """Serve the Lumen Architecture page."""
-    return _serve_html_page("architecture.html", "Architecture Page")
+    return _serve_guarded_page(request, "architecture.html", "Architecture Page")
 
 
 async def rest_schema_data(request):
@@ -1042,4 +1127,4 @@ async def rest_schema_data(request):
 
 async def rest_schema_page(request):
     """Serve the Self-Schema visualization page."""
-    return _serve_html_page("schema.html", "Schema Page")
+    return _serve_guarded_page(request, "schema.html", "Schema Page")
