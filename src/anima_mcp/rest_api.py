@@ -178,6 +178,16 @@ _EXTERNAL_HOSTS = {
     if host.strip()
 }
 
+# Serve GET endpoints without a token. Off by default so a fresh install is
+# closed, on where an operator decides their ambient data is not worth a
+# login. Writes and POST /v1/tools/call are never covered by this: the tools
+# route reaches say(), configure_voice(always_listening) and set_calibration
+# -- a speaker, a microphone and the creature's calibration. Those are what
+# the gate was ever for; the thermometer was only ever sharing its switch.
+_ANIMA_HTTP_PUBLIC_READS = os.environ.get(
+    "ANIMA_HTTP_PUBLIC_READS", "false"
+).lower() in ("1", "true", "yes", "on")
+
 # Cookie the browser carries after a successful ?token= handshake.
 _ANIMA_TOKEN_COOKIE = "anima_token"
 _ANIMA_TOKEN_COOKIE_MAX_AGE = 60 * 60 * 24 * 30  # 30 days
@@ -252,8 +262,42 @@ def _check_rest_auth(request) -> bool:
     return hmac.compare_digest(presented, _ANIMA_HTTP_API_TOKEN)
 
 
-def _require_rest_auth(request, *, success_shape: bool = False):
-    """Return unauthorized response when auth fails, otherwise None."""
+def _api_security_fields(request) -> dict:
+    """Gate posture, reported only to a caller who already got past the gate.
+
+    Telling an anonymous reader which mode the gate is in, and whether a token
+    exists at all, is a free first move against it. Returns an empty dict for
+    everyone else so the key is absent rather than nulled.
+    """
+    if not _check_rest_auth(request):
+        return {}
+    token_configured = bool(_ANIMA_HTTP_API_TOKEN)
+    allow_no_token = bool(_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN)
+    if token_configured:
+        mode = "token"
+    elif allow_no_token:
+        mode = "permissive-no-token"
+    else:
+        mode = "strict-no-token"
+    return {
+        "api_security": {
+            "mode": mode,
+            "token_configured": token_configured,
+            "allow_unauth_if_no_token": allow_no_token,
+            "trusted_proxy_networks_configured": bool(_TRUSTED_PROXY_NETWORKS),
+            "public_reads": _ANIMA_HTTP_PUBLIC_READS,
+        },
+    }
+
+
+def _require_rest_auth(request, *, success_shape: bool = False, read: bool = False):
+    """Return unauthorized response when auth fails, otherwise None.
+
+    ``read=True`` marks an endpoint that only reports state. Those open up
+    under ANIMA_HTTP_PUBLIC_READS; everything that acts on Lumen does not.
+    """
+    if read and _ANIMA_HTTP_PUBLIC_READS:
+        return None
     if _check_rest_auth(request):
         return None
     if success_shape:
@@ -288,8 +332,12 @@ def _serve_guarded_page(request, filename: str, label: str):
     secret stops riding in the URL bar, browser history, and proxy logs after
     first use.
     """
-    if not _check_rest_auth(request):
-        return PlainTextResponse("Unauthorized\n", status_code=401)
+    if not (_ANIMA_HTTP_PUBLIC_READS or _check_rest_auth(request)):
+        return PlainTextResponse(
+            "Unauthorized -- open this page once as "
+            "/dashboard?token=<ANIMA_HTTP_API_TOKEN> to set the cookie.\n",
+            status_code=401,
+        )
 
     if request.query_params.get("token"):
         response = RedirectResponse(url=request.url.path, status_code=303)
@@ -370,7 +418,7 @@ async def dashboard(request):
 
 async def rest_state(request):
     """GET /state - Format matching message_server.py."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -414,15 +462,6 @@ async def rest_state(request):
                 gov_timestamp = None
                 gov_age_seconds = None
                 gov_fresh = None
-
-        token_configured = bool(_ANIMA_HTTP_API_TOKEN)
-        allow_no_token = bool(_ANIMA_HTTP_ALLOW_UNAUTH_IF_NO_TOKEN)
-        if token_configured:
-            auth_mode = "token"
-        elif allow_no_token:
-            auth_mode = "permissive-no-token"
-        else:
-            auth_mode = "strict-no-token"
 
         activity_manager = _get_activity()
         shm_data = _get_last_shm_data() or {}
@@ -482,12 +521,7 @@ async def rest_state(request):
                 **_governance_state_fields(gov),
             },
             **body_fields,
-            "api_security": {
-                "mode": auth_mode,
-                "token_configured": token_configured,
-                "allow_unauth_if_no_token": allow_no_token,
-                "trusted_proxy_networks_configured": bool(_TRUSTED_PROXY_NETWORKS),
-            },
+            **_api_security_fields(request),
             "awakenings": identity.total_awakenings if identity else 0,
             "alive_hours": round(identity.total_alive_seconds / 3600, 1) if identity else 0,
             "alive_ratio": round(identity.alive_ratio(), 2) if identity else 0,
@@ -503,7 +537,7 @@ async def rest_state(request):
 
 async def rest_qa(request):
     """GET /qa - Get questions and answers (matching message_server.py format)."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -581,7 +615,7 @@ async def rest_qa(request):
 
 async def rest_messages(request):
     """GET /messages - Get recent message board entries."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -671,7 +705,7 @@ async def rest_message(request):
 
 async def rest_learning(request):
     """GET /learning - Exact copy of message_server.py format."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -755,7 +789,7 @@ async def rest_learning(request):
 
 async def rest_voice(request):
     """GET /voice - Get voice system status."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -772,7 +806,7 @@ async def rest_voice(request):
 
 async def rest_gallery(request):
     """GET /gallery - Get Lumen's drawings."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -838,7 +872,7 @@ async def rest_gallery(request):
 
 async def rest_gallery_image(request):
     """GET /gallery/{filename} - Serve a drawing image."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     filename = request.path_params.get("filename", "")
@@ -862,7 +896,7 @@ async def rest_gallery_image(request):
 
 async def rest_health_detailed(request):
     """GET /health/detailed - Get subsystem health status."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -879,7 +913,7 @@ async def rest_health_detailed(request):
 
 async def rest_self_knowledge(request):
     """GET /self-knowledge - Get Lumen's accumulated self-knowledge insights."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -898,7 +932,7 @@ async def rest_self_knowledge(request):
 
 async def rest_growth(request):
     """GET /growth - Get Lumen's growth data (autobiography, goals, memories, preferences)."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -920,7 +954,7 @@ async def rest_gallery_page(request):
 
 async def rest_layers(request):
     """GET /layers - Full proprioception stack for architecture page."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
@@ -1046,7 +1080,7 @@ async def rest_architecture_page(request):
 
 async def rest_schema_data(request):
     """Return full self-schema graph, trajectory, and history."""
-    auth_error = _require_rest_auth(request)
+    auth_error = _require_rest_auth(request, read=True)
     if auth_error:
         return auth_error
     try:
