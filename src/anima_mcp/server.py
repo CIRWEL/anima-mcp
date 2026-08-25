@@ -1598,7 +1598,9 @@ def run_http_server(host: str, port: int):
 
             # Hosts that require OAuth (Cloudflare tunnel).
             # Local and Tailscale clients (Cursor, Claude Code) skip auth.
-            _EXTERNAL_HOSTS = {"lumen.cirwel.org"}
+            # Shared with the REST gate so one hostname list governs both
+            # surfaces; they drifted apart once already.
+            from .rest_api import _EXTERNAL_HOSTS
             _auth_protected = _AuthMW(
                 _AuthCtx(
                     RequireAuthMiddleware(
@@ -1736,7 +1738,15 @@ def run_http_server(host: str, port: int):
             limit_concurrency=100,
             timeout_keep_alive=5,
             proxy_headers=True,          # Trust X-Forwarded-Proto from cloudflared
-            forwarded_allow_ips="*",     # Allow proxy headers from any IP
+            # Only cloudflared, which reaches us over loopback, may speak for
+            # the client. "*" put uvicorn in always_trust, where it reads
+            # X-Forwarded-For[0] -- the entry the *caller* wrote, ahead of the
+            # address Cloudflare appends. Naming the hop makes uvicorn scan the
+            # list from the right instead, past trusted proxies, onto the
+            # address Cloudflare actually observed.
+            forwarded_allow_ips=os.environ.get(
+                "ANIMA_FORWARDED_ALLOW_IPS", "127.0.0.1,::1"
+            ),
         )
         server = uvicorn.Server(config)
         await server.serve()
