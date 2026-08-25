@@ -878,3 +878,127 @@ class TestForwardedAllowIpsNotWildcard:
         source = (Path(rest_api.__file__).parent / "server.py").read_text()
         assert 'forwarded_allow_ips="*"' not in source
         assert "ANIMA_FORWARDED_ALLOW_IPS" in source
+
+
+class TestPublicReads:
+    """ANIMA_HTTP_PUBLIC_READS opens what reports and keeps shut what acts.
+
+    The dashboard's ambient surface -- temperature, drawings, mood -- shared a
+    single switch with POST /v1/tools/call, which reaches say(),
+    configure_voice(always_listening) and set_calibration. Locking an operator
+    out of a thermometer to protect a microphone is the wrong shape.
+
+    These assert against the real call sites, not against
+    ``_require_rest_auth`` in isolation: an earlier version of this class
+    tested the helper directly and passed happily while /v1/tools/call was
+    marked ``read=True``.
+    """
+
+    # Endpoint -> may it open under public reads? Every REST route that takes
+    # an auth decision belongs here, so adding one forces a ruling.
+    READ_ENDPOINTS = frozenset({
+        "rest_state", "rest_qa", "rest_messages", "rest_learning", "rest_voice",
+        "rest_gallery", "rest_gallery_image", "rest_health_detailed",
+        "rest_self_knowledge", "rest_growth", "rest_layers", "rest_schema_data",
+    })
+    GATED_ENDPOINTS = frozenset({"rest_tool_call", "rest_answer", "rest_message"})
+
+    def test_call_sites_match_the_ruling(self):
+        """Pin which functions pass read=True, at the AST level.
+
+        A source-level check because the acting endpoints cannot be exercised
+        for real in a unit test, and a mismarked one fails open silently.
+        """
+        import ast
+
+        tree = ast.parse(Path(rest_api.__file__).read_text())
+        marked, unmarked = set(), set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for call in ast.walk(node):
+                if (
+                    isinstance(call, ast.Call)
+                    and isinstance(call.func, ast.Name)
+                    and call.func.id == "_require_rest_auth"
+                ):
+                    kwargs = {k.arg for k in call.keywords}
+                    (marked if "read" in kwargs else unmarked).add(node.name)
+
+        assert marked == self.READ_ENDPOINTS, (
+            f"read-marked set drifted: unexpected={marked - self.READ_ENDPOINTS}, "
+            f"missing={self.READ_ENDPOINTS - marked}"
+        )
+        assert unmarked == self.GATED_ENDPOINTS, (
+            f"gated set drifted: unexpected={unmarked - self.GATED_ENDPOINTS}, "
+            f"missing={self.GATED_ENDPOINTS - unmarked}"
+        )
+
+    @pytest.fixture
+    def public(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_PUBLIC_READS", True)
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+
+    def _external(self, path="/", **kw):
+        return _make_request(
+            path=path,
+            client_host="203.0.113.7",
+            headers={"host": "lumen.cirwel.org"},
+            **kw,
+        )
+
+    def test_read_opens(self, public):
+        assert rest_api._require_rest_auth(self._external(), read=True) is None
+
+    def test_default_is_closed(self, monkeypatch):
+        """A fresh install must not serve reads to the internet."""
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        assert rest_api._require_rest_auth(self._external(), read=True) is not None
+
+    @pytest.mark.asyncio
+    async def test_tool_call_stays_shut(self, public):
+        request = self._external(
+            "/v1/tools/call", method="POST", body={"name": "get_state", "arguments": {}}
+        )
+        response = await rest_api.rest_tool_call(request)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_answer_stays_shut(self, public):
+        request = self._external("/answer", method="POST", body={"answer": "hi"})
+        response = await rest_api.rest_answer(request)
+        assert response.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_message_stays_shut(self, public):
+        request = self._external("/message", method="POST", body={"message": "hi"})
+        response = await rest_api.rest_message(request)
+        assert response.status_code == 401
+
+
+class TestApiSecurityNotLeaked:
+    def _req(self, **headers):
+        base = {"host": "lumen.cirwel.org"}
+        base.update(headers)
+        return _make_request(client_host="203.0.113.7", headers=base)
+
+    def test_anonymous_reader_gets_no_gate_posture(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_PUBLIC_READS", True)
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        assert rest_api._api_security_fields(self._req()) == {}
+
+    def test_authorized_caller_sees_gate_posture(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_PUBLIC_READS", True)
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        fields = rest_api._api_security_fields(
+            self._req(authorization="Bearer s3cret")
+        )
+        assert fields["api_security"]["mode"] == "token"
+        assert fields["api_security"]["public_reads"] is True
+
+    def test_local_caller_sees_gate_posture(self, monkeypatch):
+        monkeypatch.setattr(rest_api, "_ANIMA_HTTP_API_TOKEN", "s3cret")
+        request = _make_request(
+            client_host="100.84.100.128", headers={"host": "100.84.100.128:8766"}
+        )
+        assert "api_security" in rest_api._api_security_fields(request)
