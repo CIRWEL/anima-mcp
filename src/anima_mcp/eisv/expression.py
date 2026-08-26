@@ -141,15 +141,19 @@ class ExpressionGenerator:
             return [t1, t2]
         return [self._weighted_token_choice(shape)]
 
-    def update_weights(self, shape: str, tokens: List[str], score: float) -> None:
+    def update_weights(self, shape: str, tokens: List[str], score: float) -> int:
+        """Update matching token weights and return the number of matches."""
         if shape not in self._token_weights:
-            return
+            return 0
         lr = 0.08
         reward = (score - 0.5) * 2.0
+        matched_count = 0
         for token in tokens:
             if token in self._token_weights[shape]:
                 new_w = self._token_weights[shape][token] + lr * reward
                 self._token_weights[shape][token] = max(0.1, min(10.0, new_w))
+                matched_count += 1
+        return matched_count
 
     def get_weights(self, shape: str) -> Dict[str, float]:
         return dict(self._token_weights.get(shape, {}))
@@ -339,8 +343,8 @@ class StudentExpressionGenerator:
         except Exception:
             return self._fallback.generate(shape)
 
-    def update_weights(self, shape: str, tokens: List[str], score: float) -> None:
-        self._fallback.update_weights(shape, tokens, score)
+    def update_weights(self, shape: str, tokens: List[str], score: float) -> int:
+        return self._fallback.update_weights(shape, tokens, score)
 
     def get_weights(self, shape: str) -> Dict[str, float]:
         return self._fallback.get_weights(shape)

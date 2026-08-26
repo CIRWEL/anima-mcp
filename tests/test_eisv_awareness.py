@@ -14,7 +14,11 @@ from anima_mcp.eisv.expression import (
     ExpressionGenerator, translate_expression, generate_lumen_expression,
     TOKEN_MAP, ALL_TOKENS, LUMEN_TOKENS,
 )
-from anima_mcp.eisv.awareness import TrajectoryAwareness, compute_expression_coherence
+from anima_mcp.eisv.awareness import (
+    TrajectoryAwareness,
+    compute_expression_coherence,
+    compute_suggestion_recall,
+)
 
 
 class TestMapping:
@@ -260,15 +264,32 @@ class TestTrajectoryAwareness:
         ta.get_trajectory_suggestion()
         assert ta.current_shape == "settled_presence"
 
-    def test_feedback_forwarding(self):
+    def test_eisv_weight_feedback_preserves_update_behavior(self):
         ta = TrajectoryAwareness(buffer_size=30, seed=42)
         for i in range(10):
             ta._buffer.append({"t": float(i), "E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1})
         ta.get_trajectory_suggestion()
         before = ta._generator.get_weights("settled_presence").copy()
-        ta.record_feedback(["~stillness~"], 0.9)
+        matched_count = ta.record_eisv_weight_feedback(["~stillness~"], 0.9)
         after = ta._generator.get_weights("settled_presence")
-        assert after["~stillness~"] > before["~stillness~"]
+        assert matched_count == 1
+        assert after["~stillness~"] == pytest.approx(
+            before["~stillness~"] + 0.064
+        )
+
+    def test_suggestion_recall_recording_does_not_update_weights(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()
+        before = ta._generator.get_weights("settled_presence")
+
+        score = ta.record_suggestion_recall(
+            ["quiet", "here"],
+            ["quiet", "soft"],
+        )
+
+        assert score == 0.5
+        assert ta._generator.get_weights("settled_presence") == before
 
     def test_bootstrap_from_history(self):
         ta = TrajectoryAwareness(buffer_size=30)
@@ -338,6 +359,120 @@ class TestPersistence:
         assert cursor.fetchone() is not None
         conn.close()
 
+    def test_init_db_migrates_legacy_schema_idempotently(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """CREATE TABLE trajectory_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                shape TEXT,
+                eisv_state TEXT,
+                derivatives TEXT,
+                suggested_tokens TEXT,
+                expression_tokens TEXT,
+                coherence_score REAL,
+                cache_hit INTEGER DEFAULT 0,
+                buffer_size INTEGER
+            )"""
+        )
+        conn.execute(
+            """INSERT INTO trajectory_events
+               (timestamp, event_type, shape, suggested_tokens,
+                expression_tokens, coherence_score)
+               VALUES (?, 'feedback', 'settled_presence', ?, ?, 0.75)""",
+            (
+                "2026-01-01T00:00:00+00:00",
+                '[ "warm", "feel" ]',
+                '[ "warm", "cold" ]',
+            ),
+        )
+        conn.commit()
+        conn.close()
+
+        first = TrajectoryAwareness(buffer_size=30, db_path=self.db_path)
+        assert first.record_suggestion_recall(
+            ["quiet"],
+            ["quiet", "soft"],
+            shape="settled_presence",
+        ) == 1.0
+        first.close()
+        second = TrajectoryAwareness(buffer_size=30, db_path=self.db_path)
+        second.close()
+
+        conn = sqlite3.connect(self.db_path)
+        columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(trajectory_events)")
+        ]
+        legacy_row = conn.execute(
+            "SELECT suggested_tokens, expression_tokens, coherence_score, "
+            "suggestion_recall, suggested_count, actual_count, "
+            "eisv_weight_feedback_score "
+            "FROM trajectory_events WHERE timestamp = ?",
+            ("2026-01-01T00:00:00+00:00",),
+        ).fetchone()
+        typed_row = conn.execute(
+            "SELECT coherence_score, suggestion_recall, suggested_count, "
+            "actual_count FROM trajectory_events "
+            "WHERE suggestion_recall IS NOT NULL"
+        ).fetchone()
+        conn.close()
+
+        assert columns.count("suggestion_recall") == 1
+        assert columns.count("suggested_count") == 1
+        assert columns.count("actual_count") == 1
+        assert columns.count("eisv_weight_feedback_score") == 1
+        assert legacy_row == (
+            '[ "warm", "feel" ]',
+            '[ "warm", "cold" ]',
+            0.75,
+            None,
+            None,
+            None,
+            None,
+        )
+        assert typed_row == (None, 1.0, 1, 2)
+
+    def test_init_db_completes_partial_suggestion_recall_migration(self):
+        conn = sqlite3.connect(self.db_path)
+        conn.execute(
+            """CREATE TABLE trajectory_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                shape TEXT,
+                eisv_state TEXT,
+                derivatives TEXT,
+                suggested_tokens TEXT,
+                expression_tokens TEXT,
+                coherence_score REAL,
+                cache_hit INTEGER DEFAULT 0,
+                buffer_size INTEGER,
+                suggestion_recall REAL
+            )"""
+        )
+        conn.commit()
+        conn.close()
+
+        awareness = TrajectoryAwareness(
+            buffer_size=30,
+            db_path=self.db_path,
+        )
+        awareness.close()
+
+        conn = sqlite3.connect(self.db_path)
+        columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(trajectory_events)")
+        ]
+        conn.close()
+
+        assert columns.count("suggestion_recall") == 1
+        assert columns.count("suggested_count") == 1
+        assert columns.count("actual_count") == 1
+        assert columns.count("eisv_weight_feedback_score") == 1
+
     def test_log_event_writes_row(self):
         ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
         ta._log_event(
@@ -370,20 +505,71 @@ class TestPersistence:
         assert rows[0][0] == "classification"
         assert rows[0][1] == "settled_presence"
 
-    def test_feedback_logs_event(self):
+    def test_eisv_weight_update_logs_only_matched_feedback(self):
         ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
         _make_settled_buffer(ta)
         ta.get_trajectory_suggestion()
 
-        ta.record_feedback(["~stillness~"], 0.9)
+        assert ta.record_eisv_weight_feedback(["~stillness~"], 0.9) == 1
 
         conn = sqlite3.connect(self.db_path)
         rows = conn.execute(
-            "SELECT event_type FROM trajectory_events ORDER BY id"
+            "SELECT event_type, eisv_weight_feedback_score "
+            "FROM trajectory_events ORDER BY id"
         ).fetchall()
         conn.close()
-        event_types = [r[0] for r in rows]
-        assert "feedback" in event_types
+        assert ("eisv_weight_update", 0.9) in rows
+
+    def test_deprecated_feedback_wrapper_keeps_zero_match_filter(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()
+
+        assert ta.record_feedback(["quiet"], 0.9) == 0
+
+    def test_lumen_weight_feedback_is_a_true_noop(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
+        _make_settled_buffer(ta)
+        ta.get_trajectory_suggestion()
+        before_weights = ta._generator.get_weights("settled_presence")
+        conn = sqlite3.connect(self.db_path)
+        before_events = conn.execute(
+            "SELECT COUNT(*) FROM trajectory_events"
+        ).fetchone()[0]
+        conn.close()
+
+        assert ta.record_eisv_weight_feedback(["quiet", "warm"], 0.9) == 0
+
+        conn = sqlite3.connect(self.db_path)
+        after_events = conn.execute(
+            "SELECT COUNT(*) FROM trajectory_events"
+        ).fetchone()[0]
+        conn.close()
+        state = ta.get_state()["expression_generator"]["eisv_weight_updates"]
+        assert ta._generator.get_weights("settled_presence") == before_weights
+        assert after_events == before_events
+        assert state == {
+            "scope": "process_lifetime",
+            "update_count": 0,
+            "matched_token_count": 0,
+        }
+
+    def test_suggestion_recall_uses_new_nullable_fields(self):
+        ta = TrajectoryAwareness(buffer_size=30, db_path=self.db_path, seed=42)
+
+        assert ta.record_suggestion_recall(
+            ["quiet", "here"],
+            ["quiet"],
+            shape="settled_presence",
+        ) == 0.5
+
+        conn = sqlite3.connect(self.db_path)
+        row = conn.execute(
+            "SELECT suggestion_recall, suggested_count, actual_count, "
+            "coherence_score FROM trajectory_events WHERE event_type='suggestion'"
+        ).fetchone()
+        conn.close()
+        assert row == (0.5, 2, 1, None)
 
     def test_cache_hit_does_not_log_again(self):
         ta = TrajectoryAwareness(
@@ -434,7 +620,12 @@ class TestGetState:
         assert state["buffer"]["size"] == 10
         assert state["cache"]["shape"] == "settled_presence"
         assert state["expression_generator"]["total_generations"] == 1
-        assert state["expression_generator"]["feedback_count"] == 0
+        assert "feedback_count" not in state["expression_generator"]
+        assert "mean_coherence" not in state["expression_generator"]
+        assert state["expression_generator"]["suggestion_recall"] == {
+            "scope": "persisted_history",
+            "strata": [],
+        }
 
     def test_get_state_with_recent_events(self):
         ta = TrajectoryAwareness(
@@ -446,7 +637,77 @@ class TestGetState:
         state = ta.get_state()
         assert len(state["recent_events"]) == 1
         assert state["recent_events"][0]["event_type"] == "classification"
+        assert "legacy_mixed_score" in state["recent_events"][0]
+        assert state["recent_events"][0]["legacy_score_kind"] is None
+        assert "coherence_score" not in state["recent_events"][0]
         assert state["shape_distribution"]["settled_presence"] >= 1
+
+    def test_get_state_labels_legacy_score_units_conservatively(self):
+        ta = TrajectoryAwareness(
+            buffer_size=30, db_path=self.db_path, seed=42
+        )
+        ta._log_event(event_type="suggestion", coherence_score=0.8)
+        ta._log_event(event_type="feedback", coherence_score=0.6)
+
+        events = ta.get_state()["recent_events"]
+
+        assert [event["legacy_mixed_score"] for event in events] == [0.8, 0.6]
+        assert [event["legacy_score_kind"] for event in events] == [
+            "suggestion_recall",
+            "untyped_feedback_score",
+        ]
+
+    def test_get_state_uses_persisted_suggestion_recall_strata(self):
+        ta = TrajectoryAwareness(
+            buffer_size=30, db_path=self.db_path, seed=42
+        )
+        ta.record_suggestion_recall(["quiet"], ["quiet"])
+        ta.record_suggestion_recall(["quiet", "here"], ["quiet"])
+        ta.record_suggestion_recall(["quiet", "here"], ["quiet", "soft"])
+
+        recall = ta.get_state()["expression_generator"]["suggestion_recall"]
+
+        assert recall == {
+            "scope": "persisted_history",
+            "strata": [
+                {
+                    "suggested_count": 1,
+                    "actual_count": 1,
+                    "observation_count": 1,
+                    "mean_suggestion_recall": 1.0,
+                },
+                {
+                    "suggested_count": 2,
+                    "actual_count": 1,
+                    "observation_count": 1,
+                    "mean_suggestion_recall": 0.5,
+                },
+                {
+                    "suggested_count": 2,
+                    "actual_count": 2,
+                    "observation_count": 1,
+                    "mean_suggestion_recall": 0.5,
+                },
+            ],
+        }
+
+    def test_get_state_labels_in_memory_recall_process_lifetime(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        ta.record_suggestion_recall(["quiet"], ["quiet", "soft"])
+
+        recall = ta.get_state()["expression_generator"]["suggestion_recall"]
+
+        assert recall == {
+            "scope": "process_lifetime",
+            "strata": [
+                {
+                    "suggested_count": 1,
+                    "actual_count": 2,
+                    "observation_count": 1,
+                    "mean_suggestion_recall": 1.0,
+                }
+            ],
+        }
 
     def test_get_state_window_seconds(self):
         ta = TrajectoryAwareness(buffer_size=30, seed=42)
@@ -458,21 +719,33 @@ class TestGetState:
         assert state["buffer"]["window_seconds"] == 60.0
 
 
-class TestCoherence:
+class TestSuggestionRecall:
+    def test_single_suggestion_remains_perfect_with_extra_output(self):
+        """The forced anchor makes this 1.0; do not change the denominator."""
+        assert compute_suggestion_recall(
+            ["warm"],
+            ["warm", "cold"],
+        ) == 1.0
+
     def test_full_overlap(self):
-        assert compute_expression_coherence(["warm", "feel"], ["warm", "feel"]) == 1.0
+        assert compute_suggestion_recall(["warm", "feel"], ["warm", "feel"]) == 1.0
 
     def test_no_overlap(self):
-        assert compute_expression_coherence(["warm", "feel"], ["cold", "dim"]) == 0.0
+        assert compute_suggestion_recall(["warm", "feel"], ["cold", "dim"]) == 0.0
 
     def test_partial_overlap(self):
-        assert compute_expression_coherence(["warm", "feel"], ["warm", "cold"]) == 0.5
+        assert compute_suggestion_recall(["warm", "feel"], ["warm", "cold"]) == 0.5
 
     def test_none_suggested(self):
-        assert compute_expression_coherence(None, ["warm"]) is None
+        assert compute_suggestion_recall(None, ["warm"]) is None
 
     def test_empty_suggested(self):
-        assert compute_expression_coherence([], ["warm"]) is None
+        assert compute_suggestion_recall([], ["warm"]) is None
+
+    def test_deprecated_name_is_a_pure_alias(self):
+        assert compute_expression_coherence(
+            ["warm", "feel"], ["warm"]
+        ) == compute_suggestion_recall(["warm", "feel"], ["warm"])
 
 
 class TestLEDShapeBias:

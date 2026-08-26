@@ -3,6 +3,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from anima_mcp.eisv.expression import (
     ExpressionGenerator,
     StudentExpressionGenerator,
@@ -119,7 +121,8 @@ class TestExpressionGeneratorWeights:
         shape = "settled_presence"
         token = ALL_TOKENS[0]
         original = gen.get_weights(shape)[token]
-        gen.update_weights(shape, [token], 1.0)  # max score
+        matched_count = gen.update_weights(shape, [token], 1.0)  # max score
+        assert matched_count == 1
         assert gen.get_weights(shape)[token] > original
 
     def test_update_weights_negative_score(self):
@@ -149,8 +152,45 @@ class TestExpressionGeneratorWeights:
 
     def test_update_unknown_shape_noop(self):
         gen = ExpressionGenerator(seed=42)
-        # Should not crash
-        gen.update_weights("nonexistent_shape", [ALL_TOKENS[0]], 0.8)
+        assert gen.update_weights("nonexistent_shape", [ALL_TOKENS[0]], 0.8) == 0
+
+    def test_update_non_eisv_token_reports_zero_and_changes_nothing(self):
+        gen = ExpressionGenerator(seed=42)
+        shape = "settled_presence"
+        original = gen.get_weights(shape)
+
+        matched_count = gen.update_weights(shape, ["warm"], 0.9)
+
+        assert matched_count == 0
+        assert gen.get_weights(shape) == original
+
+    def test_update_mixed_vocabulary_mutates_only_matching_eisv_token(self):
+        gen = ExpressionGenerator(seed=42)
+        shape = "settled_presence"
+        token = ALL_TOKENS[0]
+        original = gen.get_weights(shape)
+
+        matched_count = gen.update_weights(shape, ["warm", token], 1.0)
+
+        updated = gen.get_weights(shape)
+        assert matched_count == 1
+        assert updated[token] == pytest.approx(original[token] + 0.08)
+        assert {
+            key: value for key, value in updated.items() if key != token
+        } == {
+            key: value for key, value in original.items() if key != token
+        }
+
+    def test_update_counts_repeated_matches_without_changing_update_semantics(self):
+        gen = ExpressionGenerator(seed=42)
+        shape = "settled_presence"
+        token = ALL_TOKENS[0]
+        original = gen.get_weights(shape)[token]
+
+        matched_count = gen.update_weights(shape, [token, token], 1.0)
+
+        assert matched_count == 2
+        assert gen.get_weights(shape)[token] == pytest.approx(original + 0.16)
 
     def test_get_weights_returns_copy(self):
         gen = ExpressionGenerator(seed=42)
@@ -188,7 +228,8 @@ class TestStudentExpressionGenerator:
         shape = "settled_presence"
         token = ALL_TOKENS[0]
         original = gen.get_weights(shape)[token]
-        gen.update_weights(shape, [token], 1.0)
+        matched_count = gen.update_weights(shape, [token], 1.0)
+        assert matched_count == 1
         assert gen.get_weights(shape)[token] > original
 
     def test_get_weights_delegates(self, tmp_path):
@@ -243,6 +284,14 @@ class TestStudentExpressionGenerator:
             tokens = gen.generate(shape.value, window=window)
             assert tokens
             assert all(token in ALL_TOKENS for token in tokens)
+
+    def test_loaded_student_reports_delegated_weight_match_count(self):
+        model_dir = Path(__file__).parents[1] / "data" / "student_model"
+        gen = StudentExpressionGenerator(str(model_dir), fallback_seed=42)
+        token = ALL_TOKENS[0]
+
+        assert gen.is_loaded
+        assert gen.update_weights("settled_presence", [token], 1.0) == 1
 
 
 # ── translate_expression ──

@@ -137,13 +137,20 @@ class TestPrimitiveFeedback:
         from anima_mcp.handlers.communication import handle_primitive_feedback
 
         lang = MagicMock()
-        lang.get_recent_utterances.return_value = [{"text": "pulse", "score": 0.2}]
+        lang.get_recent_utterances.return_value = [{
+            "text": "pulse",
+            "score": 0.2,
+            "suggested_tokens": [],
+            "token_sources": ["ordinary_draw"],
+        }]
         with patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace(db_path=":memory:")), \
              patch("anima_mcp.primitive_language.get_language_system", return_value=lang):
             data = parse_result(await handle_primitive_feedback({"action": "recent"}))
 
         assert data["action"] == "recent"
         assert data["count"] == 1
+        assert data["utterances"][0]["suggested_tokens"] == []
+        assert data["utterances"][0]["token_sources"] == ["ordinary_draw"]
 
     async def test_stats_is_default_action(self):
         from anima_mcp.handlers.communication import handle_primitive_feedback
