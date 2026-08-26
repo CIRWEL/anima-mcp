@@ -22,6 +22,7 @@ Starting with 15 primitives across 4 layers:
 - Change layer: more, less
 """
 
+import json
 import sqlite3
 import random
 from dataclasses import dataclass, field
@@ -142,6 +143,8 @@ class Utterance:
 
     # Trajectory awareness suggestion (what EISV system suggested)
     suggested_tokens: Optional[List[str]] = None
+    # Source of each generated token, aligned one-to-one with ``tokens``.
+    token_sources: Optional[List[str]] = None
 
     def text(self) -> str:
         """Render as text."""
@@ -246,6 +249,8 @@ class PrimitiveLanguageSystem:
                 presence REAL,
                 score REAL,
                 feedback_signals TEXT,
+                suggested_tokens TEXT,
+                token_sources TEXT,
                 UNIQUE(timestamp, tokens)
             );
 
@@ -256,15 +261,24 @@ class PrimitiveLanguageSystem:
         """)
         conn.commit()
 
-        # Schema migration: add got_response column if missing
-        try:
-            conn.execute("SELECT got_response FROM primitive_history LIMIT 1")
-        except Exception:
-            try:
-                conn.execute("ALTER TABLE primitive_history ADD COLUMN got_response BOOLEAN DEFAULT NULL")
-                conn.commit()
-            except Exception:
-                pass
+        # Additive, idempotent migrations. Columns have no non-NULL default so
+        # old rows remain explicitly unknown rather than looking like utterances
+        # generated without trajectory suggestions.
+        history_columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(primitive_history)")
+        }
+        missing_columns = {
+            "got_response": "BOOLEAN DEFAULT NULL",
+            "suggested_tokens": "TEXT",
+            "token_sources": "TEXT",
+        }
+        for column, definition in missing_columns.items():
+            if column not in history_columns:
+                conn.execute(
+                    f"ALTER TABLE primitive_history ADD COLUMN {column} {definition}"
+                )
+        conn.commit()
 
     def _load_weights(self):
         """Load learned weights from database."""
@@ -324,22 +338,34 @@ class PrimitiveLanguageSystem:
         conn.commit()
 
     def _save_utterance(self, utterance: Utterance):
-        """Save utterance to history. Updates score/feedback_signals if row exists."""
+        """Save an utterance; later feedback updates preserve its provenance."""
         conn = self._connect()
         ts = utterance.timestamp.isoformat()
         tokens_str = " ".join(utterance.tokens)
         pattern = utterance.category_pattern()
         score = utterance.score
         signals = ",".join(utterance.feedback_signals) if utterance.feedback_signals else None
+        suggested_tokens = (
+            json.dumps(utterance.suggested_tokens)
+            if utterance.suggested_tokens is not None
+            else None
+        )
+        token_sources = (
+            json.dumps(utterance.token_sources)
+            if utterance.token_sources is not None
+            else None
+        )
         conn.execute("""
             INSERT INTO primitive_history
-            (timestamp, tokens, category_pattern, warmth, brightness, stability, presence, score, feedback_signals)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (timestamp, tokens, category_pattern, warmth, brightness, stability, presence,
+             score, feedback_signals, suggested_tokens, token_sources)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(timestamp, tokens) DO UPDATE SET
                 score = excluded.score,
                 feedback_signals = excluded.feedback_signals
         """, (ts, tokens_str, pattern, utterance.warmth, utterance.brightness,
-              utterance.stability, utterance.presence, score, signals))
+              utterance.stability, utterance.presence, score, signals,
+              suggested_tokens, token_sources))
         conn.commit()
 
     def _apply_weight_decay(self):
@@ -422,6 +448,20 @@ class PrimitiveLanguageSystem:
 
         Returns 1-3 tokens based on stability (more stable = longer utterance).
         """
+        selected, _ = self._select_tokens_with_sources(
+            state,
+            count=count,
+            suggested_tokens=suggested_tokens,
+        )
+        return selected
+
+    def _select_tokens_with_sources(
+        self,
+        state: Dict[str, float],
+        count: int = None,
+        suggested_tokens: Optional[List[str]] = None,
+    ) -> Tuple[List[str], List[str]]:
+        """Select tokens and record how each one entered the utterance."""
         # Determine token count based on stability
         if count is None:
             stability = state.get("stability", 0.5)
@@ -438,13 +478,14 @@ class PrimitiveLanguageSystem:
             weights[name] = self.compute_token_weight(name, state)
 
         # Boost trajectory-suggested tokens
-        if suggested_tokens:
-            suggested_set = set(suggested_tokens)
+        suggested_set = set(suggested_tokens or [])
+        if suggested_set:
             for name in PRIMITIVES:
                 if name in suggested_set:
                     weights[name] *= 3.5
 
         selected = []
+        token_sources = []
         available = list(PRIMITIVES.keys())
 
         for i in range(count):
@@ -458,6 +499,7 @@ class PrimitiveLanguageSystem:
                     anchor_weights = [weights[t] for t in anchor_candidates]
                     chosen = random.choices(anchor_candidates, weights=anchor_weights)[0]
                     selected.append(chosen)
+                    token_sources.append("trajectory_anchor")
                     available.remove(chosen)
                     continue
 
@@ -496,11 +538,16 @@ class PrimitiveLanguageSystem:
             # Select token
             chosen = random.choices(available, weights=probs)[0]
             selected.append(chosen)
+            token_sources.append(
+                "suggestion_boosted_draw"
+                if chosen in suggested_set
+                else "ordinary_draw"
+            )
 
             # Don't repeat the same token
             available.remove(chosen)
 
-        return selected
+        return selected, token_sources
 
     def generate_utterance(
         self,
@@ -508,7 +555,14 @@ class PrimitiveLanguageSystem:
         suggested_tokens: Optional[List[str]] = None,
     ) -> Utterance:
         """Generate a primitive utterance based on current state."""
-        tokens = self.select_tokens(state, suggested_tokens=suggested_tokens)
+        # Snapshot the input before generation so persisted context cannot be
+        # changed later by a caller mutating its list. ``[]`` denotes a known
+        # absence of suggestions; legacy rows retain SQL NULL.
+        suggestion_snapshot = list(suggested_tokens or [])
+        tokens, token_sources = self._select_tokens_with_sources(
+            state,
+            suggested_tokens=suggestion_snapshot,
+        )
 
         utterance = Utterance(
             tokens=tokens,
@@ -516,7 +570,8 @@ class PrimitiveLanguageSystem:
             brightness=state.get("clarity", 0.5),
             stability=state.get("stability", 0.5),
             presence=state.get("presence", 0.0),
-            suggested_tokens=suggested_tokens,
+            suggested_tokens=suggestion_snapshot,
+            token_sources=token_sources,
         )
 
         self._recent.append(utterance)
@@ -907,6 +962,8 @@ class PrimitiveLanguageSystem:
                 "pattern": u.category_pattern(),
                 "score": u.score,
                 "timestamp": u.timestamp.isoformat(),
+                "suggested_tokens": u.suggested_tokens,
+                "token_sources": u.token_sources,
             }
             for u in self._recent[-count:]
         ]
