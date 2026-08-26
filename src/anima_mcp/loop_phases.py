@@ -924,26 +924,35 @@ async def lumen_self_answer(anima, readings, identity):
     if not old_enough:
         return
 
-    # Answer 1 question per cycle
-    question = old_enough[0]
+    # Answer 1 question per cycle — but walk the queue rather than only
+    # inspecting its head. Both analyzers legitimately decline: analyze_for_question
+    # returns None when no route matches, and grounded_self_answer returns None
+    # when no evidence matches. Retrying only old_enough[0] would let one
+    # permanently unanswerable question block every later, answerable one for
+    # as long as it sits unanswered, which is forever now that nothing expires
+    # a question out of this list.
+    for question in old_enough:
+        # Longitudinal analysis is the strongest available source because it
+        # re-computes an answer from observations rather than replaying a belief.
+        try:
+            from .data_analysis import analyze_for_question
+            answer = analyze_for_question(question.text)
+        except Exception as exc:
+            logger.debug("[Lumen/SelfAnswer] Data analysis unavailable: %s", exc)
+            answer = None
 
-    # Longitudinal analysis is the strongest available source because it
-    # re-computes an answer from observations rather than replaying a belief.
-    try:
-        from .data_analysis import analyze_for_question
-        answer = analyze_for_question(question.text)
-    except Exception as exc:
-        logger.debug("[Lumen/SelfAnswer] Data analysis unavailable: %s", exc)
-        answer = None
+        if not answer:
+            answer = grounded_self_answer(
+                question.text,
+                anima,
+                readings,
+                state_when_asked=getattr(question, "state_snapshot", None),
+            )
+        if not answer:
+            # Nothing to say about this one. Leave it visibly unanswered and
+            # try the next; do not manufacture a generic reply.
+            continue
 
-    if not answer:
-        answer = grounded_self_answer(
-            question.text,
-            anima,
-            readings,
-            state_when_asked=getattr(question, "state_snapshot", None),
-        )
-    if answer:
         answer = phrase_evidence_with_ollama(question.text, answer)
         result = add_agent_message(
             text=answer,
@@ -953,6 +962,7 @@ async def lumen_self_answer(anima, readings, identity):
         if result:
             logger.debug("[Lumen/SelfAnswer] Q: %s", question.text[:60])
             logger.debug("[Lumen/SelfAnswer] A: %s", answer[:80])
+        return
 
 
 async def extract_and_validate_schema(anima, readings, identity):

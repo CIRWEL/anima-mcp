@@ -935,6 +935,120 @@ class TestLumenSelfAnswer:
         assert call_args.kwargs.get("text") or call_args[0][0] == "I feel warm"
 
     @pytest.mark.asyncio
+    async def test_unanswerable_head_does_not_starve_the_queue(self):
+        """An unanswerable oldest question must not block later ones.
+
+        Both analyzers legitimately decline: analyze_for_question returns None
+        when no route matches, grounded_self_answer when no evidence matches.
+        Nothing removes a question from this list, so retrying only the head
+        would block every later question permanently.
+        """
+        from anima_mcp.loop_phases import lumen_self_answer
+        from anima_mcp.server_state import SELF_ANSWER_MIN_QUESTION_AGE_SECONDS
+
+        age = SELF_ANSWER_MIN_QUESTION_AGE_SECONDS + 1
+        unanswerable = SimpleNamespace(
+            text="when the world holds still, what question remains in me?",
+            timestamp=_time.time() - age - 100,
+            message_id="stuck",
+            msg_type="question",
+            state_snapshot=None,
+            context=None,
+        )
+        answerable = SimpleNamespace(
+            text="does drawing affect my warmth?",
+            timestamp=_time.time() - age,
+            message_id="answerable",
+            msg_type="question",
+            state_snapshot=None,
+            context=None,
+        )
+        board = SimpleNamespace(
+            _messages=[unanswerable, answerable],
+            _load=MagicMock(),
+            repair_orphaned_answered=lambda: 0,
+        )
+        evidence = "Across 12 drawings, warmth averaged 0.420."
+
+        def analyze(text):
+            return evidence if "drawing" in text else None
+
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.data_analysis.analyze_for_question", side_effect=analyze), \
+             patch("anima_mcp.loop_phases.grounded_self_answer", return_value=None), \
+             patch("anima_mcp.loop_phases.phrase_evidence_with_ollama", side_effect=lambda _q, e: e), \
+             patch("anima_mcp.messages.add_agent_message", return_value=MagicMock()) as mock_add:
+            await lumen_self_answer(make_anima(), make_readings(), make_identity())
+
+        mock_add.assert_called_once()
+        assert mock_add.call_args.kwargs["responds_to"] == "answerable"
+
+    @pytest.mark.asyncio
+    async def test_answers_at_most_one_question_per_cycle(self):
+        """Walking the queue must not turn into answering the whole queue."""
+        from anima_mcp.loop_phases import lumen_self_answer
+        from anima_mcp.server_state import SELF_ANSWER_MIN_QUESTION_AGE_SECONDS
+
+        age = SELF_ANSWER_MIN_QUESTION_AGE_SECONDS + 1
+        questions = [
+            SimpleNamespace(
+                text="does drawing affect my warmth?",
+                timestamp=_time.time() - age - index,
+                message_id=f"q{index}",
+                msg_type="question",
+                state_snapshot=None,
+                context=None,
+            )
+            for index in range(3)
+        ]
+        board = SimpleNamespace(
+            _messages=questions,
+            _load=MagicMock(),
+            repair_orphaned_answered=lambda: 0,
+        )
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.data_analysis.analyze_for_question", return_value="evidence"), \
+             patch("anima_mcp.loop_phases.phrase_evidence_with_ollama", side_effect=lambda _q, e: e), \
+             patch("anima_mcp.messages.add_agent_message", return_value=MagicMock()) as mock_add:
+            await lumen_self_answer(make_anima(), make_readings(), make_identity())
+
+        mock_add.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_all_unanswerable_leaves_every_question_alone(self):
+        """No answer is a valid outcome — not a generic reply."""
+        from anima_mcp.loop_phases import lumen_self_answer
+        from anima_mcp.server_state import SELF_ANSWER_MIN_QUESTION_AGE_SECONDS
+
+        age = SELF_ANSWER_MIN_QUESTION_AGE_SECONDS + 1
+        questions = [
+            SimpleNamespace(
+                text=text,
+                timestamp=_time.time() - age,
+                message_id=f"q{index}",
+                msg_type="question",
+                state_snapshot=None,
+                context=None,
+            )
+            for index, text in enumerate([
+                "i've learned this place well - what's left to wonder about?",
+                "when the world holds still, what question remains in me?",
+            ])
+        ]
+        board = SimpleNamespace(
+            _messages=questions,
+            _load=MagicMock(),
+            repair_orphaned_answered=lambda: 0,
+        )
+        with patch("anima_mcp.messages.get_board", return_value=board), \
+             patch("anima_mcp.data_analysis.analyze_for_question", return_value=None), \
+             patch("anima_mcp.loop_phases.grounded_self_answer", return_value=None), \
+             patch("anima_mcp.messages.add_agent_message") as mock_add:
+            await lumen_self_answer(make_anima(), make_readings(), make_identity())
+
+        mock_add.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_prefers_fresh_data_analysis_to_stored_beliefs(self):
         """Runtime analysis is wired as the first self-answer evidence source."""
         from anima_mcp.loop_phases import lumen_self_answer

@@ -845,6 +845,22 @@ def _extract_dimension(text: str) -> str:
     return "wellness"  # Default
 
 
+def _named_dimension(text: str) -> Optional[str]:
+    """The dimension the question actually names, or None.
+
+    ``_extract_dimension`` defaults to ``"wellness"`` so that a routed branch
+    always has a dimension to work with. That default is right for a branch a
+    keyword already selected, and wrong as a basis for answering a question
+    that named no subject at all — it invents one.
+    """
+    text_lower = text.lower()
+    for dim, keywords in _DIMENSION_KEYWORDS.items():
+        for kw in keywords:
+            if kw in text_lower:
+                return dim
+    return None
+
+
 def _has_any(text: str, keywords: List[str]) -> bool:
     """Check if text contains any of the keywords."""
     return any(kw in text for kw in keywords)
@@ -993,17 +1009,41 @@ def analyze_for_question(question_text: str) -> Optional[str]:
         if parts:
             return "\n".join(parts)
 
-    # --- Fallback: try generic analyses for any question ---
-    temporal = analyze_temporal_full(dim)
+    # --- Nothing routed: answer only if the question named a subject ---
+    #
+    # This used to end with `analyze_temporal_full(dim) + analyze_belief_status()`
+    # for ANY question. Two things made that fail toward healthy:
+    #
+    #   * `analyze_belief_status()` takes no argument. It recites every belief
+    #     with >=10 evidence, identically, regardless of what was asked. It is
+    #     the reason "nothing surprised me today - is that peace, or have I
+    #     stopped looking?" was answered with LED and temperature belief counts.
+    #   * `_extract_dimension` defaults to "wellness", so a question that named
+    #     no subject was answered about one it never mentioned. On 2026-08-25
+    #     "i've learned this place well - what's left to wonder about?" and
+    #     "when the world holds still, what question remains in me?" both
+    #     defaulted that way and received BYTE-IDENTICAL replies.
+    #
+    # So the fallback now requires a dimension the question actually named, and
+    # reports on that dimension only. A question with no subject gets None and
+    # stays visibly unanswered — the same rule #221 applies to `drive:`
+    # questions. Design Invariant 2: fail toward unknown, never toward healthy.
+    #
+    # KNOWN RESIDUAL, deliberately not fixed here: the Priority-3 and
+    # Priority-4 branches above still append `analyze_belief_status()`, so a
+    # question containing "pattern" or "data" can still receive the recital.
+    # Narrowing those branches changes which questions are answerable at all,
+    # which is a routing-coverage change and belongs in its own PR.
+    named = _named_dimension(question_text)
+    if not named:
+        return None
+
+    temporal = analyze_temporal_full(named)
     if temporal:
         parts.append(temporal)
-    beliefs = analyze_belief_status()
-    if beliefs:
-        parts.append(beliefs)
-    if dim:
-        corr = analyze_correlation(dim)
-        if corr:
-            parts.append(corr)
+    corr = analyze_correlation(named)
+    if corr:
+        parts.append(corr)
     if parts:
         return "\n".join(parts)
 

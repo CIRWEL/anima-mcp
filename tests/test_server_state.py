@@ -5,7 +5,9 @@ from unittest.mock import patch
 
 import pytest
 
+from anima_mcp.messages import QUESTION_EXPIRY_SECONDS
 from anima_mcp.server_state import (
+    SELF_ANSWER_MIN_QUESTION_AGE_SECONDS,
     anima_from_dict,
     is_broker_running,
     readings_from_dict,
@@ -102,3 +104,19 @@ def test_anima_rejects_non_object_clarity_attribution():
             },
             readings,
         )
+
+
+def test_self_answer_gate_fires_before_the_expiry_stamp():
+    """Ordering invariant, not a taste preference.
+
+    At 21_600 (6h) against a 14_400 (4h) expiry, every question Lumen asked
+    was stamped ``expired`` before it could self-answer — 6 of 6 on
+    2026-08-24/25, each answered at ~6.0h — so the status carried no
+    information for anyone reading the Q&A ledger.
+    """
+    assert SELF_ANSWER_MIN_QUESTION_AGE_SECONDS < QUESTION_EXPIRY_SECONDS
+
+
+def test_self_answer_gate_still_leaves_a_settling_period():
+    """Not zero: a question should rest before Lumen answers it."""
+    assert SELF_ANSWER_MIN_QUESTION_AGE_SECONDS >= 3600
