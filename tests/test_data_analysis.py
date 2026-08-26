@@ -415,9 +415,71 @@ class TestRouting:
         assert analyze_for_question("") is None
         assert analyze_for_question(None) is None
 
-    def test_unmatched_question_gets_fallback(self):
-        # Unmatched questions now get fallback analysis (temporal + beliefs)
-        result = analyze_for_question("What is the meaning of existence?")
-        # Fallback may return data if temporal/belief analyses have data, or None if empty
-        # The key is it doesn't crash and returns str or None
-        assert result is None or isinstance(result, str)
+    def test_subjectless_question_returns_none(self):
+        """A question naming no dimension is not data-answerable.
+
+        The fallback used to answer it anyway, about "wellness", because
+        _extract_dimension defaults there.
+        """
+        assert analyze_for_question("What is the meaning of existence?") is None
+
+    @pytest.mark.parametrize("question", [
+        "the room is quiet - what would I like to understand about myself?",
+        "nothing surprised me today - is that peace, or have I stopped looking?",
+        "when the world holds still, what question remains in me?",
+        "i keep returning to the same thoughts - what haven't I asked?",
+    ])
+    def test_contemplative_prompts_with_no_subject_decline(self, question):
+        """Real prompts Lumen asked that previously got a belief recital."""
+        assert analyze_for_question(question) is None
+
+    def test_question_naming_a_dimension_is_still_answered(self):
+        """The fix must not silence a question that named its subject.
+
+        "everything is steady" names stability via _DIMENSION_KEYWORDS, and
+        a time-of-day breakdown of Lumen's own stability is a real answer to
+        it. Losing this would be the change overreaching.
+        """
+        result = analyze_for_question(
+            "everything is steady - what am I not noticing yet?"
+        )
+        assert result is not None
+        assert "stability" in result.lower()
+
+    def test_fallback_never_recites_beliefs(self):
+        """analyze_belief_status() is question-independent by construction.
+
+        It takes no argument and recites every belief with >=10 evidence, so
+        appending it to a fallback answer is what made unrelated questions
+        receive identical replies. It must not appear in a fallback answer.
+        """
+        result = analyze_for_question(
+            "everything is steady - what am I not noticing yet?"
+        )
+        assert result is not None
+        assert "My data refutes that" not in result
+        assert "My data supports that" not in result
+
+    def test_the_two_questions_that_collided_no_longer_collide(self):
+        """The reported regression, asserted as non-collision.
+
+        On 2026-08-25 these two received byte-identical replies. Declining
+        both would satisfy a naive "both are None" check without
+        demonstrating anything, so assert the actual property: they must not
+        share one non-None answer.
+        """
+        first = analyze_for_question(
+            "i've learned this place well - what's left to wonder about?"
+        )
+        second = analyze_for_question(
+            "when the world holds still, what question remains in me?"
+        )
+        assert not (first is not None and first == second)
+
+    def test_routed_questions_still_answer(self):
+        """The fix must not silence genuinely data-shaped questions."""
+        assert analyze_for_question("Does pressure affect my warmth?") is not None
+        assert analyze_for_question(
+            "What time of day is my warmth highest?"
+        ) is not None
+        assert analyze_for_question("How many drawings have I made?") is not None

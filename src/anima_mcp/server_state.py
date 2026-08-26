@@ -100,7 +100,26 @@ SELF_DIALOGUE_LOG_THROTTLE = 150  # ~5 minutes between self-dialogue status logs
 # === Thresholds ===
 METACOG_SURPRISE_THRESHOLD = 0.2
 PRIMITIVE_SELF_FEEDBACK_DELAY_SECONDS = 75.0
-SELF_ANSWER_MIN_QUESTION_AGE_SECONDS = 21_600  # 6h — give external Q&A automations a real window
+# 2h — the window a human answerer gets before Lumen answers itself.
+#
+# Was 21_600 (6h), which outlived QUESTION_EXPIRY_SECONDS (14_400, 4h), so
+# every question was stamped ``expired`` before Lumen could answer it: 6 of 6
+# on 2026-08-24/25, each answered at ~6.0h. The stamp is still surfaced by the
+# ``lumen_qa`` MCP ledger and by ``/qa``, where a status that fires on
+# literally every question tells a reader nothing. (The dashboard's renderItem
+# keys only on ``q.answer`` and ignores ``status`` entirely — a separate gap,
+# not fixed here.)
+#
+# The window was originally sized for the external Q&A cron, which was
+# unloaded on 2026-08-24. It is NOT dead time: ``scripts/message_server.py``
+# still serves ``POST /answer`` into ``handle_lumen_qa``, so an operator can
+# still reply. 2h is that human window, deliberately a plain constant rather
+# than a fraction of QUESTION_EXPIRY_SECONDS — that constant already carries
+# the expiry stamp, the dedup window and the re-ask gate, and coupling a
+# fourth policy to it would mean tuning the recital cadence silently moved
+# this gate too. The ordering that actually matters is asserted in
+# tests/test_server_state.py, not encoded as arithmetic here.
+SELF_ANSWER_MIN_QUESTION_AGE_SECONDS = 7_200
 DISPLAY_UPDATE_TIMEOUT_SECONDS = 2.0
 MODE_CHANGE_SETTLE_SECONDS = 0.015
 HEAVY_SCREEN_DELAY_SECONDS = 1.0
