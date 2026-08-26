@@ -7,6 +7,8 @@ If a pipeline breaks (wrong parameter name, missing kwarg, field rename),
 these tests catch it.
 """
 
+import inspect
+
 import pytest
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -15,7 +17,7 @@ from conftest import make_anima, make_readings
 
 
 # ============================================================
-# 1. Student model → translate → primitive language → coherence
+# 1. Student model → translate → primitive language → suggestion recall
 # ============================================================
 
 class TestTrajectoryToPrimitiveLanguageWiring:
@@ -52,9 +54,12 @@ class TestTrajectoryToPrimitiveLanguageWiring:
         finally:
             pls.close()
 
-    def test_trajectory_awareness_to_utterance_coherence(self, tmp_path):
-        """Full pipeline: TrajectoryAwareness → suggestion → utterance → coherence > 0."""
-        from anima_mcp.eisv.awareness import TrajectoryAwareness, compute_expression_coherence
+    def test_trajectory_awareness_to_utterance_recall(self, tmp_path):
+        """Full pipeline: trajectory suggestion → utterance → recall > 0."""
+        from anima_mcp.eisv.awareness import (
+            TrajectoryAwareness,
+            compute_suggestion_recall,
+        )
         from anima_mcp.primitive_language import PrimitiveLanguageSystem
 
         ta = TrajectoryAwareness(buffer_size=10, seed=42)
@@ -75,13 +80,34 @@ class TestTrajectoryToPrimitiveLanguageWiring:
             # Generate utterance with suggestions
             utterance = pls.generate_utterance(lang_state, suggested_tokens=suggestion["suggested_tokens"])
 
-            # Compute coherence
-            coherence = compute_expression_coherence(suggestion["suggested_tokens"], utterance.tokens)
-            assert coherence is not None
-            assert coherence > 0, f"Coherence should be > 0 with anchor mechanism, got {coherence}"
+            # Compute suggestion recall
+            recall = compute_suggestion_recall(
+                suggestion["suggested_tokens"],
+                utterance.tokens,
+            )
+            assert recall is not None
+            assert recall > 0, (
+                "Suggestion recall should be > 0 with anchor mechanism, "
+                f"got {recall}"
+            )
         finally:
             ta.close()
             pls.close()
+
+    def test_server_keeps_feedback_vocabularies_and_board_payload_separate(self):
+        """Pin the behavior boundary around the display-loop call site."""
+        from anima_mcp import server
+
+        source = inspect.getsource(server._update_display_loop)
+
+        assert source.count("record_eisv_weight_feedback(") == 1
+        assert '_suggestion.get("eisv_tokens", [])' in source
+        assert "_traj.record_feedback(" not in source
+        assert (
+            'f"[expression] {utterance.text()} '
+            '({utterance.category_pattern()})"'
+        ) in source
+        assert 'author="lumen"' in source
 
 
 # ============================================================

@@ -14,6 +14,10 @@ Covers:
   - Statistics and recent utterances
 """
 
+import json
+import random
+import sqlite3
+
 import pytest
 from datetime import datetime, timedelta
 
@@ -120,6 +124,60 @@ class TestSelectTokens:
         # Using 15% threshold for robustness against randomness
         assert warm_count / trials > 0.15
 
+    def test_source_tracking_does_not_change_selection_rng(self, pls):
+        """Collecting provenance consumes no extra draws or different branches."""
+        original_rng_state = random.getstate()
+        try:
+            random.seed(225)
+            public_tokens = pls.select_tokens(
+                default_state(stability=0.9),
+                suggested_tokens=["warm", "cold"],
+            )
+            public_rng_state = random.getstate()
+
+            random.seed(225)
+            sourced_tokens, token_sources = pls._select_tokens_with_sources(
+                default_state(stability=0.9),
+                suggested_tokens=["warm", "cold"],
+            )
+            sourced_rng_state = random.getstate()
+        finally:
+            random.setstate(original_rng_state)
+
+        assert sourced_tokens == public_tokens
+        assert sourced_rng_state == public_rng_state
+        assert len(token_sources) == len(sourced_tokens)
+
+    @pytest.mark.parametrize(
+        ("suggestions", "expected_tokens"),
+        [
+            (None, ["here", "deep", "let"]),
+            (["warm"], ["warm", "glad", "let"]),
+            (["warm", "cold"], ["warm", "deep", "let"]),
+            (["not-a-primitive"], ["here", "deep", "let"]),
+        ],
+    )
+    def test_selection_matches_pre_provenance_seeded_golden(
+        self,
+        pls,
+        suggestions,
+        expected_tokens,
+    ):
+        """Lock token output and RNG consumption to the pre-#225 selector."""
+        original_rng_state = random.getstate()
+        try:
+            random.seed(225)
+            tokens = pls.select_tokens(
+                default_state(),
+                suggested_tokens=suggestions,
+            )
+            next_draw = random.random()
+        finally:
+            random.setstate(original_rng_state)
+
+        assert tokens == expected_tokens
+        assert next_draw == 0.7016400481377023
+
 
 # ==================== Utterance Generation ====================
 
@@ -156,6 +214,51 @@ class TestGenerateUtterance:
         assert pls._last_utterance is None
         pls.generate_utterance(default_state())
         assert pls._last_utterance is not None
+
+    def test_no_suggestions_have_known_empty_provenance(self, pls):
+        """New unsuggested utterances distinguish known absence from legacy NULL."""
+        utt = pls.generate_utterance(default_state())
+        row = pls._connect().execute("""
+            SELECT suggested_tokens, token_sources
+            FROM primitive_history
+            WHERE timestamp = ? AND tokens = ?
+        """, (utt.timestamp.isoformat(), utt.text())).fetchone()
+
+        assert utt.suggested_tokens == []
+        assert utt.token_sources == ["ordinary_draw"] * len(utt.tokens)
+        assert json.loads(row["suggested_tokens"]) == []
+        assert json.loads(row["token_sources"]) == [
+            "ordinary_draw"
+        ] * len(utt.tokens)
+
+    def test_snapshots_suggestions_and_aligns_token_sources(self, pls, monkeypatch):
+        """Anchors, boosted draws, and ordinary draws are recorded per token."""
+        picks = iter([3, "warm", "cold", "feel"])
+
+        def choose(population, weights=None):
+            chosen = next(picks)
+            assert chosen in population
+            return [chosen]
+
+        monkeypatch.setattr(
+            "anima_mcp.primitive_language.random.choices",
+            choose,
+        )
+        suggestions = ["warm", "cold", "not-a-primitive"]
+
+        utt = pls.generate_utterance(
+            default_state(),
+            suggested_tokens=suggestions,
+        )
+        suggestions.append("feel")
+
+        assert utt.tokens == ["warm", "cold", "feel"]
+        assert utt.suggested_tokens == ["warm", "cold", "not-a-primitive"]
+        assert utt.token_sources == [
+            "trajectory_anchor",
+            "suggestion_boosted_draw",
+            "ordinary_draw",
+        ]
 
 
 # ==================== should_generate ====================
@@ -403,6 +506,103 @@ class TestPersistence:
         count = conn.execute("SELECT COUNT(*) FROM primitive_history").fetchone()[0]
         assert count == 1
 
+    def test_provenance_migration_is_idempotent_and_legacy_rows_stay_null(
+        self,
+        tmp_path,
+    ):
+        """Existing history gains nullable provenance columns exactly once."""
+        db = str(tmp_path / "legacy.db")
+        conn = sqlite3.connect(db)
+        conn.execute("""
+            CREATE TABLE primitive_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                tokens TEXT NOT NULL,
+                category_pattern TEXT,
+                warmth REAL,
+                brightness REAL,
+                stability REAL,
+                presence REAL,
+                score REAL,
+                feedback_signals TEXT,
+                UNIQUE(timestamp, tokens)
+            )
+        """)
+        conn.execute(
+            "INSERT INTO primitive_history (timestamp, tokens) VALUES (?, ?)",
+            ("2026-08-25T12:00:00", "warm here"),
+        )
+        conn.commit()
+        conn.close()
+
+        for _ in range(2):
+            system = PrimitiveLanguageSystem(db_path=db)
+            system._connect()
+            system.close()
+
+        conn = sqlite3.connect(db)
+        columns = [
+            row[1]
+            for row in conn.execute("PRAGMA table_info(primitive_history)")
+        ]
+        row = conn.execute("""
+            SELECT suggested_tokens, token_sources
+            FROM primitive_history
+            WHERE tokens = 'warm here'
+        """).fetchone()
+        conn.close()
+
+        assert columns.count("suggested_tokens") == 1
+        assert columns.count("token_sources") == 1
+        assert row == (None, None)
+
+    def test_feedback_upsert_preserves_persisted_provenance(self, pls, monkeypatch):
+        """Scoring an existing utterance cannot overwrite its generation context."""
+        picks = iter([3, "warm", "cold", "feel"])
+
+        def choose(population, weights=None):
+            chosen = next(picks)
+            assert chosen in population
+            return [chosen]
+
+        monkeypatch.setattr(
+            "anima_mcp.primitive_language.random.choices",
+            choose,
+        )
+        utt = pls.generate_utterance(
+            default_state(),
+            suggested_tokens=["warm", "cold"],
+        )
+        conn = pls._connect()
+        before = conn.execute("""
+            SELECT suggested_tokens, token_sources
+            FROM primitive_history
+            WHERE timestamp = ? AND tokens = ?
+        """, (utt.timestamp.isoformat(), utt.text())).fetchone()
+
+        # A delayed feedback object may lack the original generation context;
+        # the conflict update must treat the stored provenance as immutable.
+        utt.suggested_tokens = None
+        utt.token_sources = None
+        pls.record_feedback(
+            utt,
+            response="this resonates",
+            explicit_positive=True,
+        )
+        after = conn.execute("""
+            SELECT suggested_tokens, token_sources
+            FROM primitive_history
+            WHERE timestamp = ? AND tokens = ?
+        """, (utt.timestamp.isoformat(), utt.text())).fetchone()
+
+        assert tuple(after) == tuple(before)
+        assert json.loads(after["suggested_tokens"]) == ["warm", "cold"]
+        assert json.loads(after["token_sources"]) == [
+            "trajectory_anchor",
+            "suggestion_boosted_draw",
+            "ordinary_draw",
+        ]
+
 
 # ==================== Stats ====================
 
@@ -432,3 +632,7 @@ class TestStats:
         assert len(recent) == 2
         assert "text" in recent[0]
         assert "tokens" in recent[0]
+        assert recent[0]["suggested_tokens"] == []
+        assert recent[0]["token_sources"] == [
+            "ordinary_draw"
+        ] * len(recent[0]["tokens"])

@@ -109,10 +109,14 @@ class TrajectoryAwareness:
         self._current_shape: Optional[str] = None
         self._last_anima_state: Optional[Dict[str, float]] = None
 
-        # Observability counters
+        # Process-lifetime observability counters. Suggestion recall is read from
+        # persisted events when a database is configured (see ``get_state``).
         self._total_generations: int = 0
-        self._total_feedback: int = 0
-        self._coherence_sum: float = 0.0
+        self._eisv_weight_update_count: int = 0
+        self._eisv_weight_matched_token_count: int = 0
+        self._suggestion_recall_stats: Dict[
+            tuple[int, int], tuple[int, float]
+        ] = {}
 
         # Persistence
         self._db_path = db_path
@@ -146,9 +150,32 @@ class TrajectoryAwareness:
                     expression_tokens TEXT,
                     coherence_score REAL,
                     cache_hit INTEGER DEFAULT 0,
-                    buffer_size INTEGER
+                    buffer_size INTEGER,
+                    suggestion_recall REAL,
+                    suggested_count INTEGER,
+                    actual_count INTEGER,
+                    eisv_weight_feedback_score REAL
                 )"""
             )
+            # Existing databases predate suggestion-recall telemetry. Append
+            # nullable columns without renaming or rewriting legacy scores.
+            existing_columns = {
+                row[1]
+                for row in self._db_conn.execute(
+                    "PRAGMA table_info(trajectory_events)"
+                ).fetchall()
+            }
+            for column, declaration in (
+                ("suggestion_recall", "REAL"),
+                ("suggested_count", "INTEGER"),
+                ("actual_count", "INTEGER"),
+                ("eisv_weight_feedback_score", "REAL"),
+            ):
+                if column not in existing_columns:
+                    self._db_conn.execute(
+                        f"ALTER TABLE trajectory_events "
+                        f"ADD COLUMN {column} {declaration}"
+                    )
             self._db_conn.commit()
         except Exception:
             self._db_conn = None
@@ -171,8 +198,9 @@ class TrajectoryAwareness:
                 """INSERT INTO trajectory_events
                    (timestamp, event_type, shape, eisv_state, derivatives,
                     suggested_tokens, expression_tokens, coherence_score,
-                    cache_hit, buffer_size)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    cache_hit, buffer_size, suggestion_recall,
+                    suggested_count, actual_count, eisv_weight_feedback_score)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     now_iso,
                     kwargs.get("event_type", "unknown"),
@@ -184,6 +212,10 @@ class TrajectoryAwareness:
                     kwargs.get("coherence_score"),
                     1 if kwargs.get("cache_hit") else 0,
                     kwargs.get("buffer_size", len(self._buffer)),
+                    kwargs.get("suggestion_recall"),
+                    kwargs.get("suggested_count"),
+                    kwargs.get("actual_count"),
+                    kwargs.get("eisv_weight_feedback_score"),
                 ),
             )
             self._db_conn.commit()
@@ -356,22 +388,82 @@ class TrajectoryAwareness:
         except Exception:
             return None
 
-    def record_feedback(self, tokens: List[str], score: float) -> None:
-        """Forward feedback to the expression generator's weight learning."""
-        if self._current_shape is not None:
-            try:
-                self._generator.update_weights(self._current_shape, tokens, score)
-                self._total_feedback += 1
-                self._coherence_sum += score
-                self._log_event(
-                    event_type="feedback",
-                    shape=self._current_shape,
-                    expression_tokens=tokens,
-                    coherence_score=score,
-                    buffer_size=len(self._buffer),
-                )
-            except Exception:
-                pass
+    def record_suggestion_recall(
+        self,
+        suggested_tokens: Optional[List[str]],
+        actual_tokens: List[str],
+        *,
+        shape: Optional[str] = None,
+    ) -> Optional[float]:
+        """Persist one typed suggestion-recall observation.
+
+        This is telemetry only. It deliberately does not mutate expression
+        weights; callers that intend learning must make that separate action
+        explicit through :meth:`record_eisv_weight_feedback`.
+        """
+        score = compute_suggestion_recall(suggested_tokens, actual_tokens)
+        if score is None:
+            return None
+
+        suggested_count = len(suggested_tokens)
+        actual_count = len(actual_tokens)
+        stratum = (suggested_count, actual_count)
+        observation_count, recall_sum = self._suggestion_recall_stats.get(
+            stratum, (0, 0.0)
+        )
+        self._suggestion_recall_stats[stratum] = (
+            observation_count + 1,
+            recall_sum + score,
+        )
+        self._log_event(
+            event_type="suggestion",
+            shape=shape if shape is not None else self._current_shape,
+            suggested_tokens=suggested_tokens,
+            expression_tokens=actual_tokens,
+            suggestion_recall=score,
+            suggested_count=suggested_count,
+            actual_count=actual_count,
+            buffer_size=len(self._buffer),
+        )
+        return score
+
+    def record_eisv_weight_feedback(
+        self,
+        eisv_tokens: List[str],
+        score: float,
+    ) -> int:
+        """Apply feedback to matching EISV tokens and return match count.
+
+        Zero-match input is a true no-op: it changes no counter and writes no
+        event. This keeps Lumen vocabulary out of the EISV learning stream.
+        """
+        if self._current_shape is None:
+            return 0
+        try:
+            matched_count = self._generator.update_weights(
+                self._current_shape,
+                eisv_tokens,
+                score,
+            )
+        except Exception:
+            return 0
+        if matched_count <= 0:
+            return 0
+
+        self._eisv_weight_update_count += 1
+        self._eisv_weight_matched_token_count += matched_count
+        self._log_event(
+            event_type="eisv_weight_update",
+            shape=self._current_shape,
+            expression_tokens=eisv_tokens,
+            eisv_weight_feedback_score=score,
+            buffer_size=len(self._buffer),
+        )
+        return matched_count
+
+    def record_feedback(self, tokens: List[str], score: float) -> int:
+        """Deprecated compatibility wrapper for EISV weight feedback."""
+        return self.record_eisv_weight_feedback(tokens, score)
 
     # ------------------------------------------------------------------
     # Observability
@@ -409,10 +501,21 @@ class TrajectoryAwareness:
             cache_shape = self._cached_result.get("shape")
             cache_age = time.time() - self._cache_time
 
-        # Expression generator stats
-        mean_coherence: Optional[float] = None
-        if self._total_feedback > 0:
-            mean_coherence = self._coherence_sum / self._total_feedback
+        # In-memory fallback is explicitly process-scoped. With persistence,
+        # the database is the source of truth so restarts do not reset recall.
+        suggestion_recall_scope = "process_lifetime"
+        suggestion_recall_strata = [
+            {
+                "suggested_count": suggested_count,
+                "actual_count": actual_count,
+                "observation_count": observation_count,
+                "mean_suggestion_recall": recall_sum / observation_count,
+            }
+            for (suggested_count, actual_count), (
+                observation_count,
+                recall_sum,
+            ) in sorted(self._suggestion_recall_stats.items())
+        ]
 
         # Recent events from DB
         recent_events: List[Dict[str, Any]] = []
@@ -422,12 +525,24 @@ class TrajectoryAwareness:
                 cursor = self._db_conn.execute(
                     "SELECT id, timestamp, event_type, shape, eisv_state, "
                     "derivatives, suggested_tokens, expression_tokens, "
-                    "coherence_score, cache_hit, buffer_size "
+                    "coherence_score AS legacy_mixed_score, cache_hit, "
+                    "buffer_size, suggestion_recall, suggested_count, "
+                    "actual_count, eisv_weight_feedback_score "
                     "FROM trajectory_events ORDER BY id DESC LIMIT 10"
                 )
                 cols = [d[0] for d in cursor.description]
                 for row in cursor.fetchall():
-                    recent_events.append(dict(zip(cols, row)))
+                    event = dict(zip(cols, row))
+                    legacy_score_kind = None
+                    if event["legacy_mixed_score"] is not None:
+                        if event["event_type"] == "suggestion":
+                            legacy_score_kind = "suggestion_recall"
+                        elif event["event_type"] == "feedback":
+                            legacy_score_kind = "untyped_feedback_score"
+                        else:
+                            legacy_score_kind = "unknown"
+                    event["legacy_score_kind"] = legacy_score_kind
+                    recent_events.append(event)
                 recent_events.reverse()  # chronological order
 
                 dist_cursor = self._db_conn.execute(
@@ -436,6 +551,32 @@ class TrajectoryAwareness:
                 )
                 for shape_name, count in dist_cursor.fetchall():
                     shape_distribution[shape_name] = count
+
+                recall_cursor = self._db_conn.execute(
+                    "SELECT suggested_count, actual_count, COUNT(*), "
+                    "AVG(suggestion_recall) FROM trajectory_events "
+                    "WHERE event_type = 'suggestion' "
+                    "AND suggestion_recall IS NOT NULL "
+                    "AND suggested_count IS NOT NULL "
+                    "AND actual_count IS NOT NULL "
+                    "GROUP BY suggested_count, actual_count "
+                    "ORDER BY suggested_count, actual_count"
+                )
+                suggestion_recall_strata = [
+                    {
+                        "suggested_count": suggested_count,
+                        "actual_count": actual_count,
+                        "observation_count": observation_count,
+                        "mean_suggestion_recall": mean_recall,
+                    }
+                    for (
+                        suggested_count,
+                        actual_count,
+                        observation_count,
+                        mean_recall,
+                    ) in recall_cursor.fetchall()
+                ]
+                suggestion_recall_scope = "persisted_history"
             except Exception:
                 pass
 
@@ -455,8 +596,16 @@ class TrajectoryAwareness:
             },
             "expression_generator": {
                 "total_generations": self._total_generations,
-                "feedback_count": self._total_feedback,
-                "mean_coherence": mean_coherence,
+                "total_generations_scope": "process_lifetime",
+                "suggestion_recall": {
+                    "scope": suggestion_recall_scope,
+                    "strata": suggestion_recall_strata,
+                },
+                "eisv_weight_updates": {
+                    "scope": "process_lifetime",
+                    "update_count": self._eisv_weight_update_count,
+                    "matched_token_count": self._eisv_weight_matched_token_count,
+                },
             },
             "recent_events": recent_events,
             "shape_distribution": shape_distribution,
@@ -477,15 +626,23 @@ class TrajectoryAwareness:
 _awareness: Optional[TrajectoryAwareness] = None
 
 
-def compute_expression_coherence(
+def compute_suggestion_recall(
     suggested_tokens: Optional[List[str]],
     actual_tokens: List[str],
 ) -> Optional[float]:
-    """Compute coherence between trajectory-suggested and actually-generated tokens."""
+    """Return the fraction of suggested tokens present in the output."""
     if not suggested_tokens:
         return None
     overlap = set(suggested_tokens) & set(actual_tokens)
     return len(overlap) / max(len(suggested_tokens), 1)
+
+
+def compute_expression_coherence(
+    suggested_tokens: Optional[List[str]],
+    actual_tokens: List[str],
+) -> Optional[float]:
+    """Deprecated compatibility alias for :func:`compute_suggestion_recall`."""
+    return compute_suggestion_recall(suggested_tokens, actual_tokens)
 
 
 def get_trajectory_awareness(**kwargs) -> TrajectoryAwareness:

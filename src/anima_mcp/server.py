@@ -636,33 +636,25 @@ async def _update_display_loop():
                         print(f"[PrimitiveLang] Generated: '{utterance.text()}' ({reason}){_shape_info}", file=sys.stderr, flush=True)
                         print(f"[PrimitiveLang] Pattern: {utterance.category_pattern()}", file=sys.stderr, flush=True)
 
-                        # Compute and log trajectory coherence
+                        # Record suggestion recall, then explicitly apply the
+                        # same score to the originating EISV token weights.
                         if _suggestion and utterance:
                             try:
-                                from .eisv.awareness import compute_expression_coherence
-                                _coherence = compute_expression_coherence(
+                                _traj = get_trajectory_awareness()
+                                _suggestion_recall = _traj.record_suggestion_recall(
                                     _suggestion.get("suggested_tokens"),
                                     utterance.tokens,
+                                    shape=_suggestion.get("shape"),
                                 )
-                                if _coherence is not None:
-                                    _traj = get_trajectory_awareness()
-                                    _traj._log_event(
-                                        event_type="suggestion",
-                                        shape=_suggestion.get("shape"),
-                                        suggested_tokens=_suggestion.get("suggested_tokens"),
-                                        expression_tokens=utterance.tokens,
-                                        coherence_score=_coherence,
-                                        buffer_size=_traj.buffer_size,
-                                    )
-                                    # Feed coherence to trajectory weight learning
-                                    _traj.record_feedback(
+                                if _suggestion_recall is not None:
+                                    _traj.record_eisv_weight_feedback(
                                         _suggestion.get("eisv_tokens", []),
-                                        _coherence,
+                                        _suggestion_recall,
                                     )
-                                    print(f"[PrimitiveLang] Trajectory coherence: {_coherence:.2f}", file=sys.stderr, flush=True)
+                                    print(f"[PrimitiveLang] Suggestion recall: {_suggestion_recall:.2f}", file=sys.stderr, flush=True)
                             except Exception as e:
                                 if loop_count % ERROR_LOG_THROTTLE == 1:
-                                    print(f"[TrajectoryCoherence] Error: {e}", file=sys.stderr, flush=True)
+                                    print(f"[SuggestionRecall] Error: {e}", file=sys.stderr, flush=True)
 
                         from .messages import add_observation
                         add_observation(
@@ -678,16 +670,6 @@ async def _update_display_loop():
                             result = lang.record_self_feedback(_ctx.last_primitive_utterance, lang_state)
                             if result:
                                 print(f"[PrimitiveLang] Self-feedback: score={result['score']:.2f} signals={result['signals']}", file=sys.stderr, flush=True)
-                                # Forward to EISV trajectory weight learning
-                                try:
-                                    _traj = get_trajectory_awareness()
-                                    _traj.record_feedback(
-                                        _ctx.last_primitive_utterance.tokens,
-                                        result['score'],
-                                    )
-                                except Exception as e:
-                                    if loop_count % ERROR_LOG_THROTTLE == 1:
-                                        print(f"[TrajectoryFeedback] Error: {e}", file=sys.stderr, flush=True)
 
                     # Implicit feedback: did a non-lumen message arrive after utterance?
                     if _ctx.last_primitive_utterance and _ctx.last_primitive_utterance.score is not None:
