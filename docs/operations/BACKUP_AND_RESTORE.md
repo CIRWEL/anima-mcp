@@ -91,15 +91,24 @@ journald on the Pi is volatile (RAM-backed), and high-churn logging rotates it
 in under a day — which is why the 2026-03-28 day-summary writer death (#188)
 could not be root-caused five months later: no operational record survived.
 `scripts/journal-archive.sh` (hourly via `lumen-journal-archive.timer`,
-installed by `restore_lumen.sh`) exports new journal entries incrementally
-(`journalctl --cursor-file`) into `~/.anima/journal-archive/journal-<date>.log.gz`,
-which the slim mirror then carries to the Mac daily. Retention: 14 daily files
-and a 300 MB size cap, oldest pruned first. Read with `zcat` (files are
-multi-member gzip, one member per hourly run). A failed export leaves
-`lumen-journal-archive.service` in a failed state — the unit state is the
-alarm; it never silently skips a window. After a reboot the stale cursor falls
-back to the new journal's head, so at most the previous boot's final
-sub-hour is lost.
+installed by `restore_lumen.sh`, which also adds the service user to `adm` so
+the full system journal is readable) exports new journal entries incrementally
+(`journalctl --cursor-file` against a scratch cursor, promoted only after the
+append is durable — a failed append retries the same window, never skips it)
+into `~/.anima/journal-archive/journal-<date>.log.gz`, which the slim mirror
+then carries to the Mac daily. Read with `zcat` (multi-member gzip, one member
+per hourly run).
+
+Retention: roughly 7 daily files under a 100 MB cap, oldest pruned first —
+except today's file, which may be the sole copy the daily mirror has not yet
+carried off-host and is never pruned; a storm day can therefore exceed the cap,
+loudly. Failures exit non-zero (transiently visible as a failed unit) and drop
+a durable `.last_failure` marker in the archive dir, cleared on the next full
+success — the marker rides the mirror, so it is greppable from the Mac. After
+a reboot the stale cursor falls back to the new journal's head (systemd 257
+detects the unmatched cursor), so at most the previous boot's tail since the
+last hourly run is lost; a backward clock jump can delay resumption until wall
+time passes the saved cursor's timestamp.
 
 ### Identity continuity
 

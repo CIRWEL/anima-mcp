@@ -506,7 +506,8 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/lumen-heartbeat.
 # operational record to read (#188 could not be root-caused for exactly this
 # reason). The hourly export is what makes post-hoc forensics possible.
 log "Installing journal archive timer..."
-ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/journal-archive.sh && \
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "sudo usermod -aG adm $PI_USER && \
+    chmod +x ~/anima-mcp/scripts/journal-archive.sh && \
     sudo cp ~/anima-mcp/systemd/lumen-journal-archive.service /etc/systemd/system/ && \
     sudo cp ~/anima-mcp/systemd/lumen-journal-archive.timer /etc/systemd/system/ && \
     sudo systemctl daemon-reload && \

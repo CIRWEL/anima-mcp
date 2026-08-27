@@ -1,11 +1,13 @@
 [Unit]
 Description=Export new journal entries to ~/.anima/journal-archive (carried off-host by the daily backup mirror)
-# Failure IS the alarm: a failed export leaves this unit in failed state
-# rather than silently skipping a window (design invariant 2).
+# The failed unit state is a transient alarm (the next successful run clears
+# it); the durable one is the .last_failure marker the script drops in the
+# archive dir, which rides the daily mirror to the Mac.
 
 [Service]
 Type=oneshot
 User=unitares-anima
 ExecStart=/home/unitares-anima/anima-mcp/scripts/journal-archive.sh
+TimeoutStartSec=300
 Nice=10
 IOSchedulingClass=idle

@@ -64,6 +64,7 @@ def rig(tmp_path):
         pass
 
     r = Rig()
+    r.tmp = tmp_path
     r.archive = archive
     r.calls = calls
     r.lines_file = lines_file
@@ -101,13 +102,20 @@ class TestExport:
         assert "first window" in content
         assert "second window" in content
 
-    def test_cursor_file_is_passed_to_journalctl(self, rig):
+    def test_cursor_advances_only_via_scratch_promotion(self, rig):
+        """journalctl runs against a scratch cursor; the real one is promoted
+        after the append lands. The stub writes s=fakecursor to whatever
+        --cursor-file= path it is handed."""
         rig.lines_file.write_text("x\n")
-        cursor = rig.archive / "custom.cursor"
-        rig.run({"JOURNAL_ARCHIVE_CURSOR": str(cursor)})
-        assert f"--cursor-file={cursor}" in rig.calls.read_text()
-        # The stub simulates journalctl's own cursor update on success.
-        assert cursor.exists()
+        cursor = rig.tmp / "custom.cursor"
+        cursor.write_text("s=old\n")
+        result = rig.run({"JOURNAL_ARCHIVE_CURSOR": str(cursor)})
+        assert result.returncode == 0, result.stderr
+        # journalctl was NOT handed the real cursor path...
+        assert f"--cursor-file={cursor}" not in rig.calls.read_text()
+        assert "--cursor-file=" in rig.calls.read_text()
+        # ...but the real cursor carries the advanced value after promotion.
+        assert cursor.read_text() == "s=fakecursor\n"
 
 
 class TestFailureDirection:
@@ -117,6 +125,34 @@ class TestFailureDirection:
         assert result.returncode != 0
         assert "journalctl export failed" in result.stderr
         assert not rig.day_file.exists()
+
+    def test_append_failure_does_not_advance_cursor(self, rig):
+        """The finding-1 scenario: journalctl succeeds (scratch cursor written)
+        but the append fails — the real cursor must NOT advance, so the window
+        is retried next run instead of permanently skipped."""
+        rig.archive.mkdir(parents=True)
+        rig.archive.chmod(0o555)  # append into the dir will fail
+        cursor = rig.tmp / "cursor"
+        cursor.write_text("s=old\n")
+        rig.lines_file.write_text("entries that must not be skipped\n")
+        try:
+            result = rig.run({"JOURNAL_ARCHIVE_CURSOR": str(cursor)})
+            assert result.returncode != 0
+            assert "append" in result.stderr
+            assert cursor.read_text() == "s=old\n"
+        finally:
+            rig.archive.chmod(0o755)
+
+    def test_failure_writes_marker_and_success_clears_it(self, rig):
+        rig.lines_file.write_text("x\n")
+        result = rig.run({"JOURNALCTL_SHOULD_FAIL": "1"})
+        assert result.returncode != 0
+        marker = rig.archive / ".last_failure"
+        assert marker.exists()
+        assert "journalctl export failed" in marker.read_text()
+        result = rig.run()
+        assert result.returncode == 0, result.stderr
+        assert not marker.exists()
 
 
 class TestRetention:
@@ -147,3 +183,33 @@ class TestRetention:
         assert not oldest.exists()
         assert newest.exists()
         assert "size cap" in result.stderr
+
+    def test_todays_file_is_never_pruned(self, rig):
+        """Today's file may be the sole copy the daily mirror has not yet
+        carried off-host; a storm day exceeds the cap loudly instead."""
+        rig.archive.mkdir(parents=True)
+        rig.day_file.write_bytes(os.urandom(2 * 1024 * 1024))
+        rig.lines_file.write_text("")
+        result = rig.run({"JOURNAL_ARCHIVE_MAX_MB": "1"})
+        assert result.returncode == 0, result.stderr
+        assert rig.day_file.exists()
+        assert "sole un-mirrored copy" in result.stderr
+
+    def test_stuck_delete_exits_loud_instead_of_spinning(self, rig):
+        rig.archive.mkdir(parents=True)
+        victim = rig.archive / "journal-2026-08-01.log.gz"
+        victim.write_bytes(os.urandom(600 * 1024))
+        rig.archive.chmod(0o555)  # rm cannot unlink
+        rig.lines_file.write_text("")
+        try:
+            # Cursor outside the read-only dir so the run reaches the cap loop
+            # instead of dying at cursor promotion.
+            result = rig.run({
+                "JOURNAL_ARCHIVE_MAX_MB": "0",
+                "JOURNAL_ARCHIVE_CURSOR": str(rig.tmp / "cursor"),
+            })
+            assert result.returncode != 0
+            assert "could not delete" in result.stderr
+            assert victim.exists()
+        finally:
+            rig.archive.chmod(0o755)
