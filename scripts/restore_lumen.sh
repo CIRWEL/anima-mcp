@@ -500,6 +500,19 @@ ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/lumen-heartbeat.
     sudo systemctl enable lumen-heartbeat.timer && \
     sudo systemctl start lumen-heartbeat.timer" || log "  heartbeat install failed (non-fatal)"
 
+# 5e. Install the journal archive (volatile journald -> ~/.anima -> Mac mirror).
+# The Pi's journal lives in RAM and high-churn logging rotates it in under a
+# day; without this export a quiet failure investigated later has no
+# operational record to read (#188 could not be root-caused for exactly this
+# reason). The hourly export is what makes post-hoc forensics possible.
+log "Installing journal archive timer..."
+ssh $SSH_OPTS "$PI_USER@$PI_HOST" "chmod +x ~/anima-mcp/scripts/journal-archive.sh && \
+    sudo cp ~/anima-mcp/systemd/lumen-journal-archive.service /etc/systemd/system/ && \
+    sudo cp ~/anima-mcp/systemd/lumen-journal-archive.timer /etc/systemd/system/ && \
+    sudo systemctl daemon-reload && \
+    sudo systemctl enable lumen-journal-archive.timer && \
+    sudo systemctl start lumen-journal-archive.timer" || log "  journal archive install failed (non-fatal)"
+
 # 6. Install cron jobs (wifi watchdog, db maintenance, backup)
 log "Installing cron jobs..."
 PI_SCRIPTS="/home/${PI_USER}/anima-mcp/scripts"

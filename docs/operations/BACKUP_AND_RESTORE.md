@@ -62,6 +62,7 @@ From Pi's `~/.anima/`:
 | `drawings/` | All saved artwork |
 | `learning_inbox/` | Pending/rejected server-to-broker learning evidence |
 | `oauth.db` | Registered OAuth clients and token continuity (local only) |
+| `journal-archive/` | Hourly gzip exports of the systemd journal (see below) |
 
 The scheduled backup publishes `anima_data/` only after its staging mirror
 finishes. A JSON mirror failure makes the run fail and does not advance
@@ -83,6 +84,22 @@ MCP/zip deployments cannot assume the Mac is reachable, so `git_pull` and
 `~/.anima/backups/predeploy-code/` before replacing any code that will be
 restarted. Snapshot failure prevents the update. The one-time bootstrap path
 does the same.
+
+### Journal archive
+
+journald on the Pi is volatile (RAM-backed), and high-churn logging rotates it
+in under a day — which is why the 2026-03-28 day-summary writer death (#188)
+could not be root-caused five months later: no operational record survived.
+`scripts/journal-archive.sh` (hourly via `lumen-journal-archive.timer`,
+installed by `restore_lumen.sh`) exports new journal entries incrementally
+(`journalctl --cursor-file`) into `~/.anima/journal-archive/journal-<date>.log.gz`,
+which the slim mirror then carries to the Mac daily. Retention: 14 daily files
+and a 300 MB size cap, oldest pruned first. Read with `zcat` (files are
+multi-member gzip, one member per hourly run). A failed export leaves
+`lumen-journal-archive.service` in a failed state — the unit state is the
+alarm; it never silently skips a window. After a reboot the stale cursor falls
+back to the new journal's head, so at most the previous boot's final
+sub-hour is lost.
 
 ### Identity continuity
 

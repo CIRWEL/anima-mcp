@@ -1,0 +1,11 @@
+[Unit]
+Description=Export new journal entries to ~/.anima/journal-archive (carried off-host by the daily backup mirror)
+# Failure IS the alarm: a failed export leaves this unit in failed state
+# rather than silently skipping a window (design invariant 2).
+
+[Service]
+Type=oneshot
+User=unitares-anima
+ExecStart=/home/unitares-anima/anima-mcp/scripts/journal-archive.sh
+Nice=10
+IOSchedulingClass=idle
