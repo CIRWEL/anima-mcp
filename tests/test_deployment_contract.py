@@ -1,5 +1,8 @@
 """Deployment wiring must preserve the single-owner runtime architecture."""
 
+import json
+import os
+import subprocess
 from pathlib import Path
 
 
@@ -235,3 +238,85 @@ def test_server_never_initializes_a_direct_sensor_backend():
     assert "from .sensors import get_sensors" not in server
     assert 'get_sensors(backend="shm")' in accessors
     assert "no direct sensor takeover" in server
+
+
+# --- deployed-ref marker: git on the Pi must not be the only witness --------
+# Deploys reset/clean/overlay the checkout, so `git log` there cannot be
+# trusted to name the running code. The marker written at process start to
+# ~/.anima/deployed_ref.json (outside the repo tree — deploys have wiped
+# repo-resident files before) is the record an outside observer reads.
+
+
+def test_server_startup_records_deployed_ref_marker():
+    server = (ROOT / "src" / "anima_mcp" / "server.py").read_text()
+
+    # After the pidfile is claimed, before the runtime wakes: every restart
+    # path (deploy.sh, _delayed_restart, manual, reboot) passes through here.
+    pid_at = server.index("pidfile.write_text(str(os.getpid()))")
+    marker_at = server.index("write_startup_marker")
+    # Leading space: "wake(db_path, anima_id)" alone also matches the
+    # _lifecycle_wake delegation inside wake()'s own definition.
+    wake_at = server.index(" wake(db_path, anima_id)")
+    assert pid_at < marker_at < wake_at
+
+
+def test_startup_marker_names_the_running_head(tmp_path):
+    from anima_mcp import deploy_marker
+
+    marker = tmp_path / "deployed_ref.json"
+    assert deploy_marker.write_startup_marker(path=marker) is True
+
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT, capture_output=True, text=True, timeout=10,
+    ).stdout.strip()
+    assert data["head"] == head
+    assert data["source"] == "startup"
+    assert data["pid"] == os.getpid()
+    assert data["started_at"].endswith("+00:00")
+    # Atomic write: no half-written tmp residue left beside the marker.
+    assert not marker.with_name(marker.name + ".tmp").exists()
+
+
+def test_startup_marker_tolerates_absent_git(tmp_path, monkeypatch):
+    from anima_mcp import deploy_marker
+
+    gitless = tmp_path / "gitless"
+    gitless.mkdir()
+    monkeypatch.setattr(deploy_marker, "_repo_root", lambda: gitless)
+
+    marker = tmp_path / "deployed_ref.json"
+    # Without .git, a prior zip-overlay record is the ONLY statement of the
+    # deployed ref — startup must carry it forward, not erase it.
+    marker.write_text(json.dumps({"deployed_zip_sha": "ab" * 20}), encoding="utf-8")
+
+    assert deploy_marker.write_startup_marker(path=marker) is True
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["head"] is None
+    assert data["branch"] is None
+    assert data["source"] == "startup"
+    assert data["deployed_zip_sha"] == "ab" * 20
+
+
+def test_startup_marker_failure_returns_false_never_raises(tmp_path):
+    from anima_mcp import deploy_marker
+
+    blocker = tmp_path / "blocker"
+    blocker.write_text("", encoding="utf-8")
+    # Parent is a regular file: mkdir/replace must fail — quietly.
+    marker = blocker / "deployed_ref.json"
+    assert deploy_marker.write_startup_marker(path=marker) is False
+
+
+def test_zip_overlay_record_merges_into_existing_marker(tmp_path):
+    from anima_mcp import deploy_marker
+
+    marker = tmp_path / "deployed_ref.json"
+    assert deploy_marker.write_startup_marker(path=marker) is True
+    assert deploy_marker.record_zip_overlay("cd" * 20, path=marker) is True
+
+    data = json.loads(marker.read_text(encoding="utf-8"))
+    assert data["deployed_zip_sha"] == "cd" * 20
+    assert data["source"] == "zip-overlay"
+    assert data["head"]  # startup fields survive the merge

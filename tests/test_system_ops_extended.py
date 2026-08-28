@@ -572,3 +572,122 @@ class TestGithubArchiveOverlay:
         assert compiled_release.read_text(encoding="utf-8") == "compiled release"
         assert (live_docs / "current.md").read_text(encoding="utf-8") == "current"
         assert not (live_docs / "stale.md").exists()
+
+
+class TestZipCommitSha:
+    def _zip_with_comment(self, tmp_path, comment: bytes):
+        import zipfile
+
+        zip_path = tmp_path / "archive.zip"
+        with zipfile.ZipFile(zip_path, "w") as z:
+            z.writestr("anima-mcp-main/README.md", "x")
+            z.comment = comment
+        return zipfile.ZipFile(zip_path, "r")
+
+    def test_reads_github_archive_comment(self, tmp_path):
+        # GitHub codeload zips carry the exact commit SHA as the archive
+        # comment — the only place a refs/heads/<branch>.zip names it.
+        from anima_mcp.handlers.system_ops import _zip_commit_sha
+
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        with self._zip_with_comment(tmp_path, sha.encode()) as z:
+            assert _zip_commit_sha(z) == sha
+
+    def test_rejects_missing_or_non_sha_comment(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _zip_commit_sha
+
+        with self._zip_with_comment(tmp_path, b"") as z:
+            assert _zip_commit_sha(z) is None
+        with self._zip_with_comment(tmp_path, b"not a commit sha") as z:
+            assert _zip_commit_sha(z) is None
+
+
+class TestRecordOverlayRef:
+    """The zip overlay rewrites files without touching .git; these assert the
+    ref of what was actually deployed still gets named somewhere truthful."""
+
+    def test_without_git_records_marker_only(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _record_overlay_ref
+
+        sha = "ab" * 20
+        output = {}
+        with patch("anima_mcp.deploy_marker.record_zip_overlay") as rec, patch(
+            "anima_mcp.handlers.system_ops.subprocess.run"
+        ) as run_mock:
+            _record_overlay_ref(tmp_path, sha, output)
+
+        assert output["deployed_zip_sha"] == sha
+        rec.assert_called_once_with(sha)
+        run_mock.assert_not_called()
+
+    def test_with_git_mirrors_deploy_sh_step_1b(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _record_overlay_ref
+
+        (tmp_path / ".git").mkdir()
+        sha = "cd" * 20
+        output = {}
+        with patch("anima_mcp.deploy_marker.record_zip_overlay") as rec, patch(
+            "anima_mcp.handlers.system_ops.subprocess.run",
+            side_effect=[_cp(returncode=0), _cp(returncode=0)],
+        ) as run_mock:
+            _record_overlay_ref(tmp_path, sha, output)
+
+        cmds = [call.args[0] for call in run_mock.call_args_list]
+        assert cmds[0][:2] == ["git", "fetch"] and sha in cmds[0]
+        assert cmds[1] == ["git", "reset", "--mixed", sha]
+        assert "reset --mixed" in output["git_sync"]
+        rec.assert_called_once_with(sha)
+
+    def test_git_failure_is_reported_not_raised(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _record_overlay_ref
+
+        (tmp_path / ".git").mkdir()
+        sha = "ef" * 20
+        output = {}
+        with patch("anima_mcp.deploy_marker.record_zip_overlay") as rec, patch(
+            "anima_mcp.handlers.system_ops.subprocess.run",
+            side_effect=[_cp(returncode=0), _cp(returncode=1, stderr="bad object")],
+        ):
+            _record_overlay_ref(tmp_path, sha, output)
+
+        assert "could not align git" in output["git_sync"]
+        assert "bad object" in output["git_sync"]
+        rec.assert_called_once_with(sha)  # marker still written
+
+    def test_missing_sha_notes_unaligned_git(self, tmp_path):
+        from anima_mcp.handlers.system_ops import _record_overlay_ref
+
+        output = {}
+        with patch("anima_mcp.deploy_marker.record_zip_overlay") as rec:
+            _record_overlay_ref(tmp_path, None, output)
+
+        assert "no commit SHA" in output["git_sync"]
+        rec.assert_called_once_with(None)
+
+
+@pytest.mark.asyncio
+class TestDeployRefRecording:
+    async def test_deploy_from_github_extracts_and_records_zip_sha(self):
+        from anima_mcp.handlers.system_ops import handle_deploy_from_github
+
+        import zipfile
+
+        sha = "0123456789abcdef0123456789abcdef01234567"
+
+        def fake_retrieve(url, dest):
+            with zipfile.ZipFile(dest, "w") as z:
+                z.writestr("anima-mcp-main/README.md", "x")
+                z.comment = sha.encode()
+
+        with patch("urllib.request.urlretrieve", side_effect=fake_retrieve), patch(
+            "anima_mcp.handlers.system_ops._overlay_github_archive"
+        ), patch(
+            "anima_mcp.handlers.system_ops._sync_systemd_services", return_value=[]
+        ), patch(
+            "anima_mcp.handlers.system_ops._record_overlay_ref"
+        ) as rec:
+            data = parse_result(await handle_deploy_from_github({"restart": False}))
+
+        assert data["success"] is True
+        rec.assert_called_once()
+        assert rec.call_args.args[1] == sha

@@ -905,6 +905,18 @@ async def rest_health_detailed(request):
         result = await handle_get_health({})
         if result and len(result) > 0:
             data = json.loads(result[0].text)
+            # Which code is actually running (written at process start,
+            # outside the repo tree — see deploy_marker.py). Plain /health
+            # stays a bare "ok": unitares_bridge and vigil consume that
+            # exact body, so the ref surfaces here instead.
+            try:
+                from .deploy_marker import read_marker
+
+                marker = read_marker()
+                if marker is not None:
+                    data["deployed_ref"] = marker
+            except Exception:
+                pass
             return JSONResponse(data)
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
