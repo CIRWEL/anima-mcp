@@ -215,6 +215,70 @@ def _overlay_github_archive(archive_root: Path, repo_root: Path) -> None:
         shutil.copytree(item, dst, ignore=ignore)
 
 
+def _zip_commit_sha(archive) -> str | None:
+    """Exact commit SHA of a GitHub codeload archive, or None.
+
+    GitHub embeds the commit SHA the archive was cut from as the zip
+    archive comment. This is the only place a refs/heads/<branch>.zip
+    names its commit — the top-level directory is just ``<repo>-<branch>``.
+    """
+    try:
+        comment = (archive.comment or b"").decode("utf-8", "replace").strip()
+    except Exception:
+        return None
+    if len(comment) == 40 and all(c in "0123456789abcdef" for c in comment.lower()):
+        return comment.lower()
+    return None
+
+
+def _record_overlay_ref(repo_root: Path, zip_sha: str | None, output: dict) -> None:
+    """After a gitless zip overlay, stop git from lying about the running code.
+
+    The overlay copies files over the checkout WITHOUT touching .git, so
+    after the restart the running code no longer matches what ``git log``
+    reports. When .git exists, mirror deploy.sh step 1b: fetch the exact
+    deployed SHA and ``reset --mixed`` so HEAD names the code the overlay
+    just wrote. Either way, merge the SHA into the out-of-repo marker
+    (~/.anima/deployed_ref.json) so the deployed ref is named even when
+    .git is absent entirely. Best-effort: deploy success never depends on
+    any of this.
+    """
+    from ..deploy_marker import record_zip_overlay
+
+    if zip_sha:
+        output["deployed_zip_sha"] = zip_sha
+        if (repo_root / ".git").exists():
+            try:
+                fetch = subprocess.run(
+                    ["git", "fetch", "--quiet", "--no-tags", "origin", zip_sha],
+                    cwd=repo_root, capture_output=True, text=True, timeout=60,
+                )
+                reset = subprocess.run(
+                    ["git", "reset", "--mixed", zip_sha],
+                    cwd=repo_root, capture_output=True, text=True, timeout=30,
+                )
+                if fetch.returncode == 0 and reset.returncode == 0:
+                    output["git_sync"] = (
+                        f"git reset --mixed {zip_sha[:12]} (HEAD now names the overlaid code)"
+                    )
+                else:
+                    detail = (reset.stderr or fetch.stderr or "").strip()
+                    output["git_sync"] = (
+                        f"could not align git to {zip_sha[:12]}: "
+                        f"{detail or 'unknown error'} — git log may not match running code"
+                    )
+            except Exception as exc:
+                output["git_sync"] = (
+                    f"could not align git to {zip_sha[:12]}: {exc} — "
+                    "git log may not match running code"
+                )
+    else:
+        output["git_sync"] = (
+            "zip archive carried no commit SHA; git state not aligned"
+        )
+    record_zip_overlay(zip_sha)
+
+
 async def handle_git_pull(arguments: dict) -> list[TextContent]:
     """
     Pull latest code from git and optionally restart.
@@ -263,6 +327,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
 
             urllib.request.urlretrieve(url, zip_path)
             with zipfile.ZipFile(zip_path, "r") as z:
+                zip_sha = _zip_commit_sha(z)
                 z.extractall(ext_path.parent)
             zip_path.unlink(missing_ok=True)
 
@@ -273,6 +338,7 @@ async def handle_git_pull(arguments: dict) -> list[TextContent]:
             synced_services = _sync_systemd_services(repo_root)
 
             output = {"success": True, "bootstrap": "Deployed from GitHub zip", "repo": str(repo_root)}
+            _record_overlay_ref(repo_root, zip_sha, output)
             if synced_services:
                 output["synced_services"] = synced_services
             if restart:
@@ -610,6 +676,7 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
 
         urllib.request.urlretrieve(url, zip_path)
         with zipfile.ZipFile(zip_path, "r") as z:
+            zip_sha = _zip_commit_sha(z)
             z.extractall(ext_path.parent)
         zip_path.unlink(missing_ok=True)
 
@@ -618,6 +685,7 @@ async def handle_deploy_from_github(arguments: dict) -> list[TextContent]:
 
         synced_services = _sync_systemd_services(repo_root)
         output = {"success": True, "message": "Deployed from GitHub", "repo": str(repo_root)}
+        _record_overlay_ref(repo_root, zip_sha, output)
         if synced_services:
             output["synced_services"] = synced_services
         if restart:

@@ -1806,6 +1806,20 @@ def main():
             logger.debug("[Server] Cleanup pidfile error: %s", e)
     atexit.register(cleanup_pidfile)
 
+    # Record which code this process is actually running, OUTSIDE the repo
+    # tree (~/.anima/deployed_ref.json). Deploys reset/clean/overlay the
+    # checkout, so on the Pi `git log` cannot be trusted to name the running
+    # ref — this marker, written at every process start, can. Best-effort:
+    # startup must never fail on marker problems (see deploy_marker.py).
+    try:
+        from .deploy_marker import write_startup_marker
+        if not write_startup_marker():
+            print("[Server] Warning: could not write deployed-ref marker",
+                  file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"[Server] Warning: deployed-ref marker error: {e}",
+              file=sys.stderr, flush=True)
+
     # Determine DB persistence path (User Home > Project Root)
     env_db = os.environ.get("ANIMA_DB")
     if env_db:
