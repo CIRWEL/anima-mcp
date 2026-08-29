@@ -305,6 +305,7 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                 # from a broken one without SSH'ing into the database.
                 try:
                     from ..display.drawing_engine import (
+                        FROZEN_FRAC_OF_PEAK, FROZEN_STREAK_SAMPLES,
                         SETTLED_FRAC_OF_PEAK, SETTLED_STREAK_SAMPLES,
                     )
                     ns = engine.canvas._novelty_settling
@@ -318,6 +319,20 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                             "threshold": round(peak * SETTLED_FRAC_OF_PEAK, 1),
                             "recent_smoothed": round(sum(recent) / len(recent), 1)
                                                if recent else None,
+                            # Structural reach: what resets the settled streak
+                            # when the piece is still opening new ground.
+                            "occupied_cells": int(ns.get("last_cells") or 0),
+                            # The frozen counter. Distinct from the settled
+                            # streak above: idle samples ADVANCE this one and
+                            # HOLD that one, so seeing both is the only way to
+                            # tell "still being worked but unchanging" from
+                            # "not being worked at all".
+                            "idle_streak": int(ns.get("idle_streak") or 0),
+                            "idle_streak_needed": FROZEN_STREAK_SAMPLES,
+                            "mark_peak": round(float(ns.get("mark_peak") or 0.0), 1),
+                            "idle_threshold": round(
+                                float(ns.get("mark_peak") or 0.0)
+                                * FROZEN_FRAC_OF_PEAK, 2),
                         }
                     else:
                         drawing_info["novelty_settling"] = None
