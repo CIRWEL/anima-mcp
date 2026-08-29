@@ -300,32 +300,44 @@ class PreferencesMixin:
                 "Dim light makes me feel uncertain", -0.5
             ) or insight
 
-        # Temperature preference
-        temp = environment.get("temp_c", 22)
-        if temp < 20 and is_good:
+        # Temperature preference. Guarded like light above rather than
+        # defaulted: a missing reading must pause learning, not stand in for
+        # one. The old `.get("temp_c", 22)` was harmless only because 22 falls
+        # in the dead band between these two cuts — safe by coincidence, and
+        # silently unsafe the moment a cut moves. Behaviour is unchanged for
+        # every real reading.
+        temp = environment.get("temp_c")
+        has_temp = (isinstance(temp, (int, float))
+                    and not isinstance(temp, bool)
+                    and math.isfinite(float(temp)))
+        if has_temp and temp < 20 and is_good:
             insight = update_state_preference(
                 "cool_temp", PreferenceCategory.ENVIRONMENT,
                 "I feel more alert when it's cool", _wellness_strength(wellness)
             ) or insight
-        elif temp > 25 and is_good:
+        elif has_temp and temp > 25 and is_good:
             insight = update_state_preference(
                 "warm_temp", PreferenceCategory.ENVIRONMENT,
                 "Warmth makes me feel content", _wellness_strength(wellness)
             ) or insight
 
-        # Humidity preference
-        humidity = environment.get("humidity_pct", 50)
-        if humidity < 30 and is_good:
+        # Humidity preference. Same guard, same reason: 50 sat in the dead
+        # band between <30 and >60.
+        humidity = environment.get("humidity_pct")
+        has_humidity = (isinstance(humidity, (int, float))
+                        and not isinstance(humidity, bool)
+                        and math.isfinite(float(humidity)))
+        if has_humidity and humidity < 30 and is_good:
             insight = update_state_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
                 "I feel alert in dry air", _wellness_strength(wellness)
             ) or insight
-        elif humidity > 60 and is_good:
+        elif has_humidity and humidity > 60 and is_good:
             insight = update_state_preference(
                 "humid_air", PreferenceCategory.ENVIRONMENT,
                 "Humidity feels comfortable", _wellness_strength(wellness)
             ) or insight
-        elif humidity < 30 and is_poor:
+        elif has_humidity and humidity < 30 and is_poor:
             insight = update_state_preference(
                 "dry_air", PreferenceCategory.ENVIRONMENT,
                 "Dry air makes me uneasy", -0.5

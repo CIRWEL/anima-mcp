@@ -255,9 +255,44 @@ The VEML7700 light sensor sits next to the DotStar LEDs on the Adafruit BrainCra
 
 **Lux remains lux.** The canonical light channel is the uncorrected combined VEML7700 reading (room + LED glow), with the longstanding per-broker-sample EMA (`alpha=0.2`) applied in `sensors/pi.py`. Here “raw lux” means **no self-glow subtraction**, not “no temporal filtering.” It is never overwritten by a correction.
 
-All behavioral consumers still use raw lux directly: clarity, activity state, growth preferences, drawing light_regime, ethical drift, and self-model correlations. The DotStar animation thread publishes a short timestamped history of actual applied brightness and post-scaling RGB output. The Elixir VEML7700 owner records a conservative 0.52-second capture-support interval for each read: this bounds both the unknown phase of the most recently completed continuous 200 ms conversion and Vishay's specified +/-30% integration-time tolerance. The broker pairs LED history to that interval's midpoint. **Never use the shadow envelope `updated_at` as sensor capture time**: the sensor and SHM flush are independent 2-second loops and can differ by nearly a full cycle. `light_attribution.py` applies the same `alpha=0.2` EMA to optical drive, then uses the internally generated breathing pulse as a causal instrument: it learns lux-per-filtered-optical-drive only while logical color and target brightness stay fixed, rejecting the closed-loop correlation where room lux changes activity and activity changes the LEDs. Sign readiness requires both the 70% point gate and a 95% Wilson lower bound of 0.55; after activation it withdraws only below a 0.50 lower bound so adjacent samples cannot chatter epistemic status. It publishes a **shadow-only** `external_lux_residual`; the value stays `null` while warming, alignment is unavailable, or the candidate conflicts with the physical reading. This telemetry moves no gate (`used_by_clarity=false`, `clarity_input=raw_lux`). Do not restore the retired hardcoded `1150*b²` subtraction.
+⚠️ **The residual is no longer shadow — it drives behavior.** This file said
+"all behavioral consumers still use raw lux directly" and that the residual
+"moves no gate (`used_by_clarity=false`, `clarity_input=raw_lux`)". Both were
+true when written and are now false. Measured live 2026-08-29 via `get_state`:
+`mode: raw_preserving_gated`, `used_by_clarity: true`, `clarity_input:
+external_lux_residual`, `used_by_environment_preferences: true`. The split as it
+actually stands:
 
-**Drawing light regime thresholds** (raw lux):
+| Channel | Consumers |
+|---------|-----------|
+| **gated residual** (`gated_external_light_lux`) | clarity (`anima.py` `external_light` component), drawing `light_regime`, activity state (`server.py` passes it as `light_level`), growth environment preferences, `self_schema`, UNITARES bridge, `get_state` |
+| **raw lux** (`readings.light_lux`) | the info screens (labelled "raw lux (room+LED)"), identity/history recording, clarity's *sensor-coverage* count, and `light_attribution.py`'s own instrument |
+
+Raw lux is now the **display-and-record** channel; the residual is the
+**behavioral** one.
+
+⚠️ **A cut calibrated against raw lux is not calibrated against the residual.**
+`activity_state`'s light cuts (`<10` very dark, `<50` dim, `>500` bright) were
+last touched 2026-08-13; #204 switched their input to the residual on
+2026-08-23. Removing self-glow compresses the top of the range — the live
+reading above is 696 raw against 226 residual — so `>500` may no longer be
+reachable, which would pin `light_factor` in its interpolation band and bias
+`activity_score` (0.15 weight, level cuts at 0.7/0.4) toward drowsy. That is a
+question about the residual's distribution, not something to answer by moving
+the constant: `diagnostics(channel_distributions=true)` reports p05/p50/p95 per
+channel from `drawing_records` so it can be checked rather than guessed. Read
+p95 against the cut. **Unmeasured as of 2026-08-29** — the derivation has never
+run on Lumen. The gap is not cosmetic — measured live, raw 696 lux against
+a 226 lux residual with a 469 lux self-glow estimate, so any reasoning that
+treats clarity as a function of raw lux is working from a number ~3x too high.
+When the residual is unavailable the consumers fail toward *unknown* rather than
+silently substituting raw (`light_regime` returns `"unknown"`), which is
+invariant 2 working correctly. `sensors/pi.py` still never overwrites raw lux
+itself, and the retired hardcoded `1150*b²` subtraction must stay retired.  The DotStar animation thread publishes a short timestamped history of actual applied brightness and post-scaling RGB output. The Elixir VEML7700 owner records a conservative 0.52-second capture-support interval for each read: this bounds both the unknown phase of the most recently completed continuous 200 ms conversion and Vishay's specified +/-30% integration-time tolerance. The broker pairs LED history to that interval's midpoint. **Never use the shadow envelope `updated_at` as sensor capture time**: the sensor and SHM flush are independent 2-second loops and can differ by nearly a full cycle. `light_attribution.py` applies the same `alpha=0.2` EMA to optical drive, then uses the internally generated breathing pulse as a causal instrument: it learns lux-per-filtered-optical-drive only while logical color and target brightness stay fixed, rejecting the closed-loop correlation where room lux changes activity and activity changes the LEDs. Sign readiness requires both the 70% point gate and a 95% Wilson lower bound of 0.55; after activation it withdraws only below a 0.50 lower bound so adjacent samples cannot chatter epistemic status. It publishes `external_lux_residual`; the value stays `null` while warming, alignment is unavailable, or the candidate conflicts with the physical reading — and a `null` residual is what makes consumers report unknown rather than fall back to raw. Do not restore the retired hardcoded `1150*b²` subtraction.
+
+**Drawing light regime thresholds** (gated residual lux, NOT raw — see above;
+`drawing_engine.py` calls `gated_external_light_lux`, and returns `"unknown"`
+when the residual is unavailable):
 - `< 5 lux` → dark (LEDs off + room dark)
 - `< 100 lux` → dim
 - `>= 100 lux` → bright
@@ -515,7 +550,14 @@ pivot unblocks `attention_exhausted` and `earned_composition`, not that.
   `grid_entropy()` remains recorded and unread.
 - **Absent values persist as NULL, never as a default.** Lumen's instrumentation
   degrades toward healthy-looking numbers; a 0.0 would later be indistinguishable
-  from a drawing that genuinely had no reach.
+  from a drawing that genuinely had no reach. The environment dict passed to
+  `observe_drawing` broke this until 2026-08-29 (`light_lux or 0.0`,
+  `ambient_temp_c or 22`, `humidity_pct or 50` — a dark room, a comfortable one,
+  ordinary humidity, each indistinguishable afterwards from a real reading).
+  Preference learning was not misled only because 22 and 50 fall in the dead
+  bands between its cuts, which is safety by coincidence; the record was wrong
+  regardless, and both derivations read `drawing_records`. All three channels
+  are now conditional, as `external_light_lux` always was.
 - Timer-driven writers use `peek_growth_system()`, not `get_growth_system()` —
   the bare default is cwd-relative and the first caller fixes the database (#123).
 - **This moved no gate.** `tests/test_drawing_instrumentation.py::TestNoGateMoved`

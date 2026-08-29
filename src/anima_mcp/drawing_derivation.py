@@ -212,6 +212,79 @@ def derive(by_era, total: int):
     return thresholds, report
 
 
+# Environment channels recorded per drawing. Reported as distributions, never
+# judged here: a threshold's health is a question about the consumer's cuts, and
+# this module does not know them.
+_ENV_CHANNELS = ("light_lux", "external_light_lux", "ambient_temp_c",
+                 "humidity_pct")
+
+
+def channel_report(db_path: Optional[str] = None, days: int = 90) -> Dict[str, Any]:
+    """Percentile summary of the environment channels in drawing_records.
+
+    Why this exists: a fixed cut is only meaningful against the range of the
+    signal feeding it, and that signal can change underneath it. It did — #204
+    moved clarity, drawing light_regime and activity state from raw lux to the
+    gated self-glow residual, ten days after activity_state's light cuts
+    (<10 / <50 / >500) were last touched. Removing self-glow compresses the top
+    of the range: measured live, the same room read 696 lux raw and 226 lux
+    residual. Whether `> 500` is still reachable is a question about the
+    residual's distribution, and nobody could ask it without a shell.
+
+    Reports only. It names no threshold and passes no verdict — read p95 against
+    whatever cut you are checking. Read-only, same posture as derive_report:
+    never raises, opens the database `mode=ro`, and returns available=false with
+    a reason rather than an empty summary that would read as "no data recorded".
+    """
+    path = resolve_db_path(db_path)
+    since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    out: Dict[str, Any] = {"db_path": path, "days": days}
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        try:
+            have = {row[1] for row in con.execute(
+                "pragma table_info(drawing_records)")}
+            if not have:
+                return {"available": False, "db_path": path,
+                        "reason": "drawing_records not present"}
+            channels: Dict[str, Any] = {}
+            for name in _ENV_CHANNELS:
+                if name not in have:
+                    channels[name] = {"available": False,
+                                      "reason": "column not present"}
+                    continue
+                vals = sorted(
+                    float(v) for (v,) in con.execute(
+                        f"select {name} from drawing_records "
+                        f"where {name} is not null and timestamp > ?", (since,))
+                )
+                if not vals:
+                    # Distinct from a zero reading: nothing was recorded at all.
+                    channels[name] = {"available": False, "n": 0,
+                                      "reason": "no non-null rows in window"}
+                    continue
+                channels[name] = {
+                    "available": True,
+                    "n": len(vals),
+                    "min": round(vals[0], 4),
+                    "p05": round(percentile(vals, 5) or 0.0, 4),
+                    "p50": round(percentile(vals, 50) or 0.0, 4),
+                    "p95": round(percentile(vals, 95) or 0.0, 4),
+                    "max": round(vals[-1], 4),
+                }
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return {"available": False, "db_path": path,
+                "reason": f"database unreadable: {e}"}
+    except (TypeError, ValueError) as e:
+        return {"available": False, "db_path": path,
+                "reason": f"unusable row data: {e}"}
+    out["available"] = True
+    out["channels"] = channels
+    return out
+
+
 def derive_report(db_path: Optional[str] = None, days: int = 90,
                   max_rows: int = MAX_ROWS) -> Dict[str, Any]:
     """Full read-only report. Never raises — diagnostics must not break.

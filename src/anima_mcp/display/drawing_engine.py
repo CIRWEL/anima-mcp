@@ -2358,11 +2358,36 @@ class DrawingEngine:
                             "stability": anima.stability,
                             "presence": anima.presence,
                         }
-                        environment = {
-                            "light_lux": readings.light_lux or 0.0,
-                            "temp_c": readings.ambient_temp_c or 22,
-                            "humidity_pct": readings.humidity_pct or 50,
-                        }
+                        # A key is present only when its sensor actually read.
+                        # These land in drawing_records, whose columns are all
+                        # nullable and whose writer passes environment.get()
+                        # straight through — so an omitted key persists as NULL
+                        # and a dead sensor stays visibly dead.
+                        #
+                        # This used to be `readings.light_lux or 0.0`,
+                        # `ambient_temp_c or 22`, `humidity_pct or 50`. Those
+                        # defaults are the shape invariant 2 exists to forbid:
+                        # 0.0 lux is a pitch-dark room, 22C is a comfortable
+                        # one, 50% is ordinary humidity — every one a plausible
+                        # reading, none distinguishable afterwards from a real
+                        # one. Preference learning happened not to be misled,
+                        # but only because 22 and 50 fall in the dead bands
+                        # between its cuts (<20/>25, <30/>60); moving a cut
+                        # would have started teaching Lumen the taste of a
+                        # broken sensor. The record was wrong regardless, and
+                        # any later derivation over drawing_records would have
+                        # silently included the fabrications.
+                        #
+                        # external_light_lux three lines below has always been
+                        # conditional. This is the same rule, applied to the
+                        # channels that were missing it.
+                        environment = {}
+                        if readings.light_lux is not None:
+                            environment["light_lux"] = readings.light_lux
+                        if readings.ambient_temp_c is not None:
+                            environment["temp_c"] = readings.ambient_temp_c
+                        if readings.humidity_pct is not None:
+                            environment["humidity_pct"] = readings.humidity_pct
                         # Preserve raw lux in the drawing record, but only let
                         # the gated self-glow residual support claims about the
                         # room being dim or bright.

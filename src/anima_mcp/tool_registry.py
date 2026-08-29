@@ -304,9 +304,20 @@ TOOLS = [
                         "(read-only; writes nothing). Default false."
                     ),
                 },
+                "channel_distributions": {
+                    "type": "boolean",
+                    "description": (
+                        "Include a percentile summary (n/min/p05/p50/p95/max) of the "
+                        "environment channels in drawing_records — light_lux, "
+                        "external_light_lux, ambient_temp_c, humidity_pct. Read-only; "
+                        "reports distributions and names no threshold. Use it to check "
+                        "whether a fixed cut is still reachable against the signal now "
+                        "feeding it. Default false."
+                    ),
+                },
                 "derive_days": {
                     "type": "integer",
-                    "description": "Corpus window for the derivation, in days (default 90).",
+                    "description": "Corpus window for the derivation and the channel summary, in days (default 90).",
                 },
             },
             "additionalProperties": True,
