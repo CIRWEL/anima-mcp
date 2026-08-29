@@ -411,10 +411,26 @@ canvas with negative space intact. What was missing is subjective completion —
 worked", judged against the piece's own peak rate, so no per-era tuning and no
 constant an era's operating range can silently sit below.
 
-⚠️ Known follow-up: cap-length `geometric` pieces go **100% idle after ~1h**
-(marks stop entirely — fatigue high enough to suppress marks, below the 0.90
-bail) and then sit frozen for ~7h until the cap. `earned_settled` deliberately
-does not fire there (idle ≠ settled); the freeze itself is a separate defect.
+**The geometric freeze was a deadlock, not a threshold (fixed 2026-08-29).**
+Cap-length `geometric` pieces went 100% idle after ~1h (marks stopped entirely)
+and sat frozen for ~7h until the cap. The cause is structural:
+`_update_attention()` runs **once per placed mark**, so fatigue, curiosity and
+engagement only advance when a mark lands. Rising fatigue lowers
+`derived_energy`; `draw_chance *= energy` has no floor; marks become rare and
+then stop — at which point the state that could end the piece stops moving with
+them. Fatigue can no longer climb to the 0.90 `bailout_fatigue`, energy can no
+longer fall to the 0.05 `bailout_stalled`, and `earned_settled` correctly
+refuses because an idle sample HOLDS its streak. Every exit was driven by a
+quantity that only advances when marks happen.
+
+`bailout_frozen` reads around the loop from outside it: marks stopped, judged
+against **this piece's own peak marks-per-interval** (`FROZEN_FRAC_OF_PEAK`,
+`FROZEN_STREAK_SAMPLES`), gated on pixels and age. ⛔ It has **no mark-count
+floor** on purpose — `SETTLED_MIN_MARKS` is 100 and geometric pieces reach ~70
+marks in total, so requiring it would make the gate unreachable for the one era
+it exists to rescue. It is a bail-out, never earned: nothing was resolved, the
+drawing got stuck. The idle counter and the settled streak are deliberately
+separate — the same idle sample advances one and holds the other.
 
 **Why curiosity cannot deplete (measured 2026-08-02).** `_update_attention()`
 branches on a fixed `C = 0.4`:
@@ -490,7 +506,13 @@ pivot unblocks `attention_exhausted` and `earned_composition`, not that.
   give novel-pixels-per-mark and structural change over the piece's life.
 - `CanvasState.occupied_cells()` / `.grid_entropy()` — structural reach vs. pixel
   count. Cells still opening = finding territory; flat cells with rising pixels =
-  thickening what it already has.
+  thickening what it already has. `occupied_cells()` gained its first consumer
+  2026-08-29: a piece still opening new cells resets the `earned_settled` streak,
+  because pixel novelty alone cannot tell reaching into empty ground from
+  thickening what is already held. The guard can only ever RESET the streak,
+  never advance it — strictly more conservative, so it cannot make
+  `earned_settled` fire on a piece that would not otherwise have earned it.
+  `grid_entropy()` remains recorded and unread.
 - **Absent values persist as NULL, never as a default.** Lumen's instrumentation
   degrades toward healthy-looking numbers; a 0.0 would later be indistinguishable
   from a drawing that genuinely had no reach.
@@ -500,11 +522,13 @@ pivot unblocks `attention_exhausted` and `earned_composition`, not that.
   fails if one moves. Retuning is a separate decision, and the point of recording
   first is to learn what "enough" means for Lumen before anything is tuned to it.
 
-⚠️ `coverage_target` ("sparse"/"balanced"/"dense") is generated per piece from
-clarity, described, and persisted — and **read by nothing**. It is the only
-`DrawingGoal` field with no consumer (`warmth_bias` and `initial_quadrant` both
-have one). It is now recorded, which is the precondition for it ever meaning
-anything, but it still steers no mark.
+`coverage_target` ("sparse"/"balanced"/"dense") steers marks via
+`_apply_coverage_bias()`, which leans a gesture boundary toward the sparsest or
+fullest cell of the piece's own density grid (`COVERAGE_BIAS_STRENGTH`, clamped
+to `COVERAGE_BIAS_MARGIN`). Self-relative by construction — the target is an
+extremum of THIS piece's grid — so it adds no absolute threshold.
+`tests/test_coverage_intention.py` pins both halves. (This file described the
+field as "read by nothing" until 2026-08-29, ~1 week after the consumer landed.)
 
 **Attention signals** (replace arbitrary energy depletion):
 | Signal | Behavior |

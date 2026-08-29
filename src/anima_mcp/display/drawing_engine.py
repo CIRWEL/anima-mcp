@@ -68,6 +68,31 @@ SETTLED_MIN_MARKS = 100
 SETTLED_SMOOTH_WINDOW = 3        # rolling mean over active samples
 SETTLED_MIN_SAMPLE_MARKS = 2     # <2 marks/sample = trickle, holds not advances
 
+# Frozen detection. Cap-length `geometric` pieces stop marking entirely after
+# ~1h and then sit untouched for ~7h until the 8-hour cap. The cause is a closed
+# loop, not a mistuned number: _update_attention runs once per PLACED MARK, so
+# fatigue, curiosity and engagement only advance when a mark lands. Rising
+# fatigue lowers derived_energy, `draw_chance *= energy` has no floor, marks
+# become rare — and then the very state that could end the piece stops moving
+# with them. Fatigue can no longer climb to the 0.90 bailout_fatigue, energy can
+# no longer fall to the 0.05 bailout_stalled, and earned_settled correctly
+# refuses because an idle sample HOLDS the streak (idle is not settled). Every
+# exit is driven by a quantity that only advances when marks happen.
+#
+# So the detector must read the one thing still observable from outside that
+# loop: marks have stopped, judged against THIS piece's own peak marks-per-
+# interval. Self-relative in the rate, exactly as SETTLED_FRAC_OF_PEAK is — an
+# absolute "fewer than N marks" would be unreachable for a slow era and trigger
+# constantly for a fast one.
+#
+# ⛔ There is deliberately NO mark-count floor here. SETTLED_MIN_MARKS is 100 and
+# geometric pieces reach ~70 marks total, so requiring it would make this gate
+# unreachable for the one era it exists to rescue — the exact defect class this
+# file keeps having to fix. Investment is gated by pixels and age instead, which
+# a whole-shape-stamping era clears easily.
+FROZEN_FRAC_OF_PEAK = 0.10   # a sample under 10% of own peak mark rate is idle
+FROZEN_STREAK_SAMPLES = 12   # ~1h of consecutive idle samples at 300s cadence
+
 
 def is_earned_completion_reason(reason: Optional[str]) -> bool:
     """Gate for autobiographical writes tied to drawing completion.
@@ -819,6 +844,8 @@ class DrawingState:
 
           Bail-out — a safety hatch fired because natural completion did not:
             "bailout_fatigue"     — fatigue > 0.90
+            "bailout_frozen"      — marks stopped relative to this piece's own
+                                    peak rate, while attention state is stuck
             "bailout_stalled"     — energy near-zero and drawing > 15min
             "bailout_hard_cap"    — 8-hour safety net
 
@@ -858,6 +885,14 @@ class DrawingState:
         if self.fatigue > 0.90:
             return "bailout_fatigue"
 
+        # Frozen — the piece stopped being worked and cannot say so itself.
+        # Deliberately a BAILOUT, never earned: nothing was resolved here, the
+        # drawing got stuck. Ranking it above bailout_stalled is diagnosis, not
+        # preference — a frozen piece never reaches the energy floor stalled
+        # tests for, so stalled would only ever catch it at the 8-hour cap.
+        if canvas is not None and self.marks_stopped(canvas):
+            return "bailout_frozen"
+
         # Stalled -- energy near-zero and drawing has been going for a while.
         # Uses drawing-level time (not phase time) to avoid resets from phase
         # oscillation.
@@ -895,6 +930,37 @@ class DrawingState:
         except (TypeError, ValueError):
             return False
         if canvas.mark_count < SETTLED_MIN_MARKS:
+            return False
+        if len(canvas.pixels) < MIN_RECORDED_DRAWING_PIXELS:
+            return False
+        started = canvas.last_clear_time or canvas.drawing_start_time
+        if not started or (time.time() - started) < SETTLED_MIN_AGE_SECONDS:
+            return False
+        return True
+
+    def marks_stopped(self, canvas) -> bool:
+        """True when the piece has stopped marking while still unfinished.
+
+        Reads the idle counter advanced by _update_novelty_settling. Distinct
+        from novelty_settled(): settled means "still being worked but no longer
+        changing", frozen means "no longer being worked at all". The novelty
+        tracker deliberately cannot tell the difference — it HOLDS on an idle
+        sample, because rest is not evidence either way — so the freeze needs
+        its own counter and its own reason.
+
+        Investment is gated by pixels and age, never by mark count: see
+        FROZEN_FRAC_OF_PEAK for why a mark floor would make this unreachable for
+        the era it exists to rescue.
+        """
+        ns = getattr(canvas, "_novelty_settling", None)
+        if not isinstance(ns, dict):
+            return False
+        try:
+            if int(ns.get("idle_streak") or 0) < FROZEN_STREAK_SAMPLES:
+                return False
+            if float(ns.get("mark_peak") or 0.0) <= 0.0:
+                return False  # never established a rate to be idle against
+        except (TypeError, ValueError):
             return False
         if len(canvas.pixels) < MIN_RECORDED_DRAWING_PIXELS:
             return False
@@ -1368,6 +1434,9 @@ class DrawingEngine:
             canvas._novelty_settling = {
                 "last_t": now, "last_px": pixels, "last_marks": marks,
                 "recent": [], "peak": 0.0, "streak": 0,
+                # Frozen tracking (marks stopping) and structural reach, both
+                # carried alongside so a restart does not lose either.
+                "mark_peak": 0.0, "idle_streak": 0, "last_cells": 0,
             }
             return
         # One guard around the ENTIRE update: canvas.json is only shape-checked
@@ -1381,9 +1450,22 @@ class DrawingEngine:
             last_marks = int(ns.get("last_marks") or 0)
             novel = max(0, pixels - last_px)
             marks_delta = marks - last_marks
+            cells = canvas.occupied_cells()
             ns["last_t"] = now
             ns["last_px"] = pixels
             ns["last_marks"] = marks
+
+            # Frozen counter, advanced BEFORE the idle return below: an idle
+            # sample is precisely the evidence this counter needs, and precisely
+            # the evidence the settled streak must ignore. Same sample, opposite
+            # meanings — which is why they cannot share a counter.
+            mark_peak = max(float(ns.get("mark_peak") or 0.0), float(marks_delta))
+            ns["mark_peak"] = mark_peak
+            if mark_peak > 0.0 and marks_delta < mark_peak * FROZEN_FRAC_OF_PEAK:
+                ns["idle_streak"] = int(ns.get("idle_streak") or 0) + 1
+            else:
+                ns["idle_streak"] = 0
+
             if marks_delta < SETTLED_MIN_SAMPLE_MARKS:
                 # Idle or a trickle: hold — rest is not evidence either way,
                 # and a single incidental RESTING-hour mark landing on painted
@@ -1404,6 +1486,24 @@ class DrawingEngine:
             if smoothed < peak * SETTLED_FRAC_OF_PEAK:
                 ns["streak"] = int(ns.get("streak") or 0) + 1
             else:
+                ns["streak"] = 0
+
+            # Structural reach — the first consumer occupied_cells() has ever
+            # had. Until now it was written to drawing_trajectory and
+            # drawing_records and read by nothing.
+            #
+            # Pixel novelty cannot distinguish a piece opening new territory
+            # from one thickening what it already holds; cell count can, and its
+            # own docstring says so ("a piece that keeps opening new cells is
+            # still finding territory"). A drawing still reaching into empty
+            # ground is not settled however slowly its pixel count is growing.
+            #
+            # This can only ever RESET the streak, never advance it: strictly
+            # more conservative, so it cannot make earned_settled fire on a
+            # piece that would not otherwise have earned it.
+            last_cells = int(ns.get("last_cells") or 0)
+            ns["last_cells"] = cells
+            if cells > last_cells:
                 ns["streak"] = 0
         except (TypeError, ValueError):
             canvas._novelty_settling = None  # corrupt tracker: restart, don't guess
