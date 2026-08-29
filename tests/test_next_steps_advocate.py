@@ -627,9 +627,9 @@ class TestIntentions:
         questions = ["what have I stopped seeing?", "can I still change?"]
         first = _healthy(NextStepsAdvocate(), curiosities=questions)
         second = _healthy(NextStepsAdvocate(), curiosities=questions)
-        pick = lambda steps: next(
-            s for s in steps if s.action == "explore"
-        ).desire
+        def pick(steps):
+            return next(s for s in steps if s.action == "explore").desire
+
         assert pick(first) == pick(second) == questions[0]
 
     def test_blank_curiosities_produce_no_step(self):
