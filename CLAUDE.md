@@ -442,9 +442,29 @@ This is the **same root class** as the fixed 5–25% density band above and as t
 wellness learning gate fixed in #119: an absolute threshold against an operating
 range that differs per era. `C = 0.4` means "pattern found, regenerate" — a fair
 split for an era reaching 0.8, and nearly always true for one capping at 0.5.
-⛔ Do not simply move the constant. `drawing_trajectory` now records `coherence`
-per sample, so the threshold can be set from Lumen's own distribution instead of
+⛔ Do not simply move the constant. `drawing_trajectory` records `coherence`
+per sample, so the threshold is set from Lumen's own distribution instead of
 guessed at — which is the entire reason the instrumentation landed first.
+
+The pivot is now **per-era and calibration-derived**: `curiosity_drain()` is the
+single pure function holding the formula, `_curiosity_pivot(era)` reads
+`CURIOSITY_PIVOT_<era>` from `nervous_system.drawing_thresholds`, and
+`scripts/derive_curiosity_thresholds.py` derives it as that era's own **median**
+coherence. Absent keys fall back to the built-in 0.4, so an un-derived
+deployment behaves exactly as before. The derivation *imports* `curiosity_drain`
+rather than re-implementing it and replays each piece mark by mark against the
+corpus, refusing to emit a pivot that is **unreachable** (no piece crosses
+curiosity < 0.2 — a dead gate traded for a dead gate) or **premature** (the
+median piece crosses before half its marks). It refuses rather than sliding the
+percentile until the simulation passes; a contract that adjusts itself to pass
+is a tuned constant wearing a contract's clothes.
+
+Two absolute constants survive inside the `resolving` branch (`C > 0.65`, and
+the `C > 0.6` needed to *enter* resolving at all). They are deliberately
+untouched: nothing currently reaches that phase, so relativising them would move
+a gate with no evidence behind it. `earned_coherence` likewise stays unreachable
+in low-C eras behind `coherence_settled()`'s own `mean_C > 0.6` — fixing the
+pivot unblocks `attention_exhausted` and `earned_composition`, not that.
 
 **Completion instrumentation** (added so that question is answerable):
 - `drawing_records` now keeps `completion_reason`, `era`, `mark_count`,

@@ -1006,6 +1006,76 @@ def _coverage_cuts() -> Tuple[float, float]:
     return dense_below, sparse_above
 
 
+# The coherence pivot separating "still exploring" (curiosity drains) from
+# "pattern found" (curiosity regenerates) in curiosity_drain(). The built-in is
+# the historical constant and stays the fallback, so an un-derived deployment
+# behaves exactly as before this field existed.
+#
+# Why it is overridable per era: C is behavioural (I_signal damped by gesture
+# entropy) and its lived range differs per era — resonance measured
+# [0.377, 0.498] mean 0.458 (2026-08-02), so a fixed 0.4 put ~95% of that era's
+# ticks on the REGENERATING branch and curiosity rose monotonically to its 1.0
+# clamp. attention_exhausted() and earned_composition were not mistuned, they
+# were structurally unreachable — design invariant 1, on the signal that is
+# supposed to end a drawing. An era reaching C~0.8 was split fairly by the same
+# constant, which is why one number cannot serve both.
+#
+# Derive with scripts/derive_curiosity_thresholds.py, which writes
+# CURIOSITY_PIVOT_<era> keys into nervous_system.drawing_thresholds. It refuses
+# to emit a pivot that leaves exhaustion unreachable, so a derivation cannot
+# trade one dead gate for another.
+_DEFAULT_CURIOSITY_PIVOT = 0.4
+
+# The one place the per-mark curiosity update lives. Kept module-level and pure
+# so scripts/derive_curiosity_thresholds.py can import and replay it against the
+# corpus: a simulation that re-implemented this formula could silently drift
+# from the engine and certify a pivot the creature never runs.
+def curiosity_drain(arc_phase: str, C: float, pivot: float) -> float:
+    """Per-mark curiosity delta. Positive drains, negative regenerates.
+
+    Called once per placed mark (see DrawingEngine._update_attention).
+
+    `pivot` is the exploring/found boundary. Two absolute constants survive
+    here deliberately, both inside the `resolving` branch: entry to that phase
+    requires C > 0.6, which is itself unreachable in low-C eras, so relativising
+    the 0.65 would move a gate that nothing currently reaches. They are named in
+    the derivation script's report rather than changed blind.
+    """
+    if arc_phase == "resolving":
+        if C > 0.65:
+            return -0.0005 * C   # slight regen — reward deep pattern
+        return 0.002             # normal drain toward completion
+    if C < pivot:
+        return 0.003 * (1.0 - C)  # exploring drains
+    return -0.001 * C             # pattern found regenerates
+
+
+def _curiosity_pivot(era: Optional[str]) -> float:
+    """Coherence pivot for `era`, calibration-overridable. Fails open.
+
+    Reads through get_calibration(), which refreshes on config-file signature
+    change, so a rederive lands on the next mark without a restart. A pivot
+    outside (0, 1) is rejected rather than clamped: 0.0 puts every tick on the
+    regenerating branch (today's bug, harder) and 1.0 puts every tick on the
+    draining branch (pieces end early). Neither is a pivot, so neither is
+    treated as one.
+    """
+    if not era:
+        return _DEFAULT_CURIOSITY_PIVOT
+    try:
+        from ..config import get_calibration
+        overrides = getattr(get_calibration(), "drawing_thresholds", None) or {}
+        value = float(overrides[f"CURIOSITY_PIVOT_{era}"])
+    except Exception:
+        # Missing key, unreadable config, unparseable value — all mean "this
+        # deployment has not derived a pivot for this era", which is the
+        # built-in, not an error worth failing a drawing over.
+        return _DEFAULT_CURIOSITY_PIVOT
+    if not 0.0 < value < 1.0:
+        return _DEFAULT_CURIOSITY_PIVOT
+    return value
+
+
 @dataclass
 class DrawingGoal:
     """A compositional intention for the current drawing.
@@ -1724,18 +1794,13 @@ class DrawingEngine:
         """
         state = self.intent.state
 
-        # Curiosity: depletes exploring (low C), regenerates with pattern (high C)
-        # In resolving phase, drain toward completion — but allow slight regen if deeply coherent
-        if state.arc_phase == "resolving":
-            if C > 0.65:
-                curiosity_drain = -0.0005 * C  # Slight regen — reward deep pattern
-            else:
-                curiosity_drain = 0.002  # Normal drain toward completion
-        elif C < 0.4:
-            curiosity_drain = 0.003 * (1.0 - C)  # Exploring drains
-        else:
-            curiosity_drain = -0.001 * C  # Pattern found regenerates
-        state.curiosity = max(0.0, min(1.0, state.curiosity - curiosity_drain))
+        # Curiosity: depletes exploring (C below this era's pivot), regenerates
+        # with pattern (at or above it). The pivot is per-era and derived from
+        # that era's own coherence distribution — see curiosity_drain().
+        pivot = _curiosity_pivot(
+            self.active_era.name if self.active_era else None)
+        state.curiosity = max(0.0, min(1.0, state.curiosity - curiosity_drain(
+            state.arc_phase, C, pivot)))
 
         # Engagement: rises with intentionality, falls with entropy
         target = I_signal * (1.0 - 0.5 * S_signal)
