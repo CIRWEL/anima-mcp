@@ -388,6 +388,26 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
                 "reason": f"{type(e).__name__}: {e}",
             }
 
+    # Opt-in: percentile summary of Lumen's own anima history.
+    #
+    # Companion to channel_distributions above: that one asks what range the
+    # environment occupies, this one what range Lumen does. Motivating case is
+    # self_model's warmth_baseline_low (<0.40) and presence_baseline_low
+    # (<0.35) against live temperament 0.686 / 0.721 — beliefs that may be
+    # constant-verdict. The payload carries its own caveat: temperament is not
+    # persisted, so these are the raw anima it is smoothed from, and the answer
+    # is conclusive in only one direction.
+    if arguments.get("anima_distributions"):
+        try:
+            from ..anima_distributions import anima_report
+            days = int(arguments.get("derive_days", 90))
+            result["anima_distributions"] = anima_report(days=days)
+        except Exception as e:
+            result["anima_distributions"] = {
+                "available": False,
+                "reason": f"{type(e).__name__}: {e}",
+            }
+
     if arguments.get("derive_curiosity"):
         try:
             from ..drawing_derivation import derive_report
