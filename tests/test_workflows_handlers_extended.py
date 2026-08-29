@@ -294,3 +294,99 @@ class TestLearningVisualizationExtended:
             data = parse_result(await handle_learning_visualization({}))
 
         assert data["error"] == "Unable to read sensor data"
+
+
+@pytest.mark.asyncio
+class TestNextStepsIntentions:
+    """The handler must not let an unreadable growth store read as 'no plans'."""
+
+    @staticmethod
+    def _patches(growth):
+        class Bridge:
+            async def check_availability(self):
+                return True
+
+        anima = SimpleNamespace(warmth=0.7, clarity=0.8, stability=0.8, presence=0.7)
+        display = SimpleNamespace(is_available=lambda: True)
+        attention_system = SimpleNamespace(
+            attention=lambda **_: {"items": [], "active_count": 0}
+        )
+        return [
+            patch("anima_mcp.accessors._get_store", return_value=SimpleNamespace()),
+            patch("anima_mcp.accessors._get_sensors", return_value=SimpleNamespace()),
+            patch("anima_mcp.accessors._get_display", return_value=display),
+            patch(
+                "anima_mcp.accessors._get_readings_and_anima",
+                return_value=(SimpleNamespace(), anima),
+            ),
+            patch("anima_mcp.accessors._get_server_bridge", return_value=Bridge()),
+            patch("anima_mcp.accessors._get_last_shm_data", return_value=None),
+            patch("anima_mcp.accessors._get_growth", return_value=growth),
+            patch(
+                "anima_mcp.self_iteration.get_self_iteration_system",
+                return_value=attention_system,
+            ),
+            patch(
+                "anima_mcp.eisv_mapper.anima_to_body_eisv_projection",
+                return_value=SimpleNamespace(to_dict=lambda: {"E": 0.5}, entropy=0.2),
+            ),
+        ]
+
+    async def _run(self, growth):
+        from contextlib import ExitStack
+
+        from anima_mcp.handlers.workflows import handle_next_steps
+
+        with ExitStack() as stack:
+            for p in self._patches(growth):
+                stack.enter_context(p)
+            return parse_result(await handle_next_steps({}))
+
+    async def test_active_goal_becomes_the_next_action(self):
+        goal = SimpleNamespace(
+            status=SimpleNamespace(value="active"),
+            to_dict=lambda: {
+                "description": "complete 2000 drawings",
+                "motivation": "",
+                "progress": 0.779,
+                "last_worked_on": datetime.now().isoformat(),
+            },
+        )
+        growth = SimpleNamespace(_goals={"g1": goal}, _curiosities=[])
+        data = await self._run(growth)
+
+        assert data["summary"]["status"] == "quiet"
+        assert data["summary"]["desire"] == "complete 2000 drawings"
+        assert data["summary"]["action"] == "continue"
+        assert data["summary"]["intentions"] == {
+            "available": True,
+            "goals": 1,
+            "curiosities": 0,
+            "error": None,
+        }
+
+    async def test_unreadable_growth_is_reported_not_silently_empty(self):
+        data = await self._run(None)
+        assert data["summary"]["intentions"]["available"] is False
+        assert data["summary"]["intentions"]["error"] == "growth store not initialized"
+        assert data["summary"]["intentions"]["goals"] == 0
+
+    async def test_growth_raising_is_reported_not_swallowed(self):
+        class Exploding:
+            @property
+            def _goals(self):
+                raise RuntimeError("db locked")
+
+        data = await self._run(Exploding())
+        assert data["summary"]["intentions"]["available"] is False
+        assert "db locked" in data["summary"]["intentions"]["error"]
+
+    async def test_quiet_state_still_reports_the_nearest_margin(self):
+        growth = SimpleNamespace(_goals={}, _curiosities=[])
+        data = await self._run(growth)
+        checks = data["summary"]["state_checks"]
+        assert checks["evaluated"] == 5
+        assert checks["fired"] == 0
+        assert checks["nearest_threshold"]["margin"] > 0
+        assert data["summary"]["status"] == "quiet"
+        assert data["summary"]["last_analyzed"] is not None
