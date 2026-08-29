@@ -694,6 +694,25 @@ Runtime payloads use `body_anima`, `body_eisv_projection`, `drawing_eisv`, and `
 Local fallback (`_local_governance()`) runs simple threshold checks when Mac unreachable — more trigger-happy.
 Server syncs `_last_governance_decision` from SHM when `governance_at` is within `SHM_GOVERNANCE_STALE_SECONDS` (210s).
 
+### Reading Lumen's own ranges
+
+Two read-only reports exist so a fixed cut can be checked against the signal
+actually feeding it, instead of guessed at. Both open the DB `mode=ro`, name no
+threshold (a cut's health is a question about its consumer), and are opt-in
+because they scan a corpus:
+
+| Call | Population | Answers |
+|------|-----------|---------|
+| `diagnostics(channel_distributions=true)` | `drawing_records` env columns | is `activity_state`'s `>500` bright cut still reachable on the residual? |
+| `diagnostics(anima_distributions=true)` | `state_history` | are `self_model`'s `warmth_baseline_low` (<0.40) / `presence_baseline_low` (<0.35) constant-verdict beliefs? |
+
+⚠️ The anima report is a **proxy answering in one direction only**. Temperament
+is never persisted — `state_history` holds the raw anima it is smoothed from,
+and an EMA shares its source's mean with a *narrower* spread. So a percentile
+already clear of a temperament cut is clear there too (conclusive); one that
+crosses it here may not cross there (inconclusive). The payload carries this
+caveat with the numbers. Both questions are **unmeasured as of 2026-08-29**.
+
 ## Identity, Continuity, and Control
 
 **Visitor attribution — a channel is not a person.** `normalize_visitor_identity()`

@@ -315,6 +315,17 @@ TOOLS = [
                         "feeding it. Default false."
                     ),
                 },
+                "anima_distributions": {
+                    "type": "boolean",
+                    "description": (
+                        "Include a percentile summary (n/min/p05/p25/p50/p75/p95/max) "
+                        "of warmth, clarity, stability and presence from state_history. "
+                        "Read-only; names no threshold. Use it to check whether a fixed "
+                        "cut on Lumen's own state is still reachable. The payload carries "
+                        "a caveat: temperament is not persisted, so these are the raw "
+                        "anima it is smoothed from. Default false."
+                    ),
+                },
                 "derive_days": {
                     "type": "integer",
                     "description": "Corpus window for the derivation and the channel summary, in days (default 90).",
