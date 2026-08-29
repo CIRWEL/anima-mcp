@@ -287,8 +287,30 @@ TOOLS = [
     ),
     Tool(
         name="diagnostics",
-        description="Get system diagnostics: LED status, display status, update loop health",
-        inputSchema={"type": "object", "properties": {}, "additionalProperties": True},
+        description=(
+            "Get system diagnostics: LED status, display status, update loop health. "
+            "Pass derive_curiosity=true to also run the read-only per-era curiosity "
+            "pivot derivation over drawing_trajectory (off by default — it scans the "
+            "corpus). It reports only; applying thresholds stays with "
+            "scripts/derive_curiosity_thresholds.py --apply."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "derive_curiosity": {
+                    "type": "boolean",
+                    "description": (
+                        "Include the per-era curiosity pivot derivation report "
+                        "(read-only; writes nothing). Default false."
+                    ),
+                },
+                "derive_days": {
+                    "type": "integer",
+                    "description": "Corpus window for the derivation, in days (default 90).",
+                },
+            },
+            "additionalProperties": True,
+        },
     ),
     Tool(
         name="get_health",
