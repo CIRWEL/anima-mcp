@@ -90,22 +90,35 @@ SERVER_URL="${ANIMA_HEARTBEAT_SERVER_URL:-http://127.0.0.1:8766/health}"
 MAX_AGE="${ANIMA_HEARTBEAT_MAX_AGE:-120}"
 
 URL="${ANIMA_HEARTBEAT_URL:-}"
+MARK="${ANIMA_HEARTBEAT_INERT_MARK:-$HOME/.anima/.heartbeat-inert}"
+NOTICE_MARK="${ANIMA_HEARTBEAT_INERT_NOTICE_MARK:-${MARK}.notice}"
 if [ -z "$URL" ]; then
     # Unprovisioned. Note it at most daily: the timer fires every 5 minutes, so
     # logging every run would put 288 lines/day in the file an operator reads to
     # find real trouble. Do NOT exit non-zero — a box that was never set up is
     # not a failing box, and a red unit would train the operator to ignore it.
-    MARK="${ANIMA_HEARTBEAT_INERT_MARK:-$HOME/.anima/.heartbeat-inert}"
     mkdir -p "$(dirname "$MARK")" 2>/dev/null
     NOW=$(date +%s)
+    # MARK is the immutable first-seen time used by /health/detailed.  The old
+    # implementation rewrote it whenever it logged, so it could never become
+    # "older than a day".  Keep log throttling in a separate disposable file.
+    if [ ! -f "$MARK" ]; then
+        echo "$NOW" > "$MARK" 2>/dev/null \
+            || log "WARNING: could not persist heartbeat inert first-seen marker"
+    fi
     LAST=0
-    [ -f "$MARK" ] && LAST=$(cat "$MARK" 2>/dev/null || echo 0)
+    [ -f "$NOTICE_MARK" ] && LAST=$(cat "$NOTICE_MARK" 2>/dev/null || echo 0)
     if [ $((NOW - LAST)) -ge 86400 ]; then
         log "ANIMA_HEARTBEAT_URL unset — heartbeat inert (see docs/operations/HEARTBEAT.md)"
-        echo "$NOW" > "$MARK"
+        echo "$NOW" > "$NOTICE_MARK" 2>/dev/null || true
     fi
     exit 0
 fi
+
+# A configured URL is recovery.  Do this before the probes so detailed health
+# stops reporting a stale provisioning fault even if this run discovers a real
+# Lumen failure and sends /fail.
+rm -f "$MARK" "$NOTICE_MARK"
 
 FAIL_URL="${ANIMA_HEARTBEAT_FAIL_URL:-${URL%/}/fail}"
 SKIP="${ANIMA_HEARTBEAT_SKIP:-}"

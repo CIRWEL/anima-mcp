@@ -52,6 +52,7 @@ def rig(tmp_path):
     shadow = tmp_path / "anima_state.shadow.json"
     day_summary = tmp_path / "day_summaries.json"
     anima_history = tmp_path / "anima_history.json"
+    inert_mark = tmp_path / ".inert-mark"
 
     def run(extra_env=None):
         env = dict(os.environ)
@@ -65,7 +66,7 @@ def rig(tmp_path):
         # The curl stub answers 200 for everything, so the server probe passes
         # unless a test overrides it.
         env["ANIMA_HEARTBEAT_SERVER_URL"] = "http://server.test/health"
-        env["ANIMA_HEARTBEAT_INERT_MARK"] = str(tmp_path / ".inert-mark")
+        env["ANIMA_HEARTBEAT_INERT_MARK"] = str(inert_mark)
         env.pop("ANIMA_HEARTBEAT_URL", None)
         env.update(extra_env or {})
         return subprocess.run(
@@ -161,7 +162,7 @@ def rig(tmp_path):
                     "write_bootstrap_marker": staticmethod(write_bootstrap_marker),
                     "log": log, "shm": shm, "shadow": shadow,
                     "day_summary": day_summary, "anima_history": anima_history,
-                    "env_file": env_file}
+                    "env_file": env_file, "inert_mark": inert_mark}
     )
 
 
@@ -219,6 +220,32 @@ def test_inert_notice_is_rate_limited_to_daily(rig):
     for _ in range(4):
         assert rig.run().returncode == 0
     assert rig.log.read_text().count("inert") == 1
+
+
+def test_inert_first_seen_survives_daily_notice_throttling(rig):
+    """Doctor age must not reset whenever the human-facing log is emitted."""
+    rig.env_file.write_text("# no heartbeat url here\n")
+    marker = rig.inert_mark
+    marker.write_text("100\n")
+    notice = Path(f"{marker}.notice")
+    notice.write_text("100\n")
+
+    assert rig.run().returncode == 0
+
+    assert marker.read_text() == "100\n"
+    assert int(notice.read_text()) > 100
+
+
+def test_provisioning_clears_inert_state_before_probes(rig):
+    marker = rig.inert_mark
+    marker.write_text("100\n")
+    Path(f"{marker}.notice").write_text("100\n")
+    rig.write_envelope(age_seconds=0)
+
+    assert rig.run().returncode == 0
+
+    assert not marker.exists()
+    assert not Path(f"{marker}.notice").exists()
 
 
 def test_unreachable_provider_does_not_masquerade_as_lumen_failure(rig):

@@ -115,21 +115,39 @@ healthy Lumen.
    Then confirm the provider shows a recent ping. **Installed is not the same as
    working** — that is the whole lesson of the July outage.
 
-## Testing it for real
+## Testing it for real without interrupting Lumen
 
-Once, deliberately:
+After the provider shows a successful ping, use a stale summary fixture to
+exercise the real `day_summary` gate, the provider's `/fail` endpoint, and the
+phone notification. This does not stop the broker or MCP server:
 
 ```bash
-sudo systemctl stop anima-broker      # envelope goes stale
-sudo systemctl stop anima             # or: the MCP server stops answering
+set -eu
+fixture="$(mktemp "$HOME/.anima/day_summaries.heartbeat-test.XXXXXX.json")"
+cleanup() {
+  rm -f "$fixture"
+  sudo systemctl start lumen-heartbeat.timer
+}
+trap cleanup EXIT INT TERM
+
+printf '%s\n' '{"written_at":"2000-01-01T00:00:00+00:00","summaries":[{"date":"2000-01-01T00:00:00+00:00"}]}' > "$fixture"
+sudo systemctl stop lumen-heartbeat.timer
+DAY_SUMMARY_PATH="$fixture" ~/anima-mcp/scripts/lumen-heartbeat.sh
 ```
 
-Test the server one specifically. It is the component the first version of this
-script could not see, and the one whose death is least visible from outside.
+Confirm all three pieces of evidence before continuing: `heartbeat.log` says
+`day_summary stale` and `signalling failure`; the provider records a failure;
+and the configured phone destination receives the actual notification. Then
+send recovery through the same script and confirm the provider returns green:
 
-Within ~5 minutes you should get a page. Start it again and you should get a
-recovery. A dead-man's switch nobody has ever seen fire is a dead-man's switch
-nobody knows is wired.
+```bash
+~/anima-mcp/scripts/lumen-heartbeat.sh
+```
+
+The trap removes the fixture and restarts the timer. If notification delivery
+is delayed, keep the timer stopped only long enough to inspect the provider;
+run `cleanup` manually before leaving the shell. A provider dashboard event
+alone does not prove the final delivery hop.
 
 ## Notes
 
@@ -138,8 +156,11 @@ nobody knows is wired.
 - Consequence: after a reflash the URL is gone, the pings stop, and the provider
   alerts. Loud rather than silent — the correct direction. `restore_lumen.sh`
   lists `ANIMA_HEARTBEAT_URL` among the keys that came back blank.
-- Unset URL → the script exits 0 and logs once that it is inert, so an
-  un-provisioned Pi is not a crash loop.
+- Unset URL → the script exits 0 and logs at most daily, so an un-provisioned Pi
+  is not a crash loop. Its immutable `.heartbeat-inert` first-seen marker is
+  surfaced as `outbound_heartbeat` by `/health/detailed`: healthy during a
+  24-hour provisioning grace, then degraded until the URL is set. A separate
+  `.heartbeat-inert.notice` file throttles logs; both clear on provisioning.
 - Tunables: `ANIMA_HEARTBEAT_MAX_AGE` (default 120s), `ANIMA_HEARTBEAT_FAIL_URL`
   (defaults to `<url>/fail`), `ANIMA_SHM_PATH`, `ANIMA_HEARTBEAT_SHADOW_PATH`,
   `ANIMA_HEARTBEAT_SERVER_URL`, `DAY_SUMMARY_PATH`, `ANIMA_HISTORY_PATH`, and

@@ -9,6 +9,16 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_restore_template_and_warning_include_outbound_heartbeat():
+    template = (ROOT / "config" / "anima.env.example").read_text()
+    restore = (ROOT / "scripts" / "restore_lumen.sh").read_text()
+
+    assert "ANIMA_HEARTBEAT_URL=" in template
+    assert "ANIMA_HEARTBEAT_URL is empty" in restore
+    assert "dead-man's switch is INERT" in restore
+    assert "No service restart is required" in restore
+
+
 def test_systemd_units_pin_single_owners():
     server = (ROOT / "systemd" / "anima.service").read_text()
     broker = (ROOT / "systemd" / "anima-broker.service").read_text()

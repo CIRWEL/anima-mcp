@@ -41,6 +41,7 @@ sudo systemctl restart anima
 | `ANIMA_TRUSTED_PROXY_NETWORKS` | Comma-separated CIDRs allowed to supply `X-Forwarded-For` | Example: `127.0.0.1/32,::1/128` |
 | `ANIMA_ALLOWED_HOSTS` | Comma-separated MCP transport host allowlist override | Optional; defaults to built-in local/LAN/Tailscale/Cloudflare tunnel list |
 | `ANIMA_ALLOWED_ORIGINS` | Comma-separated MCP transport origin allowlist override | Optional; defaults to built-in localhost/LAN/Cloudflare tunnel list |
+| `ANIMA_HEARTBEAT_URL` | Secret off-host dead-man's-switch ping URL | Your heartbeat provider; verify `/fail` and phone delivery per `HEARTBEAT.md` |
 
 **Example:**
 ```bash

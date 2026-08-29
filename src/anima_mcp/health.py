@@ -16,8 +16,11 @@ Usage:
 
 from __future__ import annotations
 
+import math
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 
@@ -29,6 +32,89 @@ HEARTBEAT_STALE_SECONDS = 30.0
 
 # How often to run functional probes
 PROBE_INTERVAL_SECONDS = 60.0
+
+OUTBOUND_HEARTBEAT_PROVISIONING_GRACE_SECONDS = 24 * 60 * 60
+
+
+def _env_value(path: Path, key: str) -> str:
+    """Read one simple dotenv assignment without evaluating shell code."""
+    if not path.exists():
+        return ""
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == key:
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            return value.strip()
+    return ""
+
+
+def outbound_heartbeat_health() -> Dict[str, Any]:
+    """Report whether the off-host dead-man's switch is provisioned.
+
+    The URL is intentionally reduced to a boolean.  Detailed health is an
+    observability surface and must never become a secret-disclosure surface.
+    """
+    home = Path.home()
+    env_path = Path(os.environ.get("ANIMA_ENV_FILE", home / ".anima/anima.env"))
+    marker = Path(os.environ.get(
+        "ANIMA_HEARTBEAT_INERT_MARK", home / ".anima/.heartbeat-inert"
+    ))
+    grace = OUTBOUND_HEARTBEAT_PROVISIONING_GRACE_SECONDS
+
+    try:
+        configured = bool(
+            os.environ.get("ANIMA_HEARTBEAT_URL", "").strip()
+            or _env_value(env_path, "ANIMA_HEARTBEAT_URL")
+        )
+    except (OSError, UnicodeError) as exc:
+        return {
+            "ok": False,
+            "state": "unknown",
+            "configured": False,
+            "error": f"heartbeat configuration unreadable: {type(exc).__name__}",
+        }
+
+    if configured:
+        return {"ok": True, "state": "provisioned", "configured": True}
+
+    now = time.time()
+    source = "timer marker"
+    try:
+        if marker.exists():
+            raw = marker.read_text(encoding="utf-8").strip()
+            first_seen = float(raw)
+            if not math.isfinite(first_seen) or first_seen <= 0 or first_seen > now + 300:
+                raise ValueError("invalid first-seen timestamp")
+        else:
+            # The timer may not have run yet.  Bound that blind spot using the
+            # operator config's age, then the shipped template's age.
+            source = "configuration mtime"
+            fallback = env_path if env_path.exists() else Path(__file__).resolve().parents[2] / "config/anima.env.example"
+            first_seen = fallback.stat().st_mtime
+        age = max(0.0, now - first_seen)
+    except (OSError, UnicodeError, ValueError, OverflowError) as exc:
+        return {
+            "ok": False,
+            "state": "unknown",
+            "configured": False,
+            "error": f"heartbeat inert state unreadable: {type(exc).__name__}",
+        }
+
+    return {
+        "ok": age <= grace,
+        "state": "provisioning_grace" if age <= grace else "inert",
+        "configured": False,
+        "inert_for_seconds": round(age),
+        "grace_seconds": grace,
+        "age_source": source,
+    }
 
 
 @dataclass
@@ -44,6 +130,7 @@ class SubsystemHealth:
     stale_threshold: float = 0.0  # 0 = use global default
     debounce_seconds: float = 0.0  # 0 = no debounce (instant transitions)
     optional: bool = False  # capability may legitimately not exist on this host
+    probe_only: bool = False  # no loop heartbeat; status is entirely the probe
     _first_bad_at: float = 0.0  # when status first went non-ok
     _ever_ok: bool = False  # probe has succeeded at least once this process
     last_probe_details: Optional[Dict[str, Any]] = None
@@ -92,7 +179,10 @@ class SubsystemHealth:
 
         now = time.time()
         heartbeat_age = now - self.last_heartbeat if self.last_heartbeat > 0 else float("inf")
-        heartbeat_stale = heartbeat_age > self._get_stale_threshold()
+        heartbeat_stale = (
+            False if self.probe_only
+            else heartbeat_age > self._get_stale_threshold()
+        )
 
         # Run probe (respects internal cooldown)
         self.run_probe()
@@ -186,6 +276,7 @@ class HealthRegistry:
         stale_threshold: float = 0.0,
         debounce_seconds: float = 0.0,
         optional: bool = False,
+        probe_only: bool = False,
     ) -> None:
         """Register a subsystem for health tracking.
 
@@ -206,6 +297,9 @@ class HealthRegistry:
                    "absent" rather than "degraded" while it has never worked,
                    and does not drag overall(). The moment it DOES work once,
                    a later failure is reported as a real degradation.
+            probe_only: True for configuration/external-state checks that have
+                   no recurring in-process heartbeat. Their probe alone owns
+                   status, preventing registration time from looking healthy.
         """
         if name in self._subsystems:
             # Update probe if re-registering
@@ -216,6 +310,7 @@ class HealthRegistry:
             if debounce_seconds > 0:
                 self._subsystems[name].debounce_seconds = debounce_seconds
             self._subsystems[name].optional = optional
+            self._subsystems[name].probe_only = probe_only
             return
 
         self._subsystems[name] = SubsystemHealth(
@@ -225,6 +320,7 @@ class HealthRegistry:
             stale_threshold=stale_threshold,
             debounce_seconds=debounce_seconds,
             optional=optional,
+            probe_only=probe_only,
         )
 
     def heartbeat(self, name: str) -> None:
