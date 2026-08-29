@@ -537,7 +537,14 @@ pivot unblocks `attention_exhausted` and `earned_composition`, not that.
   `grid_entropy()` remains recorded and unread.
 - **Absent values persist as NULL, never as a default.** Lumen's instrumentation
   degrades toward healthy-looking numbers; a 0.0 would later be indistinguishable
-  from a drawing that genuinely had no reach.
+  from a drawing that genuinely had no reach. The environment dict passed to
+  `observe_drawing` broke this until 2026-08-29 (`light_lux or 0.0`,
+  `ambient_temp_c or 22`, `humidity_pct or 50` — a dark room, a comfortable one,
+  ordinary humidity, each indistinguishable afterwards from a real reading).
+  Preference learning was not misled only because 22 and 50 fall in the dead
+  bands between its cuts, which is safety by coincidence; the record was wrong
+  regardless, and both derivations read `drawing_records`. All three channels
+  are now conditional, as `external_light_lux` always was.
 - Timer-driven writers use `peek_growth_system()`, not `get_growth_system()` —
   the bare default is cwd-relative and the first caller fixes the database (#123).
 - **This moved no gate.** `tests/test_drawing_instrumentation.py::TestNoGateMoved`
