@@ -35,7 +35,7 @@ def _register_health_probes():
     the degraded (store-failed) path — health visibility matters MOST when the
     identity store is down, so this must not depend on the store existing.
     Store-dependent probes fail open on ctx.store is None."""
-    from .health import get_health_registry
+    from .health import get_health_registry, outbound_heartbeat_health
     from .eisv import get_trajectory_awareness
     from .anima_history import get_anima_history
     from .accessors import _get_last_shm_data
@@ -78,6 +78,13 @@ def _register_health_probes():
         stale_threshold=36 * 60 * 60,
         debounce_seconds=0.0,
         optional=False,
+    )
+    _health.register(
+        "outbound_heartbeat",
+        probe=outbound_heartbeat_health,
+        debounce_seconds=0.0,
+        optional=False,
+        probe_only=True,
     )
 
     def _voice_probe():

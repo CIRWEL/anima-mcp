@@ -215,6 +215,8 @@ The restore script copies `anima.env.example` to `~/.anima/anima.env` on the Pi.
 - `UNITARES_AUTH` -- governance BASIC auth
 - `ANIMA_OAUTH_ISSUER_URL` -- Cloudflare tunnel URL (e.g. `https://lumen.cirwel.org`)
 - `ANIMA_OAUTH_AUTO_APPROVE=true`
+- `ANIMA_HEARTBEAT_URL` -- off-host dead-man's-switch URL; it remains inert
+  until reprovisioned and acceptance-tested per `HEARTBEAT.md`
 
 See `SECRETS_AND_ENV.md` for details.
 

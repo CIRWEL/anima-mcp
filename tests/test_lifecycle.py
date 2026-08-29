@@ -93,6 +93,31 @@ def test_day_summary_writer_health_probe_registration(monkeypatch):
     }
 
 
+def test_outbound_heartbeat_is_registered_as_probe_only(monkeypatch):
+    from anima_mcp import health, lifecycle
+
+    registrations = {}
+    registry = MagicMock()
+    registry.register.side_effect = (
+        lambda name, probe, **kwargs: registrations.__setitem__(
+            name, (probe, kwargs)
+        )
+    )
+    expected = {"ok": False, "state": "inert", "configured": False}
+    monkeypatch.setattr(health, "get_health_registry", lambda: registry)
+    monkeypatch.setattr(health, "outbound_heartbeat_health", lambda: expected)
+
+    lifecycle._register_health_probes()
+
+    probe, options = registrations["outbound_heartbeat"]
+    assert probe() == expected
+    assert options == {
+        "debounce_seconds": 0.0,
+        "optional": False,
+        "probe_only": True,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

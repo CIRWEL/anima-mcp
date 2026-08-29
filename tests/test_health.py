@@ -1,8 +1,15 @@
 """Tests for subsystem health monitoring."""
 
+import os
 import time
+from pathlib import Path
 
-from anima_mcp.health import HealthRegistry, SubsystemHealth, HEARTBEAT_STALE_SECONDS
+from anima_mcp.health import (
+    HEARTBEAT_STALE_SECONDS,
+    HealthRegistry,
+    SubsystemHealth,
+    outbound_heartbeat_health,
+)
 
 
 class TestSubsystemHealth:
@@ -43,6 +50,11 @@ class TestSubsystemHealth:
         sub.last_heartbeat = time.time() - HEARTBEAT_STALE_SECONDS - 1
         sub.last_probe_time = 0
         assert sub.get_status() == "missing"
+
+    def test_probe_only_status_ignores_registration_heartbeat_age(self):
+        sub = SubsystemHealth(name="external", probe_fn=lambda: False, probe_only=True)
+        sub.last_heartbeat = 0
+        assert sub.get_status() == "degraded"
 
     def test_probe_exception_sets_degraded(self):
         sub = SubsystemHealth(name="test", probe_fn=lambda: 1 / 0)
@@ -274,6 +286,11 @@ class TestHealthRegistry:
         sub = reg.get_subsystem("fast")
         assert sub.debounce_seconds == 6.0
 
+    def test_register_probe_only(self):
+        reg = HealthRegistry()
+        reg.register("external", probe=lambda: True, probe_only=True)
+        assert reg.get_subsystem("external").probe_only is True
+
     def test_overall_ok_during_debounce_grace(self):
         """System should report ok while subsystem is debouncing."""
         reg = HealthRegistry()
@@ -317,6 +334,68 @@ class TestOptionalAbsent:
         reg.heartbeat("voice")
         reg.heartbeat("sensors")
         assert reg.overall() == "degraded"
+
+
+class TestOutboundHeartbeatHealth:
+    def _paths(self, tmp_path: Path, monkeypatch):
+        env_file = tmp_path / "anima.env"
+        marker = tmp_path / ".heartbeat-inert"
+        monkeypatch.setenv("ANIMA_ENV_FILE", str(env_file))
+        monkeypatch.setenv("ANIMA_HEARTBEAT_INERT_MARK", str(marker))
+        monkeypatch.delenv("ANIMA_HEARTBEAT_URL", raising=False)
+        return env_file, marker
+
+    def test_provisioned_without_disclosing_url(self, tmp_path, monkeypatch):
+        env_file, _marker = self._paths(tmp_path, monkeypatch)
+        secret = "https://provider.example/private-token"
+        env_file.write_text(f"ANIMA_HEARTBEAT_URL={secret}\n")
+
+        result = outbound_heartbeat_health()
+
+        assert result == {"ok": True, "state": "provisioned", "configured": True}
+        assert secret not in repr(result)
+
+    def test_recent_inert_marker_has_bounded_grace(self, tmp_path, monkeypatch):
+        env_file, marker = self._paths(tmp_path, monkeypatch)
+        env_file.write_text("ANIMA_HEARTBEAT_URL=\n")
+        marker.write_text(f"{time.time() - 60}\n")
+
+        result = outbound_heartbeat_health()
+
+        assert result["ok"] is True
+        assert result["state"] == "provisioning_grace"
+
+    def test_marker_older_than_day_is_degraded(self, tmp_path, monkeypatch):
+        env_file, marker = self._paths(tmp_path, monkeypatch)
+        env_file.write_text("ANIMA_HEARTBEAT_URL=\n")
+        marker.write_text(f"{time.time() - 86401}\n")
+
+        result = outbound_heartbeat_health()
+
+        assert result["ok"] is False
+        assert result["state"] == "inert"
+        assert result["configured"] is False
+
+    def test_malformed_marker_fails_unknown(self, tmp_path, monkeypatch):
+        env_file, marker = self._paths(tmp_path, monkeypatch)
+        env_file.write_text("ANIMA_HEARTBEAT_URL=\n")
+        marker.write_text("not-a-time\n")
+
+        result = outbound_heartbeat_health()
+
+        assert result["ok"] is False
+        assert result["state"] == "unknown"
+
+    def test_missing_marker_uses_configuration_age(self, tmp_path, monkeypatch):
+        env_file, _marker = self._paths(tmp_path, monkeypatch)
+        env_file.write_text("ANIMA_HEARTBEAT_URL=\n")
+        old = time.time() - 86401
+        os.utime(env_file, (old, old))
+
+        result = outbound_heartbeat_health()
+
+        assert result["ok"] is False
+        assert result["age_source"] == "configuration mtime"
 
     def test_optional_that_worked_then_broke_is_degraded_not_absent(self):
         """_ever_ok guard — a capability that HAS worked can genuinely break."""

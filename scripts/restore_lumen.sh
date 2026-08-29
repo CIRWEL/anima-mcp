@@ -652,6 +652,14 @@ if [ -n "${MISSING_SECRETS// /}" ]; then
             log "    Then set the same value in your MCP client's X-Anima-Admin header."
             ;;
     esac
+    case "$MISSING_SECRETS" in
+        *ANIMA_HEARTBEAT_URL*)
+            log ""
+            log "⚠️  ANIMA_HEARTBEAT_URL is empty — the outbound dead-man's switch is INERT."
+            log "    Provision and acceptance-test it per docs/operations/HEARTBEAT.md."
+            log "    No service restart is required; the next timer run reads anima.env."
+            ;;
+    esac
 else
     log "Secrets: all expected keys present in ~/.anima/anima.env"
 fi
