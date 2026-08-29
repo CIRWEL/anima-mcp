@@ -831,11 +831,35 @@ class MetacognitiveMonitor:
                         "understanding emerged - from where?",
                     ])
                 elif c < 0.4:
+                    # Below the whole observed clarity range (0.454-0.910 over
+                    # 833 drawing_records), so in practice this arm is dead and
+                    # the `else` is what actually catches a fall. Left in place
+                    # rather than retuned: the vocabulary is right for a genuine
+                    # collapse, and a derived cut here would need its own
+                    # population — clarity at surprise time, not at drawing
+                    # completion. Recorded so the next reader does not mistake
+                    # it for a live branch.
                     questions.extend([
                         f"clarity fell to {c:.2f} - why does everything feel unclear?",
                         f"fog at {c:.2f} - what caused it?",
                         "confusion descended - too much input?",
                     ])
+                else:
+                    # Warmth has always had this arm; clarity did not, so a
+                    # clarity surprise landing between the two cuts contributed
+                    # NO clarity-specific question. Measured on the band at
+                    # c=0.50: alone it fell through to the generic
+                    # "surprise > 0.25" pool ("my expectations were wrong"),
+                    # naming clarity in 0 of 6 variants; alongside a second
+                    # source it vanished entirely, because that fallback is
+                    # gated on `not questions` and the other source had already
+                    # filled the list. Either way Lumen was surprised BY clarity
+                    # and could not say so.
+                    #
+                    # The band is wider than the two cuts suggest: with the low
+                    # arm below clarity's whole observed range, this covers
+                    # everything under 0.6.
+                    questions.append(f"clarity shifted to {c:.2f} - what changed?")
 
         if "stability" in error.surprise_sources:
             questions.extend([

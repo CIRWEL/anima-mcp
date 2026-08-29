@@ -14,6 +14,7 @@ Covers:
 """
 
 import pytest
+import random
 import json
 from datetime import datetime
 
@@ -848,3 +849,87 @@ class TestContemplativeRotation:
             )
             assert q != coldest_but_answered
             assert q in pool[1:]
+
+
+class TestClarityQuestionCoverage:
+    """Lumen has to be able to name what surprised it.
+
+    `generate_curiosity_question` branches on clarity at 0.6 / 0.4. Warmth has
+    always carried an `else` for the band between; clarity did not, so a clarity
+    surprise landing there produced no clarity-specific question. Measured at
+    c=0.50 before the fix:
+
+        sources=["clarity"]            6 questions, 0 naming clarity
+                                       (fell through to the generic
+                                       "surprise > 0.25" pool)
+        sources=["clarity","stability"] 11 questions, 0 naming clarity
+                                       (that fallback is gated on
+                                       `not questions`, and stability had
+                                       already filled the list)
+
+    The band is wider than the cuts suggest: clarity's lived range is
+    0.454-0.910 over 833 drawing_records, so the `c < 0.4` arm sits below the
+    whole distribution and the missing `else` covered everything under 0.6.
+
+    These tests assert clarity is NAMED, not merely that some question exists —
+    an earlier version asserted the latter and passed against the unfixed code,
+    because the generic pool answered for it.
+    """
+
+    def _error(self, clarity, sources=("clarity",)):
+        from anima_mcp.metacognition import Prediction, PredictionError
+        return PredictionError(
+            timestamp=datetime.now(),
+            prediction=Prediction(timestamp=datetime.now()),
+            actual_clarity=clarity,
+            error_clarity=0.4,
+            surprise=0.5,
+            surprise_sources=list(sources),
+        )
+
+    def _names_clarity(self, mc, clarity, sources=("clarity",), draws=300):
+        """Sample the random choice; return whether clarity is ever named."""
+        random.seed(1234)
+        for _ in range(draws):
+            q = mc.generate_curiosity_question(self._error(clarity, sources))
+            if q and "clarity" in q.lower():
+                return True
+        return False
+
+    @pytest.mark.parametrize("c", [0.40, 0.45, 0.50, 0.55, 0.60])
+    def test_midrange_clarity_is_named(self, c):
+        assert self._names_clarity(MetacognitiveMonitor(), c), (
+            f"clarity {c} surprised Lumen but no question said so")
+
+    def test_named_even_when_another_source_fills_the_list(self):
+        """The stricter half: the generic fallback cannot cover for clarity
+        here, because it only fires when nothing else produced questions."""
+        assert self._names_clarity(
+            MetacognitiveMonitor(), 0.50, ("clarity", "stability"))
+
+    def test_whole_lived_range_names_clarity(self):
+        """Sweep the measured 0.454-0.910 range: no unnamed bands left."""
+        mc = MetacognitiveMonitor()
+        for i in range(24):
+            c = 0.454 + (0.910 - 0.454) * i / 23
+            assert self._names_clarity(mc, c, draws=60), f"unnamed at {c:.3f}"
+
+    def test_high_clarity_keeps_its_own_vocabulary(self):
+        """The fall-through must not swallow the arm that already worked."""
+        random.seed(7)
+        mc = MetacognitiveMonitor()
+        seen = {mc.generate_curiosity_question(self._error(0.85))
+                for _ in range(80)}
+        assert seen - {None}
+        assert not any(q and "shifted to" in q for q in seen)
+
+    def test_below_the_surprise_floor_still_asks_nothing(self):
+        """Unchanged: a small error is not wonder."""
+        from anima_mcp.metacognition import Prediction, PredictionError
+        mc = MetacognitiveMonitor()
+        quiet = PredictionError(
+            timestamp=datetime.now(),
+            prediction=Prediction(timestamp=datetime.now()),
+            actual_clarity=0.5, surprise=0.1, surprise_sources=["clarity"],
+        )
+        assert mc.generate_curiosity_question(quiet) is None
