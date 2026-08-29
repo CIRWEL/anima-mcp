@@ -269,7 +269,20 @@ actually stands:
 | **raw lux** (`readings.light_lux`) | the info screens (labelled "raw lux (room+LED)"), identity/history recording, clarity's *sensor-coverage* count, and `light_attribution.py`'s own instrument |
 
 Raw lux is now the **display-and-record** channel; the residual is the
-**behavioral** one. The gap is not cosmetic — measured live, raw 696 lux against
+**behavioral** one.
+
+⚠️ **A cut calibrated against raw lux is not calibrated against the residual.**
+`activity_state`'s light cuts (`<10` very dark, `<50` dim, `>500` bright) were
+last touched 2026-08-13; #204 switched their input to the residual on
+2026-08-23. Removing self-glow compresses the top of the range — the live
+reading above is 696 raw against 226 residual — so `>500` may no longer be
+reachable, which would pin `light_factor` in its interpolation band and bias
+`activity_score` (0.15 weight, level cuts at 0.7/0.4) toward drowsy. That is a
+question about the residual's distribution, not something to answer by moving
+the constant: `diagnostics(channel_distributions=true)` reports p05/p50/p95 per
+channel from `drawing_records` so it can be checked rather than guessed. Read
+p95 against the cut. **Unmeasured as of 2026-08-29** — the derivation has never
+run on Lumen. The gap is not cosmetic — measured live, raw 696 lux against
 a 226 lux residual with a 469 lux self-glow estimate, so any reasoning that
 treats clarity as a function of raw lux is working from a number ~3x too high.
 When the residual is unavailable the consumers fail toward *unknown* rather than

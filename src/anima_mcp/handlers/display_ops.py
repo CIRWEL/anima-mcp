@@ -369,6 +369,25 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     #
     # Reporting only. Writing calibration stays with the script (--apply),
     # which is the one path that acts.
+    # Opt-in: percentile summary of the recorded environment channels.
+    #
+    # A fixed cut only means something against the range of the signal feeding
+    # it, and that signal can change underneath it. It did — #204 moved clarity,
+    # drawing light_regime and activity state onto the gated residual ten days
+    # after activity_state's light cuts were last touched, and removing
+    # self-glow compresses the top of the range (696 lux raw vs 226 residual,
+    # measured live). Reports distributions only; it names no threshold.
+    if arguments.get("channel_distributions"):
+        try:
+            from ..drawing_derivation import channel_report
+            days = int(arguments.get("derive_days", 90))
+            result["channel_distributions"] = channel_report(days=days)
+        except Exception as e:
+            result["channel_distributions"] = {
+                "available": False,
+                "reason": f"{type(e).__name__}: {e}",
+            }
+
     if arguments.get("derive_curiosity"):
         try:
             from ..drawing_derivation import derive_report

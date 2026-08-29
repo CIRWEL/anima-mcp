@@ -450,3 +450,112 @@ class TestDiagnosticsExposure:
         from anima_mcp.handlers.display_ops import handle_diagnostics
         out = json.loads(asyncio.run(handle_diagnostics(None))[0].text)
         assert "leds" in out
+
+
+# ---------------------------------------------------------------------------
+# Environment channel distributions
+# ---------------------------------------------------------------------------
+
+class TestChannelReport:
+    """A fixed cut means nothing without the range of the signal feeding it.
+
+    #204 moved clarity, drawing light_regime and activity state from raw lux to
+    the gated self-glow residual, ten days after activity_state's light cuts
+    (<10 / <50 / >500) were last touched. Removing self-glow compresses the top
+    of the range — measured live, one room read 696 lux raw and 226 residual —
+    so whether `> 500` is still reachable is a question about the residual's
+    distribution. Nobody could ask it without a shell.
+
+    This reports distributions and passes no verdict: it names no threshold,
+    because a cut's health is a question about its consumer, which this module
+    does not know.
+    """
+
+    def _db(self, tmp_path, rows=None, columns=True):
+        db = tmp_path / "records.db"
+        con = sqlite3.connect(db)
+        if columns:
+            con.execute("""create table drawing_records (
+                timestamp text, light_lux real, external_light_lux real,
+                ambient_temp_c real, humidity_pct real)""")
+            base = datetime.now() - timedelta(days=5)
+            for i, r in enumerate(rows or []):
+                con.execute(
+                    "insert into drawing_records values (?,?,?,?,?)",
+                    ((base + timedelta(minutes=i)).isoformat(timespec="seconds"),
+                     *r))
+        else:
+            con.execute("create table unrelated (x int)")
+        con.commit()
+        con.close()
+        return db
+
+    def test_reports_percentiles_per_channel(self, tmp_path):
+        rows = [(300.0 + i, 100.0 + i, 21.0, 40.0) for i in range(100)]
+        r = dd.channel_report(str(self._db(tmp_path, rows)))
+        assert r["available"] is True
+        lux = r["channels"]["external_light_lux"]
+        assert lux["n"] == 100
+        assert lux["min"] == 100.0 and lux["max"] == 199.0
+        assert lux["p05"] < lux["p50"] < lux["p95"]
+
+    def test_the_question_it_exists_to_answer(self, tmp_path):
+        """p95 against a cut is the whole use: raw clears 500, residual doesn't."""
+        rows = [(600.0 + i, 200.0 + i, 21.0, 40.0) for i in range(100)]
+        ch = dd.channel_report(str(self._db(tmp_path, rows)))["channels"]
+        assert ch["light_lux"]["p95"] > 500      # raw would reach "bright"
+        assert ch["external_light_lux"]["p95"] < 500  # the residual would not
+
+    def test_nulls_are_excluded_not_counted_as_zero(self, tmp_path):
+        """The NULLs the recording fix now writes must not read as 0 lux."""
+        rows = [(None, None, 21.0, 40.0)] * 10 + [(500.0, 200.0, 21.0, 40.0)] * 10
+        ch = dd.channel_report(str(self._db(tmp_path, rows)))["channels"]
+        assert ch["light_lux"]["n"] == 10
+        assert ch["light_lux"]["min"] == 500.0
+
+    def test_a_channel_with_no_rows_is_unavailable_not_empty(self, tmp_path):
+        """Distinct from a zero reading: nothing was recorded at all."""
+        rows = [(None, None, 21.0, 40.0)] * 10
+        ch = dd.channel_report(str(self._db(tmp_path, rows)))["channels"]
+        assert ch["light_lux"]["available"] is False
+        assert ch["light_lux"]["n"] == 0
+        assert ch["ambient_temp_c"]["available"] is True
+
+    def test_missing_table_is_unavailable(self, tmp_path):
+        r = dd.channel_report(str(self._db(tmp_path, columns=False)))
+        assert r["available"] is False and "not present" in r["reason"]
+
+    def test_missing_database_is_unavailable(self, tmp_path):
+        r = dd.channel_report(str(tmp_path / "nope.db"))
+        assert r["available"] is False and "unreadable" in r["reason"]
+
+    def test_report_never_writes(self, tmp_path):
+        db = self._db(tmp_path, [(300.0, 100.0, 21.0, 40.0)] * 5)
+        before = db.stat().st_mtime_ns, db.stat().st_size
+        assert dd.channel_report(str(db))["available"] is True
+        assert (db.stat().st_mtime_ns, db.stat().st_size) == before
+
+    def test_diagnostics_exposes_it_opt_in(self):
+        import asyncio
+        from anima_mcp.handlers.display_ops import handle_diagnostics
+        from anima_mcp.tool_registry import TOOLS
+
+        tool = next(t for t in TOOLS if t.name == "diagnostics")
+        assert "channel_distributions" in tool.inputSchema["properties"]
+
+        out = json.loads(asyncio.run(handle_diagnostics({}))[0].text)
+        assert "channel_distributions" not in out
+
+    def test_diagnostics_reports_its_own_failure(self, monkeypatch):
+        import asyncio
+        import anima_mcp.drawing_derivation as mod
+        from anima_mcp.handlers.display_ops import handle_diagnostics
+
+        def _boom(**kw):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(mod, "channel_report", _boom)
+        out = json.loads(asyncio.run(
+            handle_diagnostics({"channel_distributions": True}))[0].text)
+        assert out["channel_distributions"]["available"] is False
+        assert "boom" in out["channel_distributions"]["reason"]
