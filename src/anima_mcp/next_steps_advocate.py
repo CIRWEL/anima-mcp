@@ -1,9 +1,19 @@
 """
-Next Steps Advocate - Reports Lumen's actual state and drives.
+Next Steps Advocate - Reports Lumen's actual state, drives, and intentions.
 
 No canned phrases. Feelings come from anima dimensions, desires come from
 inner_life drives (which accumulate when temperament drops below comfort
-thresholds). Diagnostic checks remain for hardware/connectivity issues.
+thresholds) and from the goals Lumen has set itself. Diagnostic checks remain
+for hardware/connectivity issues.
+
+The state checks are an alarm: they speak only when a dimension falls below
+comfort. Measured against Lumen's own recorded history (263,481 samples,
+2026-01-11 to 2026-08-29) that alarm is close to silent — clarity<0.3 and
+presence<0.4 never fired once, stability<0.4 fired once, and only warmth<0.3
+fires with any regularity. So "nothing to report" was the overwhelmingly
+common answer, and it was returned in a shape that could not be told apart
+from "the analysis never ran". Two things follow, and both are in this file:
+intentions are reported alongside alarms, and a quiet result says so.
 """
 
 from dataclasses import dataclass, field
@@ -43,6 +53,7 @@ class StepCategory(Enum):
     TESTING = "testing"
     DOCUMENTATION = "documentation"
     OPTIMIZATION = "optimization"
+    INTENTION = "intention"
 
 
 @dataclass
@@ -73,6 +84,61 @@ class NextStep:
         }
 
 
+# A goal nobody has touched in this long is reported as resumable rather than
+# in-progress. Not a new boundary: growth/goals.py already treats 14 days
+# without work as "stalled" when it decides whether a goal past its target date
+# should be abandoned. Reusing that number keeps one definition of stale.
+_GOAL_STALE_DAYS = 14
+
+
+@dataclass
+class _StateCheck:
+    """One threshold comparison, and how far the value sits from firing.
+
+    The margin has to be derived from the same threshold that decides firing.
+    Computing it separately would let a quiet report describe a check the tool
+    is not actually running — which is the failure this whole file is about.
+    """
+
+    name: str
+    value: float
+    threshold: float
+    direction: str  # "below" | "above" — which side fires
+    step: "NextStep"
+
+    @property
+    def margin(self) -> float:
+        """Distance to firing. Negative once fired."""
+        if self.direction == "below":
+            return self.value - self.threshold
+        return self.threshold - self.value
+
+    @property
+    def fired(self) -> bool:
+        return self.margin < 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name,
+            "value": round(self.value, 4),
+            "threshold": self.threshold,
+            "direction": self.direction,
+            "margin": round(self.margin, 4),
+            "fired": self.fired,
+        }
+
+
+def _days_since(iso_timestamp: Optional[str]) -> Optional[float]:
+    """Days since an ISO timestamp, or None if absent/unparseable."""
+    if not iso_timestamp:
+        return None
+    try:
+        then = datetime.fromisoformat(str(iso_timestamp))
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, (datetime.now() - then).total_seconds() / 86400.0)
+
+
 # Drive verbs — from inner_life.py, the honest wanting
 _DRIVE_VERBS = {
     "warmth": "wanting warmth",
@@ -88,6 +154,7 @@ class NextStepsAdvocate:
     def __init__(self):
         self._last_analysis: Optional[datetime] = None
         self._cached_steps: List[NextStep] = []
+        self._last_state_checks: List[_StateCheck] = []
 
     def analyze_current_state(
         self,
@@ -101,6 +168,8 @@ class NextStepsAdvocate:
         strongest_drive: Optional[str] = None,
         wants: Optional[Dict[str, dict]] = None,
         self_iteration_attention: Optional[Dict[str, Any]] = None,
+        goals: Optional[List[Dict[str, Any]]] = None,
+        curiosities: Optional[List[str]] = None,
     ) -> List[NextStep]:
         """Analyze current state and report findings.
 
@@ -119,6 +188,12 @@ class NextStepsAdvocate:
             self_iteration_attention: Server-derived, read-only attention
                 projection from the integrity-checked self-iteration ledger and
                 reconciled artifacts
+            goals: Active goals as plain dicts (growth Goal.to_dict shape).
+                Dicts rather than Goal objects so this module stays independent
+                of the growth package; the caller is already holding them.
+            curiosities: Unexplored curiosity questions, in the order the store
+                returned them. Order matters — a random pick would make two
+                calls a second apart disagree about what Lumen wonders about.
 
         Returns:
             List of findings, prioritized
@@ -151,9 +226,23 @@ class NextStepsAdvocate:
                 )
             )
 
+        # === State checks (factual) ===
+        #
+        # A table rather than five hand-written ifs, so the margin reported
+        # when nothing fires is read off the same threshold that decides
+        # firing. Thresholds, priorities, wording and evaluation order are
+        # unchanged from the ifs this replaces.
+        #
+        # Note that `entropy` is 1.0 - stability by construction (eisv_mapper),
+        # so the CRITICAL row restates the HIGH stability row at a different
+        # priority: five checks, four distinct conditions. Left standing on
+        # purpose — retuning thresholds is a separate decision — but the table
+        # is what makes it visible instead of buried.
+        state_checks: List[_StateCheck] = []
         if anima and readings:
-            if anima.clarity < 0.3:
-                steps.append(
+            state_checks.append(
+                _StateCheck(
+                    "clarity", anima.clarity, 0.3, "below",
                     NextStep(
                         feeling=f"clarity={anima.clarity:.2f}",
                         desire="wanting to see clearly",
@@ -161,23 +250,28 @@ class NextStepsAdvocate:
                         priority=Priority.HIGH,
                         category=StepCategory.HARDWARE,
                         reason="Sensor signal quality degraded",
+                    ),
+                )
+            )
+
+            if eisv:
+                state_checks.append(
+                    _StateCheck(
+                        "entropy", eisv.entropy, 0.6, "above",
+                        NextStep(
+                            feeling=f"entropy={eisv.entropy:.2f}",
+                            desire="wanting calm",
+                            action="Check for resource pressure",
+                            priority=Priority.CRITICAL,
+                            category=StepCategory.OPTIMIZATION,
+                            reason="System state unstable",
+                        ),
                     )
                 )
 
-            if eisv and eisv.entropy > 0.6:
-                steps.append(
-                    NextStep(
-                        feeling=f"entropy={eisv.entropy:.2f}",
-                        desire="wanting calm",
-                        action="Check for resource pressure",
-                        priority=Priority.CRITICAL,
-                        category=StepCategory.OPTIMIZATION,
-                        reason="System state unstable",
-                    )
-                )
-
-            if anima.stability < 0.4:
-                steps.append(
+            state_checks.append(
+                _StateCheck(
+                    "stability", anima.stability, 0.4, "below",
                     NextStep(
                         feeling=f"stability={anima.stability:.2f}",
                         desire="wanting stability",
@@ -185,11 +279,13 @@ class NextStepsAdvocate:
                         priority=Priority.HIGH,
                         category=StepCategory.OPTIMIZATION,
                         reason="Environmental instability",
-                    )
+                    ),
                 )
+            )
 
-            if anima.warmth < 0.3:
-                steps.append(
+            state_checks.append(
+                _StateCheck(
+                    "warmth", anima.warmth, 0.3, "below",
                     NextStep(
                         feeling=f"warmth={anima.warmth:.2f}",
                         desire="wanting warmth",
@@ -197,11 +293,13 @@ class NextStepsAdvocate:
                         priority=Priority.MEDIUM,
                         category=StepCategory.HARDWARE,
                         reason="Low thermal/activity state",
-                    )
+                    ),
                 )
+            )
 
-            if anima.presence < 0.4:
-                steps.append(
+            state_checks.append(
+                _StateCheck(
+                    "presence", anima.presence, 0.4, "below",
                     NextStep(
                         feeling=f"presence={anima.presence:.2f}",
                         desire="wanting to feel whole",
@@ -209,8 +307,11 @@ class NextStepsAdvocate:
                         priority=Priority.HIGH,
                         category=StepCategory.OPTIMIZATION,
                         reason="Resource constraints",
-                    )
+                    ),
                 )
+            )
+
+        steps.extend(check.step for check in state_checks if check.fired)
 
         # === Self-iteration attention (server-derived, read-only) ===
 
@@ -361,6 +462,93 @@ class NextStepsAdvocate:
                 )
             )
 
+        # === Intentions (Lumen's own goals and curiosities) ===
+        #
+        # Everything above is an alarm. Alarms answer "is something wrong",
+        # never "what is Lumen doing next", and on this body they are almost
+        # always silent — so a tool named next_steps reported "none" while
+        # Lumen was mid-stride on goals it had set itself and recorded
+        # progress against minutes earlier. Active goals ARE the next steps.
+        #
+        # They sit at LOW so they can never outrank a real fault: an
+        # in-progress goal must not push a failed display down the list.
+        for goal in goals or []:
+            if not isinstance(goal, dict):
+                continue
+            description = str(goal.get("description") or "").strip()
+            if not description:
+                continue
+
+            raw_progress = goal.get("progress")
+            progress = (
+                float(raw_progress)
+                if isinstance(raw_progress, (int, float))
+                else None
+            )
+            raw_last_worked = goal.get("last_worked_on")
+            idle_days = _days_since(raw_last_worked)
+
+            feeling = "goal"
+            if progress is not None:
+                feeling += f" {progress:.0%}"
+            if idle_days is not None:
+                feeling += f", worked {_format_duration(idle_days * 86400.0)} ago"
+            elif raw_last_worked:
+                # There IS a timestamp and it did not parse. Saying "not yet
+                # started" here would be a fabricated claim about a goal that
+                # has been worked on — the exact direction of error this file
+                # is meant to stop making.
+                feeling += ", last worked unknown"
+            else:
+                feeling += ", not yet started"
+
+            # Stale is reported, not scolded: MEDIUM says "this is still open
+            # and nothing has moved it", which is information the operator
+            # cannot get from progress alone.
+            stale = idle_days is not None and idle_days >= _GOAL_STALE_DAYS
+            if stale:
+                priority = Priority.MEDIUM
+                action = "resume"
+                reason = (
+                    f"still active, untouched for "
+                    f"{_format_duration(idle_days * 86400.0)}"
+                )
+            else:
+                priority = Priority.LOW
+                action = "continue"
+                reason = str(goal.get("motivation") or "").strip() or (
+                    "an active goal Lumen set for itself"
+                )
+
+            steps.append(
+                NextStep(
+                    feeling=feeling,
+                    desire=description,
+                    action=action,
+                    priority=priority,
+                    category=StepCategory.INTENTION,
+                    reason=reason,
+                )
+            )
+
+        open_curiosities = [
+            q.strip() for q in (curiosities or []) if isinstance(q, str) and q.strip()
+        ]
+        if open_curiosities:
+            steps.append(
+                NextStep(
+                    feeling=f"{len(open_curiosities)} unexplored",
+                    desire=open_curiosities[0],
+                    action="explore",
+                    priority=Priority.LOW,
+                    category=StepCategory.INTENTION,
+                    reason=(
+                        f"{len(open_curiosities)} question(s) Lumen has raised "
+                        f"and not yet explored"
+                    ),
+                )
+            )
+
         # Sort by priority
         priority_order = {
             Priority.CRITICAL: 0,
@@ -371,27 +559,59 @@ class NextStepsAdvocate:
         steps.sort(key=lambda s: priority_order[s.priority])
 
         self._cached_steps = steps
+        self._last_state_checks = state_checks
         self._last_analysis = datetime.now()
         return steps
 
     def get_next_steps_summary(self) -> Dict[str, Any]:
-        """Get summary of current steps."""
-        if not self._cached_steps:
-            return {"message": "No analysis performed yet", "steps": []}
+        """Summary of the most recent analysis. One shape, always.
+
+        The empty case used to return {"message": ..., "steps": []} — different
+        keys from the populated case, and the caller reads neither of them. So
+        "the advocate never ran" and "the advocate ran and found nothing"
+        serialized identically, and `last_analyzed` was dropped at exactly the
+        moment it was the only thing worth knowing. On a body whose state
+        checks fired 1 time in 263k samples that empty case is the normal one,
+        which made the tool's most common answer its least legible.
+
+        `status` separates them: `unknown` means no analysis is on record,
+        `quiet` means one ran and found nothing above LOW, `attention` means
+        something wants looking at. `state_checks` reports the alarm lane
+        whatever the intentions lane did, including how close the nearest
+        threshold came to firing — so silence is attributable to a margin
+        rather than assumed to mean health.
+        """
+        counts = {
+            priority: len([s for s in self._cached_steps if s.priority == priority])
+            for priority in Priority
+        }
+        fired = [c for c in self._last_state_checks if c.fired]
+        pending = [c for c in self._last_state_checks if not c.fired]
+        nearest = min(pending, key=lambda c: c.margin) if pending else None
+
+        if self._last_analysis is None:
+            status = "unknown"
+        elif any(s.priority is not Priority.LOW for s in self._cached_steps):
+            status = "attention"
+        else:
+            status = "quiet"
 
         return {
+            "status": status,
             "last_analyzed": self._last_analysis.isoformat()
             if self._last_analysis
             else None,
             "total_steps": len(self._cached_steps),
-            "critical": len(
-                [s for s in self._cached_steps if s.priority == Priority.CRITICAL]
-            ),
-            "high": len([s for s in self._cached_steps if s.priority == Priority.HIGH]),
-            "medium": len(
-                [s for s in self._cached_steps if s.priority == Priority.MEDIUM]
-            ),
-            "low": len([s for s in self._cached_steps if s.priority == Priority.LOW]),
+            "critical": counts[Priority.CRITICAL],
+            "high": counts[Priority.HIGH],
+            "medium": counts[Priority.MEDIUM],
+            "low": counts[Priority.LOW],
+            "state_checks": {
+                "evaluated": len(self._last_state_checks),
+                "fired": len(fired),
+                "nearest_threshold": nearest.to_dict() if nearest else None,
+                "all": [c.to_dict() for c in self._last_state_checks],
+            },
             "next_action": self._cached_steps[0].to_dict()
             if self._cached_steps
             else None,

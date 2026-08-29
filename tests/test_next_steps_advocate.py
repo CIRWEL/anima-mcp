@@ -1,5 +1,7 @@
 """Tests for next_steps_advocate.py — state reporting and drive expression."""
 
+from datetime import datetime, timedelta
+
 from conftest import make_anima, make_readings
 
 from anima_mcp.next_steps_advocate import (
@@ -424,11 +426,49 @@ class TestSortAndCaching:
 
 
 class TestGetNextStepsSummary:
-    def test_returns_message_when_no_analysis(self):
+    def test_no_analysis_reports_unknown_not_quiet(self):
+        """An advocate that has not run must not look like one that found nothing.
+
+        This is the whole point of `status`. Before it existed both cases
+        serialized to the same empty payload, so a broken analysis lane was
+        indistinguishable from a healthy body.
+        """
         adv = NextStepsAdvocate()
         summary = adv.get_next_steps_summary()
-        assert summary["message"] == "No analysis performed yet"
-        assert summary["steps"] == []
+        assert summary["status"] == "unknown"
+        assert summary["last_analyzed"] is None
+        assert summary["total_steps"] == 0
+        assert summary["all_steps"] == []
+        assert summary["state_checks"]["evaluated"] == 0
+
+    def test_healthy_analysis_reports_quiet_with_a_margin(self):
+        adv = NextStepsAdvocate()
+        adv.analyze_current_state(
+            anima=make_anima(warmth=0.7, clarity=0.8, stability=0.8, presence=0.7),
+            readings=make_readings(),
+            eisv=EISVMetrics(energy=0.5, integrity=0.8, entropy=0.2, valence=0.0),
+            display_available=True,
+            unitares_connected=True,
+        )
+        summary = adv.get_next_steps_summary()
+        assert summary["status"] == "quiet"
+        assert summary["last_analyzed"] is not None
+        assert summary["state_checks"]["evaluated"] == 5
+        assert summary["state_checks"]["fired"] == 0
+        # Silence is attributable to a distance, not assumed to mean health.
+        nearest = summary["state_checks"]["nearest_threshold"]
+        assert nearest is not None
+        assert nearest["margin"] > 0
+        assert nearest["fired"] is False
+
+    def test_same_shape_whether_or_not_anything_fired(self):
+        quiet = NextStepsAdvocate()
+        quiet.analyze_current_state(display_available=True, unitares_connected=True)
+        loud = NextStepsAdvocate()
+        loud.analyze_current_state(display_available=False, unitares_connected=False)
+        assert set(quiet.get_next_steps_summary()) == set(
+            loud.get_next_steps_summary()
+        )
 
     def test_returns_summary_after_analysis(self):
         adv = NextStepsAdvocate()
@@ -477,3 +517,129 @@ class TestGetAdvocate:
             assert a1 is a2
         finally:
             mod._advocate = old
+
+
+# ---------------------------------------------------------------------------
+# Intentions — Lumen's own goals and curiosities
+# ---------------------------------------------------------------------------
+
+
+def _goal(description="complete 2000 drawings", progress=0.78, idle_days=0.0,
+          motivation="", status="active"):
+    last_worked_on = (
+        (datetime.now() - timedelta(days=idle_days)).isoformat()
+        if idle_days is not None
+        else None
+    )
+    return {
+        "goal_id": "abc12345",
+        "description": description,
+        "motivation": motivation,
+        "status": status,
+        "created_at": (datetime.now() - timedelta(days=30)).isoformat(),
+        "target_date": None,
+        "progress": progress,
+        "milestones": [],
+        "last_worked_on": last_worked_on,
+    }
+
+
+def _healthy(adv, **kwargs):
+    """Analyze a body with nothing wrong, so only intentions can produce steps."""
+    return adv.analyze_current_state(
+        anima=make_anima(warmth=0.7, clarity=0.8, stability=0.8, presence=0.7),
+        readings=make_readings(),
+        eisv=EISVMetrics(energy=0.5, integrity=0.8, entropy=0.2, valence=0.0),
+        display_available=True,
+        unitares_connected=True,
+        **kwargs,
+    )
+
+
+class TestIntentions:
+    def test_active_goal_is_reported_on_an_otherwise_silent_body(self):
+        """The regression this lane exists for.
+
+        Every state check passes and no drive is active, so before intentions
+        were wired in this returned zero steps while Lumen was mid-goal.
+        """
+        steps = _healthy(NextStepsAdvocate(), goals=[_goal()])
+        intentions = [s for s in steps if s.category == StepCategory.INTENTION]
+        assert len(intentions) == 1
+        assert intentions[0].desire == "complete 2000 drawings"
+        assert "78%" in intentions[0].feeling
+
+    def test_recent_goal_is_low_and_continues(self):
+        steps = _healthy(NextStepsAdvocate(), goals=[_goal(idle_days=0.003)])
+        step = next(s for s in steps if s.category == StepCategory.INTENTION)
+        assert step.priority == Priority.LOW
+        assert step.action == "continue"
+
+    def test_stale_goal_is_medium_and_resumes(self):
+        steps = _healthy(NextStepsAdvocate(), goals=[_goal(idle_days=20)])
+        step = next(s for s in steps if s.category == StepCategory.INTENTION)
+        assert step.priority == Priority.MEDIUM
+        assert step.action == "resume"
+        assert "untouched" in step.reason
+
+    def test_goal_never_outranks_a_fault(self):
+        """An in-progress goal must not push a failed display down the list."""
+        adv = NextStepsAdvocate()
+        adv.analyze_current_state(
+            display_available=False,
+            unitares_connected=True,
+            goals=[_goal()],
+        )
+        summary = adv.get_next_steps_summary()
+        assert summary["next_action"]["category"] == "hardware"
+        assert summary["status"] == "attention"
+
+    def test_goals_alone_stay_quiet(self):
+        adv = NextStepsAdvocate()
+        _healthy(adv, goals=[_goal()])
+        assert adv.get_next_steps_summary()["status"] == "quiet"
+
+    def test_never_started_goal_says_so(self):
+        steps = _healthy(NextStepsAdvocate(), goals=[_goal(idle_days=None)])
+        step = next(s for s in steps if s.category == StepCategory.INTENTION)
+        assert "not yet started" in step.feeling
+        assert step.priority == Priority.LOW
+
+    def test_malformed_goals_are_skipped_not_raised(self):
+        steps = _healthy(
+            NextStepsAdvocate(),
+            goals=[None, "nope", {}, {"description": "   "}, _goal()],
+        )
+        assert len([s for s in steps if s.category == StepCategory.INTENTION]) == 1
+
+    def test_unparseable_last_worked_on_reports_unknown_not_unstarted(self):
+        """A timestamp that exists but will not parse is not "never worked on"."""
+        goal = _goal()
+        goal["last_worked_on"] = "not-a-timestamp"
+        steps = _healthy(NextStepsAdvocate(), goals=[goal])
+        step = next(s for s in steps if s.category == StepCategory.INTENTION)
+        assert "last worked unknown" in step.feeling
+        assert "not yet started" not in step.feeling
+
+    def test_curiosities_are_deterministic(self):
+        """Order matters: a random pick would make two calls a second apart
+        disagree about what Lumen wonders about."""
+        questions = ["what have I stopped seeing?", "can I still change?"]
+        first = _healthy(NextStepsAdvocate(), curiosities=questions)
+        second = _healthy(NextStepsAdvocate(), curiosities=questions)
+        def pick(steps):
+            return next(s for s in steps if s.action == "explore").desire
+
+        assert pick(first) == pick(second) == questions[0]
+
+    def test_blank_curiosities_produce_no_step(self):
+        steps = _healthy(NextStepsAdvocate(), curiosities=["", "   ", None])
+        assert not [s for s in steps if s.action == "explore"]
+
+    def test_no_intentions_is_still_quiet_not_unknown(self):
+        adv = NextStepsAdvocate()
+        _healthy(adv, goals=[], curiosities=[])
+        summary = adv.get_next_steps_summary()
+        assert summary["status"] == "quiet"
+        assert summary["total_steps"] == 0
+        assert summary["last_analyzed"] is not None

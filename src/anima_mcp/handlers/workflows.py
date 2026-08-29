@@ -220,6 +220,34 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
             "acknowledgement_is_approval": False,
             "authority_granted": False,
         }
+    # Lumen's own intentions. Read-only on purpose: growth._goals is the
+    # active-only in-memory mirror loaded at startup and _curiosities holds the
+    # unexplored ones, so both are plain reads. check_goal_progress() would be
+    # the tempting call here and is the wrong one — it auto-abandons stale
+    # goals as a side effect, and a status tool must not change the status it
+    # reports.
+    goals: list = []
+    curiosities: list = []
+    intentions_available = False
+    intentions_error = None
+    try:
+        from ..accessors import _get_growth
+
+        growth = _get_growth()
+        if growth is not None:
+            goals = [
+                goal.to_dict()
+                for goal in getattr(growth, "_goals", {}).values()
+                if getattr(goal.status, "value", goal.status) == "active"
+            ]
+            curiosities = list(getattr(growth, "_curiosities", []) or [])
+            intentions_available = True
+        else:
+            intentions_error = "growth store not initialized"
+    except Exception as e:
+        intentions_error = str(e)
+        print(f"[Diagnostics] Intentions unavailable: {e}", file=sys.stderr, flush=True)
+
     advocate = get_advocate()
     advocate.analyze_current_state(
         anima=anima,
@@ -232,6 +260,8 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
         strongest_drive=_il.get("strongest_drive"),
         wants=_il.get("wants"),
         self_iteration_attention=self_iteration_attention,
+        goals=goals,
+        curiosities=curiosities,
     )
 
     summary = advocate.get_next_steps_summary()
@@ -241,6 +271,21 @@ async def handle_next_steps(arguments: dict) -> list[TextContent]:
 
     result = {
         "summary": {
+            # status is the field to read first: "unknown" means no analysis is
+            # on record, and it is the one case where the four "none"s below do
+            # not mean "nothing to report".
+            "status": summary.get("status", "unknown"),
+            "last_analyzed": summary.get("last_analyzed"),
+            "state_checks": summary.get("state_checks", {}),
+            # Without this, a growth store that failed to load would report
+            # zero goals and read as "Lumen has nothing planned" — the same
+            # silent-toward-healthy failure `status` exists to prevent.
+            "intentions": {
+                "available": intentions_available,
+                "goals": len(goals),
+                "curiosities": len(curiosities),
+                "error": intentions_error,
+            },
             "priority": next_action.get("priority", "unknown")
             if next_action
             else "none",
