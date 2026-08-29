@@ -238,7 +238,7 @@ class TestDerivationScript:
         r = self._run("--db", str(self._make_db(tmp_path)), "--days", "90")
         assert r.returncode == 0, r.stderr
         entry = json.loads(r.stderr[r.stderr.index("{"):])["report"]["resonance"]
-        assert entry["baseline_0.4"]["reached_composition_floor"] == 0
+        assert entry["baseline_builtin"]["reached_composition_floor"] == 0
         assert entry["verdict"]["reached_composition_floor"] > 0
 
     def test_refuses_a_pivot_that_leaves_the_gate_dead(self, tmp_path):
@@ -302,3 +302,151 @@ class TestDerivationScript:
         r = self._run("--db", str(db), "--days", "90")
         assert r.returncode == 0, r.stderr
         assert cfg.read_text() == original
+
+
+# ---------------------------------------------------------------------------
+# The replay, and the report the server serves
+# ---------------------------------------------------------------------------
+
+from anima_mcp import drawing_derivation as dd  # noqa: E402
+
+
+def _naive_replay(intervals, pivot):
+    """The per-mark loop the closed form replaces. Kept only as the oracle."""
+    curiosity, marks_seen, crossed_at = dd.CURIOSITY_START, 0, None
+    for iv in intervals:
+        for _ in range(iv["marks_delta"]):
+            curiosity = max(0.0, min(1.0, curiosity - curiosity_drain(
+                iv["arc_phase"], iv["coherence"], pivot)))
+            marks_seen += 1
+            if crossed_at is None and curiosity < dd.COMPOSITION_FLOOR:
+                crossed_at = marks_seen
+    return curiosity, crossed_at, marks_seen
+
+
+class TestReplayEquivalence:
+    """The closed form must equal the loop it replaces.
+
+    `replay` collapses each interval to one arithmetic step because coherence
+    and arc_phase are constant within a trajectory sample, so the per-mark
+    delta is constant and curiosity moves monotonically. That equivalence is
+    what makes it safe to serve from inside the server — an unbounded per-mark
+    loop over the whole corpus is not.
+    """
+
+    @pytest.mark.parametrize("pivot", [0.2, 0.4, 0.458, 0.7])
+    @pytest.mark.parametrize("centre,spread", [(0.458, 0.06), (0.05, 0.03), (0.8, 0.1)])
+    def test_matches_the_naive_loop(self, pivot, centre, spread):
+        intervals = [{"coherence": centre + spread * _OFFSETS[i % len(_OFFSETS)],
+                      "arc_phase": "developing", "marks_delta": 40 + i}
+                     for i in range(25)]
+        fast, fast_cross, fast_marks = dd.replay(intervals, pivot)
+        slow, slow_cross, slow_marks = _naive_replay(intervals, pivot)
+        assert fast_marks == slow_marks
+        assert fast == pytest.approx(slow, abs=1e-9)
+        assert fast_cross == slow_cross
+
+    def test_matches_through_the_zero_clamp(self):
+        """Hard draining must stop at 0.0 in both, not go negative."""
+        intervals = [{"coherence": 0.0, "arc_phase": "developing",
+                      "marks_delta": 5000}]
+        fast = dd.replay(intervals, 0.9)
+        slow = _naive_replay(intervals, 0.9)
+        assert fast[0] == 0.0 and slow[0] == 0.0
+        assert fast[1] == slow[1]
+
+    def test_matches_through_the_one_clamp(self):
+        """Pure regeneration must stop at 1.0 and never cross."""
+        intervals = [{"coherence": 0.9, "arc_phase": "developing",
+                      "marks_delta": 5000}]
+        fast = dd.replay(intervals, 0.1)
+        slow = _naive_replay(intervals, 0.1)
+        assert fast[0] == 1.0 and slow[0] == 1.0
+        assert fast[1] is None and slow[1] is None
+
+
+class TestReportFailsTowardUnknown:
+    """A broken derivation must say so, never report an empty corpus.
+
+    An empty `eras` with `available: true` would read as "no era qualifies",
+    which is a finding. A missing database is not a finding.
+    """
+
+    def test_missing_database_is_unavailable_not_empty(self, tmp_path):
+        r = dd.derive_report(str(tmp_path / "nope.db"))
+        assert r["available"] is False
+        assert "unreadable" in r["reason"]
+
+    def test_missing_table_is_unavailable_not_empty(self, tmp_path):
+        db = tmp_path / "bare.db"
+        sqlite3.connect(db).close()
+        r = dd.derive_report(str(db))
+        assert r["available"] is False
+        assert "unreadable" in r["reason"]
+
+    def test_report_never_writes_to_the_database(self, tmp_path):
+        """Opened mode=ro — the server-side path must not be able to mutate."""
+        db = TestDerivationScript()._make_db(tmp_path)
+        before = db.stat().st_mtime_ns, db.stat().st_size
+        r = dd.derive_report(str(db))
+        assert r["available"] is True
+        assert (db.stat().st_mtime_ns, db.stat().st_size) == before
+
+    def test_sliver_refuses_without_claiming_eras_qualified(self, tmp_path):
+        db = TestDerivationScript()._make_db(
+            tmp_path, {"resonance": (2, 5, 100, 0.458, 0.06)})
+        r = dd.derive_report(str(db))
+        assert r["available"] is True
+        assert "_refused" in r["eras"]
+        assert r["thresholds"] == {}
+
+
+class TestDiagnosticsExposure:
+    """The report has to be reachable on a device with no shell."""
+
+    def test_tool_schema_advertises_the_opt_in(self):
+        from anima_mcp.tool_registry import TOOLS
+        tool = next(t for t in TOOLS if t.name == "diagnostics")
+        props = tool.inputSchema["properties"]
+        assert "derive_curiosity" in props
+        assert props["derive_curiosity"]["type"] == "boolean"
+        assert "derive_days" in props
+
+    def test_off_by_default(self):
+        """It scans the corpus; diagnostics is called routinely. Opt-in only."""
+        import asyncio
+        from anima_mcp.handlers.display_ops import handle_diagnostics
+        out = json.loads(asyncio.run(handle_diagnostics({}))[0].text)
+        assert "curiosity_derivation" not in out
+
+    def test_included_when_requested(self, monkeypatch):
+        import asyncio
+        import anima_mcp.drawing_derivation as mod
+        from anima_mcp.handlers.display_ops import handle_diagnostics
+        monkeypatch.setattr(mod, "derive_report",
+                            lambda **kw: {"available": True, "days": kw.get("days")})
+        out = json.loads(asyncio.run(
+            handle_diagnostics({"derive_curiosity": True, "derive_days": 30}))[0].text)
+        assert out["curiosity_derivation"] == {"available": True, "days": 30}
+
+    def test_a_broken_derivation_reports_instead_of_vanishing(self, monkeypatch):
+        """Same rule as novelty_settling: a silent diagnostic is worse than none."""
+        import asyncio
+        import anima_mcp.drawing_derivation as mod
+        from anima_mcp.handlers.display_ops import handle_diagnostics
+
+        def _boom(**kw):
+            raise RuntimeError("boom")
+
+        monkeypatch.setattr(mod, "derive_report", _boom)
+        out = json.loads(asyncio.run(
+            handle_diagnostics({"derive_curiosity": True}))[0].text)
+        assert out["curiosity_derivation"]["available"] is False
+        assert "boom" in out["curiosity_derivation"]["reason"]
+
+    def test_none_arguments_do_not_crash_the_rest_path(self):
+        """REST passes the body's `arguments` through; explicit null arrives here."""
+        import asyncio
+        from anima_mcp.handlers.display_ops import handle_diagnostics
+        out = json.loads(asyncio.run(handle_diagnostics(None))[0].text)
+        assert "leds" in out

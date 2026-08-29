@@ -233,6 +233,11 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     """Get system diagnostics including LED and display status."""
     from ..accessors import _get_leds, _get_display, _get_display_update_task, _get_sensors
 
+    # The REST dispatch passes the request's `arguments` through unchecked, so
+    # a body without that field arrives as None here (the MCP path already
+    # substitutes {}). Every other read below is positional; this one is not.
+    arguments = arguments or {}
+
     sensors = _get_sensors()
 
     # LED diagnostics
@@ -334,6 +339,34 @@ async def handle_diagnostics(arguments: dict) -> list[TextContent]:
     }
     if drawing_info:
         result["drawing"] = drawing_info
+
+    # Opt-in: the per-era curiosity pivot derivation, read-only.
+    #
+    # Off by default because it scans drawing_trajectory, and diagnostics is
+    # called routinely enough that a corpus scan on every reading would be a
+    # real cost. Opt in with {"derive_curiosity": true}.
+    #
+    # This exists because the derivation was otherwise unrunnable on Lumen: the
+    # device has no shell over MCP, and its calibration carries
+    # `drawing_thresholds: {}` with `update_count: 0` — the 2026-08-22 coverage
+    # derivation shipped and was never once applied. A derivation nothing can
+    # run is a derivation that does not happen.
+    #
+    # Reporting only. Writing calibration stays with the script (--apply),
+    # which is the one path that acts.
+    if arguments.get("derive_curiosity"):
+        try:
+            from ..drawing_derivation import derive_report
+            days = int(arguments.get("derive_days", 90))
+            result["curiosity_derivation"] = derive_report(days=days)
+        except Exception as e:
+            # Same rule as `settling` and `novelty_settling` above: report the
+            # failure rather than dropping the key, so a broken derivation is
+            # distinguishable from one that found nothing to emit.
+            result["curiosity_derivation"] = {
+                "available": False,
+                "reason": f"{type(e).__name__}: {e}",
+            }
 
     # What has quietly stopped working. Optional instrumentation is allowed to
     # fail without stopping a reading, but a swallowed failure used to leave no

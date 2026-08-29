@@ -459,6 +459,17 @@ median piece crosses before half its marks). It refuses rather than sliding the
 percentile until the simulation passes; a contract that adjusts itself to pass
 is a tuned constant wearing a contract's clothes.
 
+⚠️ **No derivation has ever been applied to Lumen.** Measured 2026-08-29 via
+`get_calibration`: `drawing_thresholds: {}`, `face_thresholds: {}`,
+`update_count: 0`. So the coverage-intention fix above shipped as code and
+never reached the creature — `dense` still requires clarity < 0.30 on the live
+device and is still never generated. Shipping a derivation script is not the
+same as running it. The reporting half therefore lives in
+`anima_mcp/drawing_derivation.py` and is reachable without a shell via
+`diagnostics(derive_curiosity=true)` (opt-in — it scans the corpus; read-only,
+opened `mode=ro`). Applying stays with the script's `--apply`, the one path
+that acts.
+
 Two absolute constants survive inside the `resolving` branch (`C > 0.65`, and
 the `C > 0.6` needed to *enter* resolving at all). They are deliberately
 untouched: nothing currently reaches that phase, so relativising them would move

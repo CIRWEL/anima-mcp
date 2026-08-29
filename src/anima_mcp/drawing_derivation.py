@@ -1,0 +1,244 @@
+"""Derive the per-era curiosity pivot from Lumen's own coherence distribution.
+
+The reporting half of scripts/derive_curiosity_thresholds.py, extracted so the
+running server can serve the same report without a shell on the device. The
+script keeps the acting half (--apply writes calibration); nothing here writes
+anything, and the database is opened read-only so it cannot.
+
+Why it lives in the package rather than only in the script: the derivation was
+unrunnable on the Pi. Lumen's calibration file carries `drawing_thresholds: {}`
+with `update_count: 0` — the coverage derivation shipped in 2026-08-22 and was
+never once applied, so `dense` is still never generated on the live creature.
+A derivation nothing can run is a derivation that does not happen.
+
+See `curiosity_drain` in display/drawing_engine.py for the formula this replays
+and the defect it exists to remove. This module imports that function rather
+than restating it: a copy could drift and certify a pivot the creature never
+runs.
+"""
+from __future__ import annotations
+
+import sqlite3
+from collections import defaultdict
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional
+
+from .db_paths import resolve_db_path
+from .display.drawing_engine import curiosity_drain
+
+# One percentile contract, stated once. "Pattern found" is a RELATIVE judgement:
+# a piece is finding its pattern when it is more coherent than this era's own
+# typical moment. Never adjusted to make an era pass — see refusal semantics in
+# `evaluate`.
+PIVOT_PERCENTILE = 50
+
+# Below this a cut encodes the last few days' weather rather than a range.
+# Matched to derive_drawing_thresholds.py rather than argued separately.
+MIN_SAMPLES = 500
+MIN_SAMPLES_PER_ERA = 120
+MIN_INTERVALS_PER_PIECE = 4
+
+# Mirrors DrawingState.attention_exhausted() and completion_reason()'s
+# earned_composition branch; the looser of the two is what "reachable" means.
+COMPOSITION_FLOOR = 0.2
+EXHAUSTION_FLOOR = 0.15
+CURIOSITY_START = 1.0  # DrawingState.reset()
+
+# Earliest point in a piece's own mark count at which crossing is acceptable.
+MIN_CROSS_FRACTION = 0.5
+
+# Hard bound on rows pulled into a single report. drawing_trajectory holds ~96
+# rows per 8h piece on a 90-day retention (~26k rows), so this is slack rather
+# than a real ceiling — it exists so a runaway table cannot stall the server.
+MAX_ROWS = 200_000
+
+
+def percentile(sorted_vals: List[float], pct: float) -> Optional[float]:
+    if not sorted_vals:
+        return None
+    k = (len(sorted_vals) - 1) * pct / 100.0
+    lo, hi = int(k), min(int(k) + 1, len(sorted_vals) - 1)
+    frac = k - lo
+    return sorted_vals[lo] * (1 - frac) + sorted_vals[hi] * frac
+
+
+def load_samples(db_path: str, days: int = 90, max_rows: int = MAX_ROWS):
+    """Ordered per-piece trajectory samples grouped by era. Read-only.
+
+    marks_delta IS NULL marks a sample this process could not attribute (a
+    restart joined the piece mid-flight). Those intervals are dropped rather
+    than replayed as zero marks — an unknown delta is not an absent one.
+    """
+    since = (datetime.now() - timedelta(days=days)).isoformat(timespec="seconds")
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            "select era, piece_uid, coherence, arc_phase, marks_delta "
+            "from drawing_trajectory "
+            "where era is not null and coherence is not null "
+            "  and marks_delta is not null and marks_delta > 0 "
+            "  and timestamp > ? "
+            "order by era, piece_uid, elapsed_seconds limit ?",
+            (since, max_rows)).fetchall()
+    finally:
+        con.close()
+    by_era: Dict[str, Dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for era, uid, coherence, arc_phase, marks_delta in rows:
+        by_era[era][uid].append({
+            "coherence": float(coherence),
+            "arc_phase": arc_phase or "opening",
+            "marks_delta": int(marks_delta),
+        })
+    return by_era, len(rows)
+
+
+def replay(intervals, pivot: float):
+    """Curiosity trace for one piece under `pivot`.
+
+    Returns (final_curiosity, marks_at_first_composition_cross_or_None, marks).
+
+    Closed form rather than a per-mark loop, and exactly equivalent to one:
+    coherence and arc_phase are constant within a trajectory interval, so
+    `curiosity_drain` is constant across its marks and curiosity moves
+    monotonically. A monotone walk can only reach one clamp bound, so a single
+    max/min reproduces per-step clamping, and the first crossing solves
+    directly. tests/test_curiosity_pivot.py checks this against a naive loop —
+    the equivalence is the reason it is safe to serve from the server.
+    """
+    curiosity = CURIOSITY_START
+    marks_seen = 0
+    crossed_at: Optional[int] = None
+    for iv in intervals:
+        n = iv["marks_delta"]
+        if n <= 0:
+            continue
+        delta = curiosity_drain(iv["arc_phase"], iv["coherence"], pivot)
+        if delta > 0:  # draining: monotonically down, floor at 0.0
+            if crossed_at is None and curiosity >= COMPOSITION_FLOOR:
+                # First k with curiosity - k*delta < COMPOSITION_FLOOR.
+                k = int((curiosity - COMPOSITION_FLOOR) / delta) + 1
+                if k <= n:
+                    crossed_at = marks_seen + k
+            curiosity = max(0.0, curiosity - n * delta)
+        elif delta < 0:  # regenerating: monotonically up, ceiling at 1.0
+            curiosity = min(1.0, curiosity - n * delta)
+        marks_seen += n
+        if crossed_at is None and curiosity < COMPOSITION_FLOOR:
+            crossed_at = marks_seen
+    return curiosity, crossed_at, marks_seen
+
+
+def evaluate(pieces, pivot: float) -> Dict[str, Any]:
+    """Replay every piece in an era under `pivot`. Returns a verdict.
+
+    Two refusals, opposite failure modes:
+      unreachable — no piece crosses the composition floor. That is today's bug
+                    at a different pivot: a dead gate traded for a dead gate.
+      premature   — the median piece crosses before MIN_CROSS_FRACTION of its
+                    marks. Pieces would end before they are worked, worse than
+                    ending late: the 8h cap at least produced a finished canvas.
+    """
+    traces = []
+    for intervals in pieces.values():
+        if len(intervals) < MIN_INTERVALS_PER_PIECE:
+            continue
+        final, crossed_at, total_marks = replay(intervals, pivot)
+        if total_marks <= 0:
+            continue
+        traces.append({
+            "final": final, "crossed_at": crossed_at,
+            "cross_fraction": (crossed_at / total_marks) if crossed_at else None,
+        })
+    if not traces:
+        return {"ok": False, "traces": 0,
+                "reason": "no piece had enough usable intervals"}
+    crossings = [t for t in traces if t["crossed_at"] is not None]
+    verdict: Dict[str, Any] = {
+        "traces": len(traces),
+        "reached_composition_floor": len(crossings),
+        "reach_rate": round(len(crossings) / len(traces), 3),
+        "median_final_curiosity": round(
+            percentile(sorted(t["final"] for t in traces), 50) or 0.0, 4),
+    }
+    if not crossings:
+        verdict.update(ok=False, reason=(
+            f"unreachable: no replayed piece reaches curiosity < "
+            f"{COMPOSITION_FLOOR} under this pivot — the gate stays dead, "
+            "which is the defect this derivation exists to remove"))
+        return verdict
+    median_fraction = percentile(
+        sorted(t["cross_fraction"] for t in crossings), 50) or 0.0
+    verdict["median_cross_fraction"] = round(median_fraction, 3)
+    if median_fraction < MIN_CROSS_FRACTION:
+        verdict.update(ok=False, reason=(
+            f"premature: the median piece crosses at {median_fraction:.2f} of "
+            f"its marks (floor {MIN_CROSS_FRACTION}) — pieces would end before "
+            "they are worked, which is a worse failure than ending late"))
+        return verdict
+    verdict.update(ok=True, reason="reachable without being premature")
+    return verdict
+
+
+def derive(by_era, total: int):
+    """(thresholds, report) for an already-loaded corpus. Writes nothing."""
+    report: Dict[str, Any] = {}
+    thresholds: Dict[str, float] = {}
+    if total < MIN_SAMPLES:
+        return thresholds, {"_refused": (
+            f"only {total} usable samples (< {MIN_SAMPLES}) — a pivot derived "
+            "from a sliver would encode a mood, not a range")}
+    for era in sorted(by_era):
+        pieces = by_era[era]
+        coherence = sorted(iv["coherence"] for ivs in pieces.values() for iv in ivs)
+        entry: Dict[str, Any] = {"samples": len(coherence), "pieces": len(pieces)}
+        if len(coherence) < MIN_SAMPLES_PER_ERA:
+            entry.update(emitted=False, reason=(
+                f"only {len(coherence)} samples (< {MIN_SAMPLES_PER_ERA}); "
+                "keeping the built-in"))
+            report[era] = entry
+            continue
+        pivot = round(percentile(coherence, PIVOT_PERCENTILE) or 0.0, 4)
+        entry["coherence_range"] = [round(coherence[0], 4), round(coherence[-1], 4)]
+        entry["pivot"] = pivot
+        # The built-in beside the proposal: the report should show the change,
+        # not only the destination. The built-in is what is running right now.
+        entry["baseline_builtin"] = evaluate(pieces, 0.4)
+        verdict = evaluate(pieces, pivot)
+        entry["verdict"] = verdict
+        entry["emitted"] = bool(verdict.get("ok"))
+        if verdict.get("ok"):
+            thresholds[f"CURIOSITY_PIVOT_{era}"] = pivot
+        report[era] = entry
+    return thresholds, report
+
+
+def derive_report(db_path: Optional[str] = None, days: int = 90,
+                  max_rows: int = MAX_ROWS) -> Dict[str, Any]:
+    """Full read-only report. Never raises — diagnostics must not break.
+
+    Fails toward *unknown*: a missing table, unreadable database or bad row
+    returns `available: false` with the reason, never an empty report that
+    would read as "no era qualifies".
+    """
+    path = resolve_db_path(db_path)
+    try:
+        by_era, total = load_samples(path, days=days, max_rows=max_rows)
+    except sqlite3.Error as e:
+        return {"available": False, "reason": f"database unreadable: {e}",
+                "db_path": path}
+    except (TypeError, ValueError) as e:
+        return {"available": False, "reason": f"unusable row data: {e}",
+                "db_path": path}
+    thresholds, report = derive(by_era, total)
+    return {
+        "available": True,
+        "db_path": path,
+        "days": days,
+        "usable_intervals": total,
+        "truncated": total >= max_rows,
+        "eras": report,
+        "thresholds": thresholds,
+        "apply_with": (
+            "python3 scripts/derive_curiosity_thresholds.py --db "
+            "~/.anima/anima.db --apply ~/.anima/anima_config.json"),
+    }
