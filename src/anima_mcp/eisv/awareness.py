@@ -439,16 +439,24 @@ class TrajectoryAwareness:
         Zero-match input is a true no-op: it changes no counter and writes no
         event. This keeps Lumen vocabulary out of the EISV learning stream.
 
-        A single-token suggestion is also a true no-op. `select_tokens`
-        guarantees a suggested token wins slot 0 whenever one exists, so
-        `compute_suggestion_recall` for a one-token suggestion is a near-
-        certain 1.0 by construction, not a graded judgment of quality.
-        Feeding that into `update_weights` is an unconditional positive
-        ratchet on `_token_weights`, never able to produce the negative
-        reward the update rule needs. Pass `suggested_token_count` to gate
-        on this; omit it to preserve prior behavior.
+        A single-token suggestion that scores the structurally-guaranteed 1.0
+        is also a true no-op. `select_tokens` guarantees a suggested token
+        wins slot 0 whenever one exists, so `compute_suggestion_recall` for a
+        one-token suggestion can only be exactly 0.0 or exactly 1.0 — and the
+        anchor makes 1.0 the overwhelming, construction-driven outcome, not a
+        graded judgment of quality. Feeding that 1.0 into `update_weights`
+        would be an unconditional positive ratchet on `_token_weights`. A
+        one-token *miss* (score 0.0) is real information — the anchor failed
+        to place the suggestion at all — so it is deliberately NOT suppressed
+        here; only the tautological positive case is. Pass
+        `suggested_token_count` to gate on this; omit it to preserve prior
+        behavior.
         """
-        if suggested_token_count is not None and suggested_token_count <= 1:
+        if (
+            suggested_token_count is not None
+            and suggested_token_count <= 1
+            and score >= 1.0
+        ):
             return 0
         if self._current_shape is None:
             return 0
@@ -475,7 +483,14 @@ class TrajectoryAwareness:
         return matched_count
 
     def record_feedback(self, tokens: List[str], score: float) -> int:
-        """Deprecated compatibility wrapper for EISV weight feedback."""
+        """Deprecated compatibility wrapper for EISV weight feedback.
+
+        Cannot apply the single-token tautology guard above: `tokens` here
+        are the EISV tokens being credited, not the original suggestion, so
+        there is no `suggested_token_count` to pass. Zero live call sites as
+        of 2026-08-29 (grep before trusting that). New callers must use
+        `record_eisv_weight_feedback` directly with `suggested_token_count`.
+        """
         return self.record_eisv_weight_feedback(tokens, score)
 
     # ------------------------------------------------------------------

@@ -291,6 +291,25 @@ class TestTrajectoryAwareness:
         assert matched_count == 0
         assert ta._generator.get_weights("settled_presence") == before
 
+    def test_single_token_miss_still_updates_weights(self):
+        """A one-token suggestion that scored 0.0 is real signal, not
+        tautology: only the structurally-guaranteed 1.0 case is suppressed.
+        """
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        for i in range(10):
+            ta._buffer.append({"t": float(i), "E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1})
+        ta.get_trajectory_suggestion()
+        before = ta._generator.get_weights("settled_presence").copy()
+
+        matched_count = ta.record_eisv_weight_feedback(
+            ["~stillness~"], 0.0, suggested_token_count=1
+        )
+
+        assert matched_count == 1
+        assert ta._generator.get_weights("settled_presence")["~stillness~"] != before[
+            "~stillness~"
+        ]
+
     def test_multi_token_suggestion_still_updates_weights(self):
         ta = TrajectoryAwareness(buffer_size=30, seed=42)
         for i in range(10):
