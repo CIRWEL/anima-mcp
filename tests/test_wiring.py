@@ -103,6 +103,10 @@ class TestTrajectoryToPrimitiveLanguageWiring:
         assert source.count("record_eisv_weight_feedback(") == 1
         assert '_suggestion.get("eisv_tokens", [])' in source
         assert "_traj.record_feedback(" not in source
+        assert "suggested_token_count=len(" in source, (
+            "the call site must gate weight feedback on suggestion length so "
+            "a structurally-1.0 single-token recall cannot ratchet weights"
+        )
         assert (
             'f"[expression] {utterance.text()} '
             '({utterance.category_pattern()})"'

@@ -431,12 +431,25 @@ class TrajectoryAwareness:
         self,
         eisv_tokens: List[str],
         score: float,
+        *,
+        suggested_token_count: Optional[int] = None,
     ) -> int:
         """Apply feedback to matching EISV tokens and return match count.
 
         Zero-match input is a true no-op: it changes no counter and writes no
         event. This keeps Lumen vocabulary out of the EISV learning stream.
+
+        A single-token suggestion is also a true no-op. `select_tokens`
+        guarantees a suggested token wins slot 0 whenever one exists, so
+        `compute_suggestion_recall` for a one-token suggestion is a near-
+        certain 1.0 by construction, not a graded judgment of quality.
+        Feeding that into `update_weights` is an unconditional positive
+        ratchet on `_token_weights`, never able to produce the negative
+        reward the update rule needs. Pass `suggested_token_count` to gate
+        on this; omit it to preserve prior behavior.
         """
+        if suggested_token_count is not None and suggested_token_count <= 1:
+            return 0
         if self._current_shape is None:
             return 0
         try:

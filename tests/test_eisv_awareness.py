@@ -277,6 +277,46 @@ class TestTrajectoryAwareness:
             before["~stillness~"] + 0.064
         )
 
+    def test_single_token_suggestion_is_a_true_noop_for_weight_feedback(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        for i in range(10):
+            ta._buffer.append({"t": float(i), "E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1})
+        ta.get_trajectory_suggestion()
+        before = ta._generator.get_weights("settled_presence").copy()
+
+        matched_count = ta.record_eisv_weight_feedback(
+            ["~stillness~"], 1.0, suggested_token_count=1
+        )
+
+        assert matched_count == 0
+        assert ta._generator.get_weights("settled_presence") == before
+
+    def test_multi_token_suggestion_still_updates_weights(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        for i in range(10):
+            ta._buffer.append({"t": float(i), "E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1})
+        ta.get_trajectory_suggestion()
+        before = ta._generator.get_weights("settled_presence").copy()
+
+        matched_count = ta.record_eisv_weight_feedback(
+            ["~stillness~"], 0.9, suggested_token_count=2
+        )
+
+        assert matched_count == 1
+        assert ta._generator.get_weights("settled_presence")["~stillness~"] != before[
+            "~stillness~"
+        ]
+
+    def test_omitted_suggested_token_count_preserves_prior_behavior(self):
+        ta = TrajectoryAwareness(buffer_size=30, seed=42)
+        for i in range(10):
+            ta._buffer.append({"t": float(i), "E": 0.7, "I": 0.7, "S": 0.2, "V": 0.1})
+        ta.get_trajectory_suggestion()
+
+        matched_count = ta.record_eisv_weight_feedback(["~stillness~"], 0.9)
+
+        assert matched_count == 1
+
     def test_suggestion_recall_recording_does_not_update_weights(self):
         ta = TrajectoryAwareness(buffer_size=30, seed=42)
         _make_settled_buffer(ta)
